@@ -27,10 +27,10 @@
 
 ## Testing
 
-- [ ] Add unit tests for message encoding/decoding on both platforms
-- [ ] Stress-test rapid PTT toggling to surface race conditions in debouncing/recording lifecycle
+- [x] ~~Add unit tests for message encoding/decoding on both platforms~~ — Android: ProtocolTest.kt with Gson round-trip, edge case, and envelope tests; iOS: MessageProtocolTests.swift with XCTest encode/decode/round-trip coverage
+- [x] ~~Stress-test rapid PTT toggling to surface race conditions in debouncing/recording lifecycle~~ — Android: PTTStressTest.kt + RecordingStateMachineTest.kt covering double-start/stop guards, debounce suppression, concurrent send, window ID preservation; iOS: PTTStressTests.swift covering state transitions, debounce, and HardwareButtonHandler consistency
 
 ## Nice-to-Haves
 
-- [ ] Whisper-based STT option for Android (better transcription quality than Vosk)
-- [ ] Android: Persistent notification showing connection status when backgrounded
+- [x] ~~Whisper-based STT option for Android (better transcription quality than Vosk)~~ — WhisperEngine with AudioRecord PCM capture, whisper.cpp JNI bridge, model auto-download (ggml-tiny.en), periodic partial transcription; SpeechService priority: Whisper > Android > Vosk
+- [x] ~~Android: Persistent notification showing connection status when backgrounded~~ — ConnectionService foreground service with notification channel, auto-start on connect, auto-stop on disconnect, notification permission for Android 13+
