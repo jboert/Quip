@@ -1,0 +1,462 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0553EF1A21F0C774DAA2F0D6 /* LayoutPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5EFE906905D43F124D49A7A /* LayoutPreview.swift */; };
+		1A23A388645C53D6E41A1238 /* LayoutPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8726F91288D7DA56A936419F /* LayoutPreset.swift */; };
+		2D3A9D787C29669647538F78 /* TerminalStateDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */; };
+		2DBCF46F9C601B67D554D9CC /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_9AAE363B-3830-4560-89A8-296756FFA388" /* QuipMacApp.swift */; };
+		3A4AA39F4C89AA307F54001D /* MonitorSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4807DB7DFE825999F9E15D66 /* MonitorSelector.swift */; };
+		3E80AB53764777CE3E79A463 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFB206BDF80C59B557B5561A /* MessageProtocol.swift */; };
+		425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */ = {isa = PBXBuildFile; fileRef = CD526E4C21F232FACDCD3F3F /* DefaultLayouts.json */; };
+		44D85DED79B8403CA7AE7459 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE18C6DB634684CAA7FE1D5 /* WindowInfo.swift */; };
+		4C1F7E7F9836B4D3EF5D6FD7 /* LayoutPresetTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = C57A110912607ACED6E89B19 /* LayoutPresetTabs.swift */; };
+		63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDA71A2750027A58181E528 /* SettingsView.swift */; };
+		6A687DBD83641F9456CDB731 /* KeystrokeInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A56A336266F29BFDA4CB1C10 /* KeystrokeInjector.swift */; };
+		864A7798EAC351C8B5E8E39F /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B19559A6253B0E85D5C581 /* Color+Hex.swift */; };
+		9B4D46C0E2C0623E6F9BE1C6 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C947C022B2F6D1CB4FED43F /* MainWindow.swift */; };
+		A81002D85A2BC5AA5976AFCF /* WebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EC90466A8AD9BEAE5A07DDC /* WebSocketServer.swift */; };
+		BB7AD29C435EAFFE6F8DED12 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81BB452979FFEEB64D818B68 /* MenuBarView.swift */; };
+		BCE2B334F9FFDD9E2F5F76F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_DA29445A-55CF-455B-AE83-B3F7E400DC36" /* Assets.xcassets */; };
+		CDECFE9CA16389D2F1B455D5 /* CloudflareTunnel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2212F34B839B3C63906BAD2C /* CloudflareTunnel.swift */; };
+		D771CA86FD23E660375CC1AC /* WindowListSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAFA76040229EEE779AC055 /* WindowListSidebar.swift */; };
+		EB8C0145B42599AFC038A801 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */; };
+		F0BDBE94C7CB5AD6685E33E5 /* BonjourAdvertiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBFB66F35E0DB7CFEA44761B /* BonjourAdvertiser.swift */; };
+		F6BAA00D69BD1F037B3D22A1 /* TerminalColorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2212F34B839B3C63906BAD2C /* CloudflareTunnel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudflareTunnel.swift; sourceTree = "<group>"; };
+		3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
+		3EC90466A8AD9BEAE5A07DDC /* WebSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServer.swift; sourceTree = "<group>"; };
+		4807DB7DFE825999F9E15D66 /* MonitorSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorSelector.swift; sourceTree = "<group>"; };
+		6C947C022B2F6D1CB4FED43F /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
+		7C72FAA7988E0CA53E9ADCCD /* QuipMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuipMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		81BB452979FFEEB64D818B68 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		8726F91288D7DA56A936419F /* LayoutPreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPreset.swift; sourceTree = "<group>"; };
+		A2B19559A6253B0E85D5C581 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
+		A56A336266F29BFDA4CB1C10 /* KeystrokeInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeInjector.swift; sourceTree = "<group>"; };
+		ADE18C6DB634684CAA7FE1D5 /* WindowInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowInfo.swift; sourceTree = "<group>"; };
+		AFDA71A2750027A58181E528 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalStateDetector.swift; sourceTree = "<group>"; };
+		B5EFE906905D43F124D49A7A /* LayoutPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPreview.swift; sourceTree = "<group>"; };
+		C57A110912607ACED6E89B19 /* LayoutPresetTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPresetTabs.swift; sourceTree = "<group>"; };
+		CD526E4C21F232FACDCD3F3F /* DefaultLayouts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = DefaultLayouts.json; sourceTree = "<group>"; };
+		EBFB66F35E0DB7CFEA44761B /* BonjourAdvertiser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourAdvertiser.swift; sourceTree = "<group>"; };
+		EFB206BDF80C59B557B5561A /* MessageProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocol.swift; sourceTree = "<group>"; };
+		FBAFA76040229EEE779AC055 /* WindowListSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowListSidebar.swift; sourceTree = "<group>"; };
+		FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalColorManager.swift; sourceTree = "<group>"; };
+		"TEMP_6A11DD95-41E2-43F9-8855-6B22A7669C05" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_9AAE363B-3830-4560-89A8-296756FFA388" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
+		"TEMP_DA29445A-55CF-455B-AE83-B3F7E400DC36" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		7F6C02F2E9E2A8E7C337FC26 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				EBFB66F35E0DB7CFEA44761B /* BonjourAdvertiser.swift */,
+				2212F34B839B3C63906BAD2C /* CloudflareTunnel.swift */,
+				A56A336266F29BFDA4CB1C10 /* KeystrokeInjector.swift */,
+				FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */,
+				B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */,
+				3EC90466A8AD9BEAE5A07DDC /* WebSocketServer.swift */,
+				3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		81C208E030078E1EF1A2B64C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7C72FAA7988E0CA53E9ADCCD /* QuipMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		9BA6091266EE5956465EEF84 = {
+			isa = PBXGroup;
+			children = (
+				D32FA749E86D0C4ECD728F1E /* Models */,
+				DE1C5C943105EDBCAE6210E2 /* Quip */,
+				F621177D73579FB347509BD2 /* Resources */,
+				7F6C02F2E9E2A8E7C337FC26 /* Services */,
+				D87702261819716197ADF4C3 /* Views */,
+				81C208E030078E1EF1A2B64C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D32FA749E86D0C4ECD728F1E /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				8726F91288D7DA56A936419F /* LayoutPreset.swift */,
+				ADE18C6DB634684CAA7FE1D5 /* WindowInfo.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		D87702261819716197ADF4C3 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A2B19559A6253B0E85D5C581 /* Color+Hex.swift */,
+				C57A110912607ACED6E89B19 /* LayoutPresetTabs.swift */,
+				B5EFE906905D43F124D49A7A /* LayoutPreview.swift */,
+				6C947C022B2F6D1CB4FED43F /* MainWindow.swift */,
+				81BB452979FFEEB64D818B68 /* MenuBarView.swift */,
+				4807DB7DFE825999F9E15D66 /* MonitorSelector.swift */,
+				AFDA71A2750027A58181E528 /* SettingsView.swift */,
+				FBAFA76040229EEE779AC055 /* WindowListSidebar.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		DE1C5C943105EDBCAE6210E2 /* Quip */ = {
+			isa = PBXGroup;
+			children = (
+				E8B939A39C990A27EDB6FE17 /* Shared */,
+			);
+			name = Quip;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		E8B939A39C990A27EDB6FE17 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				EFB206BDF80C59B557B5561A /* MessageProtocol.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		F621177D73579FB347509BD2 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				CD526E4C21F232FACDCD3F3F /* DefaultLayouts.json */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		"TEMP_0EF270C9-EE9E-4172-9465-37225C962172" /* QuipMac */ = {
+			isa = PBXGroup;
+			children = (
+				"TEMP_9AAE363B-3830-4560-89A8-296756FFA388" /* QuipMacApp.swift */,
+				"TEMP_DA29445A-55CF-455B-AE83-B3F7E400DC36" /* Assets.xcassets */,
+				"TEMP_6A11DD95-41E2-43F9-8855-6B22A7669C05" /* Info.plist */,
+				F621177D73579FB347509BD2 /* Resources */,
+				D32FA749E86D0C4ECD728F1E /* Models */,
+				D87702261819716197ADF4C3 /* Views */,
+				7F6C02F2E9E2A8E7C337FC26 /* Services */,
+			);
+			path = QuipMac;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		91DF7F051DA6E858CC021414 /* QuipMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F6331D9A89DC399F1C1C7455 /* Build configuration list for PBXNativeTarget "QuipMac" */;
+			buildPhases = (
+				5502C86518C93053957FC281 /* Sources */,
+				F5CACDB47476D62FA81CC0ED /* Resources */,
+				F69B6BA8D0716A04CFD436D3 /* Bundle cloudflared */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuipMac;
+			packageProductDependencies = (
+			);
+			productName = QuipMac;
+			productReference = 7C72FAA7988E0CA53E9ADCCD /* QuipMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E474FA1B7E69EE35F8AE30E9 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					91DF7F051DA6E858CC021414 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 15433237F28E21CCF2CA9B36 /* Build configuration list for PBXProject "QuipMac" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 9BA6091266EE5956465EEF84;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				91DF7F051DA6E858CC021414 /* QuipMac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F5CACDB47476D62FA81CC0ED /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BCE2B334F9FFDD9E2F5F76F9 /* Assets.xcassets in Resources */,
+				425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		F69B6BA8D0716A04CFD436D3 /* Bundle cloudflared */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle cloudflared";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cp -f \"${SRCROOT}/Resources/cloudflared\" \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared\"\nchmod +x \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5502C86518C93053957FC281 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F0BDBE94C7CB5AD6685E33E5 /* BonjourAdvertiser.swift in Sources */,
+				CDECFE9CA16389D2F1B455D5 /* CloudflareTunnel.swift in Sources */,
+				864A7798EAC351C8B5E8E39F /* Color+Hex.swift in Sources */,
+				6A687DBD83641F9456CDB731 /* KeystrokeInjector.swift in Sources */,
+				1A23A388645C53D6E41A1238 /* LayoutPreset.swift in Sources */,
+				4C1F7E7F9836B4D3EF5D6FD7 /* LayoutPresetTabs.swift in Sources */,
+				0553EF1A21F0C774DAA2F0D6 /* LayoutPreview.swift in Sources */,
+				9B4D46C0E2C0623E6F9BE1C6 /* MainWindow.swift in Sources */,
+				BB7AD29C435EAFFE6F8DED12 /* MenuBarView.swift in Sources */,
+				3E80AB53764777CE3E79A463 /* MessageProtocol.swift in Sources */,
+				3A4AA39F4C89AA307F54001D /* MonitorSelector.swift in Sources */,
+				2DBCF46F9C601B67D554D9CC /* QuipMacApp.swift in Sources */,
+				63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */,
+				F6BAA00D69BD1F037B3D22A1 /* TerminalColorManager.swift in Sources */,
+				2D3A9D787C29669647538F78 /* TerminalStateDetector.swift in Sources */,
+				A81002D85A2BC5AA5976AFCF /* WebSocketServer.swift in Sources */,
+				44D85DED79B8403CA7AE7459 /* WindowInfo.swift in Sources */,
+				D771CA86FD23E660375CC1AC /* WindowListSidebar.swift in Sources */,
+				EB8C0145B42599AFC038A801 /* WindowManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		6AE8A7CB9F29DCB59D7E510C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		740BB10B4813446A92CAFE2C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = QuipMac.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.quip.mac;
+				PRODUCT_NAME = Quip;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		8055A16BCC8DF0D19CD1DC4D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = QuipMac.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.quip.mac;
+				PRODUCT_NAME = Quip;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		A8C320938374C2E8AEAA4112 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		15433237F28E21CCF2CA9B36 /* Build configuration list for PBXProject "QuipMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6AE8A7CB9F29DCB59D7E510C /* Debug */,
+				A8C320938374C2E8AEAA4112 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F6331D9A89DC399F1C1C7455 /* Build configuration list for PBXNativeTarget "QuipMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8055A16BCC8DF0D19CD1DC4D /* Debug */,
+				740BB10B4813446A92CAFE2C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E474FA1B7E69EE35F8AE30E9 /* Project object */;
+}
