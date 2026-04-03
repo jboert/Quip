@@ -129,7 +129,7 @@ fun TerminalContentOverlay(
                         bitmap = bitmap.asImageBitmap(),
                         contentDescription = "Terminal screenshot",
                         modifier = Modifier.fillMaxWidth(),
-                        contentScale = ContentScale.FitWidth
+                        contentScale = ContentScale.Fit
                     )
                 } else {
                     Text(
