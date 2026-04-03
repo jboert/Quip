@@ -2,7 +2,7 @@
 
 Talk to your Claude instances. All of them. From your couch.
 
-Quip turns your iPhone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code) sessions running on your Mac. Just speak your prompt and it lands in the right terminal.
+Quip turns your iPhone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code) sessions running on your Mac or Linux machine. Just speak your prompt and it lands in the right terminal.
 
 ![Quip Mac App](docs/screenshot-mac.png)
 
@@ -18,15 +18,17 @@ That's Quip. Push-to-talk prompting from your phone.
 - **Tap a window** on your phone to pick which Claude gets your prompt
 - **See all your sessions** mirrored live on your phone's screen
 - **Quick actions** — hit Return, Ctrl+C, restart Claude, all from context menus
-- **Arrange windows** on your Mac with one tap
+- **Arrange windows** on your Mac or Linux desktop with one tap
 
 ## Connecting
 
-Just open both apps. Quip finds your Mac automatically over the local network via Bonjour.
+Just open both apps. Quip finds your Mac/Linux machine automatically over the local network via Bonjour/mDNS.
 
 For remote use, a Cloudflare tunnel is bundled — no install, no config, no account needed.
 
 ## Building
+
+### macOS + iOS
 
 Requires macOS 14+, iOS 17+, Xcode 16+, and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
@@ -39,19 +41,41 @@ xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
   -destination 'generic/platform=iOS' build
 ```
 
+### Linux
+
+Requires Rust 1.75+, GTK4, and libadwaita. On openSUSE Tumbleweed:
+
+```bash
+sudo zypper install gtk4-devel libadwaita-devel gcc pkg-config
+# For X11:
+sudo zypper install xdotool wmctrl
+# For Wayland (sway):
+sudo zypper install ydotool wtype
+
+cd QuipLinux && cargo build --release
+```
+
+The binary will be at `QuipLinux/target/release/quip-linux`.
+
+**Supported display servers:**
+- **X11** — full support (xdotool/wmctrl for window management)
+- **Wayland (sway)** — full support via sway IPC
+- **Wayland (Hyprland)** — window enumeration + arrangement
+- **Wayland (GNOME/KDE)** — limited (no targeted keystroke injection)
+
 ## How it works
 
-Your iPhone records speech, transcribes it on-device, and sends the text over WebSocket to the Mac app. The Mac app injects the text into whichever terminal window you selected — iTerm2 or Terminal.app.
+Your iPhone records speech, transcribes it on-device, and sends the text over WebSocket to the Mac/Linux app. The app injects the text into whichever terminal window you selected.
 
-The Mac app also broadcasts your window layout to the phone in real-time, so you always see what's where.
+The app also broadcasts your window layout to the phone in real-time, so you always see what's where.
 
 ```
-  iPhone                              Mac
-  +---------------+                   +------------------+
-  | speak prompt  |    WebSocket      | inject into      |
-  | pick window   | ===============> | correct terminal |
-  | see layout    | <=============== | broadcast layout |
-  +---------------+                   +------------------+
+  iPhone                           Mac / Linux
+  +---------------+                +------------------+
+  | speak prompt  |   WebSocket    | inject into      |
+  | pick window   | ============> | correct terminal |
+  | see layout    | <============ | broadcast layout |
+  +---------------+                +------------------+
 ```
 
 ## License
