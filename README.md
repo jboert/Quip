@@ -4,10 +4,14 @@ Talk to your Claude instances. All of them. From your couch. No keyboard needed.
 
 Quip turns your phone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code) sessions running on your Mac or Linux machine. Just speak your prompt and it lands in the right terminal.
 
+
+### Desktop:
 ![Quip Mac App — windows before arranging](docs/screenshot-mac.png)
 
+### Mobile (Standard Desktop View):
 ![Quip on Android — windows mirrored from desktop](docs/screenshot-android.png)
 
+### Mobile (Arranged View):
 ![Quip on iOS — windows after arranging](docs/screenshot-ios.png)
 
 ## The idea
