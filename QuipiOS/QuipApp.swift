@@ -87,7 +87,13 @@ struct QuipApp: App {
         volumeHandler.onSelectionChanged = { index in
             DispatchQueue.main.async {
                 guard index >= 0, index < windows.count else { return }
-                selectedWindowId = windows[index].id
+                let newId = windows[index].id
+                selectedWindowId = newId
+                // If viewing output, switch to the new window's content
+                if terminalContentText != nil {
+                    terminalContentWindowId = newId
+                    client.send(RequestContentMessage(windowId: newId))
+                }
             }
         }
 

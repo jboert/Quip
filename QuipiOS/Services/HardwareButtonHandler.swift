@@ -18,6 +18,7 @@ final class HardwareButtonHandler {
     private var volumeObservation: NSKeyValueObservation?
     private(set) var isPTTActive = false
     private var suppressUntil: Date = .distantPast
+    private var savedVolume: Float?
 
     func startMonitoring(windowCount: Int) {
         guard windowCount > 0 else { return }
@@ -35,6 +36,9 @@ final class HardwareButtonHandler {
             try session.setActive(true)
         } catch {}
 
+        // Capture current volume so we can restore it after each button press
+        savedVolume = session.outputVolume
+
         volumeObservation = session.observe(\.outputVolume, options: [.new, .old]) {
             [weak self] _, change in
             guard let newVol = change.newValue, let oldVol = change.oldValue else { return }
@@ -46,6 +50,9 @@ final class HardwareButtonHandler {
 
                 let delta = newVol - oldVol
                 guard abs(delta) > 0.001 else { return }
+
+                // Restore volume to prevent audible changes
+                self.restoreVolume()
 
                 let wentDown = delta < 0
 
@@ -70,6 +77,14 @@ final class HardwareButtonHandler {
         }
     }
 
+    /// Restore volume to the level captured when monitoring started
+    private func restoreVolume() {
+        guard let target = savedVolume else { return }
+        // Suppress the KVO event that will fire from our own volume change
+        suppressUntil = Date().addingTimeInterval(0.5)
+        HiddenVolumeView.setVolume(target)
+    }
+
     func stopMonitoring() {
         volumeObservation?.invalidate()
         volumeObservation = nil
@@ -77,12 +92,27 @@ final class HardwareButtonHandler {
     }
 }
 
-// Hidden MPVolumeView — suppresses the system volume HUD
+// Hidden MPVolumeView — suppresses the system volume HUD and provides volume control
 struct HiddenVolumeView: UIViewRepresentable {
+    static weak var shared: MPVolumeView?
+
     func makeUIView(context: Context) -> MPVolumeView {
         let view = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
         view.alpha = 0.001
+        Self.shared = view
         return view
     }
     func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+
+    static func setVolume(_ value: Float) {
+        guard let volumeView = shared else { return }
+        // Find the hidden UISlider inside MPVolumeView to programmatically set volume
+        for subview in volumeView.subviews {
+            if let slider = subview as? UISlider {
+                slider.value = value
+                slider.sendActions(for: .valueChanged)
+                return
+            }
+        }
+    }
 }

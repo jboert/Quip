@@ -23,8 +23,10 @@ That's Quip. Push-to-talk prompting from your phone.
 - **Volume down** to start talking, **any volume button** to stop
 - **Tap a window** on your phone to pick which Claude gets your prompt
 - **See all your sessions** mirrored live on your phone's screen
-- **Quick actions** — hit Return, Ctrl+C, restart Claude, all from context menus
+- **Quick actions** — hit Return, Ctrl+C, restart Claude, clear context, all from context menus
+- **View terminal output** — read the last 200 lines of any terminal from your phone
 - **Arrange windows** on your Mac or Linux desktop with one tap
+- **QR code sharing** — scan a QR code from the desktop app to connect instantly
 - **Works with iPhone and Android**
 
 ## Connecting

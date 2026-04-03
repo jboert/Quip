@@ -6,6 +6,8 @@ struct TerminalContentOverlay: View {
     var onDismiss: () -> Void
     var onRefresh: () -> Void
 
+    let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.85)
@@ -53,6 +55,9 @@ struct TerminalContentOverlay: View {
             .background(Color(red: 0.08, green: 0.08, blue: 0.1))
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .padding(8)
+        }
+        .onReceive(refreshTimer) { _ in
+            onRefresh()
         }
     }
 }

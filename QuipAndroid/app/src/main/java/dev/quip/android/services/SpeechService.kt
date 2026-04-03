@@ -86,28 +86,37 @@ class SpeechService {
             val service = VoskSpeechService(recognizer, SAMPLE_RATE)
             voskService = service
 
+            // Accumulate completed segments across pauses
+            val completedSegments = StringBuilder()
+
             service.startListening(object : RecognitionListener {
                 override fun onPartialResult(hypothesis: String?) {
-                    val text = parseText(hypothesis, "partial")
-                    if (text.isNotEmpty()) {
-                        transcribedText = text
-                        Log.d(TAG, "Partial: '$text'")
-                        onPartialResult?.invoke(text)
+                    val partial = parseText(hypothesis, "partial")
+                    if (partial.isNotEmpty()) {
+                        // Show accumulated + current partial
+                        transcribedText = (completedSegments.toString() + " " + partial).trim()
+                        Log.d(TAG, "Partial: '$transcribedText'")
+                        onPartialResult?.invoke(transcribedText)
                     }
                 }
 
                 override fun onResult(hypothesis: String?) {
                     val text = parseText(hypothesis, "text")
                     if (text.isNotEmpty()) {
-                        transcribedText = text
-                        Log.d(TAG, "Result: '$text'")
+                        // Append completed segment
+                        if (completedSegments.isNotEmpty()) completedSegments.append(" ")
+                        completedSegments.append(text)
+                        transcribedText = completedSegments.toString()
+                        Log.d(TAG, "Result segment: '$text', total: '$transcribedText'")
                     }
                 }
 
                 override fun onFinalResult(hypothesis: String?) {
                     val text = parseText(hypothesis, "text")
                     if (text.isNotEmpty()) {
-                        transcribedText = text
+                        if (completedSegments.isNotEmpty()) completedSegments.append(" ")
+                        completedSegments.append(text)
+                        transcribedText = completedSegments.toString()
                     }
                     Log.d(TAG, "Final: '$transcribedText'")
                     isRecording = false
