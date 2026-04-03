@@ -11,17 +11,24 @@ enum InputTool {
     Wtype,
 }
 
+/// Detected Wayland compositor type (mirrors the one in windows.rs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Compositor {
+    Sway,
+    Hyprland,
+    Kde,
+    Gnome,
+    Unknown,
+}
+
 pub struct WaylandInputBackend {
     tool: Option<InputTool>,
-    /// Whether the compositor is sway (vs Hyprland or unknown).
-    is_sway: bool,
-    is_hyprland: bool,
+    compositor: Compositor,
 }
 
 impl WaylandInputBackend {
     pub fn new() -> Self {
-        let is_sway = std::env::var("SWAYSOCK").is_ok();
-        let is_hyprland = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok();
+        let compositor = Self::detect_compositor();
 
         let tool = if Self::is_in_path("ydotool") {
             Some(InputTool::Ydotool)
@@ -31,11 +38,24 @@ impl WaylandInputBackend {
             None
         };
 
-        Self {
-            tool,
-            is_sway,
-            is_hyprland,
+        Self { tool, compositor }
+    }
+
+    fn detect_compositor() -> Compositor {
+        if std::env::var("SWAYSOCK").is_ok() {
+            return Compositor::Sway;
         }
+        if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+            return Compositor::Hyprland;
+        }
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase();
+        if desktop.contains("KDE") {
+            return Compositor::Kde;
+        }
+        if desktop.contains("GNOME") {
+            return Compositor::Gnome;
+        }
+        Compositor::Unknown
     }
 
     fn is_in_path(program: &str) -> bool {
@@ -56,37 +76,54 @@ impl WaylandInputBackend {
 
     /// Focus a window by id before injecting input.
     fn focus(&self, window_id: u64) -> PlatformResult<()> {
-        if self.is_sway {
-            let arg = format!("[con_id={window_id}] focus");
-            let output = Command::new("swaymsg")
-                .arg(&arg)
-                .output()
-                .map_err(|e| PlatformError::CommandFailed(format!("swaymsg focus: {e}")))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(PlatformError::CommandFailed(format!(
-                    "swaymsg focus failed: {stderr}"
-                )));
+        match self.compositor {
+            Compositor::Sway => {
+                let arg = format!("[con_id={window_id}] focus");
+                Self::run_cmd("swaymsg", &[&arg], "swaymsg focus")
             }
-            return Ok(());
-        }
-        if self.is_hyprland {
-            let arg = format!("focuswindow address:0x{window_id:x}");
-            let output = Command::new("hyprctl")
-                .args(["dispatch", &arg])
-                .output()
-                .map_err(|e| PlatformError::CommandFailed(format!("hyprctl focus: {e}")))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(PlatformError::CommandFailed(format!(
-                    "hyprctl focus failed: {stderr}"
-                )));
+            Compositor::Hyprland => {
+                let arg = format!("focuswindow address:0x{window_id:x}");
+                Self::run_cmd("hyprctl", &["dispatch", &arg], "hyprctl focus")
             }
-            return Ok(());
+            Compositor::Kde => {
+                let kde_id = super::windows::kde_id_from_hash(window_id);
+                Self::run_cmd("kdotool", &["windowactivate", &kde_id], "kdotool windowactivate")
+            }
+            Compositor::Gnome => {
+                let script = format!(
+                    "global.get_window_actors().forEach(a => {{ \
+                        if (a.meta_window.get_id() == {window_id}) \
+                            a.meta_window.activate(global.get_current_time()); \
+                    }})"
+                );
+                Self::run_cmd("gdbus", &[
+                    "call", "--session",
+                    "--dest", "org.gnome.Shell",
+                    "--object-path", "/org/gnome/Shell",
+                    "--method", "org.gnome.Shell.Eval",
+                    &script,
+                ], "gdbus Eval focus")
+            }
+            Compositor::Unknown => {
+                Err(PlatformError::NotAvailable(
+                    "no supported Wayland compositor for window focus".into(),
+                ))
+            }
         }
-        Err(PlatformError::NotAvailable(
-            "no supported Wayland compositor for window focus".into(),
-        ))
+    }
+
+    fn run_cmd(program: &str, args: &[&str], context: &str) -> PlatformResult<()> {
+        let output = Command::new(program)
+            .args(args)
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("{context}: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PlatformError::CommandFailed(format!(
+                "{context} failed: {stderr}"
+            )));
+        }
+        Ok(())
     }
 
     /// Small delay to let the compositor finish focus switch before typing.

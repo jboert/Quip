@@ -1,23 +1,63 @@
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::RwLock;
 
 use crate::platform::traits::{
-    is_terminal_class, DisplayInfo, PlatformError, PlatformResult, RawWindowInfo, WindowBackend,
+    DisplayInfo, PlatformError, PlatformResult, RawWindowInfo, WindowBackend,
 };
 use crate::protocol::types::Rect;
 
+/// Global mapping from hashed u64 IDs back to KDE UUID strings.
+/// kdotool uses UUIDs like {xxx-xxx} but our trait uses u64 window IDs.
+static KDE_ID_MAP: std::sync::LazyLock<RwLock<HashMap<u64, String>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Look up the original KDE UUID string from a hashed u64 window ID.
+pub fn kde_id_from_hash(hash: u64) -> String {
+    KDE_ID_MAP
+        .read()
+        .unwrap()
+        .get(&hash)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Detected Wayland compositor type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Compositor {
+    Sway,
+    Hyprland,
+    Kde,
+    Gnome,
+    Unknown,
+}
+
 pub struct WaylandWindowBackend {
-    is_sway: bool,
-    is_hyprland: bool,
+    compositor: Compositor,
 }
 
 impl WaylandWindowBackend {
     pub fn new() -> Self {
-        let is_sway = std::env::var("SWAYSOCK").is_ok();
-        let is_hyprland = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok();
-        Self {
-            is_sway,
-            is_hyprland,
+        let compositor = Self::detect_compositor();
+        tracing::info!("Detected Wayland compositor: {:?}", compositor);
+        Self { compositor }
+    }
+
+    fn detect_compositor() -> Compositor {
+        if std::env::var("SWAYSOCK").is_ok() {
+            return Compositor::Sway;
         }
+        if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+            return Compositor::Hyprland;
+        }
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase();
+        if desktop.contains("KDE") {
+            return Compositor::Kde;
+        }
+        if desktop.contains("GNOME") {
+            return Compositor::Gnome;
+        }
+        Compositor::Unknown
     }
 
     /// Recursively collect terminal windows from the sway IPC tree.
@@ -257,63 +297,359 @@ impl WaylandWindowBackend {
 
         Ok(displays)
     }
+
+    // ── KDE (kdotool) ──────────────────────────────────────────────────
+
+    fn list_windows_kde(&self) -> PlatformResult<Vec<RawWindowInfo>> {
+        // kdotool search "" lists all window IDs, one per line.
+        let output = Command::new("kdotool")
+            .args(["search", ""])
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("kdotool search: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PlatformError::CommandFailed(format!(
+                "kdotool search failed: {stderr}"
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut windows = Vec::new();
+
+        for id_str in stdout.lines() {
+            let id_str = id_str.trim();
+            if id_str.is_empty() {
+                continue;
+            }
+            // kdotool IDs are KWin UUIDs like {xxx-xxx}; we hash them to u64
+            // for our window_id field and store the UUID as the string id.
+            let window_id = Self::hash_kde_id(id_str);
+            KDE_ID_MAP.write().unwrap().insert(window_id, id_str.to_string());
+
+            let title = Self::kdotool_get(id_str, "getwindowname").unwrap_or_default();
+            let class = Self::kdotool_get(id_str, "getwindowclassname").unwrap_or_default();
+            let pid: u32 = Self::kdotool_get(id_str, "getwindowpid")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let bounds = Self::kdotool_get_geometry(id_str).unwrap_or(Rect {
+                x: 0, y: 0, width: 0, height: 0,
+            });
+
+            if class.is_empty() {
+                continue;
+            }
+
+            windows.push(RawWindowInfo {
+                window_id,
+                title,
+                app_name: class.clone(),
+                app_class: class,
+                pid,
+                bounds,
+            });
+        }
+
+        Ok(windows)
+    }
+
+    fn kdotool_get(kde_id: &str, command: &str) -> Option<String> {
+        let output = Command::new("kdotool")
+            .args([command, kde_id])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    }
+
+    fn kdotool_get_geometry(kde_id: &str) -> Option<Rect> {
+        let output = Command::new("kdotool")
+            .args(["getwindowgeometry", kde_id])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        // Output format:
+        //   Position: X,Y
+        //   Geometry: WxH
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut x = 0i32;
+        let mut y = 0i32;
+        let mut w = 0u32;
+        let mut h = 0u32;
+        for line in stdout.lines() {
+            let line = line.trim();
+            if let Some(pos) = line.strip_prefix("Position:") {
+                let pos = pos.trim();
+                if let Some((xs, ys)) = pos.split_once(',') {
+                    x = xs.trim().parse().unwrap_or(0);
+                    y = ys.trim().parse().unwrap_or(0);
+                }
+            } else if let Some(geom) = line.strip_prefix("Geometry:") {
+                let geom = geom.trim();
+                if let Some((ws, hs)) = geom.split_once('x') {
+                    w = ws.trim().parse().unwrap_or(0);
+                    h = hs.trim().parse().unwrap_or(0);
+                }
+            }
+        }
+        Some(Rect { x, y, width: w, height: h })
+    }
+
+    /// Hash a KDE window UUID to a u64 for use as window_id.
+    fn hash_kde_id(id: &str) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    // ── GNOME (Window Commander extension via gdbus) ───────────────────
+
+    fn list_windows_gnome(&self) -> PlatformResult<Vec<RawWindowInfo>> {
+        let output = Command::new("gdbus")
+            .args([
+                "call", "--session",
+                "--dest", "org.gnome.Shell",
+                "--object-path", "/org/gnome/Shell/Extensions/WindowCommander",
+                "--method", "org.gnome.Shell.Extensions.WindowCommander.List",
+            ])
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("gdbus List: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PlatformError::CommandFailed(format!(
+                "Window Commander List failed (is the GNOME extension installed?): {stderr}"
+            )));
+        }
+
+        // gdbus wraps the return value in parentheses: ('json_string',)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let json_str = Self::extract_gdbus_string(&stdout)?;
+        let arr: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| PlatformError::Other(format!("failed to parse Window Commander JSON: {e}")))?;
+
+        let list = arr.as_array()
+            .ok_or_else(|| PlatformError::Other("Window Commander List: expected array".into()))?;
+
+        let mut windows = Vec::new();
+        for entry in list {
+            let id = entry["id"].as_u64().unwrap_or(0);
+            let title = entry["title"].as_str().unwrap_or("").to_string();
+            let class = entry["class"].as_str()
+                .or_else(|| entry["wm_class"].as_str())
+                .unwrap_or("").to_string();
+            let pid = entry["pid"].as_u64().unwrap_or(0) as u32;
+
+            if class.is_empty() {
+                continue;
+            }
+
+            // Geometry may come from List or we fetch it separately.
+            let bounds = if entry.get("x").is_some() {
+                Rect {
+                    x: entry["x"].as_i64().unwrap_or(0) as i32,
+                    y: entry["y"].as_i64().unwrap_or(0) as i32,
+                    width: entry["width"].as_u64().unwrap_or(0) as u32,
+                    height: entry["height"].as_u64().unwrap_or(0) as u32,
+                }
+            } else {
+                Self::gnome_get_frame_rect(id).unwrap_or(Rect {
+                    x: 0, y: 0, width: 0, height: 0,
+                })
+            };
+
+            windows.push(RawWindowInfo {
+                window_id: id,
+                title,
+                app_name: class.clone(),
+                app_class: class,
+                pid,
+                bounds,
+            });
+        }
+
+        Ok(windows)
+    }
+
+    fn gnome_get_frame_rect(win_id: u64) -> Option<Rect> {
+        let output = Command::new("gdbus")
+            .args([
+                "call", "--session",
+                "--dest", "org.gnome.Shell",
+                "--object-path", "/org/gnome/Shell/Extensions/WindowCommander",
+                "--method", "org.gnome.Shell.Extensions.WindowCommander.GetFrameRect",
+                &win_id.to_string(),
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let json_str = Self::extract_gdbus_string(&stdout).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+        Some(Rect {
+            x: v["x"].as_i64()? as i32,
+            y: v["y"].as_i64()? as i32,
+            width: v["width"].as_u64()? as u32,
+            height: v["height"].as_u64()? as u32,
+        })
+    }
+
+    /// Extract the string payload from gdbus output like: ('json_string',)
+    fn extract_gdbus_string(raw: &str) -> PlatformResult<String> {
+        let trimmed = raw.trim();
+        // gdbus wraps return in ('...',) — extract the inner string
+        let inner = trimmed
+            .strip_prefix("('").or_else(|| trimmed.strip_prefix("(\""))
+            .and_then(|s| s.strip_suffix("',)").or_else(|| s.strip_suffix("\",)")))
+            .unwrap_or(trimmed);
+        // Unescape any escaped quotes
+        Ok(inner.replace("\\'", "'").replace("\\\"", "\""))
+    }
+
+    // ── Display listing fallback (xrandr) ──────────────────────────────
+
+    fn list_displays_xrandr(&self) -> PlatformResult<Vec<DisplayInfo>> {
+        let output = Command::new("xrandr")
+            .arg("--query")
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("xrandr: {e}")))?;
+
+        if !output.status.success() {
+            return Err(PlatformError::CommandFailed(format!(
+                "xrandr exited with {}", output.status
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut displays = Vec::new();
+
+        for line in stdout.lines() {
+            if !line.contains(" connected") {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 3 {
+                continue;
+            }
+            let name = parts[0].to_string();
+            let is_primary = parts.contains(&"primary");
+
+            let geometry = parts.iter().find(|p| p.contains('x') && p.contains('+'));
+            let Some(geom) = geometry else { continue };
+            let Some(rect) = Self::parse_xrandr_geometry(geom) else { continue };
+
+            displays.push(DisplayInfo {
+                id: name.clone(),
+                name,
+                frame: rect,
+                is_primary,
+            });
+        }
+
+        Ok(displays)
+    }
+
+    /// Run a command and return Ok(()) on success, or an error with stderr.
+    fn run_command(program: &str, args: &[&str], context: &str) -> PlatformResult<()> {
+        let output = Command::new(program)
+            .args(args)
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("{context}: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PlatformError::CommandFailed(format!(
+                "{context} failed: {stderr}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Parse xrandr geometry string like "1920x1080+0+0" into a Rect.
+    fn parse_xrandr_geometry(geom: &str) -> Option<Rect> {
+        let (wh, rest) = geom.split_once('+')?;
+        let (w_str, h_str) = wh.split_once('x')?;
+        let (x_str, y_str) = rest.split_once('+')?;
+        Some(Rect {
+            x: x_str.parse().ok()?,
+            y: y_str.parse().ok()?,
+            width: w_str.parse().ok()?,
+            height: h_str.parse().ok()?,
+        })
+    }
 }
 
 impl WindowBackend for WaylandWindowBackend {
     fn list_windows(&self) -> PlatformResult<Vec<RawWindowInfo>> {
-        if self.is_sway {
-            return self.list_windows_sway();
+        match self.compositor {
+            Compositor::Sway => self.list_windows_sway(),
+            Compositor::Hyprland => self.list_windows_hyprland(),
+            Compositor::Kde => self.list_windows_kde(),
+            Compositor::Gnome => self.list_windows_gnome(),
+            Compositor::Unknown => {
+                tracing::warn!("no supported Wayland compositor detected");
+                Ok(Vec::new())
+            }
         }
-        if self.is_hyprland {
-            return self.list_windows_hyprland();
-        }
-        tracing::warn!("no supported Wayland compositor detected (need sway or Hyprland)");
-        Ok(Vec::new())
     }
 
     fn list_displays(&self) -> PlatformResult<Vec<DisplayInfo>> {
-        if self.is_sway {
-            return self.list_displays_sway();
+        match self.compositor {
+            Compositor::Sway => self.list_displays_sway(),
+            Compositor::Hyprland => self.list_displays_hyprland(),
+            Compositor::Kde | Compositor::Gnome => self.list_displays_xrandr(),
+            Compositor::Unknown => {
+                tracing::warn!("no supported Wayland compositor detected for display enumeration");
+                Ok(Vec::new())
+            }
         }
-        if self.is_hyprland {
-            return self.list_displays_hyprland();
-        }
-        tracing::warn!("no supported Wayland compositor detected for display enumeration");
-        Ok(Vec::new())
     }
 
     fn focus_window(&self, window_id: u64) -> PlatformResult<()> {
-        if self.is_sway {
-            let arg = format!("[con_id={window_id}] focus");
-            let output = Command::new("swaymsg")
-                .arg(&arg)
-                .output()
-                .map_err(|e| PlatformError::CommandFailed(format!("swaymsg focus: {e}")))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(PlatformError::CommandFailed(format!(
-                    "swaymsg focus failed: {stderr}"
-                )));
+        match self.compositor {
+            Compositor::Sway => {
+                let arg = format!("[con_id={window_id}] focus");
+                Self::run_command("swaymsg", &[&arg], "swaymsg focus")
             }
-            return Ok(());
-        }
-        if self.is_hyprland {
-            let arg = format!("focuswindow address:0x{window_id:x}");
-            let output = Command::new("hyprctl")
-                .args(["dispatch", &arg])
-                .output()
-                .map_err(|e| PlatformError::CommandFailed(format!("hyprctl focus: {e}")))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(PlatformError::CommandFailed(format!(
-                    "hyprctl focus failed: {stderr}"
-                )));
+            Compositor::Hyprland => {
+                let arg = format!("focuswindow address:0x{window_id:x}");
+                Self::run_command("hyprctl", &["dispatch", &arg], "hyprctl focus")
             }
-            return Ok(());
+            Compositor::Kde => {
+                let id = kde_id_from_hash(window_id);
+                Self::run_command("kdotool", &["windowactivate", &id], "kdotool windowactivate")
+            }
+            Compositor::Gnome => {
+                // Window Commander doesn't have a dedicated focus/activate method,
+                // but we can use the GNOME Shell Eval interface.
+                let script = format!(
+                    "global.get_window_actors().forEach(a => {{ \
+                        if (a.meta_window.get_id() == {window_id}) \
+                            a.meta_window.activate(global.get_current_time()); \
+                    }})"
+                );
+                Self::run_command("gdbus", &[
+                    "call", "--session",
+                    "--dest", "org.gnome.Shell",
+                    "--object-path", "/org/gnome/Shell",
+                    "--method", "org.gnome.Shell.Eval",
+                    &script,
+                ], "gdbus Eval focus")
+            }
+            Compositor::Unknown => {
+                Err(PlatformError::NotAvailable(
+                    "no supported Wayland compositor for focus_window".into(),
+                ))
+            }
         }
-        Err(PlatformError::NotAvailable(
-            "no supported Wayland compositor for focus_window".into(),
-        ))
     }
 
     fn move_resize_window(
@@ -324,66 +660,46 @@ impl WindowBackend for WaylandWindowBackend {
         w: u32,
         h: u32,
     ) -> PlatformResult<()> {
-        if self.is_sway {
-            // Chain: enable floating, move to position, then resize.
-            let cmd = format!(
-                "[con_id={wid}] floating enable; \
-                 [con_id={wid}] move position {x} {y}; \
-                 [con_id={wid}] resize set {w} {h}",
-                wid = window_id,
-                x = x,
-                y = y,
-                w = w,
-                h = h,
-            );
-            let output = Command::new("swaymsg")
-                .arg(&cmd)
-                .output()
-                .map_err(|e| {
-                    PlatformError::CommandFailed(format!("swaymsg move_resize: {e}"))
-                })?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(PlatformError::CommandFailed(format!(
-                    "swaymsg move_resize failed: {stderr}"
-                )));
+        match self.compositor {
+            Compositor::Sway => {
+                let cmd = format!(
+                    "[con_id={wid}] floating enable; \
+                     [con_id={wid}] move position {x} {y}; \
+                     [con_id={wid}] resize set {w} {h}",
+                    wid = window_id,
+                );
+                Self::run_command("swaymsg", &[&cmd], "swaymsg move_resize")
             }
-            return Ok(());
+            Compositor::Hyprland => {
+                let addr = format!("address:0x{window_id:x}");
+                let move_arg = format!("exact {x} {y},{addr}");
+                Self::run_command("hyprctl", &["dispatch", "movewindowpixel", &move_arg], "hyprctl move")?;
+                let resize_arg = format!("exact {w} {h},{addr}");
+                Self::run_command("hyprctl", &["dispatch", "resizewindowpixel", &resize_arg], "hyprctl resize")
+            }
+            Compositor::Kde => {
+                let id = kde_id_from_hash(window_id);
+                Self::run_command("kdotool", &["windowmove", &id, &x.to_string(), &y.to_string()], "kdotool windowmove")?;
+                Self::run_command("kdotool", &["windowsize", &id, &w.to_string(), &h.to_string()], "kdotool windowsize")
+            }
+            Compositor::Gnome => {
+                Self::run_command("gdbus", &[
+                    "call", "--session",
+                    "--dest", "org.gnome.Shell",
+                    "--object-path", "/org/gnome/Shell/Extensions/WindowCommander",
+                    "--method", "org.gnome.Shell.Extensions.WindowCommander.Place",
+                    &window_id.to_string(),
+                    &(x as u32).to_string(),
+                    &(y as u32).to_string(),
+                    &w.to_string(),
+                    &h.to_string(),
+                ], "Window Commander Place")
+            }
+            Compositor::Unknown => {
+                Err(PlatformError::NotAvailable(
+                    "no supported Wayland compositor for move_resize_window".into(),
+                ))
+            }
         }
-        if self.is_hyprland {
-            let addr = format!("address:0x{window_id:x}");
-            // Move window to exact pixel position.
-            let move_arg = format!("exact {x} {y},{addr}");
-            let output = Command::new("hyprctl")
-                .args(["dispatch", "movewindowpixel", &move_arg])
-                .output()
-                .map_err(|e| {
-                    PlatformError::CommandFailed(format!("hyprctl movewindowpixel: {e}"))
-                })?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(PlatformError::CommandFailed(format!(
-                    "hyprctl movewindowpixel failed: {stderr}"
-                )));
-            }
-            // Resize window to exact pixel dimensions.
-            let resize_arg = format!("exact {w} {h},{addr}");
-            let output = Command::new("hyprctl")
-                .args(["dispatch", "resizewindowpixel", &resize_arg])
-                .output()
-                .map_err(|e| {
-                    PlatformError::CommandFailed(format!("hyprctl resizewindowpixel: {e}"))
-                })?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(PlatformError::CommandFailed(format!(
-                    "hyprctl resizewindowpixel failed: {stderr}"
-                )));
-            }
-            return Ok(());
-        }
-        Err(PlatformError::NotAvailable(
-            "no supported Wayland compositor for move_resize_window".into(),
-        ))
     }
 }

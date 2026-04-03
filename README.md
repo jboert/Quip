@@ -79,7 +79,8 @@ The binary will be at `QuipLinux/target/release/quip-linux`.
 - **X11** — full support (xdotool/wmctrl for window management)
 - **Wayland (sway)** — full support via sway IPC
 - **Wayland (Hyprland)** — window enumeration + arrangement
-- **Wayland (GNOME/KDE)** — limited (no targeted keystroke injection)
+- **Wayland (KDE Plasma)** — full support via kdotool (install `kdotool`; uses ydotool/wtype for input)
+- **Wayland (GNOME)** — full support via [Window Commander](https://extensions.gnome.org/extension/7302/window-commander/) extension (uses ydotool/wtype for input)
 
 ## How it works
 
