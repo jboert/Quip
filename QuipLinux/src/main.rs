@@ -26,9 +26,15 @@ fn main() {
     // Initialize GTK + libadwaita
     let app = adw::Application::builder()
         .application_id("dev.quip.linux")
+        .flags(gtk4::gio::ApplicationFlags::empty())
         .build();
 
     app.connect_activate(move |app| {
+        // If a window already exists, just present it (single-instance)
+        if let Some(window) = app.active_window() {
+            window.present();
+            return;
+        }
         setup_icon();
         ui::build_ui(app);
     });
