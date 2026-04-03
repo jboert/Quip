@@ -27,6 +27,8 @@ pub struct GeneralSettings {
     pub default_terminal: String,
     pub websocket_port: u16,
     pub bonjour_name: String,
+    #[serde(default)]
+    pub show_all_windows: bool,
 }
 
 impl Default for GeneralSettings {
@@ -37,7 +39,9 @@ impl Default for GeneralSettings {
             bonjour_name: hostname::get()
                 .ok()
                 .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| "Quip".into()),
+                .filter(|h| !h.is_empty() && !h.starts_with("localhost"))
+                .unwrap_or_else(|| "Quip Linux".into()),
+            show_all_windows: false,
         }
     }
 }

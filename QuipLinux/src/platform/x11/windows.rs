@@ -95,11 +95,9 @@ impl WindowBackend for X11WindowBackend {
         let mut windows = Vec::new();
 
         for line in stdout.lines() {
-            // Columns: wid desktop x y w h pid hostname title...
-            // Use split_whitespace for the first 8 fixed fields, then take
-            // the remainder of the line as the title (which may contain spaces).
+            // wmctrl -l -G -p columns: wid desktop pid x y w h hostname title...
             let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.len() < 8 {
+            if fields.len() < 9 {
                 continue;
             }
 
@@ -107,27 +105,22 @@ impl WindowBackend for X11WindowBackend {
                 continue;
             };
             let _desktop = fields[1];
-            let x: i32 = fields[2].parse().unwrap_or(0);
-            let y: i32 = fields[3].parse().unwrap_or(0);
-            let w: u32 = fields[4].parse().unwrap_or(0);
-            let h: u32 = fields[5].parse().unwrap_or(0);
-            let pid: u32 = fields[6].parse().unwrap_or(0);
-            // Everything after the 8th field is the window title.
+            let pid: u32 = fields[2].parse().unwrap_or(0);
+            let x: i32 = fields[3].parse().unwrap_or(0);
+            let y: i32 = fields[4].parse().unwrap_or(0);
+            let w: u32 = fields[5].parse().unwrap_or(0);
+            let h: u32 = fields[6].parse().unwrap_or(0);
+            // Everything after the 8th field (hostname) is the window title.
             let title = if fields.len() > 8 {
                 fields[8..].join(" ")
             } else {
                 String::new()
             };
 
-            // Look up WM_CLASS and filter to terminals only.
             let wm_class = match self.get_wm_class(window_id) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-
-            if !is_terminal_class(&wm_class) {
-                continue;
-            }
 
             windows.push(RawWindowInfo {
                 window_id,

@@ -4,6 +4,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::state::SharedState;
+use glib;
 
 /// Show the settings preferences window
 pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState) {
@@ -52,7 +53,31 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
         .build();
     terminal_group.add(&terminal_row);
 
+    // Windows group
+    let windows_group = adw::PreferencesGroup::builder()
+        .title("Windows")
+        .build();
+
+    let show_all_switch = gtk4::Switch::new();
+    show_all_switch.set_active(state.settings.general.show_all_windows);
+    show_all_switch.set_valign(gtk4::Align::Center);
+    let show_all_row = adw::ActionRow::builder()
+        .title("Show All Windows")
+        .subtitle("Include non-terminal windows for arranging")
+        .build();
+    show_all_row.add_suffix(&show_all_switch);
+    show_all_row.set_activatable_widget(Some(&show_all_switch));
+    let ss_switch = shared_state.clone();
+    show_all_switch.connect_state_set(move |_, active| {
+        let mut state = ss_switch.write().unwrap();
+        state.settings.general.show_all_windows = active;
+        state.settings.save();
+        glib::Propagation::Proceed
+    });
+    windows_group.add(&show_all_row);
+
     general_page.add(&terminal_group);
+    general_page.add(&windows_group);
 
     // Colors page
     let colors_page = adw::PreferencesPage::builder()
