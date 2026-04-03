@@ -19,6 +19,7 @@ targets:
         excludes:
           - "project.yml"
           - "*.xcodeproj/**"
+          - "Tests/**"
       - path: ../Shared
     settings:
       base:
@@ -54,3 +55,16 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSAllowsArbitraryLoads: true
+  QuipiOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+      - path: ../Shared
+    dependencies:
+      - target: QuipiOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipiOSTests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quip"
+        BUNDLE_LOADER: "$(TEST_HOST)"

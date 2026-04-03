@@ -26,7 +26,7 @@ class SpeechService {
         private const val SAMPLE_RATE = 16000.0f
     }
 
-    enum class Engine { ANDROID, VOSK }
+    enum class Engine { ANDROID, VOSK, WHISPER }
 
     @Volatile var isRecording: Boolean = false
         private set
@@ -34,10 +34,13 @@ class SpeechService {
         private set
     @Volatile var isModelReady: Boolean = false
         private set
-    @Volatile var isModelDownloading: Boolean = false
-        private set
-    @Volatile var downloadProgress: Int = -1 // 0-100, or -1 if unknown
-        private set
+    val isModelDownloading: Boolean
+        get() = _isModelDownloading || whisperEngine.isModelDownloading
+    @Volatile private var _isModelDownloading: Boolean = false
+
+    val downloadProgress: Int // 0-100, or -1 if unknown
+        get() = if (whisperEngine.isModelDownloading) whisperEngine.downloadProgress else _downloadProgress
+    @Volatile private var _downloadProgress: Int = -1
 
     var onPartialResult: ((String) -> Unit)? = null
     var onFinalResult: ((String) -> Unit)? = null
@@ -53,12 +56,27 @@ class SpeechService {
     // Android SpeechRecognizer state
     private var androidRecognizer: SpeechRecognizer? = null
 
+    // Whisper state
+    private val whisperEngine = WhisperEngine()
+
     /**
-     * Initialize the speech engine. Uses Android's built-in SpeechRecognizer when available,
-     * falls back to Vosk (downloads model on first use).
+     * Initialize the speech engine.
+     * Priority: Whisper (if native lib available) > Android SpeechRecognizer (Google) > Vosk.
      */
     fun initModel(context: Context, onReady: (() -> Unit)? = null) {
         if (isModelReady) { onReady?.invoke(); return }
+
+        // Prefer Whisper when the native library is present
+        if (whisperEngine.isAvailable()) {
+            engine = Engine.WHISPER
+            Log.i(TAG, "Using Whisper STT engine")
+            whisperEngine.onError = { msg -> onError?.invoke(msg) }
+            whisperEngine.initModel(context) {
+                isModelReady = true
+                onReady?.invoke()
+            }
+            return
+        }
 
         if (SpeechRecognizer.isRecognitionAvailable(context)) {
             engine = Engine.ANDROID
@@ -79,13 +97,13 @@ class SpeechService {
             try {
                 val modelDir = File(context.filesDir, MODEL_NAME)
                 if (!modelDir.exists()) {
-                    isModelDownloading = true
-                    downloadProgress = 0
+                    _isModelDownloading = true
+                    _downloadProgress = 0
                     Log.i(TAG, "Downloading Vosk model from $MODEL_URL")
                     downloadAndUnzip(MODEL_URL, context.filesDir)
                     if (Thread.interrupted()) return@Thread
-                    isModelDownloading = false
-                    downloadProgress = -1
+                    _isModelDownloading = false
+                    _downloadProgress = -1
                     Log.i(TAG, "Model downloaded and extracted to ${modelDir.absolutePath}")
                 }
 
@@ -124,6 +142,7 @@ class SpeechService {
         when (engine) {
             Engine.ANDROID -> startAndroidRecording(context)
             Engine.VOSK -> startVoskRecording(context)
+            Engine.WHISPER -> startWhisperRecording()
         }
     }
 
@@ -284,6 +303,36 @@ class SpeechService {
         }
     }
 
+    // -- Whisper --
+
+    private fun startWhisperRecording() {
+        whisperEngine.onPartialResult = { text ->
+            transcribedText = text
+            Log.d(TAG, "Whisper partial: '$text'")
+            onPartialResult?.invoke(text)
+        }
+        whisperEngine.onFinalResult = { text ->
+            transcribedText = text
+            Log.d(TAG, "Whisper final: '$text'")
+            isRecording = false
+            onFinalResult?.invoke(text)
+        }
+        whisperEngine.onError = { msg ->
+            Log.e(TAG, "Whisper error: $msg")
+            isRecording = false
+            onError?.invoke(msg)
+        }
+
+        try {
+            whisperEngine.startRecording()
+            Log.i(TAG, "Started recording with Whisper")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start Whisper recording: ${e.message}", e)
+            isRecording = false
+            onError?.invoke("Failed to start recording: ${e.message}")
+        }
+    }
+
     fun requestStop() {
         Log.i(TAG, "requestStop called, engine=$engine, text='$transcribedText'")
         when (engine) {
@@ -301,6 +350,13 @@ class SpeechService {
                     Log.w(TAG, "Vosk stop error: ${e.message}")
                 }
                 voskService = null
+            }
+            Engine.WHISPER -> {
+                try {
+                    whisperEngine.requestStop()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Whisper stop error: ${e.message}")
+                }
             }
         }
     }
@@ -330,6 +386,8 @@ class SpeechService {
         voskService = null
         voskModel?.close()
         voskModel = null
+
+        whisperEngine.destroy()
 
         isRecording = false
         isModelReady = false
@@ -371,7 +429,7 @@ class SpeechService {
                             fos.write(buffer, 0, len)
                             bytesRead += len
                             if (totalBytes > 0) {
-                                downloadProgress = ((bytesRead * 100) / totalBytes).toInt().coerceIn(0, 100)
+                                _downloadProgress = ((bytesRead * 100) / totalBytes).toInt().coerceIn(0, 100)
                             }
                         }
                     }

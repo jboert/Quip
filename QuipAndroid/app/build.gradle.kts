@@ -42,6 +42,16 @@ android {
         kotlinCompilerExtensionVersion = "1.5.5"
     }
 
+    // Whisper STT: build whisper.cpp native library via CMake
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    ndkVersion = "26.1.10909125"
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -77,4 +87,6 @@ dependencies {
 
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.navigation:navigation-compose:2.7.6")
+
+    testImplementation("junit:junit:4.13.2")
 }

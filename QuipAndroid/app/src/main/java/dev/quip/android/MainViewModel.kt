@@ -21,6 +21,7 @@ import dev.quip.android.models.SttStateMessage
 import dev.quip.android.models.WindowState
 import dev.quip.android.models.SavedConnection
 import dev.quip.android.services.ConnectionManager
+import dev.quip.android.services.ConnectionService
 import dev.quip.android.services.DiscoveredHost
 import dev.quip.android.services.NsdBrowser
 import dev.quip.android.services.QuipWebSocketClient
@@ -119,10 +120,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         webSocketClient.onConnectionStateChanged = {
+            val context = getApplication<Application>()
+            val wasConnected = isConnected
             isConnected = webSocketClient.isConnected
             isConnecting = webSocketClient.isConnecting
 
-            if (!isConnected && !isConnecting) {
+            if (isConnected && !wasConnected) {
+                ConnectionService.start(context, monitorName)
+            } else if (!isConnected && !isConnecting) {
+                ConnectionService.stop(context)
                 windows.clear()
                 selectedWindowId = null
                 hasReceivedLayout = false
@@ -353,6 +359,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        ConnectionService.stop(getApplication())
         webSocketClient.disconnect()
         nsdBrowser.stopDiscovery()
         speechService.destroy()
