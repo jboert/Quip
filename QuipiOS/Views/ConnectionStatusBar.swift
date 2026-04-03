@@ -7,18 +7,20 @@ struct ConnectionStatusBar: View {
 
     @State private var manualIP: String = ""
     @State private var dotPulse: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
+    private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
     var body: some View {
         VStack(spacing: 6) {
             // Status row
             HStack(spacing: 8) {
                 Circle()
-                    .fill(isConnected ? Color.green : Color.red)
+                    .fill(isConnected ? colors.statusConnected : colors.statusDisconnected)
                     .frame(width: 8, height: 8)
 
                 Text(isConnected ? "Connected to \(macName)" : "Not connected")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(isConnected ? 0.9 : 0.5))
+                    .foregroundStyle(isConnected ? colors.textPrimary.opacity(0.9) : colors.textSecondary)
 
                 Spacer()
             }
@@ -28,7 +30,7 @@ struct ConnectionStatusBar: View {
                 HStack(spacing: 8) {
                     TextField("192.168.x.x:8765", text: $manualIP)
                         .font(.subheadline.monospaced())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(colors.textPrimary)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .keyboardType(.numbersAndPunctuation)
@@ -36,16 +38,16 @@ struct ConnectionStatusBar: View {
                         .onSubmit { doConnect() }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(.white.opacity(0.08))
+                        .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     Button { doConnect() } label: {
                         Text("Connect")
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(colors.textPrimary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(manualIP.isEmpty ? Color.white.opacity(0.08) : Color.blue)
+                            .background(manualIP.isEmpty ? colors.surface : colors.buttonPrimary)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .disabled(manualIP.isEmpty)

@@ -10,6 +10,8 @@ struct ContextMenuView: View {
     let window: WindowState
     var onAction: ((WindowAction) -> Void)? = nil
     var onDismiss: (() -> Void)? = nil
+    @Environment(\.colorScheme) private var colorScheme
+    private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
     private var accentColor: Color {
         Color(hex: window.color)
@@ -26,10 +28,10 @@ struct ContextMenuView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(window.name)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(colors.textPrimary)
                     Text(window.app)
                         .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(colors.textTertiary)
                 }
 
                 Spacer()
@@ -39,14 +41,14 @@ struct ContextMenuView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 20))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .foregroundStyle(colors.textTertiary)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
 
             Divider()
-                .background(.white.opacity(0.08))
+                .background(colors.divider)
 
             // Action rows
             VStack(spacing: 0) {
@@ -81,7 +83,7 @@ struct ContextMenuView: View {
                 )
 
                 Divider()
-                    .background(.white.opacity(0.08))
+                    .background(colors.divider)
                     .padding(.vertical, 4)
 
                 contextActionRow(
@@ -120,13 +122,13 @@ struct ContextMenuView: View {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(isDestructive ? .red.opacity(0.8) : accentColor.opacity(0.7))
+                    .foregroundStyle(isDestructive ? colors.destructive : accentColor.opacity(0.7))
                     .frame(width: 24)
 
                 Text(label)
                     .font(.subheadline)
                     .foregroundStyle(
-                        isDestructive ? .red.opacity(0.8) : .white.opacity(0.85)
+                        isDestructive ? colors.destructive : colors.textPrimary.opacity(0.85)
                     )
 
                 Spacer()
@@ -140,11 +142,14 @@ struct ContextMenuView: View {
 }
 
 private struct ContextMenuButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) var colorScheme
+
     func makeBody(configuration: Configuration) -> some View {
+        let colors = QuipColors(scheme: colorScheme)
         configuration.label
             .background(
                 configuration.isPressed
-                    ? Color.white.opacity(0.06)
+                    ? colors.pressedHighlight
                     : Color.clear
             )
     }

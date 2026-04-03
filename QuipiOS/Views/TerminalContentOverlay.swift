@@ -7,12 +7,13 @@ struct TerminalContentOverlay: View {
     var onDismiss: () -> Void
     var onRefresh: () -> Void
     var onSendAction: (String) -> Void
+    @Environment(\.quipColors) private var colors
 
     let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.85)
+            colors.overlayBackground
                 .ignoresSafeArea()
                 .onTapGesture { onDismiss() }
 
@@ -21,18 +22,18 @@ struct TerminalContentOverlay: View {
                 HStack {
                     Text(windowName)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(Color.white.opacity(0.7))
                     Spacer()
                     Button { onRefresh() } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .foregroundStyle(Color.white.opacity(0.5))
                     }
                     .padding(.trailing, 8)
                     Button { onDismiss() } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 16))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .foregroundStyle(Color.white.opacity(0.5))
                     }
                 }
                 .padding(.horizontal, 12)
@@ -77,7 +78,7 @@ struct TerminalContentOverlay: View {
                 .padding(.vertical, 8)
                 .background(Color.white.opacity(0.06))
             }
-            .background(Color(red: 0.08, green: 0.08, blue: 0.1))
+            .background(colors.overlayContainer)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .padding(8)
         }

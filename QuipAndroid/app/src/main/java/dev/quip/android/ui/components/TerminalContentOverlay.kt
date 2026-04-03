@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.quip.android.ui.theme.LocalQuipColors
 
 @Composable
 fun TerminalContentOverlay(
@@ -65,7 +66,7 @@ fun TerminalContentOverlay(
                 .fillMaxSize()
                 .padding(8.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF141416))
+                .background(Color(0xFF141416)) // always dark — terminal content
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null

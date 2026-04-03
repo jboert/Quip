@@ -177,10 +177,12 @@ struct MainiOSView: View {
     @State private var renameText: String = ""
     @State private var showTextInput = false
     @State private var textInputValue = ""
+    @Environment(\.colorScheme) private var colorScheme
+    private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
     var body: some View {
         ZStack {
-            Color(red: 0.07, green: 0.07, blue: 0.09)
+            colors.background
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -221,7 +223,7 @@ struct MainiOSView: View {
                             .opacity(0.8)
                         Text("Recording — tap to stop")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.8))
+                            .foregroundStyle(colors.textPrimary.opacity(0.8))
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
@@ -259,7 +261,7 @@ struct MainiOSView: View {
             }
         }
         .overlay { HiddenVolumeView().frame(width: 1, height: 1) }
-        .preferredColorScheme(.dark)
+        .environment(\.quipColors, colors)
         .onAppear { updateOrientation() }
         .onChange(of: client.isConnected) { _, connected in
             withAnimation(.easeInOut(duration: 0.5)) {
@@ -286,39 +288,39 @@ struct MainiOSView: View {
             // URL input row
             HStack(spacing: 6) {
                 Circle()
-                    .fill(Color.red)
+                    .fill(colors.statusDisconnected)
                     .frame(width: 6, height: 6)
 
                 TextField("wss://...", text: $urlText)
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(colors.textPrimary)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .background(.white.opacity(0.08))
+                    .background(colors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .onSubmit { doConnect() }
 
                 Button { pasteFromClipboard() } label: {
                     Image(systemName: "doc.on.clipboard")
                         .font(.system(size: 18))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(colors.textSecondary)
                         .frame(width: 36, height: 36)
                 }
 
                 Button { showQRScanner = true } label: {
                     Image(systemName: "qrcode.viewfinder")
                         .font(.system(size: 18))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(colors.textSecondary)
                         .frame(width: 36, height: 36)
                 }
 
                 Button { doConnect() } label: {
                     Image(systemName: "arrow.right.circle.fill")
                         .font(.system(size: 22))
-                        .foregroundStyle(urlText.isEmpty ? .white.opacity(0.2) : .blue)
+                        .foregroundStyle(urlText.isEmpty ? colors.buttonDisabled : colors.buttonPrimary)
                 }
                 .disabled(urlText.isEmpty)
             }
@@ -336,27 +338,27 @@ struct MainiOSView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "bonjour")
                                     .font(.system(size: 14))
-                                    .foregroundStyle(.green.opacity(0.7))
+                                    .foregroundStyle(colors.discoveredDot)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(host.name)
                                         .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(.white.opacity(0.8))
+                                        .foregroundStyle(colors.textPrimary.opacity(0.8))
                                     Text("\(host.host):\(host.port)")
                                         .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.white.opacity(0.3))
+                                        .foregroundStyle(colors.textTertiary)
                                 }
                                 Spacer()
                                 Text("Local")
                                     .font(.system(size: 9, weight: .medium))
-                                    .foregroundStyle(.green.opacity(0.5))
+                                    .foregroundStyle(colors.discoveredLabel)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(.green.opacity(0.1))
+                                    .background(Color.green.opacity(0.1))
                                     .clipShape(Capsule())
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
-                            .background(.green.opacity(0.06))
+                            .background(colors.discoveredBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
                     }
@@ -381,21 +383,21 @@ struct MainiOSView: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(conn.displayName)
                                             .font(.system(size: 13, weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.8))
+                                            .foregroundStyle(colors.textPrimary.opacity(0.8))
                                             .lineLimit(1)
                                         Text(conn.url)
                                             .font(.system(size: 10, design: .monospaced))
-                                            .foregroundStyle(.white.opacity(0.3))
+                                            .foregroundStyle(colors.textTertiary)
                                             .lineLimit(1)
                                     }
                                     Spacer()
                                     Image(systemName: "arrow.right")
                                         .font(.system(size: 11))
-                                        .foregroundStyle(.white.opacity(0.2))
+                                        .foregroundStyle(colors.textFaint)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
-                                .background(.white.opacity(0.06))
+                                .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                             }
                             .contextMenu {
@@ -449,20 +451,20 @@ struct MainiOSView: View {
     private var connectedBar: some View {
         HStack(spacing: 4) {
             Circle()
-                .fill(client.isConnected ? Color.green : Color.yellow)
+                .fill(client.isConnected ? colors.statusConnected : colors.statusConnecting)
                 .frame(width: 6, height: 6)
             Text(client.isConnected ? "Connected" : "Connecting\u{2026}")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(colors.textSecondary)
             if let error = client.lastError {
                 Text(error)
                     .font(.system(size: 9))
-                    .foregroundStyle(.red.opacity(0.7))
+                    .foregroundStyle(Color.red.opacity(0.7))
             }
             if isRecording {
                 Text("REC")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color(red: 0.9, green: 0.65, blue: 0.15))
+                    .foregroundStyle(colors.recording)
             }
             Spacer()
             Button {
@@ -470,7 +472,7 @@ struct MainiOSView: View {
             } label: {
                 Image(systemName: "xmark.circle")
                     .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(colors.textTertiary)
             }
         }
     }
@@ -483,7 +485,7 @@ struct MainiOSView: View {
                 Circle().fill(Color(hex: sel.color)).frame(width: 5, height: 5)
                 Text(" \(sel.name)")
                     .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(colors.textTertiary)
             }
             Spacer()
             if client.isConnected {
@@ -495,7 +497,7 @@ struct MainiOSView: View {
                 } label: {
                     Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
                         .font(.system(size: 14))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(colors.textSecondary)
                 }
             }
         }
@@ -507,25 +509,25 @@ struct MainiOSView: View {
         HStack(spacing: 6) {
             TextField("Type a prompt\u{2026}", text: $textInputValue)
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(colors.textPrimary)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
-                .background(.white.opacity(0.08))
+                .background(colors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .onSubmit { sendTextInput() }
 
             Button { sendTextInput() } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 22))
-                    .foregroundStyle(textInputValue.isEmpty ? .white.opacity(0.2) : .blue)
+                    .foregroundStyle(textInputValue.isEmpty ? colors.buttonDisabled : colors.buttonPrimary)
             }
             .disabled(textInputValue.isEmpty)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
-        .background(Color(red: 0.07, green: 0.07, blue: 0.09))
+        .background(colors.background)
     }
 
     private func sendTextInput() {
@@ -541,20 +543,20 @@ struct MainiOSView: View {
         GeometryReader { geo in
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.015))
+                    .fill(colors.surface.opacity(0.5))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(Color.white.opacity(0.03), lineWidth: 0.5)
+                            .strokeBorder(colors.surfaceBorder, lineWidth: 0.5)
                     )
 
                 if windows.isEmpty {
                     VStack(spacing: 6) {
                         Image(systemName: "macwindow.on.rectangle")
                             .font(.system(size: 24, weight: .light))
-                            .foregroundStyle(.white.opacity(0.1))
+                            .foregroundStyle(colors.textFaint)
                         Text(client.isConnected ? "No windows" : "Enter tunnel URL")
                             .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.15))
+                            .foregroundStyle(colors.textFaint)
                     }
                 } else {
                     ForEach(windows) { window in

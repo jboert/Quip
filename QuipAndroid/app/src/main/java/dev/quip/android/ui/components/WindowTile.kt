@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.quip.android.models.WindowState
+import dev.quip.android.ui.theme.LocalQuipColors
 
 fun parseHexColor(hex: String): Color {
     val colorInt = android.graphics.Color.parseColor(hex)
@@ -44,6 +45,7 @@ fun WindowTile(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val colors = LocalQuipColors.current
     val windowColor = parseHexColor(window.color)
     val shape = RoundedCornerShape(8.dp)
 
@@ -121,14 +123,14 @@ fun WindowTile(
         ) {
             Text(
                 text = window.name,
-                color = Color.White.copy(alpha = 0.9f),
+                color = colors.textPrimary.copy(alpha = 0.9f),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1
             )
             Text(
                 text = window.app,
-                color = Color.White.copy(alpha = 0.45f),
+                color = colors.textSecondary.copy(alpha = 0.7f),
                 fontSize = 9.sp,
                 maxLines = 1
             )
@@ -145,7 +147,7 @@ fun WindowTile(
                 // Use a text stand-in for eye-slash since we don't have the icon resource
                 Text(
                     text = "\u00D8", // slashed circle as stand-in
-                    color = Color.White.copy(alpha = 0.3f),
+                    color = colors.textTertiary,
                     fontSize = 18.sp
                 )
             }

@@ -7,7 +7,7 @@
 - [x] ~~Faster terminal state detection (2s polling interval is noticeable; consider kqueue or shorter interval)~~ — Hybrid kqueue DispatchSource + 0.5s polling; process exit events trigger instant re-detection
 - [x] ~~Haptic feedback on PTT press/release for tactile confirmation~~ — Medium impact on start, double light tap on stop (iOS + Android)
 - [ ] Speech language selection (both platforms hardcode locale)
-- [ ] Dark/light theme or system-following appearance
+- [x] ~~Dark/light theme or system-following appearance~~ — Both platforms follow system dark/light mode; iOS: QuipColors struct with adaptive colors via @Environment(\.colorScheme); Android: LocalQuipColors CompositionLocal with dark/light QuipColors sets via isSystemInDarkTheme(); terminal content overlay stays dark in both modes
 - [x] ~~Keyboard input fallback for typing prompts when voice isn't practical~~ — Keyboard icon in bottom bar (iOS + Android) opens inline text field; submit sends SendTextMessage to selected window with pressReturn
 
 ## Reliability / Robustness
