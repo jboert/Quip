@@ -1,7 +1,11 @@
 package dev.quip.android.ui.components
 
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -10,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
@@ -20,6 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,13 +34,15 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun TerminalContentOverlay(
     content: String,
+    screenshot: String? = null,
     windowName: String,
     onDismiss: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onSendAction: (String) -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
 
-    LaunchedEffect(content) {
+    LaunchedEffect(content, screenshot) {
         scrollState.animateScrollTo(scrollState.maxValue)
     }
 
@@ -95,21 +104,79 @@ fun TerminalContentOverlay(
                 }
             }
 
-            // Content
+            // Content — prefer screenshot, fall back to text
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
+                    .fillMaxWidth()
                     .verticalScroll(scrollState)
                     .padding(10.dp)
             ) {
-                Text(
-                    text = content,
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 14.sp
-                )
+                val bitmap = remember(screenshot) {
+                    screenshot?.let {
+                        try {
+                            val bytes = Base64.decode(it, Base64.DEFAULT)
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                }
+
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Terminal screenshot",
+                        modifier = Modifier.fillMaxWidth(),
+                        contentScale = ContentScale.FitWidth
+                    )
+                } else {
+                    Text(
+                        text = content,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 14.sp
+                    )
+                }
+            }
+
+            // Keyboard action buttons
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White.copy(alpha = 0.06f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                KeyActionButton("Return") { onSendAction("press_return") }
+                KeyActionButton("Ctrl+C") { onSendAction("press_ctrl_c") }
+                KeyActionButton("Ctrl+D") { onSendAction("press_ctrl_d") }
+                KeyActionButton("Esc") { onSendAction("press_escape") }
+                KeyActionButton("Tab") { onSendAction("press_tab") }
+                KeyActionButton("Y") { onSendAction("press_y") }
+                KeyActionButton("N") { onSendAction("press_n") }
             }
         }
+    }
+}
+
+@Composable
+private fun KeyActionButton(label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(Color.White.copy(alpha = 0.1f)),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace
+        )
     }
 }

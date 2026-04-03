@@ -16,7 +16,7 @@ final class WebSocketClient {
 
     var onLayoutUpdate: ((LayoutUpdate) -> Void)?
     var onStateChange: ((String, String) -> Void)?
-    var onTerminalContent: ((String, String) -> Void)?  // (windowId, content)
+    var onTerminalContent: ((String, String, String?) -> Void)?  // (windowId, content, screenshot)
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -190,7 +190,7 @@ final class WebSocketClient {
             }
         case "terminal_content":
             if let msg = try? decoder.decode(TerminalContentMessage.self, from: data) {
-                onTerminalContent?(msg.windowId, msg.content)
+                onTerminalContent?(msg.windowId, msg.content, msg.screenshot)
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)

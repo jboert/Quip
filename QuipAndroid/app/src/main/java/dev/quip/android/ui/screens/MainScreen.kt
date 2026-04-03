@@ -29,9 +29,11 @@ fun MainScreen(
     onWindowAction: (String, String) -> Unit,
     onStopRecording: () -> Unit,
     terminalContentText: String? = null,
+    terminalContentScreenshot: String? = null,
     terminalContentWindowName: String = "Terminal",
     onDismissContent: () -> Unit = {},
     onRefreshContent: () -> Unit = {},
+    onSendTerminalAction: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     androidx.compose.foundation.layout.Box(modifier = modifier) {
@@ -65,9 +67,11 @@ fun MainScreen(
     if (terminalContentText != null) {
         dev.quip.android.ui.components.TerminalContentOverlay(
             content = terminalContentText,
+            screenshot = terminalContentScreenshot,
             windowName = terminalContentWindowName,
             onDismiss = onDismissContent,
-            onRefresh = onRefreshContent
+            onRefresh = onRefreshContent,
+            onSendAction = onSendTerminalAction
         )
     }
     }

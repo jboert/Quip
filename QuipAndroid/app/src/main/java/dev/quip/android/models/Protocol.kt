@@ -71,7 +71,8 @@ data class RequestContentMessage(
 data class TerminalContentMessage(
     val type: String = "terminal_content",
     @SerializedName("windowId") val windowId: String,
-    val content: String
+    val content: String,
+    val screenshot: String? = null
 )
 
 // MARK: - Message Envelope (for peeking at type before full deserialization)

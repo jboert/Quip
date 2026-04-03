@@ -121,11 +121,13 @@ struct TerminalContentMessage: Codable, Sendable {
     let type: String
     let windowId: String
     let content: String
+    let screenshot: String?
 
-    init(windowId: String, content: String) {
+    init(windowId: String, content: String, screenshot: String? = nil) {
         self.type = "terminal_content"
         self.windowId = windowId
         self.content = content
+        self.screenshot = screenshot
     }
 }
 
