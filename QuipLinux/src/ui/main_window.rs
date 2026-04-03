@@ -87,21 +87,6 @@ pub fn build_ui(app: &adw::Application) {
 
     mode_box.append(&mode_buttons);
 
-    // Spacer
-    let spacer = gtk4::Box::new(Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    mode_box.append(&spacer);
-
-    // Display label
-    {
-        let state = shared_state.read().unwrap();
-        if let Some(display) = state.displays.first() {
-            let label = gtk4::Label::new(Some(&display.name));
-            label.add_css_class("dim-label");
-            mode_box.append(&label);
-        }
-    }
-
     detail_box.append(&mode_box);
     detail_box.append(&gtk4::Separator::new(Orientation::Horizontal));
 
@@ -120,6 +105,10 @@ pub fn build_ui(app: &adw::Application) {
 
     // --- Toolbar / Header bar ---
     let header = adw::HeaderBar::new();
+    header.set_title_widget(None::<&gtk4::Widget>);
+    let title_label = gtk4::Label::new(Some("Quip"));
+    title_label.add_css_class("heading");
+    header.pack_start(&title_label);
 
     let arrange_button = gtk4::Button::with_label("Arrange");
     arrange_button.add_css_class("suggested-action");
@@ -131,11 +120,6 @@ pub fn build_ui(app: &adw::Application) {
         arrange_windows(&ss, &*wb, &lm.borrow(), &ct.borrow());
     });
     header.pack_end(&arrange_button);
-
-    // QR button
-    let qr_button = gtk4::Button::from_icon_name("camera-photo-symbolic");
-    qr_button.set_tooltip_text(Some("Show QR code for iPhone"));
-    header.pack_end(&qr_button);
 
     // Settings button
     let settings_button = gtk4::Button::from_icon_name("emblem-system-symbolic");
@@ -242,18 +226,20 @@ fn start_services(
 
     // Channel for incoming WS messages -> GTK thread
     let (gtk_tx, gtk_rx) = async_channel::bounded::<String>(256);
+    let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Create WsServer before spawning the background thread so it can be shared
+    let ws_server = Arc::new(crate::services::ws_server::WsServer::new(port, msg_tx));
 
     // Tokio runtime on background thread
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let ss_bg = shared_state.clone();
+    let ws_bg = ws_server.clone();
 
     std::thread::spawn(move || {
         rt.block_on(async move {
-            // WebSocket incoming message channel
-            let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-            // Start WebSocket server
-            let ws_server = Arc::new(crate::services::ws_server::WsServer::new(port, msg_tx));
+            let mut msg_rx = msg_rx;
+            let ws_server = ws_bg;
             let ws_clone = ws_server.clone();
             tokio::spawn(async move {
                 ws_clone.run().await;
@@ -280,12 +266,22 @@ fn start_services(
             let ss_tunnel = ss_bg.clone();
             tokio::spawn(async move {
                 let mut tunnel = crate::services::cloudflare_tunnel::CloudflareTunnel::new();
-                tunnel.start(port).await;
-                if !tunnel.ws_url().is_empty() {
+                {
                     let mut state = ss_tunnel.write().unwrap();
                     state.tunnel_running = true;
-                    state.tunnel_url = tunnel.public_url().to_string();
-                    state.tunnel_ws_url = tunnel.ws_url().to_string();
+                }
+                match tunnel.start(port).await {
+                    Ok(()) => {
+                        tracing::info!("Cloudflare tunnel started: {}", tunnel.ws_url());
+                        let mut state = ss_tunnel.write().unwrap();
+                        state.tunnel_url = tunnel.public_url().to_string();
+                        state.tunnel_ws_url = tunnel.ws_url().to_string();
+                    }
+                    Err(e) => {
+                        tracing::warn!("Cloudflare tunnel failed: {e}");
+                        let mut state = ss_tunnel.write().unwrap();
+                        state.tunnel_running = false;
+                    }
                 }
                 // Keep tunnel alive
                 loop {

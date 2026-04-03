@@ -33,15 +33,20 @@ impl CloudflareTunnel {
     }
 
     /// Start a Cloudflare quick tunnel pointing at the given local port.
+    /// If cloudflared is not installed, downloads it automatically to ~/.local/bin.
     pub async fn start(&mut self, local_port: u16) -> Result<(), String> {
         if self.is_running {
             warn!("Cloudflare tunnel already running");
             return Ok(());
         }
 
-        let binary = find_cloudflared().ok_or_else(|| {
-            "cloudflared binary not found in PATH, /usr/bin, or ~/.local/bin".to_string()
-        })?;
+        let binary = match find_cloudflared() {
+            Some(b) => b,
+            None => {
+                info!("cloudflared not found, downloading automatically...");
+                download_cloudflared().await?
+            }
+        };
 
         info!("Starting cloudflared tunnel via {binary}");
 
@@ -167,4 +172,47 @@ fn find_cloudflared() -> Option<String> {
     }
 
     None
+}
+
+/// Download cloudflared binary to ~/.local/bin and return its path.
+async fn download_cloudflared() -> Result<String, String> {
+    let arch = std::env::consts::ARCH;
+    let cf_arch = match arch {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "arm" => "arm",
+        other => return Err(format!("unsupported architecture for cloudflared: {other}")),
+    };
+
+    let url = format!(
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-{cf_arch}"
+    );
+
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let bin_dir = std::path::PathBuf::from(&home).join(".local/bin");
+    std::fs::create_dir_all(&bin_dir)
+        .map_err(|e| format!("failed to create ~/.local/bin: {e}"))?;
+
+    let dest = bin_dir.join("cloudflared");
+    info!("Downloading cloudflared from {url}");
+
+    let output = tokio::process::Command::new("curl")
+        .args(["-fsSL", "-o", &dest.to_string_lossy(), &url])
+        .output()
+        .await
+        .map_err(|e| format!("failed to run curl: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("failed to download cloudflared: {stderr}"));
+    }
+
+    // Make executable
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| format!("failed to chmod cloudflared: {e}"))?;
+
+    let path = dest.to_string_lossy().to_string();
+    info!("cloudflared installed to {path}");
+    Ok(path)
 }

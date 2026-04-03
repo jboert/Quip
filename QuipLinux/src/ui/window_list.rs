@@ -10,8 +10,10 @@ use crate::state::SharedState;
 pub struct WindowListWidget {
     container: gtk4::Box,
     list_box: gtk4::ListBox,
+    scrolled: gtk4::ScrolledWindow,
     count_label: gtk4::Label,
     shared_state: SharedState,
+    last_fingerprint: RefCell<String>,
 }
 
 impl WindowListWidget {
@@ -69,8 +71,10 @@ impl WindowListWidget {
         let widget = Self {
             container,
             list_box,
+            scrolled,
             count_label,
             shared_state,
+            last_fingerprint: RefCell::new(String::new()),
         };
 
         widget.populate();
@@ -82,6 +86,23 @@ impl WindowListWidget {
     }
 
     pub fn refresh(&self) {
+        let state = self.shared_state.read().unwrap();
+
+        // Build a fingerprint of the current window list to avoid unnecessary rebuilds
+        // (rebuilding resets scroll position)
+        let fingerprint = state.windows.iter()
+            .map(|w| format!("{}:{}:{}", w.id, w.name, w.is_enabled))
+            .collect::<Vec<_>>()
+            .join("|");
+
+        self.count_label.set_text(&format!("({})", state.windows.len()));
+
+        if *self.last_fingerprint.borrow() == fingerprint {
+            return;
+        }
+        *self.last_fingerprint.borrow_mut() = fingerprint;
+
+        drop(state);
         self.populate();
     }
 
@@ -92,7 +113,6 @@ impl WindowListWidget {
         }
 
         let state = self.shared_state.read().unwrap();
-        self.count_label.set_text(&format!("({})", state.windows.len()));
 
         for (i, window) in state.windows.iter().enumerate() {
             let row = self.build_row(window, i);
