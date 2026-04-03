@@ -7,7 +7,12 @@ import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import java.util.LinkedList
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 
 data class DiscoveredHost(
     val name: String,
@@ -35,9 +40,9 @@ class NsdBrowser {
     private var multicastLock: WifiManager.MulticastLock? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // NSD can only resolve one service at a time; queue the rest
-    private val resolveQueue = LinkedList<NsdServiceInfo>()
-    @Volatile private var isResolving = false
+    // Channel-based resolve queue replaces LinkedList+synchronized+volatile
+    private val resolveChannel = Channel<NsdServiceInfo>(Channel.UNLIMITED)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val discoveryListener = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(serviceType: String) {
@@ -50,7 +55,7 @@ class NsdBrowser {
 
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
             Log.i(TAG, "Found service: ${serviceInfo.serviceName}")
-            enqueueResolve(serviceInfo)
+            resolveChannel.trySend(serviceInfo)
         }
 
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {
@@ -75,8 +80,13 @@ class NsdBrowser {
         if (isSearching) return
 
         discoveredHosts = emptyList()
-        resolveQueue.clear()
-        isResolving = false
+
+        // Launch coroutine that processes resolves serially from the channel
+        scope.launch {
+            for (serviceInfo in resolveChannel) {
+                resolveService(serviceInfo)
+            }
+        }
 
         // Acquire multicast lock so WiFi chipset doesn't filter mDNS packets
         val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -103,8 +113,7 @@ class NsdBrowser {
         }
         nsdManager = null
         isSearching = false
-        resolveQueue.clear()
-        isResolving = false
+        scope.cancel()
 
         try {
             multicastLock?.release()
@@ -115,53 +124,44 @@ class NsdBrowser {
         }
     }
 
-    private fun enqueueResolve(serviceInfo: NsdServiceInfo) {
-        synchronized(resolveQueue) {
-            resolveQueue.add(serviceInfo)
-            if (!isResolving) {
-                resolveNext()
-            }
-        }
-    }
-
-    private fun resolveNext() {
-        val serviceInfo: NsdServiceInfo
-        synchronized(resolveQueue) {
-            serviceInfo = resolveQueue.poll() ?: run {
-                isResolving = false
-                return
-            }
-            isResolving = true
-        }
-
+    /**
+     * Resolves a single service using suspendCoroutine to bridge the callback API.
+     * Called serially from the channel consumer coroutine, ensuring NSD resolves one at a time.
+     */
+    @Suppress("DEPRECATION")
+    private suspend fun resolveService(serviceInfo: NsdServiceInfo) {
         val manager = nsdManager ?: return
 
-        manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-            override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
-                Log.e(TAG, "Resolve failed for ${info.serviceName}: $errorCode")
-                resolveNext()
-            }
-
-            override fun onServiceResolved(info: NsdServiceInfo) {
-                val host = info.host?.hostAddress ?: return
-                val port = info.port
-                Log.i(TAG, "Resolved: ${info.serviceName} -> $host:$port")
-
-                val discovered = DiscoveredHost(
-                    name = info.serviceName,
-                    host = host,
-                    port = port
-                )
-
-                mainHandler.post {
-                    if (discoveredHosts.none { it.host == host && it.port == port }) {
-                        discoveredHosts = discoveredHosts + discovered
-                        onHostsChanged?.invoke()
-                    }
+        kotlin.coroutines.suspendCoroutine { cont ->
+            manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                    Log.e(TAG, "Resolve failed for ${info.serviceName}: $errorCode")
+                    cont.resumeWith(Result.success(Unit))
                 }
 
-                resolveNext()
-            }
-        })
+                override fun onServiceResolved(info: NsdServiceInfo) {
+                    val host = info.host?.hostAddress
+                    if (host != null) {
+                        val port = info.port
+                        Log.i(TAG, "Resolved: ${info.serviceName} -> $host:$port")
+
+                        val discovered = DiscoveredHost(
+                            name = info.serviceName,
+                            host = host,
+                            port = port
+                        )
+
+                        mainHandler.post {
+                            if (discoveredHosts.none { it.host == host && it.port == port }) {
+                                discoveredHosts = discoveredHosts + discovered
+                                onHostsChanged?.invoke()
+                            }
+                        }
+                    }
+
+                    cont.resumeWith(Result.success(Unit))
+                }
+            })
+        }
     }
 }
