@@ -1,6 +1,6 @@
 [package]
 name = "quip-linux"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 description = "Voice remote for Claude Code — Linux edition"
 

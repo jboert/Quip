@@ -180,7 +180,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         hasSentTranscription = false
         speechService.startRecording(context)
         recordingState = RecordingState.Recording(windowId)
-        performHaptic(VibrationEffect.EFFECT_CLICK)
+        performHaptic(VibrationEffect.EFFECT_HEAVY_CLICK)
         webSocketClient.send(SttStateMessage.started(windowId))
         Log.d(TAG, "Recording started for window $windowId")
     }
@@ -193,11 +193,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         recordingState = RecordingState.WaitingForResult(windowId)
         Log.d(TAG, "stopRecording called, windowId=$windowId")
 
-        // Haptic: double tick for recording stop
-        performHaptic(VibrationEffect.EFFECT_TICK)
+        // Haptic: triple heavy tap for recording stop
+        performHaptic(VibrationEffect.EFFECT_HEAVY_CLICK)
         viewModelScope.launch {
             delay(100)
-            performHaptic(VibrationEffect.EFFECT_TICK)
+            performHaptic(VibrationEffect.EFFECT_HEAVY_CLICK)
+            delay(100)
+            performHaptic(VibrationEffect.EFFECT_HEAVY_CLICK)
         }
 
         // If the recognizer already delivered a final result, send it now
