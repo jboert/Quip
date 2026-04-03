@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Coding Session",
+    "mode": "columns",
+    "windowOrder": []
+  },
+  {
+    "name": "Trading Setup",
+    "mode": "grid",
+    "windowOrder": []
+  },
+  {
+    "name": "Focus Mode",
+    "mode": "custom",
+    "customFrames": {
+      "main": {"x": 0, "y": 0, "width": 0.6, "height": 1.0},
+      "side1": {"x": 0.6, "y": 0, "width": 0.4, "height": 0.5},
+      "side2": {"x": 0.6, "y": 0.5, "width": 0.4, "height": 0.5}
+    },
+    "windowOrder": []
+  }
+]

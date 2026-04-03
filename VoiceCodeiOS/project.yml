@@ -1,0 +1,55 @@
+name: VoiceCodeiOS
+options:
+  bundleIdPrefix: com.voicecode
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  VoiceCodeiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - "project.yml"
+          - "*.xcodeproj/**"
+      - path: ../Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.voicecode.ios
+        PRODUCT_NAME: VoiceCode
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: VoiceCode
+        UILaunchScreen:
+          UIColorName: ""
+        NSSpeechRecognitionUsageDescription: VoiceCode uses speech recognition to transcribe your voice commands for Claude Code.
+        NSCameraUsageDescription: VoiceCode uses the camera to scan QR codes for connecting to your Mac.
+        NSMicrophoneUsageDescription: VoiceCode needs microphone access for push-to-talk voice commands.
+        NSBonjourServices:
+          - _voicecode._tcp.
+          - _voicecode._tcp
+        NSBluetoothAlwaysUsageDescription: VoiceCode uses Bluetooth to discover and connect to your Mac.
+        NSBluetoothPeripheralUsageDescription: VoiceCode uses Bluetooth to discover and connect to your Mac.
+        NSLocalNetworkUsageDescription: VoiceCode connects to your Mac over the local network to control Claude Code sessions.
+        UIBackgroundModes:
+          - audio
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true

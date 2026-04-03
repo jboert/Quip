@@ -1,0 +1,383 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2CFEDB1738653CF828EC5E06 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6A7D50B6CEA485760EC1B4 /* ConnectionStatusBar.swift */; };
+		49E213D0F9000FAB14CCC15F /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4DAF95C4FA46545EFDE0EE /* MessageProtocol.swift */; };
+		4E5B2686D50686E9CA489549 /* WindowRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A1AC8FA5E9A603C0F9977A1 /* WindowRectangle.swift */; };
+		63FAC38769809F1D2E44F116 /* ContextMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F802B823C4912BF95786C97 /* ContextMenuView.swift */; };
+		64B19DD7B7B34088AF23B1BF /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8CF69B497EBFB3584E3C1EC /* WindowInfo.swift */; };
+		67B4153DA48CC6DD40B0EB75 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0564B1FD021ACF02D6870760 /* SpeechService.swift */; };
+		806A4890A3072F67FEFAFD4A /* VoiceCodeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_9B90ABD5-8EA7-4727-80F8-B3079E3927B5" /* VoiceCodeApp.swift */; };
+		816BF461245B5194AB841078 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE7A3AB250C4C857A03E07D /* WebSocketClient.swift */; };
+		949855D85FA8F1EE5DC80B3B /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DD0D0CB465B09182F2F3B47 /* BonjourBrowser.swift */; };
+		A3B0845C20583EEB6E7A2968 /* HardwareButtonHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EF7702AA12B14F4F53A3411 /* HardwareButtonHandler.swift */; };
+		D243F64546A40012B9DECA07 /* RemoteLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C1CB7C7A7145D09D7C7DA6 /* RemoteLayoutView.swift */; };
+		EF0B2A0CBF71703E1578BBBD /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53831FE4295C29D54A00FCA4 /* Color+Hex.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0564B1FD021ACF02D6870760 /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
+		1EF7702AA12B14F4F53A3411 /* HardwareButtonHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareButtonHandler.swift; sourceTree = "<group>"; };
+		3A1AC8FA5E9A603C0F9977A1 /* WindowRectangle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRectangle.swift; sourceTree = "<group>"; };
+		53831FE4295C29D54A00FCA4 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
+		5CE7A3AB250C4C857A03E07D /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
+		775E599F99015E71320AF03B /* VoiceCodeiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VoiceCodeiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8DD0D0CB465B09182F2F3B47 /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
+		8F802B823C4912BF95786C97 /* ContextMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuView.swift; sourceTree = "<group>"; };
+		EC6A7D50B6CEA485760EC1B4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
+		F5C1CB7C7A7145D09D7C7DA6 /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
+		F8CF69B497EBFB3584E3C1EC /* WindowInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowInfo.swift; sourceTree = "<group>"; };
+		FD4DAF95C4FA46545EFDE0EE /* MessageProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocol.swift; sourceTree = "<group>"; };
+		"TEMP_9B90ABD5-8EA7-4727-80F8-B3079E3927B5" /* VoiceCodeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCodeApp.swift; sourceTree = "<group>"; };
+		"TEMP_E492F2C9-DFD0-470E-997F-CCE3B30A1763" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		11004C47EF1728C64E5ACF23 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				8DD0D0CB465B09182F2F3B47 /* BonjourBrowser.swift */,
+				1EF7702AA12B14F4F53A3411 /* HardwareButtonHandler.swift */,
+				0564B1FD021ACF02D6870760 /* SpeechService.swift */,
+				5CE7A3AB250C4C857A03E07D /* WebSocketClient.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		3745099C9B603071C1528229 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				FD4DAF95C4FA46545EFDE0EE /* MessageProtocol.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		4A727060FF533834123DA3C0 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				F8CF69B497EBFB3584E3C1EC /* WindowInfo.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		62C5FA5608E071252ED4ABBF /* VoiceCode */ = {
+			isa = PBXGroup;
+			children = (
+				3745099C9B603071C1528229 /* Shared */,
+			);
+			name = VoiceCode;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		7E307D2EED8E1F43FE398166 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				775E599F99015E71320AF03B /* VoiceCodeiOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DB234809A188DD25A85076BC = {
+			isa = PBXGroup;
+			children = (
+				4A727060FF533834123DA3C0 /* Models */,
+				11004C47EF1728C64E5ACF23 /* Services */,
+				ECBE0AD330B6B0DDFD719F63 /* Views */,
+				62C5FA5608E071252ED4ABBF /* VoiceCode */,
+				7E307D2EED8E1F43FE398166 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		ECBE0AD330B6B0DDFD719F63 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				53831FE4295C29D54A00FCA4 /* Color+Hex.swift */,
+				EC6A7D50B6CEA485760EC1B4 /* ConnectionStatusBar.swift */,
+				8F802B823C4912BF95786C97 /* ContextMenuView.swift */,
+				F5C1CB7C7A7145D09D7C7DA6 /* RemoteLayoutView.swift */,
+				3A1AC8FA5E9A603C0F9977A1 /* WindowRectangle.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		"TEMP_0C382EAD-212D-4D5C-8874-098894125FFA" /* VoiceCodeiOS */ = {
+			isa = PBXGroup;
+			children = (
+				"TEMP_9B90ABD5-8EA7-4727-80F8-B3079E3927B5" /* VoiceCodeApp.swift */,
+				"TEMP_E492F2C9-DFD0-470E-997F-CCE3B30A1763" /* Info.plist */,
+				4A727060FF533834123DA3C0 /* Models */,
+				ECBE0AD330B6B0DDFD719F63 /* Views */,
+				11004C47EF1728C64E5ACF23 /* Services */,
+			);
+			path = VoiceCodeiOS;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4EA96998B2BB0D397F16A04F /* VoiceCodeiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F0EF1D0CAD775A4E2D7036B5 /* Build configuration list for PBXNativeTarget "VoiceCodeiOS" */;
+			buildPhases = (
+				DCABE5FC8919F11D1359C01A /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VoiceCodeiOS;
+			packageProductDependencies = (
+			);
+			productName = VoiceCodeiOS;
+			productReference = 775E599F99015E71320AF03B /* VoiceCodeiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		3EF1CFBE890F194866FAC2F9 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					4EA96998B2BB0D397F16A04F = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 2187B5C3D6FF3177445F1621 /* Build configuration list for PBXProject "VoiceCodeiOS" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = DB234809A188DD25A85076BC;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4EA96998B2BB0D397F16A04F /* VoiceCodeiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DCABE5FC8919F11D1359C01A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				949855D85FA8F1EE5DC80B3B /* BonjourBrowser.swift in Sources */,
+				EF0B2A0CBF71703E1578BBBD /* Color+Hex.swift in Sources */,
+				2CFEDB1738653CF828EC5E06 /* ConnectionStatusBar.swift in Sources */,
+				63FAC38769809F1D2E44F116 /* ContextMenuView.swift in Sources */,
+				A3B0845C20583EEB6E7A2968 /* HardwareButtonHandler.swift in Sources */,
+				49E213D0F9000FAB14CCC15F /* MessageProtocol.swift in Sources */,
+				D243F64546A40012B9DECA07 /* RemoteLayoutView.swift in Sources */,
+				67B4153DA48CC6DD40B0EB75 /* SpeechService.swift in Sources */,
+				806A4890A3072F67FEFAFD4A /* VoiceCodeApp.swift in Sources */,
+				816BF461245B5194AB841078 /* WebSocketClient.swift in Sources */,
+				64B19DD7B7B34088AF23B1BF /* WindowInfo.swift in Sources */,
+				4E5B2686D50686E9CA489549 /* WindowRectangle.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		5A3F21B69E6BCCA53D15E2AE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		838C7EC9AF08895D9BCDF632 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				PROVISIONING_PROFILE_SPECIFIER = "9e86e3f7-48cd-4ebb-ad10-de45e17768d9";
+				DEVELOPMENT_TEAM = L35T4H6XMC;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.citrine505.salmon5945;
+				PRODUCT_NAME = VoiceCode;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A46E3534B3009C9DD710D9A1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		ED66DA026AE200A22F94B496 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				PROVISIONING_PROFILE_SPECIFIER = "9e86e3f7-48cd-4ebb-ad10-de45e17768d9";
+				DEVELOPMENT_TEAM = L35T4H6XMC;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.citrine505.salmon5945;
+				PRODUCT_NAME = VoiceCode;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2187B5C3D6FF3177445F1621 /* Build configuration list for PBXProject "VoiceCodeiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A46E3534B3009C9DD710D9A1 /* Debug */,
+				5A3F21B69E6BCCA53D15E2AE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F0EF1D0CAD775A4E2D7036B5 /* Build configuration list for PBXNativeTarget "VoiceCodeiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ED66DA026AE200A22F94B496 /* Debug */,
+				838C7EC9AF08895D9BCDF632 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 3EF1CFBE890F194866FAC2F9 /* Project object */;
+}

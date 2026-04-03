@@ -1,0 +1,44 @@
+name: VoiceCodeMac
+options:
+  bundleIdPrefix: com.voicecode
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  VoiceCodeMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: .
+        excludes:
+          - "project.yml"
+          - "*.entitlements"
+          - "*.xcodeproj/**"
+      - path: ../Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.voicecode.mac
+        PRODUCT_NAME: VoiceCode
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_ENTITLEMENTS: VoiceCodeMac.entitlements
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: false
+    info:
+      path: Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: VoiceCode
+        NSAppleEventsUsageDescription: VoiceCode needs to control Terminal and iTerm2 to manage Claude Code sessions.
+        NSAccessibilityUsageDescription: VoiceCode needs Accessibility access to arrange and manage windows on your screen.
+        NSBonjourServices:
+          - _voicecode._tcp.
+          - _voicecode._tcp
+        NSLocalNetworkUsageDescription: VoiceCode uses your local network to connect with the iPhone remote controller app.
