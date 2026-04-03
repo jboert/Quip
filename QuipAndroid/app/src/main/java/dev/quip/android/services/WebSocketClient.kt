@@ -6,6 +6,7 @@ import android.util.Log
 import com.google.gson.Gson
 import dev.quip.android.models.LayoutUpdate
 import dev.quip.android.models.MessageEnvelope
+import dev.quip.android.models.TerminalContentMessage
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -30,6 +31,7 @@ class QuipWebSocketClient {
 
     var onLayoutUpdate: ((LayoutUpdate) -> Unit)? = null
     var onStateChange: ((windowId: String, state: String) -> Unit)? = null
+    var onTerminalContent: ((windowId: String, content: String) -> Unit)? = null
     var onConnectionStateChanged: (() -> Unit)? = null
 
     private val gson = Gson()
@@ -149,6 +151,10 @@ class QuipWebSocketClient {
                     val windowId = json["windowId"] as? String ?: return
                     val state = json["state"] as? String ?: return
                     mainHandler.post { onStateChange?.invoke(windowId, state) }
+                }
+                "terminal_content" -> {
+                    val msg = gson.fromJson(text, TerminalContentMessage::class.java)
+                    mainHandler.post { onTerminalContent?.invoke(msg.windowId, msg.content) }
                 }
                 else -> {
                     Log.w(TAG, "Unknown message type: ${envelope.type}")

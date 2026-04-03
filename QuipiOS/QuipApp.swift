@@ -22,6 +22,8 @@ struct QuipApp: App {
     @State private var selectedWindowId: String?
     @State private var monitorName: String = "Mac"
     @State private var isRecording = false
+    @State private var terminalContentText: String?
+    @State private var terminalContentWindowId: String?
 
     var body: some Scene {
         WindowGroup {
@@ -32,9 +34,14 @@ struct QuipApp: App {
                 windows: $windows,
                 selectedWindowId: $selectedWindowId,
                 isRecording: $isRecording,
+                terminalContentText: $terminalContentText,
+                terminalContentWindowId: $terminalContentWindowId,
                 monitorName: monitorName,
                 onStartRecording: { startRecording() },
-                onStopRecording: { stopRecording() }
+                onStopRecording: { stopRecording() },
+                onRequestContent: { windowId in
+                    client.send(RequestContentMessage(windowId: windowId))
+                }
             )
             .onAppear {
                 setup()
@@ -84,6 +91,13 @@ struct QuipApp: App {
             }
         }
 
+        client.onTerminalContent = { windowId, content in
+            DispatchQueue.main.async {
+                terminalContentWindowId = windowId
+                terminalContentText = content
+            }
+        }
+
         volumeHandler.onPTTStart = {
             DispatchQueue.main.async { startRecording() }
         }
@@ -130,9 +144,12 @@ struct MainiOSView: View {
     @Binding var windows: [WindowState]
     @Binding var selectedWindowId: String?
     @Binding var isRecording: Bool
+    @Binding var terminalContentText: String?
+    @Binding var terminalContentWindowId: String?
     var monitorName: String
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
+    var onRequestContent: (String) -> Void
 
     @AppStorage("lastURL") private var urlText: String = ""
     @AppStorage("recentConnectionsData") private var recentConnectionsData: Data = Data()
@@ -190,6 +207,24 @@ struct MainiOSView: View {
                 }
                 .allowsHitTesting(true)
                 .onTapGesture { onStopRecording() }
+            }
+        }
+        .overlay {
+            if let content = terminalContentText {
+                let windowName = windows.first(where: { $0.id == terminalContentWindowId })?.name ?? "Terminal"
+                TerminalContentOverlay(
+                    content: content,
+                    windowName: windowName,
+                    onDismiss: {
+                        terminalContentText = nil
+                        terminalContentWindowId = nil
+                    },
+                    onRefresh: {
+                        if let wid = terminalContentWindowId {
+                            onRequestContent(wid)
+                        }
+                    }
+                )
             }
         }
         .overlay { HiddenVolumeView().frame(width: 1, height: 1) }
@@ -564,6 +599,10 @@ struct MainiOSView: View {
     }
 
     private func sendAction(windowId: String, action: WindowAction) {
+        if action == .viewOutput {
+            onRequestContent(windowId)
+            return
+        }
         let str: String
         switch action {
         case .pressReturn: str = "press_return"
@@ -571,6 +610,7 @@ struct MainiOSView: View {
         case .clearTerminal: str = "clear_terminal"
         case .restartClaude: str = "restart_claude"
         case .toggleEnabled: str = "toggle_enabled"
+        case .viewOutput: return // handled above
         }
         client.send(QuickActionMessage(windowId: windowId, action: str))
     }

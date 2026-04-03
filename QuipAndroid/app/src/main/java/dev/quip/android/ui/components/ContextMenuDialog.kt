@@ -90,7 +90,15 @@ fun ContextMenuDialog(
                     }
                 )
                 ContextActionRow(
-                    label = "Clear Terminal",
+                    label = "View Output",
+                    color = windowColor,
+                    onClick = {
+                        onAction(window.id, "view_output")
+                        onDismiss()
+                    }
+                )
+                ContextActionRow(
+                    label = "Clear Context",
                     color = windowColor,
                     onClick = {
                         onAction(window.id, "clear_terminal")

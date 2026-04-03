@@ -70,6 +70,9 @@ pub trait InputBackend: Send + Sync {
 
     /// Spawn a new terminal window in a directory
     fn spawn_terminal(&self, terminal: &str, directory: &str) -> PlatformResult<()>;
+
+    /// Read terminal content from a window (select-all, copy, read clipboard, deselect)
+    fn read_content(&self, window_id: u64) -> PlatformResult<String>;
 }
 
 /// Known terminal emulators and their WM_CLASS / app_id values

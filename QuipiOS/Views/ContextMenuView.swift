@@ -63,8 +63,14 @@ struct ContextMenuView: View {
                 )
 
                 contextActionRow(
-                    icon: "trash",
-                    label: "Clear Terminal",
+                    icon: "text.alignleft",
+                    label: "View Output",
+                    action: .viewOutput
+                )
+
+                contextActionRow(
+                    icon: "eraser",
+                    label: "Clear Context",
                     action: .clearTerminal
                 )
 

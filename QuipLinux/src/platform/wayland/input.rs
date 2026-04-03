@@ -288,4 +288,82 @@ impl InputBackend for WaylandInputBackend {
             })?;
         Ok(())
     }
+
+    fn read_content(&self, window_id: u64) -> PlatformResult<String> {
+        let tool = self.tool()?;
+        self.focus(window_id)?;
+        Self::focus_delay();
+
+        // Save current clipboard
+        let old_clip = Command::new("wl-paste")
+            .args(["--no-newline"])
+            .output()
+            .ok()
+            .and_then(|o| if o.status.success() { Some(o.stdout) } else { None });
+
+        // Select all: Ctrl+Shift+A
+        match tool {
+            InputTool::Ydotool => {
+                let _ = Command::new("ydotool")
+                    .args(["key", "29:1", "42:1", "30:1", "30:0", "42:0", "29:0"]) // ctrl+shift+a
+                    .output();
+            }
+            InputTool::Wtype => {
+                let _ = Command::new("wtype")
+                    .args(["-M", "ctrl", "-M", "shift", "-k", "a", "-m", "shift", "-m", "ctrl"])
+                    .output();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Copy: Ctrl+Shift+C
+        match tool {
+            InputTool::Ydotool => {
+                let _ = Command::new("ydotool")
+                    .args(["key", "29:1", "42:1", "46:1", "46:0", "42:0", "29:0"]) // ctrl+shift+c
+                    .output();
+            }
+            InputTool::Wtype => {
+                let _ = Command::new("wtype")
+                    .args(["-M", "ctrl", "-M", "shift", "-k", "c", "-m", "shift", "-m", "ctrl"])
+                    .output();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Read clipboard
+        let clip_output = Command::new("wl-paste")
+            .args(["--no-newline"])
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("wl-paste: {e}")))?;
+
+        let content = String::from_utf8_lossy(&clip_output.stdout).to_string();
+
+        // Deselect
+        match tool {
+            InputTool::Ydotool => {
+                let _ = Command::new("ydotool").args(["key", "1:1", "1:0"]).output(); // Escape
+            }
+            InputTool::Wtype => {
+                let _ = Command::new("wtype").args(["-k", "Escape"]).output();
+            }
+        }
+
+        // Restore old clipboard
+        if let Some(old) = old_clip {
+            let mut child = Command::new("wl-copy")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .ok();
+            if let Some(ref mut c) = child {
+                use std::io::Write;
+                if let Some(ref mut stdin) = c.stdin {
+                    let _ = stdin.write_all(&old);
+                }
+                let _ = c.wait();
+            }
+        }
+
+        Ok(content)
+    }
 }
