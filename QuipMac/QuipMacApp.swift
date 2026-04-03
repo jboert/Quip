@@ -141,7 +141,8 @@ struct QuipMacApp: App {
                     // Send only last ~200 lines to keep payload reasonable
                     let lines = content.components(separatedBy: "\n")
                     let trimmed = lines.suffix(200).joined(separator: "\n")
-                    webSocketServer.broadcast(TerminalContentMessage(windowId: msg.windowId, content: trimmed))
+                    let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
+                    webSocketServer.broadcast(TerminalContentMessage(windowId: msg.windowId, content: trimmed, screenshot: screenshot))
                 }
             }
         default:
@@ -155,6 +156,19 @@ struct QuipMacApp: App {
         switch action {
         case "press_return": keystrokeInjector.sendKeystroke("return", to: window.id, terminalApp: termApp)
         case "press_ctrl_c": keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
+        case "press_ctrl_d": keystrokeInjector.sendKeystroke("ctrl+d", to: window.id, terminalApp: termApp)
+        case "press_escape": keystrokeInjector.sendKeystroke("escape", to: window.id, terminalApp: termApp)
+        case "press_tab": keystrokeInjector.sendKeystroke("tab", to: window.id, terminalApp: termApp)
+        case "press_y":
+            windowManager.focusWindow(window.id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                self.keystrokeInjector.sendText("y", to: window.id, pressReturn: true, terminalApp: termApp)
+            }
+        case "press_n":
+            windowManager.focusWindow(window.id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                self.keystrokeInjector.sendText("n", to: window.id, pressReturn: true, terminalApp: termApp)
+            }
         case "clear_terminal": keystrokeInjector.sendText("/clear", to: window.id, pressReturn: true, terminalApp: termApp)
         case "restart_claude":
             keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)

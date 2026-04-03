@@ -69,6 +69,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showQrScanner by mutableStateOf(false)
     var terminalContentText by mutableStateOf<String?>(null)
         private set
+    var terminalContentScreenshot by mutableStateOf<String?>(null)
+        private set
     var terminalContentWindowId by mutableStateOf<String?>(null)
         private set
 
@@ -136,9 +138,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        webSocketClient.onTerminalContent = { windowId, content ->
+        webSocketClient.onTerminalContent = { windowId, content, screenshot ->
             terminalContentWindowId = windowId
             terminalContentText = content
+            terminalContentScreenshot = screenshot
         }
 
         nsdBrowser.onHostsChanged = {
@@ -331,7 +334,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissTerminalContent() {
         terminalContentText = null
+        terminalContentScreenshot = null
         terminalContentWindowId = null
+    }
+
+    fun sendTerminalAction(action: String) {
+        terminalContentWindowId?.let { wid ->
+            webSocketClient.send(QuickActionMessage(windowId = wid, action = action))
+        }
     }
 
     fun refreshTerminalContent() {

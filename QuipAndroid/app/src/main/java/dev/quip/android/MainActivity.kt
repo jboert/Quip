@@ -97,9 +97,11 @@ class MainActivity : ComponentActivity() {
                         onWindowAction = { windowId, action -> vm.handleWindowAction(windowId, action) },
                         onStopRecording = { vm.stopRecording() },
                         terminalContentText = vm.terminalContentText,
+                        terminalContentScreenshot = vm.terminalContentScreenshot,
                         terminalContentWindowName = vm.terminalContentWindowName,
                         onDismissContent = { vm.dismissTerminalContent() },
-                        onRefreshContent = { vm.refreshTerminalContent() }
+                        onRefreshContent = { vm.refreshTerminalContent() },
+                        onSendTerminalAction = { action -> vm.sendTerminalAction(action) }
                     )
                 }
             }

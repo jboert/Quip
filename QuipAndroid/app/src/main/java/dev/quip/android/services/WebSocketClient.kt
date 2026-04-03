@@ -31,7 +31,7 @@ class QuipWebSocketClient {
 
     var onLayoutUpdate: ((LayoutUpdate) -> Unit)? = null
     var onStateChange: ((windowId: String, state: String) -> Unit)? = null
-    var onTerminalContent: ((windowId: String, content: String) -> Unit)? = null
+    var onTerminalContent: ((windowId: String, content: String, screenshot: String?) -> Unit)? = null
     var onConnectionStateChanged: (() -> Unit)? = null
 
     private val gson = Gson()
@@ -154,7 +154,7 @@ class QuipWebSocketClient {
                 }
                 "terminal_content" -> {
                     val msg = gson.fromJson(text, TerminalContentMessage::class.java)
-                    mainHandler.post { onTerminalContent?.invoke(msg.windowId, msg.content) }
+                    mainHandler.post { onTerminalContent?.invoke(msg.windowId, msg.content, msg.screenshot) }
                 }
                 else -> {
                     Log.w(TAG, "Unknown message type: ${envelope.type}")

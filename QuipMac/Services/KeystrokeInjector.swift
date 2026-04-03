@@ -202,6 +202,28 @@ final class KeystrokeInjector {
         return result.stringValue
     }
 
+    // MARK: - Capture Window Screenshot
+
+    /// Capture a screenshot of a specific window via the `screencapture` CLI.
+    /// Returns base64-encoded PNG data, or nil on failure.
+    func captureWindowScreenshot(cgWindowNumber: CGWindowID) -> String? {
+        guard cgWindowNumber != 0 else { return nil }
+        let tmpPath = NSTemporaryDirectory() + "quip_capture_\(cgWindowNumber).png"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-l", "\(cgWindowNumber)", "-x", "-o", tmpPath]
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+        guard let data = FileManager.default.contents(atPath: tmpPath) else { return nil }
+        return data.base64EncodedString()
+    }
+
     // MARK: - Helpers
 
     /// Build a System Events keystroke AppleScript targeting the correct terminal

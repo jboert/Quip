@@ -23,6 +23,7 @@ struct QuipApp: App {
     @State private var monitorName: String = "Mac"
     @State private var isRecording = false
     @State private var terminalContentText: String?
+    @State private var terminalContentScreenshot: String?
     @State private var terminalContentWindowId: String?
 
     var body: some Scene {
@@ -35,6 +36,7 @@ struct QuipApp: App {
                 selectedWindowId: $selectedWindowId,
                 isRecording: $isRecording,
                 terminalContentText: $terminalContentText,
+                terminalContentScreenshot: $terminalContentScreenshot,
                 terminalContentWindowId: $terminalContentWindowId,
                 monitorName: monitorName,
                 onStartRecording: { startRecording() },
@@ -97,10 +99,11 @@ struct QuipApp: App {
             }
         }
 
-        client.onTerminalContent = { windowId, content in
+        client.onTerminalContent = { windowId, content, screenshot in
             DispatchQueue.main.async {
                 terminalContentWindowId = windowId
                 terminalContentText = content
+                terminalContentScreenshot = screenshot
             }
         }
 
@@ -160,6 +163,7 @@ struct MainiOSView: View {
     @Binding var selectedWindowId: String?
     @Binding var isRecording: Bool
     @Binding var terminalContentText: String?
+    @Binding var terminalContentScreenshot: String?
     @Binding var terminalContentWindowId: String?
     var monitorName: String
     var onStartRecording: () -> Void
@@ -229,14 +233,21 @@ struct MainiOSView: View {
                 let windowName = windows.first(where: { $0.id == terminalContentWindowId })?.name ?? "Terminal"
                 TerminalContentOverlay(
                     content: content,
+                    screenshot: terminalContentScreenshot,
                     windowName: windowName,
                     onDismiss: {
                         terminalContentText = nil
+                        terminalContentScreenshot = nil
                         terminalContentWindowId = nil
                     },
                     onRefresh: {
                         if let wid = terminalContentWindowId {
                             onRequestContent(wid)
+                        }
+                    },
+                    onSendAction: { action in
+                        if let wid = terminalContentWindowId {
+                            client.send(QuickActionMessage(windowId: wid, action: action))
                         }
                     }
                 )
