@@ -258,6 +258,14 @@ final class WindowManager {
     /// Arrange enabled windows according to target frames.
     /// `frames` maps window IDs to their desired CGRect.
     func arrangeWindows(frames: [String: CGRect]) {
+        // Check Accessibility permission — prompt if not granted
+        let trusted = AXIsProcessTrustedWithOptions(
+            ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        )
+        if !trusted {
+            print("[WindowManager] Accessibility permission not granted. Please enable in System Settings > Privacy & Security > Accessibility.")
+            return
+        }
 
         print("[WindowManager] Arranging \(frames.count) windows")
         for (windowId, targetFrame) in frames {
