@@ -3,10 +3,14 @@ package dev.quip.android.services
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class SpeechService {
 
@@ -18,12 +22,14 @@ class SpeechService {
         private set
     @Volatile var transcribedText: String = ""
         private set
+    @Volatile private var gotFinalResult: Boolean = false
 
     var onPartialResult: ((String) -> Unit)? = null
     var onFinalResult: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
 
     private var speechRecognizer: SpeechRecognizer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun isAvailable(context: Context): Boolean {
         return SpeechRecognizer.isRecognitionAvailable(context)
@@ -39,6 +45,7 @@ class SpeechService {
         }
 
         transcribedText = ""
+        gotFinalResult = false
         isRecording = true
 
         val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
@@ -53,10 +60,7 @@ class SpeechService {
                 Log.d(TAG, "Speech started")
             }
 
-            override fun onRmsChanged(rmsdB: Float) {
-                // Could be used for audio level visualization
-            }
-
+            override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
 
             override fun onEndOfSpeech() {
@@ -76,9 +80,14 @@ class SpeechService {
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech input"
                     else -> "Unknown error ($error)"
                 }
-                Log.e(TAG, "Recognition error: $message")
+                Log.e(TAG, "Recognition error: $message (code=$error)")
+                // ERROR_NO_MATCH and ERROR_SPEECH_TIMEOUT are not fatal —
+                // they mean recognition finished with no text
+                gotFinalResult = true
                 isRecording = false
-                onError?.invoke(message)
+                if (error != SpeechRecognizer.ERROR_CLIENT) {
+                    onError?.invoke(message)
+                }
             }
 
             override fun onResults(results: Bundle?) {
@@ -87,7 +96,8 @@ class SpeechService {
                 if (bestResult.isNotEmpty()) {
                     transcribedText = bestResult
                 }
-                Log.d(TAG, "Final result: $transcribedText")
+                Log.d(TAG, "Final result: '$transcribedText'")
+                gotFinalResult = true
                 isRecording = false
                 onFinalResult?.invoke(transcribedText)
             }
@@ -97,6 +107,7 @@ class SpeechService {
                 val partial = matches?.firstOrNull() ?: ""
                 if (partial.isNotEmpty()) {
                     transcribedText = partial
+                    Log.d(TAG, "Partial result: '$partial'")
                     onPartialResult?.invoke(partial)
                 }
             }
@@ -114,15 +125,49 @@ class SpeechService {
         Log.i(TAG, "Started recording")
     }
 
+    /**
+     * Stop recording and return the transcribed text.
+     * Signals the recognizer to stop, then waits briefly for the final result
+     * callback before returning whatever text we have.
+     */
     fun stopRecording(): String {
-        if (!isRecording) return transcribedText
+        Log.i(TAG, "stopRecording called, gotFinalResult=$gotFinalResult, text='$transcribedText'")
 
-        speechRecognizer?.stopListening()
-        speechRecognizer?.destroy()
-        speechRecognizer = null
+        // If we already got a final result (recognizer auto-stopped), just clean up
+        if (gotFinalResult) {
+            cleanupRecognizer()
+            return transcribedText
+        }
+
+        // Tell recognizer to finish — this triggers onResults asynchronously
+        try {
+            speechRecognizer?.stopListening()
+        } catch (e: Exception) {
+            Log.w(TAG, "stopListening error: ${e.message}")
+        }
+
+        // Wait up to 1.5 seconds for the final result callback
+        val startTime = System.currentTimeMillis()
+        while (!gotFinalResult && System.currentTimeMillis() - startTime < 1500) {
+            Thread.sleep(50)
+        }
+
+        Log.i(TAG, "After wait: gotFinalResult=$gotFinalResult, text='$transcribedText'")
+
+        cleanupRecognizer()
         isRecording = false
-        Log.i(TAG, "Stopped recording, text: $transcribedText")
         return transcribedText
+    }
+
+    private fun cleanupRecognizer() {
+        mainHandler.post {
+            try {
+                speechRecognizer?.destroy()
+            } catch (e: Exception) {
+                Log.w(TAG, "destroy error: ${e.message}")
+            }
+            speechRecognizer = null
+        }
     }
 
     fun destroy() {
