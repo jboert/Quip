@@ -22,7 +22,7 @@
 
 - [x] ~~Normalize speech recording timing across platforms (iOS: 0.8s delay, Android: 800ms+1000ms nested)~~ — Both platforms now use 2.5s post-release recording window (up from 0.8s) for conversational flow; Android result timeout normalized to 1.5s
 - [x] ~~Extract Android connection UI into separate Compose components (MainActivity.kt is 419 LOC mixing UI and logic)~~ — MainViewModel holds all state and business logic; MainActivity reduced to ~120 LOC Activity shell
-- [ ] Add standalone protocol spec for MessageProtocol (currently only exists as Swift; helps independent Android/Linux work)
+- [x] ~~Add standalone protocol spec for MessageProtocol (currently only exists as Swift; helps independent Android/Linux work)~~ — docs/protocol.md with all message types, fields, actions, and JSON examples
 - [x] ~~iOS: Simplify orientation lock to use requestGeometryUpdate only (remove manual UIDevice.setValue workarounds)~~ — Removed UIDevice.setValue private API call; on-connect flow now uses requestGeometryUpdate + attemptRotationToDeviceOrientation only
 
 ## Testing
