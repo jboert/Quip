@@ -118,6 +118,9 @@ struct QuipApp: App {
         guard let windowId = selectedWindowId else { return }
         speech.startRecording()
         isRecording = true
+        // Haptic: medium impact for recording start
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
         client.send(STTStateMessage.started(windowId: windowId))
     }
 
@@ -125,6 +128,12 @@ struct QuipApp: App {
     private func stopRecording() {
         guard isRecording else { return }
         isRecording = false // Set immediately to prevent re-entry from rapid presses
+        // Haptic: double light tap for recording stop
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            generator.impactOccurred()
+        }
         let windowId = selectedWindowId
         NSLog("[Quip] stopRecording called, windowId=%@", windowId ?? "nil")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [self] in
