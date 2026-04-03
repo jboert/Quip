@@ -1,6 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{self, Orientation};
 use libadwaita as adw;
+use libadwaita::prelude::*;
 
 use crate::state::SharedState;
 

@@ -2,6 +2,7 @@ use glib::clone;
 use gtk4::prelude::*;
 use gtk4::{self, Align, Orientation, PolicyType, ScrolledWindow};
 use libadwaita as adw;
+use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -109,7 +110,7 @@ pub fn build_ui(app: &adw::Application) {
     let preview_widget = preview.widget();
     preview_widget.set_vexpand(true);
     preview_widget.set_hexpand(true);
-    detail_box.append(&preview_widget);
+    detail_box.append(preview_widget);
 
     detail_box.append(&gtk4::Separator::new(Orientation::Horizontal));
 
@@ -146,13 +147,14 @@ pub fn build_ui(app: &adw::Application) {
     });
     header.pack_end(&settings_button);
 
-    window.set_titlebar(Some(&header));
-
     main_box.append(&sidebar_frame);
     main_box.append(&gtk4::Separator::new(Orientation::Vertical));
     main_box.append(&detail_box);
 
-    window.set_content(Some(&main_box));
+    let toolbar_view = adw::ToolbarView::new();
+    toolbar_view.add_top_bar(&header);
+    toolbar_view.set_content(Some(&main_box));
+    window.set_content(Some(&toolbar_view));
 
     // --- Start background services ---
     start_services(shared_state.clone(), window_backend.clone(), input_backend.clone());
@@ -239,7 +241,7 @@ fn start_services(
     };
 
     // Channel for incoming WS messages -> GTK thread
-    let (gtk_tx, gtk_rx) = glib::MainContext::channel::<String>(glib::Priority::DEFAULT);
+    let (gtk_tx, gtk_rx) = async_channel::bounded::<String>(256);
 
     // Tokio runtime on background thread
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -279,11 +281,11 @@ fn start_services(
             tokio::spawn(async move {
                 let mut tunnel = crate::services::cloudflare_tunnel::CloudflareTunnel::new();
                 tunnel.start(port).await;
-                if !tunnel.ws_url.is_empty() {
+                if !tunnel.ws_url().is_empty() {
                     let mut state = ss_tunnel.write().unwrap();
                     state.tunnel_running = true;
-                    state.tunnel_url = tunnel.public_url.clone();
-                    state.tunnel_ws_url = tunnel.ws_url.clone();
+                    state.tunnel_url = tunnel.public_url().to_string();
+                    state.tunnel_ws_url = tunnel.ws_url().to_string();
                 }
                 // Keep tunnel alive
                 loop {
@@ -317,7 +319,7 @@ fn start_services(
 
             // Forward incoming messages to GTK thread
             while let Some(msg) = msg_rx.recv().await {
-                let _ = gtk_tx.send(msg);
+                let _ = gtk_tx.send(msg).await;
             }
         });
     });
@@ -326,9 +328,10 @@ fn start_services(
     let ss_handler = shared_state.clone();
     let ib_handler = input_backend.clone();
     let wb_handler = window_backend.clone();
-    gtk_rx.attach(None, move |json| {
-        handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler);
-        glib::ControlFlow::Continue
+    glib::spawn_future_local(async move {
+        while let Ok(json) = gtk_rx.recv().await {
+            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler);
+        }
     });
 }
 
