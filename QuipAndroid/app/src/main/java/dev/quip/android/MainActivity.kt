@@ -357,8 +357,14 @@ class MainActivity : ComponentActivity() {
         if (windows.isEmpty()) return
         val currentIndex = windows.indexOfFirst { it.id == selectedWindowId }
         val nextIndex = if (currentIndex < 0) 0 else (currentIndex + 1) % windows.size
-        selectedWindowId = windows[nextIndex].id
-        webSocketClient.send(SelectWindowMessage(windowId = windows[nextIndex].id))
+        val newId = windows[nextIndex].id
+        selectedWindowId = newId
+        webSocketClient.send(SelectWindowMessage(windowId = newId))
+        // If viewing output, switch to the new window's content
+        if (terminalContentText != null) {
+            terminalContentWindowId = newId
+            webSocketClient.send(RequestContentMessage(windowId = newId))
+        }
     }
 
     // -- WebSocket connection --

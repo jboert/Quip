@@ -2,6 +2,7 @@ package dev.quip.android.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +37,14 @@ fun TerminalContentOverlay(
         scrollState.animateScrollTo(scrollState.maxValue)
     }
 
+    // Auto-refresh every 2 seconds
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(2000)
+            onRefresh()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -47,7 +57,10 @@ fun TerminalContentOverlay(
                 .padding(8.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(Color(0xFF141416))
-                .clickable(enabled = false) {} // prevent click-through
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {} // consume clicks so they don't reach the dismiss backdrop
         ) {
             // Header
             Row(

@@ -120,7 +120,8 @@ private class AudioWorker: @unchecked Sendable {
                 audioEngine.stop()
                 audioEngine.inputNode.removeTap(onBus: 0)
             }
-            recognitionTask?.cancel()
+            // Use finish() instead of cancel() to get the final transcription
+            recognitionTask?.finish()
             recognitionTask = nil
             recognitionRequest = nil
         }
