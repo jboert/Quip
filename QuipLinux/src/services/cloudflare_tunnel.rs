@@ -1,10 +1,11 @@
 use regex::Regex;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use std::io::BufRead;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use tracing::{error, info, warn};
 
 pub struct CloudflareTunnel {
-    process: Option<tokio::process::Child>,
+    process: Option<Child>,
     public_url: String,
     ws_url: String,
     is_running: bool,
@@ -51,58 +52,62 @@ impl CloudflareTunnel {
         info!("Starting cloudflared tunnel via {binary}");
 
         let mut child = Command::new(&binary)
-            .args(["tunnel", "--url", &format!("http://localhost:{local_port}")])
-            .stderr(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
+            .args([
+                "tunnel",
+                "--url", &format!("http://localhost:{local_port}"),
+                "--protocol", "http2",
+                "--no-autoupdate",
+            ])
+            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .stdin(Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to spawn cloudflared: {e}"))?;
 
-        let stderr = child
-            .stderr
-            .take()
+        // Read stderr on a background thread to find the tunnel URL.
+        // The thread continues draining stderr after we find the URL so
+        // cloudflared doesn't get SIGPIPE.
+        let stderr = child.stderr.take()
             .ok_or_else(|| "Failed to capture cloudflared stderr".to_string())?;
 
-        let url_regex =
-            Regex::new(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com").expect("valid regex");
+        let (tx, rx) = mpsc::channel::<String>();
+        let url_regex = Regex::new(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com").expect("valid regex");
 
-        let mut reader = BufReader::new(stderr).lines();
-
-        // Read stderr lines until we find the public URL or the process exits.
-        let mut found_url = None;
-        let timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
-        tokio::pin!(timeout);
-
-        loop {
-            tokio::select! {
-                line_result = reader.next_line() => {
-                    match line_result {
-                        Ok(Some(line)) => {
-                            if let Some(m) = url_regex.find(&line) {
-                                found_url = Some(m.as_str().to_string());
-                                break;
+        std::thread::Builder::new()
+            .name("cloudflared-stderr".into())
+            .spawn(move || {
+                let reader = std::io::BufReader::new(stderr);
+                let mut sent = false;
+                for line in reader.lines() {
+                    match line {
+                        Ok(line) => {
+                            if !sent {
+                                if let Some(m) = url_regex.find(&line) {
+                                    let _ = tx.send(m.as_str().to_string());
+                                    sent = true;
+                                    info!("Tunnel URL found, continuing to drain stderr");
+                                }
                             }
                         }
-                        Ok(None) => {
-                            return Err("cloudflared exited before producing a URL".into());
-                        }
                         Err(e) => {
-                            return Err(format!("Error reading cloudflared stderr: {e}"));
+                            warn!("cloudflared stderr read error: {e}");
+                            break;
                         }
                     }
                 }
-                _ = &mut timeout => {
-                    // Kill the child since we timed out.
-                    let _ = child.kill().await;
-                    return Err("Timed out waiting for cloudflared URL".into());
-                }
-            }
-        }
+                warn!("cloudflared stderr stream ended");
+            })
+            .map_err(|e| format!("Failed to spawn stderr reader thread: {e}"))?;
 
-        let public_url = found_url.ok_or("No URL captured from cloudflared")?;
+        // Wait for the URL with a timeout
+        let public_url = tokio::task::spawn_blocking(move || {
+            rx.recv_timeout(std::time::Duration::from_secs(30))
+        })
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+        .map_err(|_| "Timed out or cloudflared exited before producing a URL".to_string())?;
+
         let ws_url = public_url.replacen("https://", "wss://", 1);
-
         info!("Cloudflare tunnel established: {public_url}");
 
         self.process = Some(child);
@@ -114,12 +119,13 @@ impl CloudflareTunnel {
     }
 
     /// Stop the running tunnel.
-    pub async fn stop(&mut self) {
+    pub fn stop(&mut self) {
         if let Some(mut child) = self.process.take() {
             info!("Stopping cloudflare tunnel");
-            if let Err(e) = child.kill().await {
+            if let Err(e) = child.kill() {
                 error!("Failed to kill cloudflared process: {e}");
             }
+            let _ = child.wait();
         }
         self.public_url.clear();
         self.ws_url.clear();
@@ -129,17 +135,16 @@ impl CloudflareTunnel {
 
 impl Drop for CloudflareTunnel {
     fn drop(&mut self) {
-        // Best-effort synchronous cleanup; kill_on_drop handles the rest.
         if let Some(ref mut child) = self.process {
-            let _ = child.start_kill();
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
 
 /// Search common locations for the cloudflared binary.
 fn find_cloudflared() -> Option<String> {
-    // Check PATH first via `which`.
-    if let Ok(output) = std::process::Command::new("which")
+    if let Ok(output) = Command::new("which")
         .arg("cloudflared")
         .output()
     {
@@ -151,7 +156,6 @@ fn find_cloudflared() -> Option<String> {
         }
     }
 
-    // Fallback locations.
     let candidates = [
         "/usr/bin/cloudflared",
         "/usr/local/bin/cloudflared",
@@ -163,7 +167,6 @@ fn find_cloudflared() -> Option<String> {
         }
     }
 
-    // ~/.local/bin/cloudflared
     if let Some(home) = std::env::var_os("HOME") {
         let local_bin = std::path::PathBuf::from(home).join(".local/bin/cloudflared");
         if local_bin.exists() {
@@ -207,7 +210,6 @@ async fn download_cloudflared() -> Result<String, String> {
         return Err(format!("failed to download cloudflared: {stderr}"));
     }
 
-    // Make executable
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
         .map_err(|e| format!("failed to chmod cloudflared: {e}"))?;
