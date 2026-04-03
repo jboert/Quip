@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import dev.quip.android.models.QuickActionMessage
+import dev.quip.android.models.RequestContentMessage
 import dev.quip.android.models.SelectWindowMessage
 import dev.quip.android.models.SendTextMessage
 import dev.quip.android.models.SttStateMessage
@@ -54,6 +55,8 @@ class MainActivity : ComponentActivity() {
     private var discoveredHosts = mutableStateListOf<DiscoveredHost>()
     private var recentConnections = mutableStateListOf<SavedConnection>()
     private var showQrScanner by mutableStateOf(false)
+    private var terminalContentText by mutableStateOf<String?>(null)
+    private var terminalContentWindowId by mutableStateOf<String?>(null)
 
     // Services
     private val webSocketClient = QuipWebSocketClient()
@@ -143,6 +146,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        webSocketClient.onTerminalContent = { windowId, content ->
+            terminalContentWindowId = windowId
+            terminalContentText = content
+        }
+
         // Wire up NSD callbacks
         nsdBrowser.onHostsChanged = {
             discoveredHosts.clear()
@@ -185,9 +193,24 @@ class MainActivity : ComponentActivity() {
                             webSocketClient.send(SelectWindowMessage(windowId = windowId))
                         },
                         onWindowAction = { windowId, action ->
-                            webSocketClient.send(QuickActionMessage(windowId = windowId, action = action))
+                            if (action == "view_output") {
+                                webSocketClient.send(RequestContentMessage(windowId = windowId))
+                            } else {
+                                webSocketClient.send(QuickActionMessage(windowId = windowId, action = action))
+                            }
                         },
-                        onStopRecording = { stopRecording() }
+                        onStopRecording = { stopRecording() },
+                        terminalContentText = terminalContentText,
+                        terminalContentWindowName = windows.firstOrNull { it.id == terminalContentWindowId }?.name ?: "Terminal",
+                        onDismissContent = {
+                            terminalContentText = null
+                            terminalContentWindowId = null
+                        },
+                        onRefreshContent = {
+                            terminalContentWindowId?.let { wid ->
+                                webSocketClient.send(RequestContentMessage(windowId = wid))
+                            }
+                        }
                     )
                 }
             }

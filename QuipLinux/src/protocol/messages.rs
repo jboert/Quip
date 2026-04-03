@@ -98,6 +98,31 @@ pub struct SttStateMessage {
     pub window_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RequestContentMessage {
+    #[serde(rename = "windowId")]
+    pub window_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TerminalContentMessage {
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(rename = "windowId")]
+    pub window_id: String,
+    pub content: String,
+}
+
+impl TerminalContentMessage {
+    pub fn new(window_id: String, content: String) -> Self {
+        Self {
+            type_: "terminal_content".into(),
+            window_id,
+            content,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Encoding helpers — JSON with sorted keys to match Swift's sortedKeys output
 // ---------------------------------------------------------------------------

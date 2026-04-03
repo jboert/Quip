@@ -328,9 +328,10 @@ fn start_services(
     let ss_handler = shared_state.clone();
     let ib_handler = input_backend.clone();
     let wb_handler = window_backend.clone();
+    let ws_handler = ws_server.clone();
     glib::spawn_future_local(async move {
         while let Ok(json) = gtk_rx.recv().await {
-            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler);
+            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler);
         }
     });
 }
@@ -340,6 +341,7 @@ fn handle_incoming_message(
     shared_state: &SharedState,
     window_backend: &dyn platform::traits::WindowBackend,
     input_backend: &dyn platform::traits::InputBackend,
+    ws_server: &crate::services::ws_server::WsServer,
 ) {
     use message_router::IncomingAction;
 
@@ -382,7 +384,7 @@ fn handle_incoming_message(
                 match action.as_str() {
                     "press_return" => { let _ = input_backend.send_keystroke(wid, "return"); }
                     "press_ctrl_c" => { let _ = input_backend.send_keystroke(wid, "ctrl+c"); }
-                    "clear_terminal" => { let _ = input_backend.send_text(wid, "clear", true); }
+                    "clear_terminal" => { let _ = input_backend.send_text(wid, "/clear", true); }
                     "restart_claude" => {
                         let _ = input_backend.send_keystroke(wid, "ctrl+c");
                         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -410,6 +412,25 @@ fn handle_incoming_message(
             state.state_detector.clear_stt(&window_id);
             if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                 crate::services::terminal_color::reset_background_color(w.pid);
+            }
+        }
+        IncomingAction::RequestContent(window_id) => {
+            let content = if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
+                match input_backend.read_content(w.window_id) {
+                    Ok(text) => {
+                        // Trim to last ~200 lines
+                        let lines: Vec<&str> = text.lines().collect();
+                        let start = lines.len().saturating_sub(200);
+                        lines[start..].join("\n")
+                    }
+                    Err(e) => format!("(Failed to read terminal content: {e})"),
+                }
+            } else {
+                "(Window not found)".into()
+            };
+            let msg = crate::protocol::messages::TerminalContentMessage::new(window_id, content);
+            if let Some(json) = crate::protocol::messages::encode_message(&msg) {
+                ws_server.broadcast(&json);
             }
         }
     }

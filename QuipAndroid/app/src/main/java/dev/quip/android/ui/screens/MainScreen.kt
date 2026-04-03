@@ -28,8 +28,13 @@ fun MainScreen(
     onSelectWindow: (String) -> Unit,
     onWindowAction: (String, String) -> Unit,
     onStopRecording: () -> Unit,
+    terminalContentText: String? = null,
+    terminalContentWindowName: String = "Terminal",
+    onDismissContent: () -> Unit = {},
+    onRefreshContent: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    androidx.compose.foundation.layout.Box(modifier = modifier) {
     if (isConnected || isConnecting) {
         LayoutScreen(
             windows = windows,
@@ -40,8 +45,7 @@ fun MainScreen(
             onSelectWindow = onSelectWindow,
             onWindowAction = onWindowAction,
             onStopRecording = onStopRecording,
-            onDisconnect = onDisconnect,
-            modifier = modifier
+            onDisconnect = onDisconnect
         )
     } else {
         ConnectionScreen(
@@ -54,8 +58,17 @@ fun MainScreen(
             onPinToggle = onPinToggle,
             onRename = onRename,
             onDelete = onDelete,
-            onScanQR = onScanQR,
-            modifier = modifier
+            onScanQR = onScanQR
         )
+    }
+
+    if (terminalContentText != null) {
+        dev.quip.android.ui.components.TerminalContentOverlay(
+            content = terminalContentText,
+            windowName = terminalContentWindowName,
+            onDismiss = onDismissContent,
+            onRefresh = onRefreshContent
+        )
+    }
     }
 }

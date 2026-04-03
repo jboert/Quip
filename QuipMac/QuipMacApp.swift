@@ -132,6 +132,18 @@ struct QuipMacApp: App {
                     terminalColorManager.updateColor(for: msg.windowId, state: .neutral, terminalApp: terminalAppForWindow(window))
                 }
             }
+        case "request_content":
+            if let msg = MessageCoder.decode(RequestContentMessage.self, from: data) {
+                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
+                    let termApp = terminalAppForWindow(window)
+                    let wn = window.windowNumber
+                    let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                    // Send only last ~200 lines to keep payload reasonable
+                    let lines = content.components(separatedBy: "\n")
+                    let trimmed = lines.suffix(200).joined(separator: "\n")
+                    webSocketServer.broadcast(TerminalContentMessage(windowId: msg.windowId, content: trimmed))
+                }
+            }
         default:
             break
         }
@@ -143,7 +155,7 @@ struct QuipMacApp: App {
         switch action {
         case "press_return": keystrokeInjector.sendKeystroke("return", to: window.id, terminalApp: termApp)
         case "press_ctrl_c": keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
-        case "clear_terminal": keystrokeInjector.sendText("clear", to: window.id, pressReturn: true, terminalApp: termApp)
+        case "clear_terminal": keystrokeInjector.sendText("/clear", to: window.id, pressReturn: true, terminalApp: termApp)
         case "restart_claude":
             keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

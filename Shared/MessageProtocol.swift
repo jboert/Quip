@@ -107,6 +107,28 @@ struct STTStateMessage: Codable, Sendable {
     }
 }
 
+struct RequestContentMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+
+    init(windowId: String) {
+        self.type = "request_content"
+        self.windowId = windowId
+    }
+}
+
+struct TerminalContentMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+    let content: String
+
+    init(windowId: String, content: String) {
+        self.type = "terminal_content"
+        self.windowId = windowId
+        self.content = content
+    }
+}
+
 // MARK: - Message Encoding/Decoding Helpers
 
 enum MessageCoder {

@@ -63,6 +63,17 @@ data class SttStateMessage(
     }
 }
 
+data class RequestContentMessage(
+    val type: String = "request_content",
+    @SerializedName("windowId") val windowId: String
+)
+
+data class TerminalContentMessage(
+    val type: String = "terminal_content",
+    @SerializedName("windowId") val windowId: String,
+    val content: String
+)
+
 // MARK: - Message Envelope (for peeking at type before full deserialization)
 
 data class MessageEnvelope(val type: String)

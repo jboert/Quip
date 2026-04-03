@@ -164,6 +164,44 @@ final class KeystrokeInjector {
         return executeAppleScript(script, context: "spawnTerminal in \(directory)")
     }
 
+    // MARK: - Read Terminal Content
+
+    /// Read the visible/recent text content from a terminal window via AppleScript.
+    func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0) -> String? {
+        let script: String
+        switch terminalApp {
+        case .terminal:
+            script = """
+            tell application "Terminal"
+                return contents of front window
+            end tell
+            """
+        case .iterm2:
+            script = """
+            tell application "iTerm2"
+                try
+                    repeat with w in windows
+                        if id of w is \(cgWindowNumber) then
+                            tell current session of w
+                                return contents
+                            end tell
+                        end if
+                    end repeat
+                end try
+                tell current session of front window
+                    return contents
+                end tell
+            end tell
+            """
+        }
+
+        guard let appleScript = NSAppleScript(source: script) else { return nil }
+        var errorInfo: NSDictionary?
+        let result = appleScript.executeAndReturnError(&errorInfo)
+        if errorInfo != nil { return nil }
+        return result.stringValue
+    }
+
     // MARK: - Helpers
 
     /// Build a System Events keystroke AppleScript targeting the correct terminal

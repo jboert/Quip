@@ -106,9 +106,15 @@ struct WindowRectangle: View {
             }
 
             Button {
+                onAction?(.viewOutput)
+            } label: {
+                Label("View Output", systemImage: "text.alignleft")
+            }
+
+            Button {
                 onAction?(.clearTerminal)
             } label: {
-                Label("Clear Terminal", systemImage: "trash")
+                Label("Clear Context", systemImage: "eraser")
             }
 
             Button {
@@ -146,6 +152,7 @@ struct WindowRectangle: View {
 enum WindowAction {
     case pressReturn
     case cancel
+    case viewOutput
     case clearTerminal
     case restartClaude
     case toggleEnabled
