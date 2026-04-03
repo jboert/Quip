@@ -1,4 +1,5 @@
-use crate::protocol::types::{Rect, WindowFrame, WindowState};
+use crate::protocol::types::Rect;
+use crate::protocol::messages::WindowState;
 
 /// A window managed by Quip
 #[derive(Debug, Clone)]
