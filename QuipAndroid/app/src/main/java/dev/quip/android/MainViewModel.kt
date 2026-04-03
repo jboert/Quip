@@ -36,8 +36,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val TAG = "Quip"
         private const val PREFS_NAME = "quip_prefs"
         private const val KEY_LAST_URL = "last_url"
-        private const val STOP_RECORDING_DELAY_MS = 800L
-        private const val RESULT_TIMEOUT_MS = 1000L
+        private const val STOP_RECORDING_DELAY_MS = 2500L  // extra recording after button release for conversational pauses
+        private const val RESULT_TIMEOUT_MS = 1500L
     }
 
     // Recording state machine
@@ -73,6 +73,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var terminalContentWindowId by mutableStateOf<String?>(null)
         private set
+    var showTextInput by mutableStateOf(false)
+    var textInputValue by mutableStateOf("")
 
     // Orientation request callback — set by Activity
     var onRequestOrientation: ((Int) -> Unit)? = null
@@ -342,6 +344,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         terminalContentWindowId?.let { wid ->
             webSocketClient.send(QuickActionMessage(windowId = wid, action = action))
         }
+    }
+
+    fun sendTextInput() {
+        val text = textInputValue.trim()
+        val windowId = selectedWindowId ?: return
+        if (text.isEmpty()) return
+        webSocketClient.send(SendTextMessage(windowId = windowId, text = text))
+        textInputValue = ""
     }
 
     fun refreshTerminalContent() {

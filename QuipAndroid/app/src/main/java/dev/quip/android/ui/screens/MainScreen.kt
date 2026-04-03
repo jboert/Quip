@@ -28,6 +28,11 @@ fun MainScreen(
     onSelectWindow: (String) -> Unit,
     onWindowAction: (String, String) -> Unit,
     onStopRecording: () -> Unit,
+    showTextInput: Boolean = false,
+    textInputValue: String = "",
+    onTextInputChange: (String) -> Unit = {},
+    onToggleTextInput: () -> Unit = {},
+    onSendTextInput: () -> Unit = {},
     terminalContentText: String? = null,
     terminalContentScreenshot: String? = null,
     terminalContentWindowName: String = "Terminal",
@@ -47,7 +52,12 @@ fun MainScreen(
             onSelectWindow = onSelectWindow,
             onWindowAction = onWindowAction,
             onStopRecording = onStopRecording,
-            onDisconnect = onDisconnect
+            onDisconnect = onDisconnect,
+            showTextInput = showTextInput,
+            textInputValue = textInputValue,
+            onTextInputChange = onTextInputChange,
+            onToggleTextInput = onToggleTextInput,
+            onSendTextInput = onSendTextInput
         )
     } else {
         ConnectionScreen(

@@ -8,6 +8,11 @@ import SwiftUI
 @MainActor
 final class HardwareButtonHandler {
 
+    // Suppression windows: shorter for self-triggered KVO echoes,
+    // slightly longer for PTT transitions that reconfigure the audio session.
+    private static let volumeRestoreSuppression: TimeInterval = 0.3
+    private static let pttTransitionSuppression: TimeInterval = 0.4
+
     var selectedIndex = 0
     private(set) var windowCount = 0
 
@@ -59,14 +64,14 @@ final class HardwareButtonHandler {
                 if self.isPTTActive {
                     // ANY volume button press stops recording
                     self.isPTTActive = false
-                    self.suppressUntil = Date().addingTimeInterval(0.5)
+                    self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
                     self.onPTTStop?()
                     return
                 }
 
                 if wentDown {
                     self.isPTTActive = true
-                    self.suppressUntil = Date().addingTimeInterval(0.5)
+                    self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
                     self.onPTTStart?()
                 } else {
                     guard self.windowCount > 0 else { return }
@@ -81,7 +86,7 @@ final class HardwareButtonHandler {
     private func restoreVolume() {
         guard let target = savedVolume else { return }
         // Suppress the KVO event that will fire from our own volume change
-        suppressUntil = Date().addingTimeInterval(0.5)
+        suppressUntil = Date().addingTimeInterval(Self.volumeRestoreSuppression)
         HiddenVolumeView.setVolume(target)
     }
 
