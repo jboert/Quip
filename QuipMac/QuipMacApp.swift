@@ -153,27 +153,49 @@ struct QuipMacApp: App {
     @MainActor
     private func handleQuickAction(_ action: String, for window: ManagedWindow) {
         let termApp = terminalAppForWindow(window)
-        switch action {
-        case "press_return": keystrokeInjector.sendKeystroke("return", to: window.id, terminalApp: termApp)
-        case "press_ctrl_c": keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
-        case "press_ctrl_d": keystrokeInjector.sendKeystroke("ctrl+d", to: window.id, terminalApp: termApp)
-        case "press_escape": keystrokeInjector.sendKeystroke("escape", to: window.id, terminalApp: termApp)
-        case "press_tab": keystrokeInjector.sendKeystroke("tab", to: window.id, terminalApp: termApp)
-        case "press_y":
+        // Focus the target window first so keystrokes land in the right place
+        if action != "toggle_enabled" {
             windowManager.focusWindow(window.id)
+        }
+        switch action {
+        case "press_return":
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                keystrokeInjector.sendKeystroke("return", to: window.id, terminalApp: termApp)
+            }
+        case "press_ctrl_c":
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
+            }
+        case "press_ctrl_d":
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                keystrokeInjector.sendKeystroke("ctrl+d", to: window.id, terminalApp: termApp)
+            }
+        case "press_escape":
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                keystrokeInjector.sendKeystroke("escape", to: window.id, terminalApp: termApp)
+            }
+        case "press_tab":
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                keystrokeInjector.sendKeystroke("tab", to: window.id, terminalApp: termApp)
+            }
+        case "press_y":
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 self.keystrokeInjector.sendText("y", to: window.id, pressReturn: true, terminalApp: termApp)
             }
         case "press_n":
-            windowManager.focusWindow(window.id)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 self.keystrokeInjector.sendText("n", to: window.id, pressReturn: true, terminalApp: termApp)
             }
-        case "clear_terminal": keystrokeInjector.sendText("/clear", to: window.id, pressReturn: true, terminalApp: termApp)
+        case "clear_terminal":
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                keystrokeInjector.sendText("/clear", to: window.id, pressReturn: true, terminalApp: termApp)
+            }
         case "restart_claude":
-            keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                keystrokeInjector.sendText("claude", to: window.id, pressReturn: true, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    keystrokeInjector.sendText("claude", to: window.id, pressReturn: true, terminalApp: termApp)
+                }
             }
         case "toggle_enabled": windowManager.toggleWindow(window.id, enabled: !window.isEnabled)
         default: break

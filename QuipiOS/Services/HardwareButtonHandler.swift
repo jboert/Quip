@@ -11,7 +11,7 @@ final class HardwareButtonHandler {
     // Suppression windows: shorter for self-triggered KVO echoes,
     // slightly longer for PTT transitions that reconfigure the audio session.
     private static let volumeRestoreSuppression: TimeInterval = 0.3
-    private static let pttTransitionSuppression: TimeInterval = 0.4
+    private static let pttTransitionSuppression: TimeInterval = 0.25
 
     var selectedIndex = 0
     private(set) var windowCount = 0
