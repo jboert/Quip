@@ -20,6 +20,8 @@ struct WindowListSidebar: View {
             Divider()
             bottomBar
         }
+        .onAppear { syncWindowOrder() }
+        .onChange(of: windowManager.windows.map(\.id)) { _, _ in syncWindowOrder() }
     }
 
     // MARK: - Header
@@ -67,15 +69,22 @@ struct WindowListSidebar: View {
         for window in allWindows {
             if !windowOrder.contains(window.id) {
                 ordered.append(window)
-                windowOrder.append(window.id)
             }
         }
 
-        // Clean up stale IDs
+        return ordered
+    }
+
+    /// Sync windowOrder binding with current window list — called outside of body evaluation
+    private func syncWindowOrder() {
+        let allWindows = windowManager.windows
+        for window in allWindows {
+            if !windowOrder.contains(window.id) {
+                windowOrder.append(window.id)
+            }
+        }
         let activeIds = Set(allWindows.map(\.id))
         windowOrder.removeAll { !activeIds.contains($0) }
-
-        return ordered
     }
 
     private var windowList: some View {
