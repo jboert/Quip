@@ -1,178 +1,197 @@
 package dev.quip.android.services
 
 import android.content.Context
-import android.content.Intent
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.util.Log
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import org.json.JSONObject
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.RecognitionListener
+import org.vosk.android.SpeechService as VoskSpeechService
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URL
+import java.util.zip.ZipInputStream
 
 class SpeechService {
 
     companion object {
         private const val TAG = "SpeechService"
+        private const val MODEL_NAME = "vosk-model-small-en-us-0.15"
+        private const val MODEL_URL = "https://alphacephei.com/vosk/models/$MODEL_NAME.zip"
+        private const val SAMPLE_RATE = 16000.0f
     }
 
     @Volatile var isRecording: Boolean = false
         private set
     @Volatile var transcribedText: String = ""
         private set
-    @Volatile private var gotFinalResult: Boolean = false
+    @Volatile var isModelReady: Boolean = false
+        private set
+    @Volatile var isModelDownloading: Boolean = false
+        private set
 
     var onPartialResult: ((String) -> Unit)? = null
     var onFinalResult: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
 
-    private var speechRecognizer: SpeechRecognizer? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private var model: Model? = null
+    private var voskService: VoskSpeechService? = null
 
-    fun isAvailable(context: Context): Boolean {
-        return SpeechRecognizer.isRecognitionAvailable(context)
+    /**
+     * Initialize the Vosk model. Downloads on first use, then loads from disk.
+     * Call from a background thread or early in the app lifecycle.
+     */
+    fun initModel(context: Context, onReady: (() -> Unit)? = null) {
+        if (isModelReady) { onReady?.invoke(); return }
+
+        Thread {
+            try {
+                val modelDir = File(context.filesDir, MODEL_NAME)
+                if (!modelDir.exists()) {
+                    isModelDownloading = true
+                    Log.i(TAG, "Downloading Vosk model from $MODEL_URL")
+                    downloadAndUnzip(MODEL_URL, context.filesDir)
+                    isModelDownloading = false
+                    Log.i(TAG, "Model downloaded and extracted to ${modelDir.absolutePath}")
+                }
+
+                model = Model(modelDir.absolutePath)
+                isModelReady = true
+                Log.i(TAG, "Vosk model loaded successfully")
+                onReady?.invoke()
+            } catch (e: Throwable) {
+                isModelDownloading = false
+                Log.e(TAG, "Failed to init Vosk model: ${e.message}", e)
+                onError?.invoke("Failed to load speech model: ${e.message}")
+            }
+        }.start()
     }
 
     fun startRecording(context: Context) {
         if (isRecording) return
 
-        if (!isAvailable(context)) {
-            Log.e(TAG, "Speech recognition not available")
-            onError?.invoke("Speech recognition not available on this device")
+        val currentModel = model
+        if (currentModel == null) {
+            Log.e(TAG, "Model not loaded yet")
+            onError?.invoke("Speech model not ready — downloading...")
+            initModel(context)
             return
         }
 
         transcribedText = ""
-        gotFinalResult = false
         isRecording = true
 
-        val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-        speechRecognizer = recognizer
+        try {
+            val recognizer = Recognizer(currentModel, SAMPLE_RATE)
+            val service = VoskSpeechService(recognizer, SAMPLE_RATE)
+            voskService = service
 
-        recognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                Log.d(TAG, "Ready for speech")
-            }
-
-            override fun onBeginningOfSpeech() {
-                Log.d(TAG, "Speech started")
-            }
-
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-
-            override fun onEndOfSpeech() {
-                Log.d(TAG, "Speech ended")
-            }
-
-            override fun onError(error: Int) {
-                val message = when (error) {
-                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
-                    SpeechRecognizer.ERROR_CLIENT -> "Client error"
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Insufficient permissions"
-                    SpeechRecognizer.ERROR_NETWORK -> "Network error"
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized"
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-                    SpeechRecognizer.ERROR_SERVER -> "Server error"
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech input"
-                    else -> "Unknown error ($error)"
+            service.startListening(object : RecognitionListener {
+                override fun onPartialResult(hypothesis: String?) {
+                    val text = parseText(hypothesis, "partial")
+                    if (text.isNotEmpty()) {
+                        transcribedText = text
+                        Log.d(TAG, "Partial: '$text'")
+                        onPartialResult?.invoke(text)
+                    }
                 }
-                Log.e(TAG, "Recognition error: $message (code=$error)")
-                // ERROR_NO_MATCH and ERROR_SPEECH_TIMEOUT are not fatal —
-                // they mean recognition finished with no text
-                gotFinalResult = true
-                isRecording = false
-                if (error != SpeechRecognizer.ERROR_CLIENT) {
-                    onError?.invoke(message)
+
+                override fun onResult(hypothesis: String?) {
+                    val text = parseText(hypothesis, "text")
+                    if (text.isNotEmpty()) {
+                        transcribedText = text
+                        Log.d(TAG, "Result: '$text'")
+                    }
                 }
-            }
 
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val bestResult = matches?.firstOrNull() ?: ""
-                if (bestResult.isNotEmpty()) {
-                    transcribedText = bestResult
+                override fun onFinalResult(hypothesis: String?) {
+                    val text = parseText(hypothesis, "text")
+                    if (text.isNotEmpty()) {
+                        transcribedText = text
+                    }
+                    Log.d(TAG, "Final: '$transcribedText'")
+                    isRecording = false
+                    onFinalResult?.invoke(transcribedText)
                 }
-                Log.d(TAG, "Final result: '$transcribedText'")
-                gotFinalResult = true
-                isRecording = false
-                onFinalResult?.invoke(transcribedText)
-            }
 
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val partial = matches?.firstOrNull() ?: ""
-                if (partial.isNotEmpty()) {
-                    transcribedText = partial
-                    Log.d(TAG, "Partial result: '$partial'")
-                    onPartialResult?.invoke(partial)
+                override fun onError(exception: Exception?) {
+                    Log.e(TAG, "Vosk error: ${exception?.message}")
+                    isRecording = false
+                    onError?.invoke(exception?.message ?: "Recognition error")
                 }
-            }
 
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
+                override fun onTimeout() {
+                    Log.d(TAG, "Vosk timeout")
+                    isRecording = false
+                    onFinalResult?.invoke(transcribedText)
+                }
+            })
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            Log.i(TAG, "Started recording with Vosk")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start recording: ${e.message}", e)
+            isRecording = false
+            onError?.invoke("Failed to start recording: ${e.message}")
         }
-
-        recognizer.startListening(intent)
-        Log.i(TAG, "Started recording")
     }
 
-    /**
-     * Stop recording and return the transcribed text.
-     * Signals the recognizer to stop, then waits briefly for the final result
-     * callback before returning whatever text we have.
-     */
-    fun stopRecording(): String {
-        Log.i(TAG, "stopRecording called, gotFinalResult=$gotFinalResult, text='$transcribedText'")
-
-        // If we already got a final result (recognizer auto-stopped), just clean up
-        if (gotFinalResult) {
-            cleanupRecognizer()
-            return transcribedText
-        }
-
-        // Tell recognizer to finish — this triggers onResults asynchronously
+    fun requestStop() {
+        Log.i(TAG, "requestStop called, current text='$transcribedText'")
         try {
-            speechRecognizer?.stopListening()
+            voskService?.stop() // triggers onFinalResult
         } catch (e: Exception) {
-            Log.w(TAG, "stopListening error: ${e.message}")
+            Log.w(TAG, "stop error: ${e.message}")
         }
+        voskService = null
+    }
 
-        // Wait up to 1.5 seconds for the final result callback
-        val startTime = System.currentTimeMillis()
-        while (!gotFinalResult && System.currentTimeMillis() - startTime < 1500) {
-            Thread.sleep(50)
-        }
-
-        Log.i(TAG, "After wait: gotFinalResult=$gotFinalResult, text='$transcribedText'")
-
-        cleanupRecognizer()
+    fun stopRecording(): String {
+        Log.i(TAG, "stopRecording called, text='$transcribedText'")
+        requestStop()
         isRecording = false
         return transcribedText
     }
 
-    private fun cleanupRecognizer() {
-        mainHandler.post {
-            try {
-                speechRecognizer?.destroy()
-            } catch (e: Exception) {
-                Log.w(TAG, "destroy error: ${e.message}")
-            }
-            speechRecognizer = null
+    fun destroy() {
+        voskService?.apply {
+            stop()
+            shutdown()
+        }
+        voskService = null
+        model?.close()
+        model = null
+        isRecording = false
+        isModelReady = false
+    }
+
+    private fun parseText(json: String?, key: String): String {
+        if (json.isNullOrBlank()) return ""
+        return try {
+            JSONObject(json).optString(key, "").trim()
+        } catch (e: Exception) {
+            ""
         }
     }
 
-    fun destroy() {
-        speechRecognizer?.destroy()
-        speechRecognizer = null
-        isRecording = false
+    private fun downloadAndUnzip(url: String, destDir: File) {
+        val connection = URL(url).openConnection()
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 60_000
+        ZipInputStream(connection.getInputStream().buffered()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val outFile = File(destDir, entry.name)
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { fos ->
+                        zis.copyTo(fos)
+                    }
+                }
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
     }
 }

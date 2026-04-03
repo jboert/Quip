@@ -104,11 +104,11 @@ struct QuipApp: App {
     @MainActor
     private func stopRecording() {
         guard isRecording else { return }
+        isRecording = false // Set immediately to prevent re-entry from rapid presses
         let windowId = selectedWindowId
         NSLog("[Quip] stopRecording called, windowId=%@", windowId ?? "nil")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [self] in
             let text = speech.stopRecording()
-            isRecording = false
             NSLog("[Quip] Transcribed: '%@' (length=%d)", text, text.count)
             if let windowId {
                 client.send(STTStateMessage.ended(windowId: windowId))

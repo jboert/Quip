@@ -17,8 +17,7 @@ final class HardwareButtonHandler {
 
     private var volumeObservation: NSKeyValueObservation?
     private(set) var isPTTActive = false
-    // Counts how many KVO events to skip (audio session switches cause 1-2 spurious events)
-    private var skipCount = 0
+    private var suppressUntil: Date = .distantPast
 
     func startMonitoring(windowCount: Int) {
         guard windowCount > 0 else { return }
@@ -27,9 +26,12 @@ final class HardwareButtonHandler {
 
         guard volumeObservation == nil else { return }
 
+        // Use .playAndRecord so volume KVO keeps working even while the mic is active.
+        // The speech service no longer switches categories — it stays on .playAndRecord.
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .default, options: .mixWithOthers)
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.mixWithOthers, .defaultToSpeaker])
             try session.setActive(true)
         } catch {}
 
@@ -39,30 +41,25 @@ final class HardwareButtonHandler {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
 
+                // Ignore phantom KVO events caused by audio session reconfiguration
+                guard Date() >= self.suppressUntil else { return }
+
                 let delta = newVol - oldVol
                 guard abs(delta) > 0.001 else { return }
-
-                // Skip spurious KVO events from audio session category changes
-                if self.skipCount > 0 {
-                    self.skipCount -= 1
-                    return
-                }
 
                 let wentDown = delta < 0
 
                 if self.isPTTActive {
                     // ANY volume button press stops recording
                     self.isPTTActive = false
-                    // Skip next 2 KVO events (audio session switching back to playback)
-                    self.skipCount = 2
+                    self.suppressUntil = Date().addingTimeInterval(0.5)
                     self.onPTTStop?()
                     return
                 }
 
                 if wentDown {
                     self.isPTTActive = true
-                    // Skip next 2 KVO events (audio session switching to record)
-                    self.skipCount = 2
+                    self.suppressUntil = Date().addingTimeInterval(0.5)
                     self.onPTTStart?()
                 } else {
                     guard self.windowCount > 0 else { return }
