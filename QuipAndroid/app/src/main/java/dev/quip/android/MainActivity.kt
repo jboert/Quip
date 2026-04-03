@@ -96,6 +96,14 @@ class MainActivity : ComponentActivity() {
                         onSelectWindow = { windowId -> vm.selectWindow(windowId) },
                         onWindowAction = { windowId, action -> vm.handleWindowAction(windowId, action) },
                         onStopRecording = { vm.stopRecording() },
+                        showTextInput = vm.showTextInput,
+                        textInputValue = vm.textInputValue,
+                        onTextInputChange = { vm.textInputValue = it },
+                        onToggleTextInput = {
+                            vm.showTextInput = !vm.showTextInput
+                            if (!vm.showTextInput) vm.textInputValue = ""
+                        },
+                        onSendTextInput = { vm.sendTextInput() },
                         terminalContentText = vm.terminalContentText,
                         terminalContentScreenshot = vm.terminalContentScreenshot,
                         terminalContentWindowName = vm.terminalContentWindowName,

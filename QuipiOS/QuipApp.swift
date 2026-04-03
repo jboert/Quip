@@ -64,8 +64,6 @@ struct QuipApp: App {
                 // Switch to landscape on first layout received
                 if wasEmpty && !update.windows.isEmpty {
                     AppOrientationDelegate.allowLandscape = true
-                    // Force rotation via UIDevice
-                    UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
                     if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
                         scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
                     }
@@ -139,7 +137,8 @@ struct QuipApp: App {
         }
         let windowId = selectedWindowId
         NSLog("[Quip] stopRecording called, windowId=%@", windowId ?? "nil")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [self] in
+        // Allow extra recording time after button release for conversational pauses
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [self] in
             let text = speech.stopRecording()
             NSLog("[Quip] Transcribed: '%@' (length=%d)", text, text.count)
             if let windowId {
@@ -176,6 +175,8 @@ struct MainiOSView: View {
     @State private var recentConnections: [SavedConnection] = []
     @State private var editingConnection: SavedConnection?
     @State private var renameText: String = ""
+    @State private var showTextInput = false
+    @State private var textInputValue = ""
 
     var body: some View {
         ZStack {
@@ -196,6 +197,10 @@ struct MainiOSView: View {
                 windowLayout
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
+
+                if showTextInput {
+                    textInputBar
+                }
 
                 bottomBar
                     .padding(.horizontal, 6)
@@ -481,7 +486,53 @@ struct MainiOSView: View {
                     .foregroundStyle(.white.opacity(0.4))
             }
             Spacer()
+            if client.isConnected {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showTextInput.toggle()
+                        if !showTextInput { textInputValue = "" }
+                    }
+                } label: {
+                    Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
         }
+    }
+
+    // MARK: - Text Input Bar
+
+    private var textInputBar: some View {
+        HStack(spacing: 6) {
+            TextField("Type a prompt\u{2026}", text: $textInputValue)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .onSubmit { sendTextInput() }
+
+            Button { sendTextInput() } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(textInputValue.isEmpty ? .white.opacity(0.2) : .blue)
+            }
+            .disabled(textInputValue.isEmpty)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(Color(red: 0.07, green: 0.07, blue: 0.09))
+    }
+
+    private func sendTextInput() {
+        let text = textInputValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let windowId = selectedWindowId else { return }
+        client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
+        textInputValue = ""
     }
 
     // MARK: - Window Layout
@@ -575,18 +626,19 @@ struct MainiOSView: View {
         }
     }
 
+    private static let maxConnections = 10
+
     private func addToRecents(_ url: String) {
         if let i = recentConnections.firstIndex(where: { $0.url == url }) {
             recentConnections[i].lastUsed = Date()
         } else {
             recentConnections.append(SavedConnection(url: url))
         }
-        // Keep max 10
+        // Keep max 10 total: all pinned + newest unpinned to fill remaining slots
+        let pinned = recentConnections.filter(\.pinned)
         let unpinned = recentConnections.filter { !$0.pinned }.sorted { $0.lastUsed > $1.lastUsed }
-        if unpinned.count > 8 {
-            let toRemove = Set(unpinned.dropFirst(8).map(\.id))
-            recentConnections.removeAll { toRemove.contains($0.id) }
-        }
+        let unpinnedLimit = max(0, Self.maxConnections - pinned.count)
+        recentConnections = pinned + Array(unpinned.prefix(unpinnedLimit))
         saveRecents()
     }
 

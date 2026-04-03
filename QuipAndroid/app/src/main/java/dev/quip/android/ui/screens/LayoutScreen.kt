@@ -22,7 +22,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,7 +38,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.quip.android.models.WindowState
@@ -52,6 +60,11 @@ fun LayoutScreen(
     onWindowAction: (String, String) -> Unit,
     onStopRecording: () -> Unit,
     onDisconnect: () -> Unit,
+    showTextInput: Boolean = false,
+    textInputValue: String = "",
+    onTextInputChange: (String) -> Unit = {},
+    onToggleTextInput: () -> Unit = {},
+    onSendTextInput: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var contextMenuWindow by remember { mutableStateOf<WindowState?>(null) }
@@ -123,10 +136,22 @@ fun LayoutScreen(
                 }
             }
 
+            // Text input bar
+            if (showTextInput) {
+                TextInputBar(
+                    value = textInputValue,
+                    onValueChange = onTextInputChange,
+                    onSend = onSendTextInput
+                )
+            }
+
             // Bottom bar: selected window indicator
             BottomBar(
                 windows = windows,
-                selectedWindowId = selectedWindowId
+                selectedWindowId = selectedWindowId,
+                showKeyboard = isConnected,
+                isTextInputVisible = showTextInput,
+                onToggleTextInput = onToggleTextInput
             )
         }
 
@@ -207,7 +232,10 @@ private fun TopStatusBar(
 @Composable
 private fun BottomBar(
     windows: List<WindowState>,
-    selectedWindowId: String?
+    selectedWindowId: String?,
+    showKeyboard: Boolean = false,
+    isTextInputVisible: Boolean = false,
+    onToggleTextInput: () -> Unit = {}
 ) {
     val selected = windows.firstOrNull { it.id == selectedWindowId }
     Row(
@@ -237,6 +265,74 @@ private fun BottomBar(
             )
         }
         Spacer(modifier = Modifier.weight(1f))
+        if (showKeyboard) {
+            Text(
+                text = if (isTextInputVisible) "\u2328\u2193" else "\u2328",
+                color = Color.White.copy(alpha = 0.5f),
+                fontSize = 14.sp,
+                modifier = Modifier.clickable(onClick = onToggleTextInput)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TextInputBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF101014))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = {
+                Text(
+                    "Type a prompt\u2026",
+                    color = Color.White.copy(alpha = 0.3f),
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            },
+            textStyle = TextStyle(
+                color = Color.White,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace
+            ),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.White.copy(alpha = 0.08f),
+                unfocusedContainerColor = Color.White.copy(alpha = 0.08f),
+                cursorColor = Color.White,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent
+            ),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { onSend() }),
+            singleLine = true,
+            modifier = Modifier
+                .weight(1f)
+                .height(40.dp)
+                .clip(RoundedCornerShape(6.dp))
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        IconButton(
+            onClick = onSend,
+            enabled = value.isNotBlank(),
+            modifier = Modifier.size(32.dp)
+        ) {
+            Text(
+                text = "\u2191",
+                color = if (value.isNotBlank()) Color(0xFF3B82F6) else Color.White.copy(alpha = 0.2f),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
