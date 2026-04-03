@@ -2,38 +2,15 @@ package dev.quip.android.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Divider
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +19,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.quip.android.models.SavedConnection
@@ -56,6 +34,7 @@ fun ConnectionScreen(
     urlText: String,
     onUrlChange: (String) -> Unit,
     onConnect: (String) -> Unit,
+    onPaste: () -> Unit,
     discoveredHosts: List<DiscoveredHost>,
     recentConnections: List<SavedConnection>,
     onPinToggle: (SavedConnection) -> Unit,
@@ -69,60 +48,110 @@ fun ConnectionScreen(
         modifier = modifier
             .fillMaxSize()
             .background(DarkBackground)
-            .padding(horizontal = 24.dp, vertical = 32.dp)
+            .padding(horizontal = 20.dp, vertical = 32.dp)
     ) {
         // Title
         Text(
             text = "Quip",
             color = AmberPrimary,
-            fontSize = 32.sp,
+            fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // URL input
-        TextField(
-            value = urlText,
-            onValueChange = onUrlChange,
-            placeholder = {
-                Text(
-                    "ws://192.168.x.x:8765",
-                    color = Color.White.copy(alpha = 0.3f),
-                    fontFamily = FontFamily.Monospace
-                )
-            },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Uri,
-                imeAction = ImeAction.Go
-            ),
-            keyboardActions = KeyboardActions(onGo = { onConnect(urlText) }),
-            colors = TextFieldDefaults.textFieldColors(
-                containerColor = DarkSurface,
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                cursorColor = AmberPrimary,
-                focusedIndicatorColor = AmberPrimary,
-                unfocusedIndicatorColor = Color.White.copy(alpha = 0.15f)
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Connect button
-        Button(
-            onClick = { onConnect(urlText) },
-            enabled = urlText.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = AmberPrimary,
-                contentColor = DarkBackground
-            ),
-            shape = RoundedCornerShape(8.dp),
+        // URL bar row — text field + paste + QR + connect
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Connect", fontWeight = FontWeight.Bold)
+            // URL text field
+            TextField(
+                value = urlText,
+                onValueChange = onUrlChange,
+                placeholder = {
+                    Text(
+                        "ws://192.168.x.x:8765",
+                        color = Color.White.copy(alpha = 0.25f),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp
+                    )
+                },
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    color = Color.White
+                ),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Go
+                ),
+                keyboardActions = KeyboardActions(onGo = { onConnect(urlText) }),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = DarkSurface,
+                    unfocusedContainerColor = DarkSurface,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    cursorColor = AmberPrimary,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent
+                ),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Paste button
+            IconButton(
+                onClick = onPaste,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(DarkSurface)
+            ) {
+                Text(
+                    text = "\uD83D\uDCCB", // clipboard emoji
+                    fontSize = 16.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            // QR button
+            IconButton(
+                onClick = onScanQR,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(DarkSurface)
+            ) {
+                Text(
+                    text = "\u25A3", // QR-like square
+                    fontSize = 18.sp,
+                    color = Color.White.copy(alpha = 0.7f)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Connect button
+            Button(
+                onClick = { onConnect(urlText) },
+                enabled = urlText.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AmberPrimary,
+                    contentColor = DarkBackground
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                modifier = Modifier.height(40.dp)
+            ) {
+                Text("Connect", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -163,17 +192,6 @@ fun ConnectionScreen(
             }
         } else {
             Spacer(modifier = Modifier.weight(1f))
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Scan QR button
-        OutlinedButton(
-            onClick = onScanQR,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Scan QR Code", color = Color.White.copy(alpha = 0.7f))
         }
     }
 }
@@ -267,7 +285,7 @@ private fun RecentConnectionRow(
         ) {
             if (connection.pinned) {
                 Text(
-                    text = "\uD83D\uDCCC", // pin emoji
+                    text = "\uD83D\uDCCC",
                     fontSize = 10.sp,
                     modifier = Modifier.padding(end = 6.dp)
                 )
@@ -278,19 +296,20 @@ private fun RecentConnectionRow(
                     color = Color.White.copy(alpha = 0.8f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = connection.url,
                     color = Color.White.copy(alpha = 0.3f),
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            // Long press triggers dropdown
             Text(
-                text = "\u22EE", // vertical ellipsis
+                text = "\u22EE",
                 color = Color.White.copy(alpha = 0.3f),
                 fontSize = 18.sp,
                 modifier = Modifier
@@ -305,26 +324,15 @@ private fun RecentConnectionRow(
         ) {
             DropdownMenuItem(
                 text = { Text(if (connection.pinned) "Unpin" else "Pin to Top") },
-                onClick = {
-                    showMenu = false
-                    onPinToggle()
-                }
+                onClick = { showMenu = false; onPinToggle() }
             )
             DropdownMenuItem(
                 text = { Text("Rename") },
-                onClick = {
-                    showMenu = false
-                    // For simplicity, rename to display name + " (renamed)"
-                    // In a real app, this would show an input dialog
-                    onRename(connection.displayName)
-                }
+                onClick = { showMenu = false; onRename(connection.displayName) }
             )
             DropdownMenuItem(
                 text = { Text("Delete", color = Color(0xFFE05050)) },
-                onClick = {
-                    showMenu = false
-                    onDelete()
-                }
+                onClick = { showMenu = false; onDelete() }
             )
         }
     }

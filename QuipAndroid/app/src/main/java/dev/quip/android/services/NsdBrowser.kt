@@ -3,6 +3,7 @@ package dev.quip.android.services
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -31,6 +32,7 @@ class NsdBrowser {
     var onHostsChanged: (() -> Unit)? = null
 
     private var nsdManager: NsdManager? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // NSD can only resolve one service at a time; queue the rest
@@ -76,6 +78,14 @@ class NsdBrowser {
         resolveQueue.clear()
         isResolving = false
 
+        // Acquire multicast lock so WiFi chipset doesn't filter mDNS packets
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val lock = wifiManager.createMulticastLock("quip_mdns")
+        lock.setReferenceCounted(true)
+        lock.acquire()
+        multicastLock = lock
+        Log.i(TAG, "Multicast lock acquired")
+
         val manager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
         nsdManager = manager
 
@@ -95,6 +105,14 @@ class NsdBrowser {
         isSearching = false
         resolveQueue.clear()
         isResolving = false
+
+        try {
+            multicastLock?.release()
+            multicastLock = null
+            Log.i(TAG, "Multicast lock released")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing multicast lock: ${e.message}")
+        }
     }
 
     private fun enqueueResolve(serviceInfo: NsdServiceInfo) {

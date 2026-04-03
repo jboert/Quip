@@ -2,7 +2,7 @@
 
 Talk to your Claude instances. All of them. From your couch.
 
-Quip turns your iPhone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code) sessions running on your Mac or Linux machine. Just speak your prompt and it lands in the right terminal.
+Quip turns your phone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code) sessions running on your Mac or Linux machine. Just speak your prompt and it lands in the right terminal.
 
 ![Quip Mac App](docs/screenshot-mac.png)
 
@@ -19,6 +19,7 @@ That's Quip. Push-to-talk prompting from your phone.
 - **See all your sessions** mirrored live on your phone's screen
 - **Quick actions** — hit Return, Ctrl+C, restart Claude, all from context menus
 - **Arrange windows** on your Mac or Linux desktop with one tap
+- **Works with iPhone and Android**
 
 ## Connecting
 
@@ -40,6 +41,17 @@ xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac build
 xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
   -destination 'generic/platform=iOS' build
 ```
+
+### Android
+
+Requires Android SDK 34 and Java 17.
+
+```bash
+cd QuipAndroid && ./gradlew assembleDebug
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+Or download the APK from the [latest release](https://github.com/jboert/Quip/releases).
 
 ### Linux
 

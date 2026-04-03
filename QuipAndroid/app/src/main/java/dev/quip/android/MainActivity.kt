@@ -1,17 +1,25 @@
 package dev.quip.android
 
+import android.Manifest
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import dev.quip.android.models.QuickActionMessage
 import dev.quip.android.models.SelectWindowMessage
 import dev.quip.android.models.SendTextMessage
@@ -45,6 +53,7 @@ class MainActivity : ComponentActivity() {
     private var urlText by mutableStateOf("")
     private var discoveredHosts = mutableStateListOf<DiscoveredHost>()
     private var recentConnections = mutableStateListOf<SavedConnection>()
+    private var showQrScanner by mutableStateOf(false)
 
     // Services
     private val webSocketClient = QuipWebSocketClient()
@@ -54,10 +63,41 @@ class MainActivity : ComponentActivity() {
 
     private var hasReceivedLayout = false
 
+    // QR scanning state
+    private var isQrScanning by mutableStateOf(false)
+    private var cameraProvider: ProcessCameraProvider? = null
+
+    // Camera permission launcher
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startQrScanning()
+        } else {
+            Toast.makeText(this, "Camera permission required for QR scanning", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Audio permission launcher
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(this, "Microphone permission required for voice input", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+        // Request audio permission upfront
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
 
         // Load persisted state
         recentConnections.addAll(ConnectionManager.loadRecents(this))
@@ -66,18 +106,15 @@ class MainActivity : ComponentActivity() {
 
         // Wire up WebSocket callbacks
         webSocketClient.onLayoutUpdate = { update ->
-            val wasEmpty = windows.isEmpty()
             windows.clear()
             windows.addAll(update.windows)
             monitorName = update.monitor
 
-            // Switch to landscape on first layout
             if (!hasReceivedLayout && update.windows.isNotEmpty()) {
                 hasReceivedLayout = true
                 requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             }
 
-            // Auto-select first window if none selected
             if (selectedWindowId == null && windows.isNotEmpty()) {
                 selectedWindowId = windows.first().id
             }
@@ -112,32 +149,44 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             QuipTheme {
-                MainScreen(
-                    isConnected = isConnected,
-                    isConnecting = isConnecting,
-                    isRecording = isRecording,
-                    windows = windows.toList(),
-                    selectedWindowId = selectedWindowId,
-                    monitorName = monitorName,
-                    urlText = urlText,
-                    onUrlChange = { urlText = it },
-                    onConnect = { url -> doConnect(url) },
-                    onDisconnect = { doDisconnect() },
-                    discoveredHosts = discoveredHosts.toList(),
-                    recentConnections = recentConnections.toList(),
-                    onPinToggle = { conn -> togglePin(conn) },
-                    onRename = { conn, name -> renameConnection(conn, name) },
-                    onDelete = { conn -> deleteConnection(conn) },
-                    onScanQR = { /* QR scanning to be wired via CameraX + MLKit */ },
-                    onSelectWindow = { windowId ->
-                        selectedWindowId = windowId
-                        webSocketClient.send(SelectWindowMessage(windowId = windowId))
-                    },
-                    onWindowAction = { windowId, action ->
-                        webSocketClient.send(QuickActionMessage(windowId = windowId, action = action))
-                    },
-                    onStopRecording = { stopRecording() }
-                )
+                if (showQrScanner) {
+                    dev.quip.android.ui.screens.QrScannerScreen(
+                        onScanned = { value ->
+                            showQrScanner = false
+                            urlText = value
+                            doConnect(value)
+                        },
+                        onDismiss = { showQrScanner = false }
+                    )
+                } else {
+                    MainScreen(
+                        isConnected = isConnected,
+                        isConnecting = isConnecting,
+                        isRecording = isRecording,
+                        windows = windows.toList(),
+                        selectedWindowId = selectedWindowId,
+                        monitorName = monitorName,
+                        urlText = urlText,
+                        onUrlChange = { urlText = it },
+                        onConnect = { url -> doConnect(url) },
+                        onDisconnect = { doDisconnect() },
+                        onPaste = { pasteFromClipboard() },
+                        discoveredHosts = discoveredHosts.toList(),
+                        recentConnections = recentConnections.toList(),
+                        onPinToggle = { conn -> togglePin(conn) },
+                        onRename = { conn, name -> renameConnection(conn, name) },
+                        onDelete = { conn -> deleteConnection(conn) },
+                        onScanQR = { requestQrScan() },
+                        onSelectWindow = { windowId ->
+                            selectedWindowId = windowId
+                            webSocketClient.send(SelectWindowMessage(windowId = windowId))
+                        },
+                        onWindowAction = { windowId, action ->
+                            webSocketClient.send(QuickActionMessage(windowId = windowId, action = action))
+                        },
+                        onStopRecording = { stopRecording() }
+                    )
+                }
             }
         }
     }
@@ -149,24 +198,45 @@ class MainActivity : ComponentActivity() {
         speechService.destroy()
     }
 
+    // -- Clipboard paste --
+
+    private fun pasteFromClipboard() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = clipboard.primaryClip
+        if (clip != null && clip.itemCount > 0) {
+            val text = clip.getItemAt(0).coerceToText(this).toString().trim()
+            if (text.isNotEmpty()) {
+                urlText = text
+            }
+        }
+    }
+
+    // -- QR scanning --
+
+    private fun requestQrScan() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            showQrScanner = true
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun startQrScanning() {
+        showQrScanner = true
+    }
+
     // -- Volume button handling --
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                if (!isRecording) {
-                    startRecording()
-                } else {
-                    stopRecording()
-                }
+                if (!isRecording) startRecording() else stopRecording()
                 return true
             }
             KeyEvent.KEYCODE_VOLUME_UP -> {
-                if (!isRecording) {
-                    cycleSelectedWindow()
-                } else {
-                    stopRecording()
-                }
+                if (!isRecording) cycleSelectedWindow() else stopRecording()
                 return true
             }
         }
@@ -175,7 +245,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            return true // consume to prevent system volume change
+            return true
         }
         return super.onKeyUp(keyCode, event)
     }
@@ -184,6 +254,12 @@ class MainActivity : ComponentActivity() {
 
     private fun startRecording() {
         val windowId = selectedWindowId ?: return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
         speechService.startRecording(this)
         isRecording = true
         webSocketClient.send(SttStateMessage.started(windowId))
