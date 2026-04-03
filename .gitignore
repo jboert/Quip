@@ -1,1 +1,5 @@
 QuipLinux/target/
+QuipAndroid/.gradle/
+QuipAndroid/app/build/
+QuipAndroid/build/
+QuipAndroid/local.properties
