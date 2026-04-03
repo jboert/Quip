@@ -21,9 +21,15 @@ final class TerminalStateDetector {
     var cpuIdleThreshold: Double = 5.0
 
     /// Polling interval in seconds
-    var pollingInterval: TimeInterval = 2.0
+    var pollingInterval: TimeInterval = 0.5
 
     private var pollTimer: Timer?
+
+    /// kqueue-based process sources that fire when a child process exits or forks
+    private var processSources: [String: [DispatchSourceProcess]] = [:]
+
+    /// Known child PIDs per window, used to detect new/exited children
+    private var knownChildren: [String: Set<pid_t>] = [:]
 
     // MARK: - Start / Stop Monitoring
 
@@ -42,18 +48,18 @@ final class TerminalStateDetector {
     func stopMonitoring() {
         pollTimer?.invalidate()
         pollTimer = nil
+        cancelAllProcessSources()
         print("[TerminalStateDetector] Stopped monitoring")
     }
 
     // MARK: - Track / Untrack
 
     /// Register a terminal window for state detection
-    /// - Parameters:
-    ///   - windowId: The Quip window identifier
-    ///   - shellPid: The PID of the shell process in that terminal window
     func trackWindow(_ windowId: String, shellPid: pid_t) {
         trackedWindows[windowId] = shellPid
         windowStates[windowId] = .neutral
+        knownChildren[windowId] = []
+        installProcessSource(windowId: windowId, pid: shellPid)
         print("[TerminalStateDetector] Tracking window \(windowId) with shell PID \(shellPid)")
     }
 
@@ -61,6 +67,8 @@ final class TerminalStateDetector {
     func untrackWindow(_ windowId: String) {
         trackedWindows.removeValue(forKey: windowId)
         windowStates.removeValue(forKey: windowId)
+        knownChildren.removeValue(forKey: windowId)
+        cancelProcessSources(for: windowId)
     }
 
     /// Externally set a window to STT active state
@@ -70,8 +78,58 @@ final class TerminalStateDetector {
 
     /// Clear STT state back to auto-detected
     func clearSTTState(for windowId: String) {
-        // Will be updated on next poll
         windowStates[windowId] = .neutral
+    }
+
+    // MARK: - kqueue Process Sources
+
+    /// Watch a process for exit events via kqueue; triggers an immediate re-poll
+    private func installProcessSource(windowId: String, pid: pid_t) {
+        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+        source.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleProcessEvent(windowId: windowId)
+            }
+        }
+        source.setCancelHandler {} // prevent crashes on dealloc
+        source.resume()
+        processSources[windowId, default: []].append(source)
+    }
+
+    /// Called when a watched process exits — immediately re-detect state and refresh child watches
+    private func handleProcessEvent(windowId: String) {
+        guard let shellPid = trackedWindows[windowId] else { return }
+        if windowStates[windowId] != .sttActive {
+            let state = detectState(shellPid: shellPid)
+            windowStates[windowId] = state
+        }
+        refreshChildWatches(windowId: windowId, shellPid: shellPid)
+    }
+
+    /// Discover current children and install kqueue watches on any new ones
+    private func refreshChildWatches(windowId: String, shellPid: pid_t) {
+        guard let children = getChildProcesses(of: shellPid) else { return }
+        let currentPids = Set(children.map(\.pid))
+        let known = knownChildren[windowId] ?? []
+        let newPids = currentPids.subtracting(known)
+        knownChildren[windowId] = currentPids
+
+        for pid in newPids {
+            installProcessSource(windowId: windowId, pid: pid)
+        }
+    }
+
+    private func cancelProcessSources(for windowId: String) {
+        if let sources = processSources.removeValue(forKey: windowId) {
+            for source in sources { source.cancel() }
+        }
+    }
+
+    private func cancelAllProcessSources() {
+        for (_, sources) in processSources {
+            for source in sources { source.cancel() }
+        }
+        processSources.removeAll()
     }
 
     // MARK: - Polling
@@ -79,33 +137,31 @@ final class TerminalStateDetector {
     /// Check all tracked windows' process states
     private func pollAllWindows() {
         for (windowId, shellPid) in trackedWindows {
-            // Don't override externally-set STT state
             if windowStates[windowId] == .sttActive { continue }
 
             let state = detectState(shellPid: shellPid)
             windowStates[windowId] = state
+
+            // Keep child watches up to date (catches new children between kqueue events)
+            refreshChildWatches(windowId: windowId, shellPid: shellPid)
         }
     }
 
     /// Detect whether a shell's child process (claude/node) is busy or idle
     private func detectState(shellPid: pid_t) -> TerminalState {
-        // Find child processes of the shell
         guard let children = getChildProcesses(of: shellPid) else {
             return .waitingForInput
         }
 
-        // Look for claude or node processes among children
         let claudeProcesses = children.filter { info in
             let comm = info.command.lowercased()
             return comm.contains("claude") || comm.contains("node")
         }
 
         if claudeProcesses.isEmpty {
-            // No Claude process running -> waiting for input (shell prompt)
             return .waitingForInput
         }
 
-        // Check CPU usage of Claude processes
         let totalCPU = claudeProcesses.reduce(0.0) { $0 + $1.cpuPercent }
 
         if totalCPU < cpuIdleThreshold {
@@ -125,14 +181,13 @@ final class TerminalStateDetector {
 
     /// Get child processes of a given PID using `ps`
     private func getChildProcesses(of parentPid: pid_t) -> [ProcessInfo]? {
-        // Get all processes whose parent is parentPid
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
         task.arguments = ["-o", "pid,pcpu,comm", "-g", "\(parentPid)"]
 
         let pipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = Pipe() // suppress stderr
+        task.standardError = Pipe()
 
         do {
             try task.run()
@@ -145,7 +200,7 @@ final class TerminalStateDetector {
         guard let output = String(data: data, encoding: .utf8) else { return nil }
 
         var results: [ProcessInfo] = []
-        let lines = output.components(separatedBy: "\n").dropFirst() // skip header
+        let lines = output.components(separatedBy: "\n").dropFirst()
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -155,7 +210,7 @@ final class TerminalStateDetector {
             guard parts.count >= 3 else { continue }
 
             guard let pid = pid_t(parts[0]) else { continue }
-            guard pid != parentPid else { continue } // exclude the parent itself
+            guard pid != parentPid else { continue }
             let cpu = Double(parts[1]) ?? 0.0
             let comm = String(parts[2])
 

@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.VibratorManager
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
@@ -306,6 +308,8 @@ class MainActivity : ComponentActivity() {
         hasSentTranscription = false
         speechService.startRecording(this)
         isRecording = true
+        // Haptic: medium click for recording start
+        performHaptic(VibrationEffect.EFFECT_CLICK)
         webSocketClient.send(SttStateMessage.started(windowId))
         Log.d(TAG, "Recording started for window $windowId")
     }
@@ -313,6 +317,9 @@ class MainActivity : ComponentActivity() {
     private fun stopRecording() {
         if (!isRecording) return
         isRecording = false // Set immediately to prevent re-entry from rapid presses
+        // Haptic: double tick for recording stop
+        performHaptic(VibrationEffect.EFFECT_TICK)
+        handler.postDelayed({ performHaptic(VibrationEffect.EFFECT_TICK) }, 100)
         val windowId = selectedWindowId
         Log.d(TAG, "stopRecording called, windowId=$windowId")
 
@@ -408,6 +415,11 @@ class MainActivity : ComponentActivity() {
         ConnectionManager.rename(this, conn.id, name)
         recentConnections.clear()
         recentConnections.addAll(ConnectionManager.loadRecents(this))
+    }
+
+    private fun performHaptic(effectId: Int) {
+        val vibrator = (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        vibrator.vibrate(VibrationEffect.createPredefined(effectId))
     }
 
     private fun deleteConnection(conn: SavedConnection) {
