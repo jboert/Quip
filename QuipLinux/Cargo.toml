@@ -10,6 +10,7 @@ gtk4 = "0.9"
 libadwaita = { version = "0.7", features = ["v1_4"] }
 glib = "0.20"
 gdk4 = "0.9"
+gdk-pixbuf = "0.20"
 cairo-rs = { version = "0.20", features = ["v1_16"] }
 pango = "0.20"
 pangocairo = "0.20"
@@ -27,6 +28,7 @@ serde_json = "1"
 
 # mDNS
 mdns-sd = "0.11"
+if-addrs = "0.13"
 
 # Process inspection
 procfs = "0.17"

@@ -29,7 +29,7 @@ impl WsServer {
     }
 
     pub async fn run(&self) {
-        let addr = format!("127.0.0.1:{}", self.port);
+        let addr = format!("0.0.0.0:{}", self.port);
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
@@ -78,6 +78,7 @@ impl WsServer {
                         Ok(msg) => {
                             if msg.is_text() {
                                 let text = msg.into_text().unwrap_or_default();
+                                info!("WS recv from {peer}: {}", &text[..text.len().min(200)]);
                                 if message_tx.send(text).is_err() {
                                     warn!("Message channel closed, dropping client {peer}");
                                     break;
@@ -85,6 +86,8 @@ impl WsServer {
                             } else if msg.is_close() {
                                 info!("Client {peer} sent close frame");
                                 break;
+                            } else {
+                                info!("WS recv non-text from {peer}: {:?}", msg);
                             }
                         }
                         Err(e) => {

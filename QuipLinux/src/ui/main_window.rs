@@ -343,9 +343,16 @@ fn handle_incoming_message(
 ) {
     use message_router::IncomingAction;
 
+    tracing::info!("Incoming WS message: {json}");
     let action = match message_router::parse_incoming(json) {
-        Some(a) => a,
-        None => return,
+        Some(a) => {
+            tracing::info!("Parsed action: {a:?}");
+            a
+        }
+        None => {
+            tracing::warn!("Failed to parse incoming message");
+            return;
+        }
     };
 
     let mut state = shared_state.write().unwrap();
@@ -355,13 +362,18 @@ fn handle_incoming_message(
             state.focus_window(&window_id, window_backend);
         }
         IncomingAction::SendText { window_id, text, press_return } => {
+            tracing::info!("SendText: window_id={window_id}, text={text}, press_return={press_return}");
             if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                 let wid = w.window_id;
+                tracing::info!("Found window, xdotool target wid={wid}");
                 state.focus_window(&window_id, window_backend);
-                // Small delay then type
                 if let Err(e) = input_backend.send_text(wid, &text, press_return) {
                     tracing::warn!("Failed to send text to {window_id}: {e}");
+                } else {
+                    tracing::info!("Text sent successfully");
                 }
+            } else {
+                tracing::warn!("Window not found for id: {window_id}");
             }
         }
         IncomingAction::QuickAction { window_id, action } => {

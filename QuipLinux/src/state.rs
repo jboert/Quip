@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::models::managed_window::{ManagedWindow, COLOR_PALETTE};
 use crate::models::settings::AppSettings;
-use crate::platform::traits::{DisplayInfo, InputBackend, RawWindowInfo, WindowBackend};
+use crate::platform::traits::{is_terminal_class, DisplayInfo, InputBackend, RawWindowInfo, WindowBackend};
 use crate::protocol::messages::{LayoutUpdate, WindowState};
 use crate::protocol::types::{Rect, TerminalState};
 use crate::services::state_detector::StateDetector;
@@ -61,12 +61,18 @@ impl AppState {
 
     /// Refresh window list from the window backend, preserving existing state
     pub fn refresh_windows(&mut self, backend: &dyn WindowBackend) {
-        let raw_windows = match backend.list_windows() {
+        let all_windows = match backend.list_windows() {
             Ok(w) => w,
             Err(e) => {
                 tracing::warn!("Failed to refresh windows: {e}");
                 return;
             }
+        };
+
+        let raw_windows: Vec<_> = if self.settings.general.show_all_windows {
+            all_windows
+        } else {
+            all_windows.into_iter().filter(|w| is_terminal_class(&w.app_class)).collect()
         };
 
         let mut refreshed = Vec::new();
@@ -150,12 +156,16 @@ impl AppState {
             .map(|d| d.frame)
             .unwrap_or(Rect { x: 0, y: 0, width: 1920, height: 1080 });
 
+        tracing::info!("Screen bounds: {:?}", screen_bounds);
         let states: Vec<WindowState> = self.windows.iter()
             .filter(|w| w.is_enabled)
             .map(|w| {
+                tracing::info!("Window '{}' raw bounds: {:?}", w.name, w.bounds);
                 let state = self.state_detector.get_state(&w.id)
                     .unwrap_or(TerminalState::Neutral);
-                w.to_window_state(state.as_str(), &screen_bounds)
+                let ws = w.to_window_state(state.as_str(), &screen_bounds);
+                tracing::info!("Window '{}' normalized: x={:.3} y={:.3} w={:.3} h={:.3}", w.name, ws.frame.x, ws.frame.y, ws.frame.width, ws.frame.height);
+                ws
             })
             .collect();
 

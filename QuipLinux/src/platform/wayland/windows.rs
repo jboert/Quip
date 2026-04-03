@@ -41,31 +41,32 @@ impl WaylandWindowBackend {
                 xwayland_class.clone()
             };
 
-            // Only include terminal windows that have an actual class.
-            if !class.is_empty() && is_terminal_class(&class) {
-                let id = node["id"].as_u64().unwrap_or(0);
-                let name = node["name"].as_str().unwrap_or("").to_string();
-                let pid = node["pid"].as_u64().unwrap_or(0) as u32;
-                let rect = &node["rect"];
-                let x = rect["x"].as_i64().unwrap_or(0) as i32;
-                let y = rect["y"].as_i64().unwrap_or(0) as i32;
-                let w = rect["width"].as_u64().unwrap_or(0) as u32;
-                let h = rect["height"].as_u64().unwrap_or(0) as u32;
-
-                out.push(RawWindowInfo {
-                    window_id: id,
-                    title: name,
-                    app_name: class.clone(),
-                    app_class: class,
-                    pid,
-                    bounds: Rect {
-                        x,
-                        y,
-                        width: w,
-                        height: h,
-                    },
-                });
+            if class.is_empty() {
+                return;
             }
+
+            let id = node["id"].as_u64().unwrap_or(0);
+            let name = node["name"].as_str().unwrap_or("").to_string();
+            let pid = node["pid"].as_u64().unwrap_or(0) as u32;
+            let rect = &node["rect"];
+            let x = rect["x"].as_i64().unwrap_or(0) as i32;
+            let y = rect["y"].as_i64().unwrap_or(0) as i32;
+            let w = rect["width"].as_u64().unwrap_or(0) as u32;
+            let h = rect["height"].as_u64().unwrap_or(0) as u32;
+
+            out.push(RawWindowInfo {
+                window_id: id,
+                title: name,
+                app_name: class.clone(),
+                app_class: class,
+                pid,
+                bounds: Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                },
+            });
         }
 
         // Recurse into child nodes and floating_nodes.
@@ -125,7 +126,7 @@ impl WaylandWindowBackend {
         let mut windows = Vec::new();
         for client in arr {
             let class = client["class"].as_str().unwrap_or("").to_string();
-            if class.is_empty() || !is_terminal_class(&class) {
+            if class.is_empty() {
                 continue;
             }
 
