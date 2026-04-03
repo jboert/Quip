@@ -1,12 +1,14 @@
 # <img src="QuipMac/Assets.xcassets/AppIcon.appiconset/icon_128x128.png" width="40" height="40" align="top"> Quip
 
-Talk to your Claude instances. All of them. From your couch.
+Talk to your Claude instances. All of them. From your couch. No keyboard needed.
 
 Quip turns your phone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code) sessions running on your Mac or Linux machine. Just speak your prompt and it lands in the right terminal.
 
-![Quip Mac App](docs/screenshot-mac.png)
+![Quip Mac App — windows before arranging](docs/screenshot-mac.png)
 
-![Quip iOS App](docs/screenshot-ios.png)
+![Quip on Android — windows mirrored from desktop](docs/screenshot-android.png)
+
+![Quip on iOS — windows after arranging](docs/screenshot-ios.png)
 
 ## The idea
 
@@ -77,12 +79,12 @@ The binary will be at `QuipLinux/target/release/quip-linux`.
 
 ## How it works
 
-Your iPhone records speech, transcribes it on-device, and sends the text over WebSocket to the Mac/Linux app. The app injects the text into whichever terminal window you selected.
+Your phone records speech, transcribes it on-device, and sends the text over WebSocket to the Mac/Linux app. The app injects the text into whichever terminal window you selected.
 
-The app also broadcasts your window layout to the phone in real-time, so you always see what's where.
+The desktop app broadcasts your window layout to the phone in real-time, so you always see what's where.
 
 ```
-  iPhone                           Mac / Linux
+  Phone                            Mac / Linux
   +---------------+                +------------------+
   | speak prompt  |   WebSocket    | inject into      |
   | pick window   | ============> | correct terminal |
