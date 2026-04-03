@@ -25,8 +25,7 @@ import androidx.compose.ui.unit.sp
 import dev.quip.android.models.SavedConnection
 import dev.quip.android.services.DiscoveredHost
 import dev.quip.android.ui.theme.AmberPrimary
-import dev.quip.android.ui.theme.DarkBackground
-import dev.quip.android.ui.theme.DarkSurface
+import dev.quip.android.ui.theme.LocalQuipColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,11 +42,12 @@ fun ConnectionScreen(
     onScanQR: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val colors = LocalQuipColors.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(colors.background)
             .padding(horizontal = 20.dp, vertical = 32.dp)
     ) {
         // Title
@@ -72,7 +72,7 @@ fun ConnectionScreen(
                 placeholder = {
                     Text(
                         "ws://192.168.x.x:8765",
-                        color = Color.White.copy(alpha = 0.25f),
+                        color = colors.textFaint,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 13.sp
                     )
@@ -81,7 +81,7 @@ fun ConnectionScreen(
                 textStyle = LocalTextStyle.current.copy(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
-                    color = Color.White
+                    color = colors.textPrimary
                 ),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
@@ -89,10 +89,10 @@ fun ConnectionScreen(
                 ),
                 keyboardActions = KeyboardActions(onGo = { onConnect(urlText) }),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = DarkSurface,
-                    unfocusedContainerColor = DarkSurface,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
+                    focusedContainerColor = colors.surface,
+                    unfocusedContainerColor = colors.surface,
+                    focusedTextColor = colors.textPrimary,
+                    unfocusedTextColor = colors.textPrimary,
                     cursorColor = AmberPrimary,
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent
@@ -111,7 +111,7 @@ fun ConnectionScreen(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(DarkSurface)
+                    .background(colors.surface)
             ) {
                 Text(
                     text = "\uD83D\uDCCB", // clipboard emoji
@@ -127,12 +127,12 @@ fun ConnectionScreen(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(DarkSurface)
+                    .background(colors.surface)
             ) {
                 Text(
                     text = "\u25A3", // QR-like square
                     fontSize = 18.sp,
-                    color = Color.White.copy(alpha = 0.7f)
+                    color = colors.textSecondary
                 )
             }
 
@@ -144,7 +144,7 @@ fun ConnectionScreen(
                 enabled = urlText.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AmberPrimary,
-                    contentColor = DarkBackground
+                    contentColor = colors.background
                 ),
                 shape = RoundedCornerShape(8.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp),
@@ -198,22 +198,23 @@ fun ConnectionScreen(
 
 @Composable
 private fun SectionHeader(text: String) {
+    val colors = LocalQuipColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ) {
         Divider(
-            color = Color.White.copy(alpha = 0.1f),
+            color = colors.divider,
             modifier = Modifier.weight(1f)
         )
         Text(
             text = text,
-            color = Color.White.copy(alpha = 0.4f),
+            color = colors.textTertiary,
             fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 12.dp)
         )
         Divider(
-            color = Color.White.copy(alpha = 0.1f),
+            color = colors.divider,
             modifier = Modifier.weight(1f)
         )
     }
@@ -224,6 +225,7 @@ private fun DiscoveredHostRow(
     host: DiscoveredHost,
     onClick: () -> Unit
 ) {
+    val colors = LocalQuipColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -243,13 +245,13 @@ private fun DiscoveredHostRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = host.name,
-                color = Color.White.copy(alpha = 0.8f),
+                color = colors.textPrimary.copy(alpha = 0.8f),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
             )
             Text(
                 text = "${host.host}:${host.port}",
-                color = Color.White.copy(alpha = 0.3f),
+                color = colors.textTertiary,
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace
             )
@@ -271,6 +273,7 @@ private fun RecentConnectionRow(
     onRename: (String) -> Unit,
     onDelete: () -> Unit
 ) {
+    val colors = LocalQuipColors.current
     var showMenu by remember { mutableStateOf(false) }
 
     Box {
@@ -279,7 +282,7 @@ private fun RecentConnectionRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.White.copy(alpha = 0.06f))
+                .background(colors.surface)
                 .clickable(onClick = onClick)
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
@@ -293,7 +296,7 @@ private fun RecentConnectionRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = connection.displayName,
-                    color = Color.White.copy(alpha = 0.8f),
+                    color = colors.textPrimary.copy(alpha = 0.8f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
@@ -301,7 +304,7 @@ private fun RecentConnectionRow(
                 )
                 Text(
                     text = connection.url,
-                    color = Color.White.copy(alpha = 0.3f),
+                    color = colors.textTertiary,
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -310,7 +313,7 @@ private fun RecentConnectionRow(
             }
             Text(
                 text = "\u22EE",
-                color = Color.White.copy(alpha = 0.3f),
+                color = colors.textTertiary,
                 fontSize = 18.sp,
                 modifier = Modifier
                     .clickable { showMenu = true }
@@ -331,7 +334,7 @@ private fun RecentConnectionRow(
                 onClick = { showMenu = false; onRename(connection.displayName) }
             )
             DropdownMenuItem(
-                text = { Text("Delete", color = Color(0xFFE05050)) },
+                text = { Text("Delete", color = colors.destructive) },
                 onClick = { showMenu = false; onDelete() }
             )
         }

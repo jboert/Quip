@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.quip.android.models.WindowState
+import dev.quip.android.ui.theme.LocalQuipColors
 
 @Composable
 fun ContextMenuDialog(
@@ -33,12 +34,13 @@ fun ContextMenuDialog(
     onAction: (String, String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val colors = LocalQuipColors.current
     val windowColor = parseHexColor(window.color)
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF2A2A2A),
+            color = colors.dialogSurface,
             tonalElevation = 8.dp
         ) {
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
@@ -58,19 +60,19 @@ fun ContextMenuDialog(
                     Column {
                         Text(
                             text = window.name,
-                            color = Color.White,
+                            color = colors.textPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
                             text = window.app,
-                            color = Color.White.copy(alpha = 0.4f),
+                            color = colors.textTertiary,
                             fontSize = 11.sp
                         )
                     }
                 }
 
-                Divider(color = Color.White.copy(alpha = 0.08f))
+                Divider(color = colors.divider)
 
                 // Action rows
                 ContextActionRow(
@@ -115,13 +117,13 @@ fun ContextMenuDialog(
                 )
 
                 Divider(
-                    color = Color.White.copy(alpha = 0.08f),
+                    color = colors.divider,
                     modifier = Modifier.padding(vertical = 4.dp)
                 )
 
                 ContextActionRow(
                     label = if (window.enabled) "Disable Window" else "Enable Window",
-                    color = if (window.enabled) Color(0xFFE05050) else windowColor,
+                    color = if (window.enabled) colors.destructive else windowColor,
                     onClick = {
                         onAction(window.id, "toggle_enabled")
                         onDismiss()

@@ -7,6 +7,8 @@ struct WindowRectangle: View {
     var onAction: ((WindowAction) -> Void)? = nil
 
     @State private var pulsePhase: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
+    private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
     private var windowColor: Color {
         Color(hex: window.color)
@@ -59,12 +61,12 @@ struct WindowRectangle: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(window.name)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(colors.textPrimary.opacity(0.9))
                     .lineLimit(1)
 
                 Text(window.app)
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(colors.textSecondary.opacity(0.7))
                     .lineLimit(1)
             }
             .padding(10)
@@ -72,11 +74,11 @@ struct WindowRectangle: View {
             // Disabled overlay
             if !window.enabled {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(.black.opacity(0.5))
+                    .fill(Color.black.opacity(0.5))
                     .overlay {
                         Image(systemName: "eye.slash")
                             .font(.system(size: 14))
-                            .foregroundStyle(.white.opacity(0.3))
+                            .foregroundStyle(colors.textTertiary)
                     }
             }
         }

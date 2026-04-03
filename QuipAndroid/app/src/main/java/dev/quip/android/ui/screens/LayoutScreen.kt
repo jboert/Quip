@@ -48,6 +48,7 @@ import dev.quip.android.models.WindowState
 import dev.quip.android.ui.components.ContextMenuDialog
 import dev.quip.android.ui.components.WindowTile
 import dev.quip.android.ui.components.parseHexColor
+import dev.quip.android.ui.theme.LocalQuipColors
 
 @Composable
 fun LayoutScreen(
@@ -68,19 +69,12 @@ fun LayoutScreen(
     modifier: Modifier = Modifier
 ) {
     var contextMenuWindow by remember { mutableStateOf<WindowState?>(null) }
+    val colors = LocalQuipColors.current
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFF101014),
-                        Color(0xFF1A1A1E),
-                        Color(0xFF121216)
-                    )
-                )
-            )
+            .background(Brush.linearGradient(colors = colors.backgroundGradient))
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Top status bar
@@ -110,7 +104,7 @@ fun LayoutScreen(
                     ) {
                         Text(
                             text = if (isConnected) "No windows detected" else "Connect to see windows",
-                            color = Color.White.copy(alpha = 0.25f),
+                            color = colors.textFaint,
                             fontSize = 14.sp
                         )
                     }
@@ -180,11 +174,12 @@ private fun TopStatusBar(
     monitorName: String,
     onDisconnect: () -> Unit
 ) {
+    val colors = LocalQuipColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.3f))
+            .background(colors.surfaceHeader)
             .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         // Connection dot
@@ -197,7 +192,7 @@ private fun TopStatusBar(
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = if (isConnected) "Connected" else "Connecting...",
-            color = Color.White.copy(alpha = 0.5f),
+            color = colors.textSecondary,
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium
         )
@@ -206,7 +201,7 @@ private fun TopStatusBar(
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "REC",
-                color = Color(0xFFE6A619),
+                color = colors.recording,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -216,13 +211,13 @@ private fun TopStatusBar(
 
         Text(
             text = monitorName,
-            color = Color.White.copy(alpha = 0.3f),
+            color = colors.textTertiary,
             fontSize = 10.sp
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = "\u2715", // x mark
-            color = Color.White.copy(alpha = 0.4f),
+            color = colors.textTertiary,
             fontSize = 12.sp,
             modifier = Modifier.clickable(onClick = onDisconnect)
         )
@@ -237,6 +232,7 @@ private fun BottomBar(
     isTextInputVisible: Boolean = false,
     onToggleTextInput: () -> Unit = {}
 ) {
+    val colors = LocalQuipColors.current
     val selected = windows.firstOrNull { it.id == selectedWindowId }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -254,13 +250,13 @@ private fun BottomBar(
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = selected.name,
-                color = Color.White.copy(alpha = 0.4f),
+                color = colors.textTertiary,
                 fontSize = 9.sp
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = selected.app,
-                color = Color.White.copy(alpha = 0.2f),
+                color = colors.textFaint,
                 fontSize = 9.sp
             )
         }
@@ -268,7 +264,7 @@ private fun BottomBar(
         if (showKeyboard) {
             Text(
                 text = if (isTextInputVisible) "\u2328\u2193" else "\u2328",
-                color = Color.White.copy(alpha = 0.5f),
+                color = colors.textSecondary,
                 fontSize = 14.sp,
                 modifier = Modifier.clickable(onClick = onToggleTextInput)
             )
@@ -282,11 +278,12 @@ private fun TextInputBar(
     onValueChange: (String) -> Unit,
     onSend: () -> Unit
 ) {
+    val colors = LocalQuipColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF101014))
+            .background(colors.background)
             .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         TextField(
@@ -295,20 +292,20 @@ private fun TextInputBar(
             placeholder = {
                 Text(
                     "Type a prompt\u2026",
-                    color = Color.White.copy(alpha = 0.3f),
+                    color = colors.textTertiary,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
                 )
             },
             textStyle = TextStyle(
-                color = Color.White,
+                color = colors.textPrimary,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace
             ),
             colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.White.copy(alpha = 0.08f),
-                unfocusedContainerColor = Color.White.copy(alpha = 0.08f),
-                cursorColor = Color.White,
+                focusedContainerColor = colors.surface,
+                unfocusedContainerColor = colors.surface,
+                cursorColor = colors.textPrimary,
                 focusedIndicatorColor = Color.Transparent,
                 unfocusedIndicatorColor = Color.Transparent
             ),
@@ -328,7 +325,7 @@ private fun TextInputBar(
         ) {
             Text(
                 text = "\u2191",
-                color = if (value.isNotBlank()) Color(0xFF3B82F6) else Color.White.copy(alpha = 0.2f),
+                color = if (value.isNotBlank()) colors.buttonPrimary else colors.buttonDisabled,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -372,7 +369,7 @@ private fun RecordingOverlay(onStopRecording: () -> Unit) {
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "Recording \u2014 tap to stop",
-                color = Color.White.copy(alpha = 0.8f),
+                color = LocalQuipColors.current.textPrimary.copy(alpha = 0.8f),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium
             )

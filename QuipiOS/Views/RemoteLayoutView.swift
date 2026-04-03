@@ -7,16 +7,14 @@ struct RemoteLayoutView: View {
     var macName: String = "Mac"
     var onConnect: ((String) -> Void)? = nil
     var onWindowAction: ((String, WindowAction) -> Void)? = nil
+    @Environment(\.colorScheme) private var colorScheme
+    private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
     var body: some View {
         ZStack {
             // Background gradient
             LinearGradient(
-                colors: [
-                    Color(red: 0.06, green: 0.06, blue: 0.08),
-                    Color(red: 0.10, green: 0.10, blue: 0.12),
-                    Color(red: 0.07, green: 0.07, blue: 0.09),
-                ],
+                colors: colors.backgroundGradient,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -43,16 +41,16 @@ struct RemoteLayoutView: View {
                             .frame(width: 8, height: 8)
                         Text(selected.name)
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(colors.textSecondary)
                         Text(selected.app)
                             .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.35))
+                            .foregroundStyle(colors.textTertiary)
                     }
                     .padding(.bottom, 8)
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .environment(\.quipColors, colors)
     }
 
     // MARK: - Layout Area
@@ -64,20 +62,20 @@ struct RemoteLayoutView: View {
             ZStack {
                 // Subtle background
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.white.opacity(0.02))
+                    .fill(colors.surface.opacity(0.5))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
-                            .strokeBorder(Color.white.opacity(0.04), lineWidth: 0.5)
+                            .strokeBorder(colors.surfaceBorder, lineWidth: 0.5)
                     )
 
                 if windows.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "macwindow.on.rectangle")
                             .font(.system(size: 36, weight: .light))
-                            .foregroundStyle(.white.opacity(0.15))
+                            .foregroundStyle(colors.textFaint)
                         Text(isConnected ? "No windows detected" : "Connect to see windows")
                             .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.25))
+                            .foregroundStyle(colors.textFaint)
                     }
                 } else {
                     ForEach(windows) { window in
