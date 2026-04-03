@@ -112,12 +112,12 @@ class SpeechService {
                 Log.i(TAG, "Vosk model loaded successfully")
                 onReady?.invoke()
             } catch (e: InterruptedException) {
-                isModelDownloading = false
-                downloadProgress = -1
+                _isModelDownloading = false
+                _downloadProgress = -1
                 Log.i(TAG, "Vosk model download cancelled")
             } catch (e: Throwable) {
-                isModelDownloading = false
-                downloadProgress = -1
+                _isModelDownloading = false
+                _downloadProgress = -1
                 Log.e(TAG, "Failed to init Vosk model: ${e.message}", e)
                 onError?.invoke("Failed to load speech model: ${e.message}")
             }

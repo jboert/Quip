@@ -7,7 +7,6 @@ include(FetchContent)
 FetchContent_Declare(
     whisper
     URL https://github.com/ggerganov/whisper.cpp/archive/refs/tags/v1.7.2.tar.gz
-    URL_HASH SHA256=TODO  # Will be resolved on first build
     DOWNLOAD_EXTRACT_TIMESTAMP ON
 )
 
