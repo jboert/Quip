@@ -11,8 +11,8 @@ android {
         applicationId = "dev.quip.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -68,6 +68,12 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.3.1")
     implementation("androidx.camera:camera-view:1.3.1")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
+
+    implementation("androidx.media:media:1.7.0")
+    implementation("com.alphacephei:vosk-android:0.3.38") {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
 
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.navigation:navigation-compose:2.7.6")

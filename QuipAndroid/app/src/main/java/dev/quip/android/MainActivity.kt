@@ -104,6 +104,9 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         urlText = prefs.getString(KEY_LAST_URL, "") ?: ""
 
+        // Init Vosk speech model (downloads on first launch)
+        speechService.initModel(this)
+
         // Wire up WebSocket callbacks
         webSocketClient.onLayoutUpdate = { update ->
             windows.clear()
@@ -191,6 +194,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                if (!isRecording) startRecording() else stopRecording()
+                return true // consume the event — no system volume change or overlay
+            }
+            KeyEvent.KEYCODE_VOLUME_UP -> {
+                if (!isRecording) cycleSelectedWindow() else stopRecording()
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        // Consume key-up too so the system doesn't handle it
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         webSocketClient.disconnect()
@@ -227,29 +252,6 @@ class MainActivity : ComponentActivity() {
         showQrScanner = true
     }
 
-    // -- Volume button handling --
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                if (!isRecording) startRecording() else stopRecording()
-                return true
-            }
-            KeyEvent.KEYCODE_VOLUME_UP -> {
-                if (!isRecording) cycleSelectedWindow() else stopRecording()
-                return true
-            }
-        }
-        return super.onKeyDown(keyCode, event)
-    }
-
-    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            return true
-        }
-        return super.onKeyUp(keyCode, event)
-    }
-
     // -- Recording --
 
     private fun startRecording() {
@@ -260,6 +262,25 @@ class MainActivity : ComponentActivity() {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
+
+        // Set callbacks BEFORE starting so we don't miss results
+        speechService.onFinalResult = { text ->
+            Log.d(TAG, "Final transcription: '$text' (length=${text.length})")
+            if (!isRecording) {
+                // Only send text if stopRecording was already called
+                sendTranscription(windowId, text)
+            }
+            // If still recording, stopRecording will pick up transcribedText
+        }
+
+        speechService.onError = { error ->
+            Log.w(TAG, "Speech error: $error")
+            if (!isRecording) {
+                sendTranscription(windowId, speechService.transcribedText)
+            }
+        }
+
+        hasSentTranscription = false
         speechService.startRecording(this)
         isRecording = true
         webSocketClient.send(SttStateMessage.started(windowId))
@@ -268,22 +289,45 @@ class MainActivity : ComponentActivity() {
 
     private fun stopRecording() {
         if (!isRecording) return
+        isRecording = false // Set immediately to prevent re-entry from rapid presses
         val windowId = selectedWindowId
         Log.d(TAG, "stopRecording called, windowId=$windowId")
 
-        handler.postDelayed({
-            val text = speechService.stopRecording()
-            isRecording = false
-            Log.d(TAG, "Transcribed: '$text' (length=${text.length})")
+        // If the recognizer already delivered a final result, send it now
+        if (!speechService.isRecording && speechService.transcribedText.isNotEmpty()) {
+            sendTranscription(windowId, speechService.transcribedText)
+            return
+        }
 
-            if (windowId != null) {
-                webSocketClient.send(SttStateMessage.ended(windowId))
-                if (text.isNotEmpty()) {
-                    Log.d(TAG, "Sending text to window $windowId")
-                    webSocketClient.send(SendTextMessage(windowId = windowId, text = text))
+        // Otherwise wait for final audio, then stop the recognizer
+        handler.postDelayed({
+            speechService.requestStop()
+            // If requestStop doesn't trigger onFinalResult within 1s, send what we have
+            handler.postDelayed({
+                if (windowId != null) {
+                    val text = speechService.transcribedText
+                    if (text.isNotEmpty()) {
+                        Log.d(TAG, "Fallback: sending partial text '$text'")
+                        sendTranscription(windowId, text)
+                    } else {
+                        webSocketClient.send(SttStateMessage.ended(windowId))
+                    }
                 }
-            }
+            }, 1000)
         }, STOP_RECORDING_DELAY_MS)
+    }
+
+    private var hasSentTranscription = false
+
+    private fun sendTranscription(windowId: String?, text: String) {
+        if (windowId == null) return
+        if (hasSentTranscription) return
+        hasSentTranscription = true
+        webSocketClient.send(SttStateMessage.ended(windowId))
+        if (text.isNotEmpty()) {
+            Log.d(TAG, "Sending text to window $windowId: '$text'")
+            webSocketClient.send(SendTextMessage(windowId = windowId, text = text))
+        }
     }
 
     private fun cycleSelectedWindow() {

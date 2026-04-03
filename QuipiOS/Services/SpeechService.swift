@@ -77,15 +77,9 @@ private class AudioWorker: @unchecked Sendable {
                 return
             }
 
-            // Configure audio session
-            let session = AVAudioSession.sharedInstance()
-            do {
-                try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-                try session.setActive(true, options: .notifyOthersOnDeactivation)
-            } catch {
-                onUpdate(nil, true)
-                return
-            }
+            // Do NOT reconfigure the audio session here — HardwareButtonHandler
+            // already set .playAndRecord and changing the mode/options triggers
+            // phantom outputVolume KVO notifications that cause a feedback loop.
 
             // Create recognition request
             let request = SFSpeechAudioBufferRecognitionRequest()
@@ -129,11 +123,6 @@ private class AudioWorker: @unchecked Sendable {
             recognitionTask?.cancel()
             recognitionTask = nil
             recognitionRequest = nil
-
-            // Restore audio session to playback so volume button KVO keeps working
-            let session = AVAudioSession.sharedInstance()
-            try? session.setCategory(.playback, mode: .default, options: .mixWithOthers)
-            try? session.setActive(true)
         }
     }
 }
