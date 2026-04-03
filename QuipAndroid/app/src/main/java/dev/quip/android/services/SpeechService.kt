@@ -48,6 +48,7 @@ class SpeechService {
     // Vosk state
     private var voskModel: Model? = null
     private var voskService: VoskSpeechService? = null
+    private var downloadThread: Thread? = null
 
     // Android SpeechRecognizer state
     private var androidRecognizer: SpeechRecognizer? = null
@@ -74,7 +75,7 @@ class SpeechService {
     }
 
     private fun initVoskModel(context: Context, onReady: (() -> Unit)? = null) {
-        Thread {
+        val thread = Thread {
             try {
                 val modelDir = File(context.filesDir, MODEL_NAME)
                 if (!modelDir.exists()) {
@@ -82,6 +83,7 @@ class SpeechService {
                     downloadProgress = 0
                     Log.i(TAG, "Downloading Vosk model from $MODEL_URL")
                     downloadAndUnzip(MODEL_URL, context.filesDir)
+                    if (Thread.interrupted()) return@Thread
                     isModelDownloading = false
                     downloadProgress = -1
                     Log.i(TAG, "Model downloaded and extracted to ${modelDir.absolutePath}")
@@ -91,13 +93,19 @@ class SpeechService {
                 isModelReady = true
                 Log.i(TAG, "Vosk model loaded successfully")
                 onReady?.invoke()
+            } catch (e: InterruptedException) {
+                isModelDownloading = false
+                downloadProgress = -1
+                Log.i(TAG, "Vosk model download cancelled")
             } catch (e: Throwable) {
                 isModelDownloading = false
                 downloadProgress = -1
                 Log.e(TAG, "Failed to init Vosk model: ${e.message}", e)
                 onError?.invoke("Failed to load speech model: ${e.message}")
             }
-        }.start()
+        }
+        downloadThread = thread
+        thread.start()
     }
 
     fun startRecording(context: Context) {
@@ -305,6 +313,10 @@ class SpeechService {
     }
 
     fun destroy() {
+        // Cancel any in-progress Vosk model download
+        downloadThread?.interrupt()
+        downloadThread = null
+
         androidRecognizer?.apply {
             cancel()
             destroy()
@@ -332,6 +344,7 @@ class SpeechService {
         }
     }
 
+    @Throws(InterruptedException::class)
     private fun downloadAndUnzip(url: String, destDir: File) {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.connectTimeout = 30_000
@@ -344,6 +357,7 @@ class SpeechService {
         ZipInputStream(connection.inputStream.buffered()).use { zis ->
             var entry = zis.nextEntry
             while (entry != null) {
+                if (Thread.interrupted()) throw InterruptedException()
                 val outFile = File(destDir, entry.name)
                 if (entry.isDirectory) {
                     outFile.mkdirs()
@@ -353,6 +367,7 @@ class SpeechService {
                         val buffer = ByteArray(8192)
                         var len: Int
                         while (zis.read(buffer).also { len = it } != -1) {
+                            if (Thread.interrupted()) throw InterruptedException()
                             fos.write(buffer, 0, len)
                             bytesRead += len
                             if (totalBytes > 0) {

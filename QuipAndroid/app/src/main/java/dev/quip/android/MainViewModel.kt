@@ -1,0 +1,360 @@
+package dev.quip.android
+
+import android.app.Application
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.os.VibrationEffect
+import android.os.VibratorManager
+import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import dev.quip.android.models.QuickActionMessage
+import dev.quip.android.models.RequestContentMessage
+import dev.quip.android.models.SelectWindowMessage
+import dev.quip.android.models.SendTextMessage
+import dev.quip.android.models.SttStateMessage
+import dev.quip.android.models.WindowState
+import dev.quip.android.models.SavedConnection
+import dev.quip.android.services.ConnectionManager
+import dev.quip.android.services.DiscoveredHost
+import dev.quip.android.services.NsdBrowser
+import dev.quip.android.services.QuipWebSocketClient
+import dev.quip.android.services.SpeechService
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+
+    companion object {
+        private const val TAG = "Quip"
+        private const val PREFS_NAME = "quip_prefs"
+        private const val KEY_LAST_URL = "last_url"
+        private const val STOP_RECORDING_DELAY_MS = 800L
+        private const val RESULT_TIMEOUT_MS = 1000L
+    }
+
+    // Recording state machine
+    sealed class RecordingState {
+        object Idle : RecordingState()
+        data class Recording(val windowId: String) : RecordingState()
+        data class WaitingForResult(val windowId: String) : RecordingState()
+    }
+
+    // UI state
+    var windows = mutableStateListOf<WindowState>()
+        private set
+    var selectedWindowId by mutableStateOf<String?>(null)
+        private set
+    var isConnected by mutableStateOf(false)
+        private set
+    var isConnecting by mutableStateOf(false)
+        private set
+    var recordingState by mutableStateOf<RecordingState>(RecordingState.Idle)
+        private set
+    val isRecording: Boolean get() = recordingState !is RecordingState.Idle
+    var monitorName by mutableStateOf("Mac")
+        private set
+    var urlText by mutableStateOf("")
+    var discoveredHosts = mutableStateListOf<DiscoveredHost>()
+        private set
+    var recentConnections = mutableStateListOf<SavedConnection>()
+        private set
+    var showQrScanner by mutableStateOf(false)
+    var terminalContentText by mutableStateOf<String?>(null)
+        private set
+    var terminalContentWindowId by mutableStateOf<String?>(null)
+        private set
+
+    // Orientation request callback — set by Activity
+    var onRequestOrientation: ((Int) -> Unit)? = null
+
+    // Services
+    val webSocketClient = QuipWebSocketClient()
+    val speechService = SpeechService()
+    val nsdBrowser = NsdBrowser()
+
+    private var hasReceivedLayout = false
+    private var hasSentTranscription = false
+    private var stopRecordingJob: Job? = null
+
+    fun initialize() {
+        val context = getApplication<Application>()
+
+        recentConnections.addAll(ConnectionManager.loadRecents(context))
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        urlText = prefs.getString(KEY_LAST_URL, "") ?: ""
+
+        speechService.initModel(context)
+        wireCallbacks()
+        nsdBrowser.startDiscovery(context)
+    }
+
+    private fun wireCallbacks() {
+        webSocketClient.onLayoutUpdate = { update ->
+            windows.clear()
+            windows.addAll(update.windows)
+            monitorName = update.monitor
+
+            if (!hasReceivedLayout && update.windows.isNotEmpty()) {
+                hasReceivedLayout = true
+                onRequestOrientation?.invoke(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
+            }
+
+            if (selectedWindowId == null && windows.isNotEmpty()) {
+                selectedWindowId = windows.first().id
+            }
+        }
+
+        webSocketClient.onStateChange = { windowId, newState ->
+            val index = windows.indexOfFirst { it.id == windowId }
+            if (index >= 0) {
+                windows[index] = windows[index].copy(state = newState)
+            }
+        }
+
+        webSocketClient.onConnectionStateChanged = {
+            isConnected = webSocketClient.isConnected
+            isConnecting = webSocketClient.isConnecting
+
+            if (!isConnected && !isConnecting) {
+                windows.clear()
+                selectedWindowId = null
+                hasReceivedLayout = false
+                onRequestOrientation?.invoke(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+            }
+        }
+
+        webSocketClient.onTerminalContent = { windowId, content ->
+            terminalContentWindowId = windowId
+            terminalContentText = content
+        }
+
+        nsdBrowser.onHostsChanged = {
+            discoveredHosts.clear()
+            discoveredHosts.addAll(nsdBrowser.discoveredHosts)
+        }
+    }
+
+    // -- Recording state machine --
+
+    fun startRecording(context: Context) {
+        if (recordingState !is RecordingState.Idle) return
+        val windowId = selectedWindowId ?: return
+
+        speechService.onFinalResult = { text ->
+            Log.d(TAG, "Final transcription: '$text' (length=${text.length})")
+            val state = recordingState
+            if (state is RecordingState.WaitingForResult) {
+                stopRecordingJob?.cancel()
+                sendTranscription(state.windowId, text)
+            }
+            // If still Recording, stopRecording will pick up transcribedText
+        }
+
+        speechService.onError = { error ->
+            Log.w(TAG, "Speech error: $error")
+            val state = recordingState
+            if (state is RecordingState.WaitingForResult) {
+                stopRecordingJob?.cancel()
+                sendTranscription(state.windowId, speechService.transcribedText)
+            }
+        }
+
+        hasSentTranscription = false
+        speechService.startRecording(context)
+        recordingState = RecordingState.Recording(windowId)
+        performHaptic(VibrationEffect.EFFECT_CLICK)
+        webSocketClient.send(SttStateMessage.started(windowId))
+        Log.d(TAG, "Recording started for window $windowId")
+    }
+
+    fun stopRecording() {
+        val state = recordingState
+        if (state !is RecordingState.Recording) return
+
+        val windowId = state.windowId
+        recordingState = RecordingState.WaitingForResult(windowId)
+        Log.d(TAG, "stopRecording called, windowId=$windowId")
+
+        // Haptic: double tick for recording stop
+        performHaptic(VibrationEffect.EFFECT_TICK)
+        viewModelScope.launch {
+            delay(100)
+            performHaptic(VibrationEffect.EFFECT_TICK)
+        }
+
+        // If the recognizer already delivered a final result, send it now
+        if (!speechService.isRecording && speechService.transcribedText.isNotEmpty()) {
+            sendTranscription(windowId, speechService.transcribedText)
+            return
+        }
+
+        // Coroutine-based stop: wait for audio, then request stop, then fallback timeout
+        stopRecordingJob = viewModelScope.launch {
+            delay(STOP_RECORDING_DELAY_MS)
+            speechService.requestStop()
+
+            delay(RESULT_TIMEOUT_MS)
+            // If still waiting, send what we have
+            if (recordingState is RecordingState.WaitingForResult) {
+                val text = speechService.transcribedText
+                if (text.isNotEmpty()) {
+                    Log.d(TAG, "Fallback: sending partial text '$text'")
+                    sendTranscription(windowId, text)
+                } else {
+                    webSocketClient.send(SttStateMessage.ended(windowId))
+                    recordingState = RecordingState.Idle
+                }
+            }
+        }
+    }
+
+    private fun sendTranscription(windowId: String, text: String) {
+        if (hasSentTranscription) return
+        hasSentTranscription = true
+        recordingState = RecordingState.Idle
+        webSocketClient.send(SttStateMessage.ended(windowId))
+        if (text.isNotEmpty()) {
+            Log.d(TAG, "Sending text to window $windowId: '$text'")
+            webSocketClient.send(SendTextMessage(windowId = windowId, text = text))
+        }
+    }
+
+    // -- Window actions --
+
+    fun selectWindow(windowId: String) {
+        selectedWindowId = windowId
+        webSocketClient.send(SelectWindowMessage(windowId = windowId))
+    }
+
+    fun handleWindowAction(windowId: String, action: String) {
+        if (action == "view_output") {
+            webSocketClient.send(RequestContentMessage(windowId = windowId))
+        } else {
+            webSocketClient.send(QuickActionMessage(windowId = windowId, action = action))
+        }
+    }
+
+    fun cycleSelectedWindow() {
+        if (windows.isEmpty()) return
+        val currentIndex = windows.indexOfFirst { it.id == selectedWindowId }
+        val nextIndex = if (currentIndex < 0) 0 else (currentIndex + 1) % windows.size
+        val newId = windows[nextIndex].id
+        selectedWindowId = newId
+        webSocketClient.send(SelectWindowMessage(windowId = newId))
+        if (terminalContentText != null) {
+            terminalContentWindowId = newId
+            webSocketClient.send(RequestContentMessage(windowId = newId))
+        }
+    }
+
+    // -- Connection --
+
+    fun connect(url: String) {
+        if (url.isBlank()) return
+        val context = getApplication<Application>()
+
+        val wsUrl = when {
+            url.startsWith("wss://") || url.startsWith("ws://") -> url
+            url.contains("trycloudflare.com") -> "wss://$url"
+            url.contains(":") -> "ws://$url"
+            else -> "wss://$url"
+        }
+
+        urlText = url
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(KEY_LAST_URL, url).apply()
+
+        ConnectionManager.saveRecent(context, wsUrl)
+        recentConnections.clear()
+        recentConnections.addAll(ConnectionManager.loadRecents(context))
+
+        hasReceivedLayout = false
+        webSocketClient.connect(wsUrl)
+    }
+
+    fun disconnect() {
+        webSocketClient.disconnect()
+        onRequestOrientation?.invoke(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+    }
+
+    // -- Recent connections --
+
+    fun togglePin(conn: SavedConnection) {
+        val context = getApplication<Application>()
+        ConnectionManager.togglePin(context, conn.id)
+        recentConnections.clear()
+        recentConnections.addAll(ConnectionManager.loadRecents(context))
+    }
+
+    fun renameConnection(conn: SavedConnection, name: String) {
+        val context = getApplication<Application>()
+        ConnectionManager.rename(context, conn.id, name)
+        recentConnections.clear()
+        recentConnections.addAll(ConnectionManager.loadRecents(context))
+    }
+
+    fun deleteConnection(conn: SavedConnection) {
+        val context = getApplication<Application>()
+        ConnectionManager.delete(context, conn.id)
+        recentConnections.clear()
+        recentConnections.addAll(ConnectionManager.loadRecents(context))
+    }
+
+    // -- Clipboard --
+
+    fun pasteFromClipboard() {
+        val context = getApplication<Application>()
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = clipboard.primaryClip
+        if (clip != null && clip.itemCount > 0) {
+            val text = clip.getItemAt(0).coerceToText(context).toString().trim()
+            if (text.isNotEmpty()) {
+                urlText = text
+            }
+        }
+    }
+
+    // -- Terminal content --
+
+    fun dismissTerminalContent() {
+        terminalContentText = null
+        terminalContentWindowId = null
+    }
+
+    fun refreshTerminalContent() {
+        terminalContentWindowId?.let { wid ->
+            webSocketClient.send(RequestContentMessage(windowId = wid))
+        }
+    }
+
+    val terminalContentWindowName: String
+        get() = windows.firstOrNull { it.id == terminalContentWindowId }?.name ?: "Terminal"
+
+    // -- Haptics --
+
+    private fun performHaptic(effectId: Int) {
+        try {
+            val context = getApplication<Application>()
+            val vibrator = (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            vibrator.vibrate(VibrationEffect.createPredefined(effectId))
+        } catch (e: Exception) {
+            Log.w(TAG, "Haptic feedback failed: ${e.message}")
+        }
+    }
+
+    // -- Cleanup --
+
+    override fun onCleared() {
+        super.onCleared()
+        webSocketClient.disconnect()
+        nsdBrowser.stopDiscovery()
+        speechService.destroy()
+    }
+}
