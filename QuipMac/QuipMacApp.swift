@@ -51,6 +51,7 @@ struct QuipMacApp: App {
     private func startServicesOnce() {
         guard !servicesStarted else { return }
         servicesStarted = true
+        webSocketServer.pinManager = pinManager
         webSocketServer.start()
         tunnel.start()
         bonjourAdvertiser.startAdvertising()
