@@ -50,4 +50,27 @@ object NetworkValidator {
                 addr.isSiteLocalAddress ||
                 addr.isLinkLocalAddress
     }
+
+    /**
+     * Returns true if the URL matches expected Quip connection patterns:
+     * - wss://*.trycloudflare.com (Cloudflare tunnel)
+     * - ws:// to private/local IPs (RFC 1918, loopback, link-local, localhost)
+     */
+    fun isURLTrusted(url: String): Boolean {
+        val uri = try { URI(url) } catch (e: Exception) { return false }
+        val scheme = uri.scheme?.lowercase() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+
+        // wss:// to *.trycloudflare.com is trusted
+        if (scheme == "wss" && (host == "trycloudflare.com" || host.endsWith(".trycloudflare.com"))) {
+            return true
+        }
+
+        // ws:// to local/private IPs is trusted
+        if (scheme == "ws") {
+            return isPrivateNetwork(host)
+        }
+
+        return false
+    }
 }
