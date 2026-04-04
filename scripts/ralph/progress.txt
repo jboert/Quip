@@ -27,6 +27,7 @@ Started: Fri Apr  3 20:44:47 EDT 2026
 - Android UI state: `showPinEntry` controls PIN screen visibility; `isAuthenticated` gates LayoutScreen and landscape orientation
 - macOS tunnel log path: `~/Library/Caches/Quip/tunnel.log` (via FileManager cachesDirectory). Dir 0700, file 0600.
 - SecretRedactor (macOS) is a static enum with regex patterns; Linux equivalent is `secret_redactor::redact()` using `LazyLock<Vec<RedactPattern>>`
+- Rate limiting: per-client counter + window start timestamp in ClientConnection; `allowMessage()` resets counter when ≥1s elapsed, drops when count > 10
 - Linux tunnel log path: `XDG_CACHE_HOME/quip/tunnel.log` (defaults to `~/.cache/quip/tunnel.log`). Dir 0700, file 0600. Uses `prepare_tunnel_log()` helper.
 ---
 
@@ -217,4 +218,17 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - `std::sync::LazyLock` is stable in Rust — no need for `once_cell` or `lazy_static` crates
   - The `regex` crate was already in Cargo.toml, so no dependency additions needed
   - Redaction sits between content trimming and TerminalContentMessage::new — shadow the `content` variable with `let content = redact(&content);`
+---
+
+## 2026-04-03 - US-015
+- Added per-client rate limiting (10 messages/second) to macOS WebSocket server
+- Extended `ClientConnection` struct with `messageCount`, `windowStart`, and `allowMessage()` method
+- Rate check applied in `receiveMessage` before any message processing (including auth), using client index lookup
+- Excess messages silently dropped; window resets after 1 second elapses
+- Files changed: QuipMac/Services/WebSocketServer.swift
+- **Learnings for future iterations:**
+  - Rate limiting must use index-based mutation (`clients[index].allowMessage()`) since `ClientConnection` is a value type (struct)
+  - Rate limit check goes before auth check in the receive handler — prevents unauthenticated flood attacks too
+  - `Date().timeIntervalSince(windowStart) >= 1.0` is a simple 1-second sliding window approach; no timer needed
+  - US-016 (Linux equivalent) should use the same pattern: per-client counter + timestamp in `ClientConnection` HashMap entry
 ---
