@@ -9,6 +9,7 @@ import dev.quip.android.models.AuthResultMessage
 import dev.quip.android.models.LayoutUpdate
 import dev.quip.android.models.MessageEnvelope
 import dev.quip.android.models.TerminalContentMessage
+import okhttp3.CertificatePinner
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -22,6 +23,20 @@ class QuipWebSocketClient {
         private const val TAG = "QuipWebSocketClient"
         private const val INITIAL_RECONNECT_DELAY_MS = 1000L
         private const val MAX_RECONNECT_DELAY_MS = 10000L
+
+        // Pin Cloudflare's intermediate + root CA SPKI hashes for wss://*.trycloudflare.com.
+        // Local ws:// connections are unaffected (CertificatePinner only applies to HTTPS/WSS).
+        //
+        // To update when Cloudflare rotates certs, see docs/protocol.md "Updating Pins".
+        //
+        // Current chain (as of 2026-04):
+        //   Intermediate: CN=WE1 (Google Trust Services)
+        //   Root:         CN=GTS Root R4
+        private val certificatePinner = CertificatePinner.Builder()
+            .add("*.trycloudflare.com",
+                "sha256/kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",  // WE1 intermediate
+                "sha256/mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=")  // GTS Root R4
+            .build()
     }
 
     @Volatile var isConnected: Boolean = false
@@ -115,6 +130,7 @@ class QuipWebSocketClient {
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
+            .certificatePinner(certificatePinner)
             .build()
         client = httpClient
 
