@@ -18,10 +18,27 @@ final class WebSocketServer {
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
 
-    /// Tracks a WebSocket connection and its authentication state.
+    /// Tracks a WebSocket connection, its authentication state, and rate limiting.
     private struct ClientConnection {
         let connection: NWConnection
         var isAuthenticated: Bool = false
+        var messageCount: Int = 0
+        var windowStart: Date = Date()
+
+        static let maxMessagesPerSecond = 10
+
+        /// Returns true if the message should be allowed, false if rate-limited.
+        mutating func allowMessage() -> Bool {
+            let now = Date()
+            if now.timeIntervalSince(windowStart) >= 1.0 {
+                // New window
+                windowStart = now
+                messageCount = 1
+                return true
+            }
+            messageCount += 1
+            return messageCount <= Self.maxMessagesPerSecond
+        }
     }
 
     func start() {
@@ -215,6 +232,12 @@ final class WebSocketServer {
             if let data = content, !data.isEmpty {
                 let receivedData = data
                 DispatchQueue.main.async {
+                    // Rate limit: drop excess messages beyond 10/sec per client
+                    guard let clientIndex = self.clients.firstIndex(where: { $0.connection === connection }),
+                          self.clients[clientIndex].allowMessage() else {
+                        return
+                    }
+
                     let messageType = MessageCoder.messageType(from: receivedData)
 
                     // Auth messages are always handled, regardless of auth state
