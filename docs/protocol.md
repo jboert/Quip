@@ -181,6 +181,37 @@ Request terminal output and screenshot for a window. Server responds with `termi
 
 Server reads the `type` field from the JSON envelope first, then deserializes into the appropriate struct. Unknown types are logged and ignored.
 
+## Certificate Pinning (Cloudflare Tunnel)
+
+When connecting via `wss://*.trycloudflare.com`, mobile clients pin the server's TLS certificate chain to prevent MITM attacks from compromised CAs. Direct LAN `ws://` connections are not affected.
+
+**Pinning strategy:** SPKI (Subject Public Key Info) SHA-256 hashes of the intermediate and root CA certificates in the chain. Leaf certificates are NOT pinned since they rotate frequently.
+
+### Updating Pins
+
+When Cloudflare rotates their certificate chain, connections will fail. To get the new SPKI hashes:
+
+```bash
+# Dump the full chain and extract each certificate's SPKI hash
+echo | openssl s_client -connect trycloudflare.com:443 -showcerts 2>/dev/null \
+  | python3 -c "
+import subprocess, re, sys
+certs = re.findall(r'(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)', sys.stdin.read(), re.DOTALL)
+for i, cert in enumerate(certs):
+    with open(f'/tmp/cf_{i}.pem', 'w') as f: f.write(cert)
+    subj = subprocess.run(['openssl', 'x509', '-noout', '-subject', '-in', f'/tmp/cf_{i}.pem'], capture_output=True, text=True)
+    spki = subprocess.run(f'openssl x509 -noout -pubkey -in /tmp/cf_{i}.pem | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | base64', shell=True, capture_output=True, text=True)
+    print(f'Certificate {i}: {subj.stdout.strip()}')
+    print(f'  SPKI SHA-256: {spki.stdout.strip()}')
+"
+```
+
+Update the pinned hashes in:
+- **iOS:** `QuipiOS/Services/WebSocketClient.swift` → `CloudflareCertificatePinningDelegate.pinnedSPKIHashes`
+- **Android:** `QuipAndroid/.../services/WebSocketClient.kt` → `CertificatePinner` configuration
+
+Pin the **intermediate** and **root** CA hashes (not the leaf).
+
 ## Implementations
 
 | Platform | Language | Location |
