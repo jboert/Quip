@@ -4,6 +4,7 @@ use gtk4::{self, Align, Orientation, PolicyType, ScrolledWindow};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -155,6 +156,8 @@ pub fn build_ui(app: &adw::Application) {
     let preview_refresh = preview.clone();
     let status_refresh = status_bar.clone();
     let broadcast_tx_timer = broadcast_tx.clone();
+    let output_high_water: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
+    let output_hw_timer = output_high_water.clone();
     glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
         let changes = {
             let mut state = ss_timer.write().unwrap();
@@ -163,7 +166,7 @@ pub fn build_ui(app: &adw::Application) {
             state.state_detector.poll_all()
         };
 
-        // Broadcast state changes and TTS readback
+        // Broadcast state changes and output deltas
         for (window_id, new_state) in &changes {
             let state_str = match new_state {
                 crate::protocol::types::TerminalState::WaitingForInput => "waiting_for_input",
@@ -179,23 +182,34 @@ pub fn build_ui(app: &adw::Application) {
                 let _ = broadcast_tx_timer.try_send(json);
             }
 
-            // On transition to waiting_for_input, send TTS readback
+            // On transition to waiting_for_input, send output delta
             if matches!(new_state, crate::protocol::types::TerminalState::WaitingForInput) {
                 let state = ss_timer.read().unwrap();
                 if let Some(w) = state.windows.iter().find(|w| w.id == *window_id) {
                     let window_name = w.name.clone();
                     let wid = w.window_id;
                     drop(state);
-                    // Grab last few lines via tmux or read_content
                     if let Ok(content) = ib_timer.read_content(wid) {
-                        let lines: Vec<&str> = content.lines().collect();
-                        let start = lines.len().saturating_sub(5);
-                        let last_lines = lines[start..].join("\n").trim().to_string();
-                        if !last_lines.is_empty() {
-                            let tts_msg = crate::protocol::messages::TTSReadbackMessage::new(
-                                window_id.clone(), window_name, last_lines,
+                        let mut hw = output_hw_timer.borrow_mut();
+                        let prev = hw.get(window_id).cloned().unwrap_or_default();
+
+                        // Compute delta: if previous content is a prefix, take the remainder
+                        let delta = if !prev.is_empty() && content.starts_with(&prev) {
+                            content[prev.len()..].trim().to_string()
+                        } else {
+                            // No prefix match — take last 30 lines
+                            let lines: Vec<&str> = content.lines().collect();
+                            let start = lines.len().saturating_sub(30);
+                            lines[start..].join("\n").trim().to_string()
+                        };
+
+                        hw.insert(window_id.clone(), content);
+
+                        if !delta.is_empty() {
+                            let msg = crate::protocol::messages::OutputDeltaMessage::new(
+                                window_id.clone(), window_name, delta, true,
                             );
-                            if let Some(json) = encode_message(&tts_msg) {
+                            if let Some(json) = encode_message(&msg) {
                                 let _ = broadcast_tx_timer.try_send(json);
                             }
                         }

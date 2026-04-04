@@ -16,6 +16,7 @@ final class SpeechService {
     // All audio work happens through this helper on a background queue
     private let worker = AudioWorker()
     private let synthesizer = AVSpeechSynthesizer()
+    private let synthDelegate = SynthDelegate()
 
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
@@ -67,6 +68,12 @@ final class SpeechService {
         guard !text.isEmpty else { return }
         // Don't interrupt recording
         guard !isRecording else { return }
+        if synthesizer.delegate == nil {
+            synthDelegate.onFinish = { [weak self] in
+                DispatchQueue.main.async { self?.isSpeaking = false }
+            }
+            synthesizer.delegate = synthDelegate
+        }
         synthesizer.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
@@ -78,6 +85,15 @@ final class SpeechService {
     func stopSpeaking() {
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
+    }
+}
+
+/// Delegate helper that detects when AVSpeechSynthesizer finishes speaking.
+private class SynthDelegate: NSObject, AVSpeechSynthesizerDelegate, @unchecked Sendable {
+    var onFinish: (() -> Void)?
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        onFinish?()
     }
 }
 

@@ -14,6 +14,9 @@ final class TerminalStateDetector {
     /// Maps window IDs to their detected terminal state
     var windowStates: [String: TerminalState] = [:]
 
+    /// Called with (windowId, oldState, newState) when a window's state changes
+    var onStateTransition: ((String, TerminalState, TerminalState) -> Void)?
+
     /// Window IDs currently being tracked, mapped to their shell PIDs
     var trackedWindows: [String: pid_t] = [:]
 
@@ -100,8 +103,12 @@ final class TerminalStateDetector {
     private func handleProcessEvent(windowId: String) {
         guard let shellPid = trackedWindows[windowId] else { return }
         if windowStates[windowId] != .sttActive {
-            let state = detectState(shellPid: shellPid)
-            windowStates[windowId] = state
+            let newState = detectState(shellPid: shellPid)
+            let oldState = windowStates[windowId] ?? .neutral
+            if oldState != newState {
+                windowStates[windowId] = newState
+                onStateTransition?(windowId, oldState, newState)
+            }
         }
         refreshChildWatches(windowId: windowId, shellPid: shellPid)
     }
@@ -139,8 +146,12 @@ final class TerminalStateDetector {
         for (windowId, shellPid) in trackedWindows {
             if windowStates[windowId] == .sttActive { continue }
 
-            let state = detectState(shellPid: shellPid)
-            windowStates[windowId] = state
+            let newState = detectState(shellPid: shellPid)
+            let oldState = windowStates[windowId] ?? .neutral
+            if oldState != newState {
+                windowStates[windowId] = newState
+                onStateTransition?(windowId, oldState, newState)
+            }
 
             // Keep child watches up to date (catches new children between kqueue events)
             refreshChildWatches(windowId: windowId, shellPid: shellPid)

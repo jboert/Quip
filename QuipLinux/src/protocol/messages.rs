@@ -136,11 +136,11 @@ impl TerminalContentMessage {
 }
 
 // ---------------------------------------------------------------------------
-// TTS readback — sent when Claude finishes (waiting_for_input transition)
+// Output delta — sent when Claude finishes (waiting_for_input transition)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TTSReadbackMessage {
+pub struct OutputDeltaMessage {
     #[serde(rename = "type")]
     pub type_: String,
     #[serde(rename = "windowId")]
@@ -148,15 +148,18 @@ pub struct TTSReadbackMessage {
     #[serde(rename = "windowName")]
     pub window_name: String,
     pub text: String,
+    #[serde(rename = "isFinal")]
+    pub is_final: bool,
 }
 
-impl TTSReadbackMessage {
-    pub fn new(window_id: String, window_name: String, text: String) -> Self {
+impl OutputDeltaMessage {
+    pub fn new(window_id: String, window_name: String, text: String, is_final: bool) -> Self {
         Self {
-            type_: "tts_readback".into(),
+            type_: "output_delta".into(),
             window_id,
             window_name,
             text,
+            is_final,
         }
     }
 }

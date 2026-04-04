@@ -110,11 +110,12 @@ struct QuipApp: App {
             }
         }
 
-        client.onTTSReadback = { windowId, windowName, text in
+        client.onOutputDelta = { windowId, windowName, text, isFinal in
             DispatchQueue.main.async {
-                guard ttsEnabled else { return }
-                // Prefix with window name for context
-                let spoken = "\(windowName): \(text)"
+                guard ttsEnabled, isFinal else { return }
+                let filtered = TTSTextFilter.filter(text)
+                guard !filtered.isEmpty else { return }
+                let spoken = "\(windowName): \(filtered)"
                 speech.speak(spoken)
             }
         }
@@ -301,6 +302,13 @@ struct MainiOSView: View {
                         }
                     }
                 )
+            }
+        }
+        .overlay {
+            if speech.isSpeaking {
+                Color.black.opacity(0.001)
+                    .ignoresSafeArea()
+                    .onTapGesture { speech.stopSpeaking() }
             }
         }
         .overlay { HiddenVolumeView().frame(width: 1, height: 1) }
@@ -634,6 +642,9 @@ struct MainiOSView: View {
             Spacer()
             if client.isAuthenticated {
                 Button {
+                    if speech.isSpeaking {
+                        speech.stopSpeaking()
+                    }
                     ttsEnabled.toggle()
                 } label: {
                     Image(systemName: ttsEnabled ? "speaker.wave.2.fill" : "speaker.slash")

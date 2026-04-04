@@ -11,6 +11,7 @@ struct QuipMacApp: App {
     @State private var tunnel = CloudflareTunnel()
     @State private var pinManager = PINManager()
     @AppStorage("localOnlyMode") private var localOnlyMode = false
+    @State private var outputHighWaterMarks: [String: String] = [:]
 
     var body: some Scene {
         WindowGroup {
@@ -68,6 +69,40 @@ struct QuipMacApp: App {
         webSocketServer.onMessageReceived = { [self] data in
             DispatchQueue.main.async {
                 self.handleIncomingMessage(data)
+            }
+        }
+
+        terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
+            // Broadcast state change for ALL transitions
+            webSocketServer.broadcast(StateChangeMessage(windowId: windowId, state: newState.rawValue))
+
+            // On transition to waitingForInput, capture and broadcast output delta
+            if newState == .waitingForInput {
+                if let window = windowManager.windows.first(where: { $0.id == windowId }) {
+                    let termApp = terminalAppForWindow(window)
+                    let wn = window.windowNumber
+                    let name = window.name
+                    if let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) {
+                        let previousContent = outputHighWaterMarks[windowId]
+                        let delta: String
+                        if let prev = previousContent, content.hasPrefix(prev) {
+                            delta = String(content.dropFirst(prev.count))
+                        } else {
+                            // No previous content or content was reset — take last 30 lines
+                            let lines = content.components(separatedBy: "\n")
+                            delta = lines.suffix(30).joined(separator: "\n")
+                        }
+                        outputHighWaterMarks[windowId] = content
+
+                        // Trim delta to last ~50 lines
+                        let deltaLines = delta.components(separatedBy: "\n")
+                        let trimmedDelta = deltaLines.suffix(50).joined(separator: "\n")
+
+                        if !trimmedDelta.isEmpty {
+                            webSocketServer.broadcast(OutputDeltaMessage(windowId: windowId, windowName: name, text: trimmedDelta, isFinal: true))
+                        }
+                    }
+                }
             }
         }
 
