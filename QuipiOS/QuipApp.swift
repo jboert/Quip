@@ -203,6 +203,8 @@ struct MainiOSView: View {
     @State private var renameText: String = ""
     @State private var showTextInput = false
     @State private var textInputValue = ""
+    @State private var showURLWarning = false
+    @State private var pendingUnsafeURL: URL?
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
@@ -316,6 +318,22 @@ struct MainiOSView: View {
                 urlText = code
                 showQRScanner = false
                 doConnect()
+            }
+        }
+        .alert("Unrecognized Server", isPresented: $showURLWarning) {
+            Button("Connect Anyway", role: .destructive) {
+                if let url = pendingUnsafeURL {
+                    client.connect(to: url)
+                    addToRecents(url.absoluteString)
+                    pendingUnsafeURL = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingUnsafeURL = nil
+            }
+        } message: {
+            if let url = pendingUnsafeURL {
+                Text("This URL doesn't match expected patterns (local network or Cloudflare tunnel):\n\n\(url.absoluteString)\n\nConnecting to an unknown server could expose your data.")
             }
         }
     }
@@ -724,9 +742,40 @@ struct MainiOSView: View {
             urlStr = "wss://\(urlText)"
         }
         if let url = URL(string: urlStr) {
-            client.connect(to: url)
-            addToRecents(urlStr)
+            if isURLTrusted(url) {
+                client.connect(to: url)
+                addToRecents(urlStr)
+            } else {
+                pendingUnsafeURL = url
+                showURLWarning = true
+            }
         }
+    }
+
+    private func isURLTrusted(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        let scheme = url.scheme?.lowercased() ?? ""
+
+        // wss:// to *.trycloudflare.com is trusted
+        if scheme == "wss" && (host == "trycloudflare.com" || host.hasSuffix(".trycloudflare.com")) {
+            return true
+        }
+
+        // ws:// to local/private IPs is trusted
+        if scheme == "ws" {
+            if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
+            // RFC 1918 private ranges
+            let parts = host.split(separator: ".").compactMap { UInt8($0) }
+            if parts.count == 4 {
+                if parts[0] == 10 { return true }                                    // 10.0.0.0/8
+                if parts[0] == 172 && (16...31).contains(parts[1]) { return true }   // 172.16.0.0/12
+                if parts[0] == 192 && parts[1] == 168 { return true }               // 192.168.0.0/16
+                if parts[0] == 169 && parts[1] == 254 { return true }               // 169.254.0.0/16 link-local
+            }
+            return false
+        }
+
+        return false
     }
 
     // MARK: - Recent Connections
