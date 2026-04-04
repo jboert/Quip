@@ -110,7 +110,7 @@ final class WebSocketClient {
     var onLayoutUpdate: ((LayoutUpdate) -> Void)?
     var onStateChange: ((String, String) -> Void)?
     var onTerminalContent: ((String, String, String?) -> Void)?  // (windowId, content, screenshot)
-    var onTTSReadback: ((String, String, String) -> Void)?  // (windowId, windowName, text)
+    var onOutputDelta: ((String, String, String, Bool) -> Void)?  // (windowId, windowName, text, isFinal)
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
 
@@ -229,15 +229,17 @@ final class WebSocketClient {
                     NSLog("[WebSocketClient] Connected, awaiting authentication")
                     self.isConnected = true
                     self.isConnecting = false
-                    self.isAuthenticated = false
                     self.authError = nil
                     self.lastError = nil
                     self.reconnectDelay = 1.0
                     // Auto-send cached PIN on reconnect, or prompt for PIN
-                    if let pin = self.sessionPIN {
-                        self.sendAuth(pin: pin)
-                    } else {
-                        self.onAuthRequired?()
+                    // (skip if server already auto-authenticated us)
+                    if !self.isAuthenticated {
+                        if let pin = self.sessionPIN {
+                            self.sendAuth(pin: pin)
+                        } else {
+                            self.onAuthRequired?()
+                        }
                     }
                 }
             }
@@ -268,18 +270,13 @@ final class WebSocketClient {
                         if !self.isConnected {
                             self.isConnected = true
                             self.isConnecting = false
-                            self.isAuthenticated = false
                             self.authError = nil
                             self.connectionTimeoutTask?.cancel()
                             self.connectionTimeoutTask = nil
                             self.lastError = nil
                             self.reconnectDelay = 1.0
-                            // Auto-send cached PIN on reconnect, or prompt for PIN
-                            if let pin = self.sessionPIN {
-                                self.sendAuth(pin: pin)
-                            } else {
-                                self.onAuthRequired?()
-                            }
+                            // Prompt for PIN unless server already auto-authenticated us
+                            // (handleMessage below will process auth_result first)
                         }
                         self.handleMessage(data)
                     }
@@ -343,10 +340,10 @@ final class WebSocketClient {
             if let msg = try? decoder.decode(TerminalContentMessage.self, from: data) {
                 onTerminalContent?(msg.windowId, msg.content, msg.screenshot)
             }
-        case "tts_readback":
+        case "output_delta":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(TTSReadbackMessage.self, from: data) {
-                onTTSReadback?(msg.windowId, msg.windowName, msg.text)
+            if let msg = try? decoder.decode(OutputDeltaMessage.self, from: data) {
+                onOutputDelta?(msg.windowId, msg.windowName, msg.text, msg.isFinal)
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)

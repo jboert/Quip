@@ -131,17 +131,19 @@ struct TerminalContentMessage: Codable, Sendable {
     }
 }
 
-struct TTSReadbackMessage: Codable, Sendable {
+struct OutputDeltaMessage: Codable, Sendable {
     let type: String
     let windowId: String
     let windowName: String
     let text: String
+    let isFinal: Bool
 
-    init(windowId: String, windowName: String, text: String) {
-        self.type = "tts_readback"
+    init(windowId: String, windowName: String, text: String, isFinal: Bool = true) {
+        self.type = "output_delta"
         self.windowId = windowId
         self.windowName = windowName
         self.text = text
+        self.isFinal = isFinal
     }
 }
 
