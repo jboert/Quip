@@ -23,6 +23,7 @@ import dev.quip.android.models.SavedConnection
 import dev.quip.android.services.ConnectionManager
 import dev.quip.android.services.ConnectionService
 import dev.quip.android.services.DiscoveredHost
+import dev.quip.android.services.NetworkValidator
 import dev.quip.android.services.NsdBrowser
 import dev.quip.android.services.QuipWebSocketClient
 import dev.quip.android.services.SpeechService
@@ -307,6 +308,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             url.contains("trycloudflare.com") -> "wss://$url"
             url.contains(":") -> "ws://$url"
             else -> "wss://$url"
+        }
+
+        // Validate: cleartext (ws://) only allowed for private/local networks
+        if (!NetworkValidator.isSafeUrl(wsUrl)) {
+            Log.w(TAG, "Rejected connection to non-private network via cleartext: $wsUrl")
+            return
         }
 
         urlText = url
