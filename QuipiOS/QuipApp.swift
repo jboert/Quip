@@ -25,6 +25,8 @@ struct QuipApp: App {
     @State private var terminalContentText: String?
     @State private var terminalContentScreenshot: String?
     @State private var terminalContentWindowId: String?
+    @State private var showPINEntry = false
+    @State private var pinText = ""
 
     var body: some Scene {
         WindowGroup {
@@ -38,6 +40,8 @@ struct QuipApp: App {
                 terminalContentText: $terminalContentText,
                 terminalContentScreenshot: $terminalContentScreenshot,
                 terminalContentWindowId: $terminalContentWindowId,
+                showPINEntry: $showPINEntry,
+                pinText: $pinText,
                 monitorName: monitorName,
                 onStartRecording: { startRecording() },
                 onStopRecording: { stopRecording() },
@@ -105,6 +109,23 @@ struct QuipApp: App {
             }
         }
 
+        client.onAuthRequired = {
+            DispatchQueue.main.async {
+                pinText = ""
+                showPINEntry = true
+            }
+        }
+
+        client.onAuthResult = { success, error in
+            DispatchQueue.main.async {
+                if success {
+                    showPINEntry = false
+                    pinText = ""
+                }
+                // On failure, PIN entry stays open — authError displayed in the UI
+            }
+        }
+
         volumeHandler.onPTTStart = {
             DispatchQueue.main.async { startRecording() }
         }
@@ -167,6 +188,8 @@ struct MainiOSView: View {
     @Binding var terminalContentText: String?
     @Binding var terminalContentScreenshot: String?
     @Binding var terminalContentWindowId: String?
+    @Binding var showPINEntry: Bool
+    @Binding var pinText: String
     var monitorName: String
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
@@ -193,6 +216,10 @@ struct MainiOSView: View {
                     connectBar
                         .padding(.horizontal, 6)
                         .padding(.top, 4)
+                } else if client.isConnected && !client.isAuthenticated {
+                    authenticatingBar
+                        .padding(.horizontal, 6)
+                        .padding(.top, 2)
                 } else {
                     connectedBar
                         .padding(.horizontal, 6)
@@ -269,6 +296,15 @@ struct MainiOSView: View {
         .onChange(of: client.isConnected) { _, connected in
             withAnimation(.easeInOut(duration: 0.5)) {
                 if !connected {
+                    windows = []
+                    selectedWindowId = nil
+                }
+                updateOrientation()
+            }
+        }
+        .onChange(of: client.isAuthenticated) { _, authenticated in
+            withAnimation(.easeInOut(duration: 0.5)) {
+                if !authenticated {
                     windows = []
                     selectedWindowId = nil
                 }
@@ -480,6 +516,82 @@ struct MainiOSView: View {
         }
     }
 
+    // MARK: - Authenticating Bar
+
+    private var authenticatingBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(colors.statusConnecting)
+                    .frame(width: 6, height: 6)
+                Text("Authenticating\u{2026}")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(colors.textSecondary)
+                Spacer()
+                Button {
+                    client.disconnect()
+                } label: {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(colors.textTertiary)
+                }
+            }
+
+            if showPINEntry {
+                pinEntryView
+            }
+        }
+    }
+
+    private var pinEntryView: some View {
+        VStack(spacing: 8) {
+            Text("Enter PIN")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(colors.textPrimary)
+
+            Text("Enter the PIN shown on your desktop app")
+                .font(.system(size: 10))
+                .foregroundStyle(colors.textTertiary)
+
+            HStack(spacing: 6) {
+                TextField("000000", text: $pinText)
+                    .font(.system(size: 20, weight: .medium, design: .monospaced))
+                    .foregroundStyle(colors.textPrimary)
+                    .multilineTextAlignment(.center)
+                    .keyboardType(.numberPad)
+                    .frame(maxWidth: 160)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(client.authError != nil ? Color.red.opacity(0.5) : colors.surfaceBorder, lineWidth: 1)
+                    )
+
+                Button {
+                    guard pinText.count >= 4 else { return }
+                    client.sendAuth(pin: pinText)
+                } label: {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(pinText.count >= 4 ? colors.buttonPrimary : colors.buttonDisabled)
+                }
+                .disabled(pinText.count < 4)
+            }
+
+            if let error = client.authError {
+                Text(error)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.red.opacity(0.8))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(colors.surface.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
     // MARK: - Bottom Bar
 
     private var bottomBar: some View {
@@ -491,7 +603,7 @@ struct MainiOSView: View {
                     .foregroundStyle(colors.textTertiary)
             }
             Spacer()
-            if client.isConnected {
+            if client.isAuthenticated {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showTextInput.toggle()
@@ -557,7 +669,7 @@ struct MainiOSView: View {
                         Image(systemName: "macwindow.on.rectangle")
                             .font(.system(size: 24, weight: .light))
                             .foregroundStyle(colors.textFaint)
-                        Text(client.isConnected ? "No windows" : "Enter tunnel URL")
+                        Text(client.isAuthenticated ? "No windows" : client.isConnected ? "Enter PIN" : "Enter tunnel URL")
                             .font(.system(size: 10))
                             .foregroundStyle(colors.textFaint)
                     }
@@ -667,9 +779,9 @@ struct MainiOSView: View {
     }
 
     private func updateOrientation() {
-        AppOrientationDelegate.allowLandscape = client.isConnected
+        AppOrientationDelegate.allowLandscape = client.isAuthenticated
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        let mask: UIInterfaceOrientationMask = client.isConnected ? .landscape : .portrait
+        let mask: UIInterfaceOrientationMask = client.isAuthenticated ? .landscape : .portrait
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
         // Force UIKit to re-query supported orientations
         UIViewController.attemptRotationToDeviceOrientation()

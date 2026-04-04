@@ -11,12 +11,19 @@ final class WebSocketClient {
 
     var isConnected = false
     var isConnecting = false
+    var isAuthenticated = false
+    var authError: String?
     var serverURL: URL?
     var lastError: String?
 
     var onLayoutUpdate: ((LayoutUpdate) -> Void)?
     var onStateChange: ((String, String) -> Void)?
     var onTerminalContent: ((String, String, String?) -> Void)?  // (windowId, content, screenshot)
+    var onAuthRequired: (() -> Void)?
+    var onAuthResult: ((Bool, String?) -> Void)?
+
+    /// Cached PIN for the current session — used for auto-auth on reconnect
+    private(set) var sessionPIN: String?
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -46,7 +53,17 @@ final class WebSocketClient {
         session = nil
         isConnected = false
         isConnecting = false
+        isAuthenticated = false
+        authError = nil
+        sessionPIN = nil
         NSLog("[WebSocketClient] Disconnected intentionally")
+    }
+
+    func sendAuth(pin: String) {
+        sessionPIN = pin
+        authError = nil
+        send(AuthMessage(pin: pin))
+        NSLog("[WebSocketClient] Sent auth message")
     }
 
     func send(_ message: some Codable) {
@@ -111,11 +128,19 @@ final class WebSocketClient {
                     self.lastError = error.localizedDescription
                     self.handleDisconnect()
                 } else {
-                    NSLog("[WebSocketClient] Connected successfully")
+                    NSLog("[WebSocketClient] Connected, awaiting authentication")
                     self.isConnected = true
                     self.isConnecting = false
+                    self.isAuthenticated = false
+                    self.authError = nil
                     self.lastError = nil
                     self.reconnectDelay = 1.0
+                    // Auto-send cached PIN on reconnect, or prompt for PIN
+                    if let pin = self.sessionPIN {
+                        self.sendAuth(pin: pin)
+                    } else {
+                        self.onAuthRequired?()
+                    }
                 }
             }
         }
@@ -145,10 +170,18 @@ final class WebSocketClient {
                         if !self.isConnected {
                             self.isConnected = true
                             self.isConnecting = false
+                            self.isAuthenticated = false
+                            self.authError = nil
                             self.connectionTimeoutTask?.cancel()
                             self.connectionTimeoutTask = nil
                             self.lastError = nil
                             self.reconnectDelay = 1.0
+                            // Auto-send cached PIN on reconnect, or prompt for PIN
+                            if let pin = self.sessionPIN {
+                                self.sendAuth(pin: pin)
+                            } else {
+                                self.onAuthRequired?()
+                            }
                         }
                         self.handleMessage(data)
                     }
@@ -175,7 +208,21 @@ final class WebSocketClient {
         }
 
         switch peek.type {
+        case "auth_result":
+            if let msg = try? decoder.decode(AuthResultMessage.self, from: data) {
+                NSLog("[WebSocketClient] auth_result: success=%d", msg.success ? 1 : 0)
+                if msg.success {
+                    isAuthenticated = true
+                    authError = nil
+                } else {
+                    isAuthenticated = false
+                    authError = msg.error ?? "Invalid PIN"
+                    sessionPIN = nil  // Clear bad PIN
+                }
+                onAuthResult?(msg.success, msg.error)
+            }
         case "layout_update":
+            guard isAuthenticated else { return }
             do {
                 let update = try decoder.decode(LayoutUpdate.self, from: data)
                 NSLog("[WebSocketClient] layout_update: %d windows", update.windows.count)
@@ -184,11 +231,13 @@ final class WebSocketClient {
                 NSLog("[WebSocketClient] decode error: %@", "\(error)")
             }
         case "state_change":
+            guard isAuthenticated else { return }
             struct SC: Codable { let windowId: String; let state: String }
             if let c = try? decoder.decode(SC.self, from: data) {
                 onStateChange?(c.windowId, c.state)
             }
         case "terminal_content":
+            guard isAuthenticated else { return }
             if let msg = try? decoder.decode(TerminalContentMessage.self, from: data) {
                 onTerminalContent?(msg.windowId, msg.content, msg.screenshot)
             }
@@ -199,9 +248,9 @@ final class WebSocketClient {
 
     private func handleDisconnect() {
         guard !intentionalDisconnect else { return }
-        let wasConnected = isConnected
         isConnected = false
         isConnecting = true
+        isAuthenticated = false
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = nil
 
