@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures_util::sink::SinkExt;
 use futures_util::stream::{SplitSink, StreamExt};
@@ -15,10 +16,30 @@ use crate::services::pin_manager::PINManager;
 
 type WsSink = SplitSink<WebSocketStream<TcpStream>, Message>;
 
-/// Per-connection state including auth status and write half of the socket.
+/// Per-connection state including auth status, rate limiting, and write half of the socket.
 struct ClientConnection {
     sink: WsSink,
     authenticated: bool,
+    message_count: u32,
+    window_start: Instant,
+}
+
+impl ClientConnection {
+    /// Returns true if the message should be processed, false if rate-limited.
+    /// Allows max 10 messages per second per client.
+    fn allow_message(&mut self) -> bool {
+        let now = Instant::now();
+        if now.duration_since(self.window_start).as_secs_f64() >= 1.0 {
+            self.message_count = 1;
+            self.window_start = now;
+            true
+        } else if self.message_count < 10 {
+            self.message_count += 1;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 pub struct WsServer {
@@ -89,6 +110,8 @@ impl WsServer {
                     locked.insert(client_id, ClientConnection {
                         sink: write,
                         authenticated: false,
+                        message_count: 0,
+                        window_start: Instant::now(),
                     });
                     client_count.store(locked.len(), Ordering::Relaxed);
                 }
@@ -100,6 +123,17 @@ impl WsServer {
                             if msg.is_text() {
                                 let text = msg.into_text().unwrap_or_default();
                                 info!("WS recv from {peer}: {}", &text[..text.len().min(200)]);
+
+                                // Rate limit check (before auth, to prevent unauthenticated floods)
+                                {
+                                    let mut locked = clients.lock().await;
+                                    if let Some(client) = locked.get_mut(&client_id) {
+                                        if !client.allow_message() {
+                                            info!("Rate limited message from {peer}");
+                                            continue;
+                                        }
+                                    }
+                                }
 
                                 // Check auth state
                                 let is_authenticated = {
