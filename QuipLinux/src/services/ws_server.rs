@@ -29,7 +29,7 @@ impl WsServer {
     }
 
     pub async fn run(&self) {
-        let addr = format!("0.0.0.0:{}", self.port);
+        let addr = format!("127.0.0.1:{}", self.port);
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
