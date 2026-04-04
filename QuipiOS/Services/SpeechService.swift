@@ -16,6 +16,34 @@ final class SpeechService {
     // All audio work happens through this helper on a background queue
     private let worker = AudioWorker()
     private let synthesizer = AVSpeechSynthesizer()
+
+    /// Cached high-quality voice — picks premium/enhanced en-US voice if available
+    @ObservationIgnored private var _preferredVoice: AVSpeechSynthesisVoice?
+    private var preferredVoice: AVSpeechSynthesisVoice? {
+        if let v = _preferredVoice { return v }
+        let enUSVoices = AVSpeechSynthesisVoice.speechVoices().filter {
+            $0.language.hasPrefix("en-US") || $0.language.hasPrefix("en_US")
+        }
+        // Prefer: premium > enhanced > default. Within each tier, prefer personality voices
+        let preferredNames = ["Ava", "Samantha", "Evan", "Zoe", "Allison", "Susan", "Tom"]
+        let byQuality: [AVSpeechSynthesisVoiceQuality] = [.premium, .enhanced, .default]
+        for quality in byQuality {
+            let voicesAtQuality = enUSVoices.filter { $0.quality == quality }
+            for name in preferredNames {
+                if let voice = voicesAtQuality.first(where: { $0.name == name }) {
+                    _preferredVoice = voice
+                    return voice
+                }
+            }
+            if let voice = voicesAtQuality.first {
+                _preferredVoice = voice
+                return voice
+            }
+        }
+        let fallback = AVSpeechSynthesisVoice(language: "en-US")
+        _preferredVoice = fallback
+        return fallback
+    }
     private let synthDelegate = SynthDelegate()
 
     func requestAuthorization() {
@@ -77,7 +105,8 @@ final class SpeechService {
         synthesizer.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.pitchMultiplier = 1.0
+        utterance.voice = preferredVoice
         synthesizer.speak(utterance)
         isSpeaking = true
     }
