@@ -122,6 +122,14 @@ impl WsServer {
                         Ok(msg) => {
                             if msg.is_text() {
                                 let text = msg.into_text().unwrap_or_default();
+
+                                // Message size limit: 64KB max
+                                const MAX_MESSAGE_SIZE: usize = 65_536;
+                                if text.len() > MAX_MESSAGE_SIZE {
+                                    info!("Dropping oversized message ({} bytes) from {peer}", text.len());
+                                    continue;
+                                }
+
                                 info!("WS recv from {peer}: {}", &text[..text.len().min(200)]);
 
                                 // Rate limit check (before auth, to prevent unauthenticated floods)
