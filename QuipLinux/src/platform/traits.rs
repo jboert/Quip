@@ -68,7 +68,7 @@ pub trait InputBackend: Send + Sync {
     /// Send a special keystroke (e.g., "ctrl+c", "return")
     fn send_keystroke(&self, window_id: u64, key: &str) -> PlatformResult<()>;
 
-    /// Spawn a new terminal window in a directory
+    /// Spawn a new terminal window in a directory, running `claude` inside tmux
     fn spawn_terminal(&self, terminal: &str, directory: &str) -> PlatformResult<()>;
 
     /// Read terminal content from a window (select-all, copy, read clipboard, deselect)

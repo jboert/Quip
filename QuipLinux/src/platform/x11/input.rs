@@ -182,12 +182,50 @@ impl InputBackend for X11InputBackend {
     }
 
     fn spawn_terminal(&self, terminal: &str, directory: &str) -> PlatformResult<()> {
-        Command::new(terminal)
-            .current_dir(directory)
-            .spawn()
-            .map_err(|e| {
-                PlatformError::CommandFailed(format!("failed to spawn {terminal}: {e}"))
-            })?;
+        // Generate a unique tmux session name from the directory basename
+        let dir_name = std::path::Path::new(directory)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("quip");
+        let session_name = format!("quip-{}", dir_name);
+
+        // The shell command to run inside the terminal:
+        // Start a tmux session and run claude inside it
+        let tmux_cmd = format!(
+            "tmux new-session -s '{}' -c '{}' 'claude' 2>/dev/null || tmux new-session -c '{}' 'claude'",
+            session_name, directory, directory
+        );
+
+        // Most terminals support -e for executing a command
+        let result = match terminal {
+            "kitty" => Command::new(terminal)
+                .args(["--directory", directory, "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "alacritty" => Command::new(terminal)
+                .args(["--working-directory", directory, "-e", "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "wezterm" | "wezterm-gui" => Command::new(terminal)
+                .args(["start", "--cwd", directory, "--", "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "foot" => Command::new(terminal)
+                .args(["--working-directory", directory, "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "gnome-terminal" => Command::new(terminal)
+                .args(["--working-directory", directory, "--", "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "konsole" => Command::new(terminal)
+                .args(["--workdir", directory, "-e", "sh", "-c", &tmux_cmd])
+                .spawn(),
+            // terminator, xterm, xfce4-terminal, tilix, and others
+            _ => Command::new(terminal)
+                .args(["-e", &format!("sh -c '{}'", tmux_cmd.replace('\'', "'\\''"))])
+                .current_dir(directory)
+                .spawn(),
+        };
+
+        result.map_err(|e| {
+            PlatformError::CommandFailed(format!("failed to spawn {terminal}: {e}"))
+        })?;
 
         Ok(())
     }

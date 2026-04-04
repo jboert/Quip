@@ -203,7 +203,6 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
     require_pin_row.add_suffix(&require_pin_switch);
     require_pin_row.set_activatable_widget(Some(&require_pin_switch));
 
-    // Update require_pin sensitivity when local_only toggles
     let require_pin_switch_clone = require_pin_switch.clone();
     let ss_local = shared_state.clone();
     local_only_switch.connect_state_set(move |_, active| {
@@ -226,8 +225,112 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
     network_group.add(&require_pin_row);
     security_page.add(&network_group);
 
+    // Projects page
+    let projects_page = adw::PreferencesPage::builder()
+        .title("Projects")
+        .icon_name("folder-symbolic")
+        .build();
+
+    let projects_group = adw::PreferencesGroup::builder()
+        .title("Project Directories")
+        .description("Directories where Claude sessions can be launched (wrapped in tmux)")
+        .build();
+
+    let projects_list = gtk4::ListBox::new();
+    projects_list.set_selection_mode(gtk4::SelectionMode::None);
+    projects_list.add_css_class("boxed-list");
+
+    // Populate existing directories
+    {
+        let state = shared_state.read().unwrap();
+        for dir in &state.settings.directories.projects {
+            let row = build_project_row(dir, &projects_list, shared_state);
+            projects_list.append(&row);
+        }
+    }
+
+    projects_group.add(&projects_list);
+
+    // Add directory button
+    let add_dir_btn = gtk4::Button::with_label("Add Directory");
+    add_dir_btn.add_css_class("flat");
+    let ss_add = shared_state.clone();
+    let list_ref = projects_list.clone();
+    let prefs_ref: adw::PreferencesWindow = prefs.clone();
+    add_dir_btn.connect_clicked(move |_| {
+        let dialog = gtk4::FileChooserDialog::new(
+            Some("Choose project directory"),
+            Some(&prefs_ref),
+            gtk4::FileChooserAction::SelectFolder,
+            &[("Cancel", gtk4::ResponseType::Cancel), ("Select", gtk4::ResponseType::Accept)],
+        );
+        let ss_cb = ss_add.clone();
+        let list_cb = list_ref.clone();
+        dialog.connect_response(move |dlg, response| {
+            if response == gtk4::ResponseType::Accept {
+                if let Some(file) = dlg.file() {
+                    if let Some(path) = file.path() {
+                        let dir = path.to_string_lossy().to_string();
+                        {
+                            let mut state = ss_cb.write().unwrap();
+                            if !state.settings.directories.projects.contains(&dir) {
+                                state.settings.directories.projects.push(dir.clone());
+                                state.settings.save();
+                            }
+                        }
+                        let row = build_project_row(&dir, &list_cb, &ss_cb);
+                        list_cb.append(&row);
+                    }
+                }
+            }
+            dlg.close();
+        });
+        dialog.show();
+    });
+
+    let add_box = gtk4::Box::new(Orientation::Horizontal, 0);
+    add_box.set_halign(gtk4::Align::Center);
+    add_box.set_margin_top(8);
+    add_box.append(&add_dir_btn);
+    projects_group.add(&add_box);
+
+    projects_page.add(&projects_group);
+
     prefs.add(&general_page);
+    prefs.add(&projects_page);
     prefs.add(&colors_page);
     prefs.add(&security_page);
     prefs.present();
+}
+
+fn build_project_row(dir: &str, list: &gtk4::ListBox, shared_state: &SharedState) -> adw::ActionRow {
+    let dir_name = std::path::Path::new(dir)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(dir);
+
+    let row = adw::ActionRow::builder()
+        .title(dir_name)
+        .subtitle(dir)
+        .build();
+
+    let remove_btn = gtk4::Button::from_icon_name("user-trash-symbolic");
+    remove_btn.add_css_class("flat");
+    remove_btn.set_valign(gtk4::Align::Center);
+
+    let dir_owned = dir.to_string();
+    let ss_rm = shared_state.clone();
+    let list_rm = list.clone();
+    let row_ref = row.clone();
+    remove_btn.connect_clicked(move |_| {
+        {
+            let mut state = ss_rm.write().unwrap();
+            state.settings.directories.projects.retain(|d| d != &dir_owned);
+            state.settings.save();
+        }
+        list_rm.remove(&row_ref);
+    });
+
+    row.add_suffix(&remove_btn);
+    row
 }
