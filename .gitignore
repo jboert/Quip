@@ -6,3 +6,10 @@ QuipAndroid/local.properties
 TODO.md
 .superpowers/
 docs/specs/
+
+# Claude local settings
+.claude/settings.local.json
+
+# Ralph
+scripts/ralph/
+tasks/
