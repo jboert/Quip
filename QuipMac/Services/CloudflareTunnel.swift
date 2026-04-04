@@ -11,7 +11,11 @@ final class CloudflareTunnel {
 
     private var process: Process?
     private var pollTimer: Timer?
-    private static let logPath = "/tmp/quip_tunnel.log"
+
+    private static var logPath: String {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        return cacheDir.appendingPathComponent("Quip/tunnel.log").path
+    }
 
     func start(localPort: UInt16 = 8765) {
         guard !isRunning else { return }
@@ -26,8 +30,15 @@ final class CloudflareTunnel {
         }
         print("[CloudflareTunnel] Using: \(cfPath)")
 
-        // Clear old log
-        try? "".write(toFile: Self.logPath, atomically: true, encoding: .utf8)
+        // Ensure log directory exists with private permissions
+        let logDir = (Self.logPath as NSString).deletingLastPathComponent
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: logDir) {
+            try? fm.createDirectory(atPath: logDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+
+        // Clear old log with private permissions
+        fm.createFile(atPath: Self.logPath, contents: Data(), attributes: [.posixPermissions: 0o600])
 
         let shell = Process()
         shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
