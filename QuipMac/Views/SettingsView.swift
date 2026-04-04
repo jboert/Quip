@@ -369,18 +369,16 @@ private struct SecurityTab: View {
 
     var body: some View {
         Form {
-            Section("Client Authentication") {
-                Text("Mobile clients must enter this PIN to connect. Read it from here and type it on your phone.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section {
                 LabeledContent("PIN") {
                     HStack(spacing: 8) {
-                        Text(pinManager.pin)
+                        TextField("PIN", text: Bindable(pinManager).pin)
                             .font(.system(size: 24, weight: .medium, design: .monospaced))
-                            .textSelection(.enabled)
+                            .frame(minWidth: 180)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: pinManager.pin) {
+                                pinManager.savePIN()
+                            }
 
                         Button {
                             NSPasteboard.general.clearContents()

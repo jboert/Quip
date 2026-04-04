@@ -11,7 +11,6 @@ struct QuipMacApp: App {
     @State private var tunnel = CloudflareTunnel()
     @State private var pinManager = PINManager()
 
-
     var body: some Scene {
         WindowGroup {
             MainWindow()
@@ -54,7 +53,10 @@ struct QuipMacApp: App {
         webSocketServer.pinManager = pinManager
         webSocketServer.start()
         tunnel.start()
-        bonjourAdvertiser.startAdvertising()
+        // Small delay to let WebSocket listener reach .ready before advertising
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            bonjourAdvertiser.startAdvertising()
+        }
 
         webSocketServer.onMessageReceived = { [self] data in
             DispatchQueue.main.async {

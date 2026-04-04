@@ -53,7 +53,7 @@ object NetworkValidator {
 
     /**
      * Returns true if the URL matches expected Quip connection patterns:
-     * - wss://*.trycloudflare.com (Cloudflare tunnel)
+     * - wss://[wildcard].trycloudflare.com (Cloudflare tunnel)
      * - ws:// to private/local IPs (RFC 1918, loopback, link-local, localhost)
      */
     fun isURLTrusted(url: String): Boolean {
