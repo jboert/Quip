@@ -41,6 +41,9 @@ image = "0.25"
 directories = "5"
 toml = "0.8"
 
+# PIN generation
+rand = "0.9"
+
 # Misc
 async-channel = "2"
 hostname = "0.4"
