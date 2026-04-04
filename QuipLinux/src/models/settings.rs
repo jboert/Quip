@@ -29,6 +29,10 @@ pub struct GeneralSettings {
     pub bonjour_name: String,
     #[serde(default)]
     pub show_all_windows: bool,
+    #[serde(default)]
+    pub local_only_mode: bool,
+    #[serde(default)]
+    pub require_pin_for_local: bool,
 }
 
 impl Default for GeneralSettings {
@@ -42,6 +46,8 @@ impl Default for GeneralSettings {
                 .filter(|h| !h.is_empty() && !h.starts_with("localhost"))
                 .unwrap_or_else(|| "Quip Linux".into()),
             show_all_windows: false,
+            local_only_mode: false,
+            require_pin_for_local: false,
         }
     }
 }
