@@ -144,6 +144,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bit_field"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1669,6 +1675,7 @@ name = "quip-linux"
 version = "1.2.0"
 dependencies = [
  "async-channel",
+ "base64",
  "cairo-rs",
  "directories",
  "futures-util",
@@ -1686,6 +1693,7 @@ dependencies = [
  "pangocairo",
  "procfs",
  "qrcode",
+ "rand 0.9.2",
  "regex",
  "serde",
  "serde_json",

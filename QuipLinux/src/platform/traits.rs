@@ -73,6 +73,9 @@ pub trait InputBackend: Send + Sync {
 
     /// Read terminal content from a window (select-all, copy, read clipboard, deselect)
     fn read_content(&self, window_id: u64) -> PlatformResult<String>;
+
+    /// Capture a screenshot of a window, returned as base64-encoded PNG
+    fn capture_screenshot(&self, window_id: u64) -> PlatformResult<String>;
 }
 
 /// Known terminal emulators and their WM_CLASS / app_id values
