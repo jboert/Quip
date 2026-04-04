@@ -160,7 +160,7 @@
         "Typecheck passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "HIGH (H1). File: QuipLinux/src/services/cloudflare_tunnel.rs."
     },
     {
