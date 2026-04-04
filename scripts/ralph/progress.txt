@@ -160,4 +160,20 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - `XDG_CACHE_HOME` defaults to `~/.cache` per XDG Base Directory spec — same pattern as `XDG_CONFIG_HOME` used by PINManager
   - `std::fs::OpenOptions::new().append(true).open()` is idiomatic for appending to existing files in Rust
   - `prepare_tunnel_log()` creates/truncates the file fresh each tunnel start, then the stderr thread opens it in append mode
+- Cloudflare publishes `.sha256` files at `{binary_url}.sha256` — format is `<hash>  <filename>`
+---
+
+## 2026-04-03 - US-011
+- Added SHA256 verification for cloudflared auto-download in `download_cloudflared()`
+- After downloading binary, downloads `.sha256` checksum file from same GitHub release URL
+- Computes local SHA256 via `sha256sum` command, compares against published hash
+- On mismatch: deletes the unverified binary, logs error, returns failure (binary never executed)
+- On success: proceeds with chmod and execution as before
+- Files changed: QuipLinux/src/services/cloudflare_tunnel.rs
+- **Learnings for future iterations:**
+  - Cloudflare publishes `.sha256` files alongside binaries at `{binary_url}.sha256`
+  - The `.sha256` file format is `<hash>  <filename>` — parse first whitespace-delimited token for the hash
+  - Using `sha256sum` command avoids adding `sha2`+`hex` crate dependencies; acceptable since `curl` is already a runtime dependency
+  - Verification must happen BEFORE `chmod +x` — never make an unverified binary executable
+  - `tokio::process::Command` already used in the download function, so the verify function uses the same async pattern
 ---
