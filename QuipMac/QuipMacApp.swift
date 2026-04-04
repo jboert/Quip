@@ -144,8 +144,9 @@ struct QuipMacApp: App {
                     // Send only last ~200 lines to keep payload reasonable
                     let lines = content.components(separatedBy: "\n")
                     let trimmed = lines.suffix(200).joined(separator: "\n")
+                    let redacted = SecretRedactor.redact(trimmed)
                     let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
-                    webSocketServer.broadcast(TerminalContentMessage(windowId: msg.windowId, content: trimmed, screenshot: screenshot))
+                    webSocketServer.broadcast(TerminalContentMessage(windowId: msg.windowId, content: redacted, screenshot: screenshot))
                 }
             }
         default:
