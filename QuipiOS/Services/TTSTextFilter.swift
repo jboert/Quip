@@ -56,6 +56,38 @@ enum TTSTextFilter {
                    first != UnicodeScalar(0x2514)
         }.joined(separator: "\n")
 
+        // 6b. Shell prompts — strip lines that look like prompts
+        // Matches: "user@host path %", "user@host:path$", "➜ path", "$ ", "% ", "# "
+        // Also matches standalone prompt characters at start of line
+        s = s.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return true }
+            // user@host style prompts (with or without command after)
+            if trimmed.range(of: #"^[\w.-]+@[\w.-]+\s+.*?[%$#>]\s*$"#, options: .regularExpression) != nil { return false }
+            if trimmed.range(of: #"^[\w.-]+@[\w.-]+[:\s].*?[%$#>]\s"#, options: .regularExpression) != nil { return false }
+            // zsh/oh-my-zsh prompts starting with ➜ or ❯
+            if trimmed.hasPrefix("➜") || trimmed.hasPrefix("❯") || trimmed.hasPrefix("»") { return false }
+            // Lines ending with lone prompt chars (empty prompt)
+            if trimmed.range(of: #"^[~/][\w./-]*\s*[%$#]\s*$"#, options: .regularExpression) != nil { return false }
+            return true
+        }.joined(separator: "\n")
+
+        // 6c. Claude Code UI chrome — TUI box characters and borders
+        s = s.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return true }
+            // Box drawing: ─ ━ │ ┃ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼ ═ ║ ╔ ╗ ╚ ╝ etc.
+            // If the line is ONLY box-drawing chars and whitespace, drop it
+            let boxChars = CharacterSet(charactersIn: "─━│┃┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬▀▄█▌▐░▒▓╭╮╯╰")
+            let nonBox = trimmed.unicodeScalars.filter { !boxChars.contains($0) && !$0.properties.isWhitespace }
+            if nonBox.isEmpty { return false }
+            // Claude's "? for shortcuts" footer
+            if trimmed.contains("? for shortcuts") { return false }
+            // Claude's input box placeholder "> " lines (empty user prompt)
+            if trimmed == ">" || trimmed.hasPrefix("> ") && trimmed.count < 3 { return false }
+            return true
+        }.joined(separator: "\n")
+
         // 7. Markdown syntax
         // Headers: strip leading #
         s = s.replacing(try! Regex(#"(?m)^#{1,6}\s+"#), with: "")
