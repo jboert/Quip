@@ -11,9 +11,11 @@ final class SpeechService {
     private(set) var isRecording = false
     private(set) var transcribedText = ""
     private(set) var isAuthorized = false
+    private(set) var isSpeaking = false
 
     // All audio work happens through this helper on a background queue
     private let worker = AudioWorker()
+    private let synthesizer = AVSpeechSynthesizer()
 
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
@@ -58,6 +60,24 @@ final class SpeechService {
         worker.stop()
         isRecording = false
         return transcribedText
+    }
+
+    /// Speak text aloud using TTS
+    func speak(_ text: String) {
+        guard !text.isEmpty else { return }
+        // Don't interrupt recording
+        guard !isRecording else { return }
+        synthesizer.stopSpeaking(at: .immediate)
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        synthesizer.speak(utterance)
+        isSpeaking = true
+    }
+
+    func stopSpeaking() {
+        synthesizer.stopSpeaking(at: .immediate)
+        isSpeaking = false
     }
 }
 

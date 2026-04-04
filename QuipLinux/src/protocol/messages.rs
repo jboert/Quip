@@ -136,6 +136,32 @@ impl TerminalContentMessage {
 }
 
 // ---------------------------------------------------------------------------
+// TTS readback — sent when Claude finishes (waiting_for_input transition)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TTSReadbackMessage {
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(rename = "windowId")]
+    pub window_id: String,
+    #[serde(rename = "windowName")]
+    pub window_name: String,
+    pub text: String,
+}
+
+impl TTSReadbackMessage {
+    pub fn new(window_id: String, window_name: String, text: String) -> Self {
+        Self {
+            type_: "tts_readback".into(),
+            window_id,
+            window_name,
+            text,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Authentication messages
 // ---------------------------------------------------------------------------
 

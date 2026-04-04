@@ -27,6 +27,7 @@ struct QuipApp: App {
     @State private var terminalContentWindowId: String?
     @State private var showPINEntry = false
     @State private var pinText = ""
+    @AppStorage("ttsEnabled") private var ttsEnabled = false
 
     var body: some Scene {
         WindowGroup {
@@ -106,6 +107,15 @@ struct QuipApp: App {
                 terminalContentWindowId = windowId
                 terminalContentText = content
                 terminalContentScreenshot = screenshot
+            }
+        }
+
+        client.onTTSReadback = { windowId, windowName, text in
+            DispatchQueue.main.async {
+                guard ttsEnabled else { return }
+                // Prefix with window name for context
+                let spoken = "\(windowName): \(text)"
+                speech.speak(spoken)
             }
         }
 
@@ -197,6 +207,7 @@ struct MainiOSView: View {
 
     @AppStorage("lastURL") private var urlText: String = ""
     @AppStorage("recentConnectionsData") private var recentConnectionsData: Data = Data()
+    @AppStorage("ttsEnabled") private var ttsEnabled = false
     @State private var showQRScanner = false
     @State private var recentConnections: [SavedConnection] = []
     @State private var editingConnection: SavedConnection?
@@ -622,6 +633,15 @@ struct MainiOSView: View {
             }
             Spacer()
             if client.isAuthenticated {
+                Button {
+                    ttsEnabled.toggle()
+                } label: {
+                    Image(systemName: ttsEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(ttsEnabled ? colors.statusConnected : colors.textTertiary)
+                }
+                .padding(.trailing, 8)
+
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showTextInput.toggle()

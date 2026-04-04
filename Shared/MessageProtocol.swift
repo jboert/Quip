@@ -131,6 +131,20 @@ struct TerminalContentMessage: Codable, Sendable {
     }
 }
 
+struct TTSReadbackMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+    let windowName: String
+    let text: String
+
+    init(windowId: String, windowName: String, text: String) {
+        self.type = "tts_readback"
+        self.windowId = windowId
+        self.windowName = windowName
+        self.text = text
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {

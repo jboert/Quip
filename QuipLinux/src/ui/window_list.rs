@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{self, Align, Orientation};
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
+use crate::platform::traits::InputBackend;
 use crate::state::SharedState;
 
 /// Sidebar widget showing a list of managed windows with checkboxes
@@ -17,7 +18,7 @@ pub struct WindowListWidget {
 }
 
 impl WindowListWidget {
-    pub fn new(shared_state: SharedState) -> Self {
+    pub fn new(shared_state: SharedState, input_backend: Arc<dyn InputBackend>) -> Self {
         let container = gtk4::Box::new(Orientation::Vertical, 0);
 
         // Header
@@ -61,6 +62,86 @@ impl WindowListWidget {
         bottom.set_margin_end(16);
         bottom.set_margin_top(8);
         bottom.set_margin_bottom(8);
+
+        // Add session button (+)
+        let add_button = gtk4::Button::from_icon_name("list-add-symbolic");
+        add_button.set_tooltip_text(Some("New Claude session in tmux"));
+        add_button.add_css_class("flat");
+
+        let ss_add = shared_state.clone();
+        let ib_add = input_backend.clone();
+        add_button.connect_clicked(move |btn| {
+            // Remove any previous popover
+            if let Some(prev) = btn.first_child() {
+                if prev.is::<gtk4::Popover>() {
+                    prev.unparent();
+                }
+            }
+
+            let state = ss_add.read().unwrap();
+            let terminal = state.settings.general.default_terminal.clone();
+            let projects = state.settings.directories.projects.clone();
+            drop(state);
+
+            let vbox = gtk4::Box::new(Orientation::Vertical, 4);
+            vbox.set_margin_start(8);
+            vbox.set_margin_end(8);
+            vbox.set_margin_top(8);
+            vbox.set_margin_bottom(8);
+
+            if projects.is_empty() {
+                let label = gtk4::Label::new(Some("No project directories configured.\nAdd them in Settings."));
+                label.add_css_class("dim-label");
+                label.add_css_class("caption");
+                vbox.append(&label);
+            } else {
+                let label = gtk4::Label::new(Some("Open Claude in:"));
+                label.add_css_class("heading");
+                label.set_halign(Align::Start);
+                vbox.append(&label);
+
+                for dir in &projects {
+                    let dir_name = std::path::Path::new(dir)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(dir)
+                        .to_string();
+
+                    let item_btn = gtk4::Button::new();
+                    let btn_box = gtk4::Box::new(Orientation::Horizontal, 8);
+                    let icon = gtk4::Image::from_icon_name("folder-symbolic");
+                    icon.add_css_class("dim-label");
+                    btn_box.append(&icon);
+                    let lbl = gtk4::Label::new(Some(&dir_name));
+                    lbl.set_halign(Align::Start);
+                    btn_box.append(&lbl);
+                    item_btn.set_child(Some(&btn_box));
+                    item_btn.add_css_class("flat");
+
+                    let dir_clone = dir.clone();
+                    let term_clone = terminal.clone();
+                    let ib_clone = ib_add.clone();
+                    item_btn.connect_clicked(move |b| {
+                        if let Err(e) = ib_clone.spawn_terminal(&term_clone, &dir_clone) {
+                            tracing::warn!("Failed to spawn terminal: {e}");
+                        }
+                        if let Some(popover) = b.ancestor(gtk4::Popover::static_type()) {
+                            if let Ok(p) = popover.downcast::<gtk4::Popover>() {
+                                p.popdown();
+                            }
+                        }
+                    });
+                    vbox.append(&item_btn);
+                }
+            }
+
+            let popover = gtk4::Popover::new();
+            popover.set_parent(btn);
+            popover.set_child(Some(&vbox));
+            popover.popup();
+        });
+
+        bottom.append(&add_button);
 
         let refresh_button = gtk4::Button::from_icon_name("view-refresh-symbolic");
         refresh_button.set_tooltip_text(Some("Refresh window list"));

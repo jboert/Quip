@@ -280,12 +280,39 @@ impl InputBackend for WaylandInputBackend {
     }
 
     fn spawn_terminal(&self, terminal: &str, directory: &str) -> PlatformResult<()> {
-        Command::new(terminal)
-            .current_dir(directory)
-            .spawn()
-            .map_err(|e| {
-                PlatformError::CommandFailed(format!("spawn terminal '{terminal}': {e}"))
-            })?;
+        let dir_name = std::path::Path::new(directory)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("quip");
+        let session_name = format!("quip-{}", dir_name);
+
+        let tmux_cmd = format!(
+            "tmux new-session -s '{}' -c '{}' 'claude' 2>/dev/null || tmux new-session -c '{}' 'claude'",
+            session_name, directory, directory
+        );
+
+        let result = match terminal {
+            "foot" => Command::new(terminal)
+                .args(["--working-directory", directory, "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "kitty" => Command::new(terminal)
+                .args(["--directory", directory, "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "alacritty" => Command::new(terminal)
+                .args(["--working-directory", directory, "-e", "sh", "-c", &tmux_cmd])
+                .spawn(),
+            "wezterm" | "wezterm-gui" => Command::new(terminal)
+                .args(["start", "--cwd", directory, "--", "sh", "-c", &tmux_cmd])
+                .spawn(),
+            _ => Command::new(terminal)
+                .args(["-e", &format!("sh -c '{}'", tmux_cmd.replace('\'', "'\\''"))])
+                .current_dir(directory)
+                .spawn(),
+        };
+
+        result.map_err(|e| {
+            PlatformError::CommandFailed(format!("spawn terminal '{terminal}': {e}"))
+        })?;
         Ok(())
     }
 

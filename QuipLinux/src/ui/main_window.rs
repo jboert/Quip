@@ -50,7 +50,7 @@ pub fn build_ui(app: &adw::Application) {
     let main_box = gtk4::Box::new(Orientation::Horizontal, 0);
 
     // --- Sidebar ---
-    let sidebar_widget = WindowListWidget::new(shared_state.clone());
+    let sidebar_widget = WindowListWidget::new(shared_state.clone(), input_backend.clone());
     let sidebar_frame = gtk4::Frame::new(None);
     sidebar_frame.set_child(Some(sidebar_widget.container()));
     sidebar_frame.set_width_request(260);
@@ -145,21 +145,65 @@ pub fn build_ui(app: &adw::Application) {
     window.set_content(Some(&toolbar_view));
 
     // --- Start background services ---
-    start_services(shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone());
+    let broadcast_tx = start_services(shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone());
 
     // --- Periodic refresh ---
     let wb_timer = window_backend.clone();
     let ss_timer = shared_state.clone();
+    let ib_timer = input_backend.clone();
     let sidebar_refresh = sidebar_widget.clone();
     let preview_refresh = preview.clone();
     let status_refresh = status_bar.clone();
+    let broadcast_tx_timer = broadcast_tx.clone();
     glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
-        {
+        let changes = {
             let mut state = ss_timer.write().unwrap();
             state.refresh_windows(&*wb_timer);
             state.refresh_subtitles();
-            state.state_detector.poll_all();
+            state.state_detector.poll_all()
+        };
+
+        // Broadcast state changes and TTS readback
+        for (window_id, new_state) in &changes {
+            let state_str = match new_state {
+                crate::protocol::types::TerminalState::WaitingForInput => "waiting_for_input",
+                crate::protocol::types::TerminalState::Neutral => "neutral",
+                crate::protocol::types::TerminalState::SttActive => "stt_active",
+            };
+
+            // Send state_change message
+            let msg = crate::protocol::messages::StateChangeMessage::new(
+                window_id.clone(), state_str.to_string(),
+            );
+            if let Some(json) = encode_message(&msg) {
+                let _ = broadcast_tx_timer.try_send(json);
+            }
+
+            // On transition to waiting_for_input, send TTS readback
+            if matches!(new_state, crate::protocol::types::TerminalState::WaitingForInput) {
+                let state = ss_timer.read().unwrap();
+                if let Some(w) = state.windows.iter().find(|w| w.id == *window_id) {
+                    let window_name = w.name.clone();
+                    let wid = w.window_id;
+                    drop(state);
+                    // Grab last few lines via tmux or read_content
+                    if let Ok(content) = ib_timer.read_content(wid) {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let start = lines.len().saturating_sub(5);
+                        let last_lines = lines[start..].join("\n").trim().to_string();
+                        if !last_lines.is_empty() {
+                            let tts_msg = crate::protocol::messages::TTSReadbackMessage::new(
+                                window_id.clone(), window_name, last_lines,
+                            );
+                            if let Some(json) = encode_message(&tts_msg) {
+                                let _ = broadcast_tx_timer.try_send(json);
+                            }
+                        }
+                    }
+                }
+            }
         }
+
         sidebar_refresh.refresh();
         preview_refresh.queue_draw();
         status_refresh.refresh();
@@ -214,12 +258,13 @@ fn arrange_windows(
     tracing::info!("Arranged {} windows", enabled.len());
 }
 
+/// Returns a sender for broadcasting messages to all WebSocket clients from the GTK thread.
 fn start_services(
     shared_state: SharedState,
     window_backend: Arc<dyn platform::traits::WindowBackend>,
     input_backend: Arc<dyn platform::traits::InputBackend>,
     pin_manager: crate::services::pin_manager::PINManager,
-) {
+) -> async_channel::Sender<String> {
     let port = {
         let state = shared_state.read().unwrap();
         state.settings.general.websocket_port
@@ -235,6 +280,8 @@ fn start_services(
     // Channel for incoming WS messages -> GTK thread
     let (gtk_tx, gtk_rx) = async_channel::bounded::<String>(256);
     let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // Channel for outbound broadcasts from GTK -> tokio (state changes, TTS)
+    let (broadcast_tx, broadcast_rx) = async_channel::bounded::<String>(64);
 
     // Compute require_auth: always true unless local-only mode is on and PIN is not required
     let require_auth = {
@@ -336,6 +383,14 @@ fn start_services(
                 }
             });
 
+            // Forward outbound broadcasts from GTK thread
+            let ws_outbound = ws_server.clone();
+            tokio::spawn(async move {
+                while let Ok(json) = broadcast_rx.recv().await {
+                    ws_outbound.broadcast(&json).await;
+                }
+            });
+
             // Forward incoming messages to GTK thread
             while let Some(msg) = msg_rx.recv().await {
                 let _ = gtk_tx.send(msg).await;
@@ -354,6 +409,8 @@ fn start_services(
             handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler, &al_handler).await;
         }
     });
+
+    broadcast_tx
 }
 
 async fn handle_incoming_message(
