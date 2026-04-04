@@ -73,6 +73,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var terminalContentWindowId by mutableStateOf<String?>(null)
         private set
+    var isAuthenticated by mutableStateOf(false)
+        private set
+    var authError by mutableStateOf<String?>(null)
+        private set
+    var showPinEntry by mutableStateOf(false)
+        private set
+    var pinText by mutableStateOf("")
     var showTextInput by mutableStateOf(false)
     var textInputValue by mutableStateOf("")
 
@@ -106,7 +113,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             windows.addAll(update.windows)
             monitorName = update.monitor
 
-            if (!hasReceivedLayout && update.windows.isNotEmpty()) {
+            if (!hasReceivedLayout && update.windows.isNotEmpty() && webSocketClient.isAuthenticated) {
                 hasReceivedLayout = true
                 onRequestOrientation?.invoke(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
             }
@@ -128,6 +135,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val wasConnected = isConnected
             isConnected = webSocketClient.isConnected
             isConnecting = webSocketClient.isConnecting
+            isAuthenticated = webSocketClient.isAuthenticated
+            authError = webSocketClient.authError
 
             if (isConnected && !wasConnected) {
                 ConnectionService.start(context, monitorName)
@@ -136,7 +145,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 windows.clear()
                 selectedWindowId = null
                 hasReceivedLayout = false
+                showPinEntry = false
+                pinText = ""
+                authError = null
                 onRequestOrientation?.invoke(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+            }
+        }
+
+        webSocketClient.onAuthRequired = {
+            showPinEntry = true
+            pinText = ""
+            authError = null
+        }
+
+        webSocketClient.onAuthResult = { success, error ->
+            if (success) {
+                showPinEntry = false
+                pinText = ""
+                authError = null
+            } else {
+                authError = error ?: "Authentication failed"
+                pinText = ""
             }
         }
 
@@ -294,7 +323,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() {
         webSocketClient.disconnect()
+        showPinEntry = false
+        pinText = ""
+        authError = null
         onRequestOrientation?.invoke(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+    }
+
+    fun sendAuth() {
+        val pin = pinText.trim()
+        if (pin.length < 4) return
+        webSocketClient.sendAuth(pin)
     }
 
     // -- Recent connections --

@@ -4,6 +4,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.google.gson.Gson
+import dev.quip.android.models.AuthMessage
+import dev.quip.android.models.AuthResultMessage
 import dev.quip.android.models.LayoutUpdate
 import dev.quip.android.models.MessageEnvelope
 import dev.quip.android.models.TerminalContentMessage
@@ -26,13 +28,21 @@ class QuipWebSocketClient {
         private set
     @Volatile var isConnecting: Boolean = false
         private set
+    @Volatile var isAuthenticated: Boolean = false
+        private set
+    @Volatile var authError: String? = null
+        private set
     @Volatile var lastError: String? = null
         private set
+
+    private var sessionPIN: String? = null
 
     var onLayoutUpdate: ((LayoutUpdate) -> Unit)? = null
     var onStateChange: ((windowId: String, state: String) -> Unit)? = null
     var onTerminalContent: ((windowId: String, content: String, screenshot: String?) -> Unit)? = null
     var onConnectionStateChanged: (() -> Unit)? = null
+    var onAuthRequired: (() -> Unit)? = null
+    var onAuthResult: ((Boolean, String?) -> Unit)? = null
 
     private val gson = Gson()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -68,9 +78,18 @@ class QuipWebSocketClient {
             client = null
             isConnected = false
             isConnecting = false
+            isAuthenticated = false
+            authError = null
+            sessionPIN = null
             notifyConnectionStateChanged()
             Log.i(TAG, "Disconnected intentionally")
         }
+    }
+
+    fun sendAuth(pin: String) {
+        sessionPIN = pin
+        authError = null
+        send(AuthMessage(pin = pin))
     }
 
     fun send(message: Any) {
@@ -111,10 +130,21 @@ class QuipWebSocketClient {
                 synchronized(lock) {
                     isConnected = true
                     isConnecting = false
+                    isAuthenticated = false
+                    authError = null
                     lastError = null
                     reconnectDelay = INITIAL_RECONNECT_DELAY_MS
                 }
                 notifyConnectionStateChanged()
+
+                // Auto-send cached PIN or request PIN entry
+                val cachedPin = sessionPIN
+                if (cachedPin != null) {
+                    Log.i(TAG, "Auto-sending cached PIN")
+                    send(AuthMessage(pin = cachedPin))
+                } else {
+                    mainHandler.post { onAuthRequired?.invoke() }
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -141,18 +171,36 @@ class QuipWebSocketClient {
             val envelope = gson.fromJson(text, MessageEnvelope::class.java)
 
             when (envelope.type) {
+                "auth_result" -> {
+                    val result = gson.fromJson(text, AuthResultMessage::class.java)
+                    if (result.success) {
+                        Log.i(TAG, "Authentication successful")
+                        isAuthenticated = true
+                        authError = null
+                    } else {
+                        Log.w(TAG, "Authentication failed: ${result.error}")
+                        isAuthenticated = false
+                        authError = result.error ?: "Authentication failed"
+                        sessionPIN = null
+                    }
+                    notifyConnectionStateChanged()
+                    mainHandler.post { onAuthResult?.invoke(result.success, result.error) }
+                }
                 "layout_update" -> {
+                    if (!isAuthenticated) return
                     val update = gson.fromJson(text, LayoutUpdate::class.java)
                     Log.i(TAG, "layout_update: ${update.windows.size} windows")
                     mainHandler.post { onLayoutUpdate?.invoke(update) }
                 }
                 "state_change" -> {
+                    if (!isAuthenticated) return
                     val json = gson.fromJson(text, Map::class.java)
                     val windowId = json["windowId"] as? String ?: return
                     val state = json["state"] as? String ?: return
                     mainHandler.post { onStateChange?.invoke(windowId, state) }
                 }
                 "terminal_content" -> {
+                    if (!isAuthenticated) return
                     val msg = gson.fromJson(text, TerminalContentMessage::class.java)
                     mainHandler.post { onTerminalContent?.invoke(msg.windowId, msg.content, msg.screenshot) }
                 }
@@ -171,6 +219,7 @@ class QuipWebSocketClient {
 
             isConnected = false
             isConnecting = true
+            isAuthenticated = false
             webSocket = null
         }
         notifyConnectionStateChanged()

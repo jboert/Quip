@@ -1,7 +1,28 @@
 package dev.quip.android.ui.screens
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import dev.quip.android.models.SavedConnection
 import dev.quip.android.models.WindowState
 import dev.quip.android.services.DiscoveredHost
@@ -10,6 +31,7 @@ import dev.quip.android.services.DiscoveredHost
 fun MainScreen(
     isConnected: Boolean,
     isConnecting: Boolean,
+    isAuthenticated: Boolean,
     isRecording: Boolean,
     windows: List<WindowState>,
     selectedWindowId: String?,
@@ -28,6 +50,11 @@ fun MainScreen(
     onSelectWindow: (String) -> Unit,
     onWindowAction: (String, String) -> Unit,
     onStopRecording: () -> Unit,
+    showPinEntry: Boolean = false,
+    pinText: String = "",
+    onPinChange: (String) -> Unit = {},
+    onSendAuth: () -> Unit = {},
+    authError: String? = null,
     showTextInput: Boolean = false,
     textInputValue: String = "",
     onTextInputChange: (String) -> Unit = {},
@@ -41,8 +68,16 @@ fun MainScreen(
     onSendTerminalAction: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    androidx.compose.foundation.layout.Box(modifier = modifier) {
-    if (isConnected || isConnecting) {
+    Box(modifier = modifier) {
+    if (isConnected && showPinEntry && !isAuthenticated) {
+        PinEntryContent(
+            pinText = pinText,
+            onPinChange = onPinChange,
+            onSubmit = onSendAuth,
+            authError = authError,
+            onDisconnect = onDisconnect
+        )
+    } else if (isConnected && isAuthenticated || isConnecting) {
         LayoutScreen(
             windows = windows,
             selectedWindowId = selectedWindowId,
@@ -84,5 +119,84 @@ fun MainScreen(
             onSendAction = onSendTerminalAction
         )
     }
+    }
+}
+
+@Composable
+private fun PinEntryContent(
+    pinText: String,
+    onPinChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    authError: String?,
+    onDisconnect: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "Enter PIN",
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Enter the PIN shown on your desktop app",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        OutlinedTextField(
+            value = pinText,
+            onValueChange = { value ->
+                // Only allow digits, max 6 characters
+                val filtered = value.filter { it.isDigit() }.take(6)
+                onPinChange(filtered)
+            },
+            label = { Text("PIN") },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.NumberPassword,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(
+                onDone = { if (pinText.length >= 4) onSubmit() }
+            ),
+            singleLine = true,
+            modifier = Modifier.width(200.dp),
+            isError = authError != null
+        )
+
+        if (authError != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = authError,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = onSubmit,
+            enabled = pinText.length >= 4,
+            modifier = Modifier.fillMaxWidth(0.5f)
+        ) {
+            Text("Authenticate")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        TextButton(onClick = onDisconnect) {
+            Text("Disconnect")
+        }
     }
 }
