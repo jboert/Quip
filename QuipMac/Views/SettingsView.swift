@@ -300,6 +300,8 @@ private struct ConnectionTab: View {
 
     @AppStorage("wsPort") private var port: Int = 8765
     @AppStorage("bonjourServiceName") private var serviceName: String = "Quip"
+    @AppStorage("localOnlyMode") private var localOnlyMode = false
+    @AppStorage("requirePINForLocal") private var requirePINForLocal = false
     @State private var logEntries: [String] = []
 
     var body: some View {
@@ -334,6 +336,21 @@ private struct ConnectionTab: View {
                 }
 
                 TextField("Service Name", text: $serviceName)
+            }
+
+            Section("Network Mode") {
+                Toggle("Local only (no Cloudflare tunnel)", isOn: $localOnlyMode)
+
+                if localOnlyMode {
+                    Toggle("Require PIN for local connections", isOn: $requirePINForLocal)
+                        .padding(.leading, 16)
+                }
+
+                Text(localOnlyMode
+                    ? "Clients must be on the same network. QR code shows local address."
+                    : "Cloudflare tunnel enables connections from anywhere.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Connection Log") {
