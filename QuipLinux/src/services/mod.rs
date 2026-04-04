@@ -2,6 +2,7 @@ pub mod cloudflare_tunnel;
 pub mod mdns_advertiser;
 pub mod message_router;
 pub mod pin_manager;
+pub mod secret_redactor;
 pub mod state_detector;
 pub mod terminal_color;
 pub mod ws_server;

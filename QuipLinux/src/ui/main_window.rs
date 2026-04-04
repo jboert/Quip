@@ -429,6 +429,7 @@ fn handle_incoming_message(
             } else {
                 "(Window not found)".into()
             };
+            let content = crate::services::secret_redactor::redact(&content);
             let msg = crate::protocol::messages::TerminalContentMessage::new(window_id, content);
             if let Some(json) = crate::protocol::messages::encode_message(&msg) {
                 ws_server.broadcast(&json);
