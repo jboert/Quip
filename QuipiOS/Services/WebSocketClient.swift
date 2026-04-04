@@ -111,6 +111,8 @@ final class WebSocketClient {
     var onStateChange: ((String, String) -> Void)?
     var onTerminalContent: ((String, String, String?) -> Void)?  // (windowId, content, screenshot)
     var onOutputDelta: ((String, String, String, Bool) -> Void)?  // (windowId, windowName, text, isFinal)
+    // (windowId, windowName, sessionId, sequence, isFinal, wavData)
+    var onTTSAudio: ((String, String, String, Int, Bool, Data) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
 
@@ -195,6 +197,8 @@ final class WebSocketClient {
         session = urlSession
 
         let task = urlSession.webSocketTask(with: url)
+        // Allow up to 16MB messages for base64-encoded TTS audio payloads (default is 1MB)
+        task.maximumMessageSize = 16 * 1024 * 1024
         webSocketTask = task
         task.resume()
 
@@ -344,6 +348,13 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(OutputDeltaMessage.self, from: data) {
                 onOutputDelta?(msg.windowId, msg.windowName, msg.text, msg.isFinal)
+            }
+        case "tts_audio":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(TTSAudioMessage.self, from: data) {
+                // Empty audioBase64 can happen on the final marker message
+                let wavData = Data(base64Encoded: msg.audioBase64) ?? Data()
+                onTTSAudio?(msg.windowId, msg.windowName, msg.sessionId, msg.sequence, msg.isFinal, wavData)
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)

@@ -12,6 +12,17 @@ struct QuipMacApp: App {
     @State private var pinManager = PINManager()
     @AppStorage("localOnlyMode") private var localOnlyMode = false
     @State private var outputHighWaterMarks: [String: String] = [:]
+    @State private var ttsGeneration: [String: Int] = [:]
+    /// Last window the phone client selected — only this one gets TTS synthesis
+    @State private var clientSelectedWindowId: String? = nil
+    /// Windows that must see a "busy" state (Claude processing) before the next
+    /// waiting_for_input can fire TTS. Set when STT is received, cleared when
+    /// we see Claude actually start processing. Prevents stale-response readback.
+    @State private var pendingInputForWindow: Set<String> = []
+    /// Terminal content snapshot at the moment STT was sent, per window.
+    /// Used to verify Claude has actually written something new before firing TTS.
+    @State private var sttBaselineContent: [String: String] = [:]
+    private let kokoroTTS = KokoroTTS()
 
     var body: some Scene {
         WindowGroup {
@@ -86,36 +97,20 @@ struct QuipMacApp: App {
         }
 
         terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
-            // Broadcast state change for ALL transitions
             webSocketServer.broadcast(StateChangeMessage(windowId: windowId, state: newState.rawValue))
 
-            // On transition to waitingForInput, capture and broadcast output delta
+            // Clear the pending-input flag as soon as we see Claude actually become busy.
+            if newState == .neutral && pendingInputForWindow.contains(windowId) {
+                pendingInputForWindow.remove(windowId)
+                KokoroTTSDebug.log("pendingInput cleared for \(windowId) — Claude is processing")
+            }
+
             if newState == .waitingForInput {
-                if let window = windowManager.windows.first(where: { $0.id == windowId }) {
-                    let termApp = terminalAppForWindow(window)
-                    let wn = window.windowNumber
-                    let name = window.name
-                    if let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) {
-                        let previousContent = outputHighWaterMarks[windowId]
-                        let delta: String
-                        if let prev = previousContent, content.hasPrefix(prev) {
-                            delta = String(content.dropFirst(prev.count))
-                        } else {
-                            // No previous content or content was reset — take last 30 lines
-                            let lines = content.components(separatedBy: "\n")
-                            delta = lines.suffix(30).joined(separator: "\n")
-                        }
-                        outputHighWaterMarks[windowId] = content
-
-                        // Trim delta to last ~50 lines
-                        let deltaLines = delta.components(separatedBy: "\n")
-                        let trimmedDelta = deltaLines.suffix(50).joined(separator: "\n")
-
-                        if !trimmedDelta.isEmpty {
-                            webSocketServer.broadcast(OutputDeltaMessage(windowId: windowId, windowName: name, text: trimmedDelta, isFinal: true))
-                        }
-                    }
+                if pendingInputForWindow.contains(windowId) {
+                    KokoroTTSDebug.log("TTS suppressed: \(windowId) still pending input response")
+                    return
                 }
+                triggerTTSFor(windowId: windowId)
             }
         }
 
@@ -123,6 +118,9 @@ struct QuipMacApp: App {
         windowManager.refreshDisplays()
         windowManager.refreshWindowList()
         syncTrackedWindows()
+
+        // Pre-warm the Kokoro daemon so the first synth doesn't pay model load
+        kokoroTTS.preload()
 
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             DispatchQueue.main.async {
@@ -132,6 +130,153 @@ struct QuipMacApp: App {
                 broadcastLayout()
             }
         }
+    }
+
+    /// Poll terminal content until it differs meaningfully from the STT baseline,
+    /// indicating Claude has written a response. Fires TTS when detected, or times out.
+    @MainActor
+    private func schedulePendingInputResponseCheck(windowId: String, attempt: Int) {
+        // Poll every 0.2s, give up after 300 attempts (60 seconds total)
+        let maxAttempts = 300
+        guard attempt < maxAttempts else {
+            KokoroTTSDebug.log("pendingInput response check timed out for \(windowId)")
+            pendingInputForWindow.remove(windowId)
+            sttBaselineContent.removeValue(forKey: windowId)
+            return
+        }
+        guard pendingInputForWindow.contains(windowId) else {
+            // Flag was cleared by another path (state transition saw Claude go busy)
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [self] in
+            guard pendingInputForWindow.contains(windowId) else { return }
+            guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
+                schedulePendingInputResponseCheck(windowId: windowId, attempt: attempt + 1)
+                return
+            }
+            let termApp = terminalAppForWindow(window)
+            let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: window.windowNumber) ?? ""
+            let baseline = sttBaselineContent[windowId] ?? ""
+
+            let baselineLast = lastResponseMarkerText(in: baseline)
+            let currentLast = lastResponseMarkerText(in: current)
+            let currentState = terminalStateDetector.windowStates[windowId] ?? .neutral
+
+            if attempt % 4 == 0 {
+                KokoroTTSDebug.log("poll[\(attempt)] \(windowId): lastMarker changed=\(baselineLast != currentLast), state=\(currentState.rawValue), content=\(current.count) bytes")
+            }
+
+            // Fire TTS if the last response marker text has changed AND state is idle
+            if baselineLast != currentLast && !currentLast.isEmpty && currentState == .waitingForInput {
+                KokoroTTSDebug.log("pendingInput: detected new response for \(windowId), firing TTS")
+                pendingInputForWindow.remove(windowId)
+                sttBaselineContent.removeValue(forKey: windowId)
+                // Skip stable-content wait — we've already verified the response is there
+                triggerTTSFor(windowId: windowId, skipStableWait: true)
+            } else {
+                schedulePendingInputResponseCheck(windowId: windowId, attempt: attempt + 1)
+            }
+        }
+    }
+
+    /// Return the text of the LAST Claude Code response marker (⏺ prose line),
+    /// or empty string if none found. Used to detect when a new response has been added.
+    private func lastResponseMarkerText(in text: String) -> String {
+        var lastText = ""
+        for line in text.split(separator: "\n") {
+            let stripped = line.trimmingCharacters(in: .whitespaces)
+            guard stripped.hasPrefix("⏺") else { continue }
+            let rest = String(stripped.dropFirst()).trimmingCharacters(in: .whitespaces)
+            if rest.range(of: #"^[A-Z][A-Za-z]*\("#, options: .regularExpression) != nil { continue }
+            lastText = rest
+        }
+        return lastText
+    }
+
+    /// Read terminal content for the given window, compute delta, synthesize TTS audio,
+    /// and stream chunks to connected clients. Called from state transitions and from
+    /// the pendingInput polling path.
+    /// `skipStableWait` bypasses the content-stability poll — use when caller has already
+    /// verified the response is present (e.g. the pending-input polling path).
+    @MainActor
+    private func triggerTTSFor(windowId: String, skipStableWait: Bool = false) {
+        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else { return }
+        let termApp = terminalAppForWindow(window)
+        let wn = window.windowNumber
+        let name = window.name
+
+        let processContent: (String) -> Void = { [self] content in
+            doTriggerTTSBody(windowId: windowId, name: name, content: content)
+        }
+
+        if skipStableWait {
+            let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+            if !content.isEmpty { processContent(content) }
+            return
+        }
+
+        waitForStableContent(termApp: termApp, windowNumber: wn) { stableContent in
+            guard let content = stableContent else { return }
+            processContent(content)
+        }
+    }
+
+    @MainActor
+    private func doTriggerTTSBody(windowId: String, name: String, content: String) {
+            let delta = computeDelta(windowId: windowId, newContent: content)
+            outputHighWaterMarks[windowId] = content
+            guard !delta.isEmpty else { return }
+
+            webSocketServer.broadcast(OutputDeltaMessage(windowId: windowId, windowName: name, text: delta, isFinal: true))
+
+            guard windowId == clientSelectedWindowId else {
+                KokoroTTSDebug.log("TTS skipped: \(windowId) not selected (selected=\(clientSelectedWindowId ?? "nil"))")
+                return
+            }
+
+            let gen = (ttsGeneration[windowId] ?? 0) + 1
+            ttsGeneration[windowId] = gen
+
+            let wid = windowId
+            let wname = name
+            let sessionId = UUID().uuidString
+            var sequence = 0
+
+            let checkStale: @Sendable () -> Bool = {
+                var isLatest = false
+                DispatchQueue.main.sync {
+                    isLatest = (ttsGeneration[wid] ?? 0) == gen
+                }
+                return isLatest
+            }
+
+            kokoroTTS.synthesize(delta, shouldProceed: checkStale, onChunk: { [webSocketServer] wavChunk in
+                DispatchQueue.main.async {
+                    guard (ttsGeneration[wid] ?? 0) == gen else {
+                        KokoroTTSDebug.log("DROPPED mid-stream chunk for stale gen=\(gen)")
+                        return
+                    }
+                    let b64 = wavChunk.base64EncodedString()
+                    webSocketServer.broadcast(TTSAudioMessage(
+                        windowId: wid, windowName: wname,
+                        sessionId: sessionId, sequence: sequence, isFinal: false,
+                        audioBase64: b64
+                    ))
+                    KokoroTTSDebug.log("BROADCAST chunk \(sequence) session=\(sessionId.prefix(8)) \(b64.count) b64")
+                    sequence += 1
+                }
+            }, onComplete: { [webSocketServer] in
+                DispatchQueue.main.async {
+                    guard (ttsGeneration[wid] ?? 0) == gen else { return }
+                    webSocketServer.broadcast(TTSAudioMessage(
+                        windowId: wid, windowName: wname,
+                        sessionId: sessionId, sequence: sequence, isFinal: true,
+                        audioBase64: ""
+                    ))
+                    KokoroTTSDebug.log("BROADCAST final marker session=\(sessionId.prefix(8))")
+                }
+            })
     }
 
     @MainActor
@@ -157,6 +302,7 @@ struct QuipMacApp: App {
         switch type {
         case "select_window":
             if let msg = MessageCoder.decode(SelectWindowMessage.self, from: data) {
+                clientSelectedWindowId = msg.windowId
                 windowManager.focusWindow(msg.windowId)
             }
 
@@ -169,7 +315,7 @@ struct QuipMacApp: App {
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                         self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
                     }
                 }
@@ -183,6 +329,19 @@ struct QuipMacApp: App {
             }
         case "stt_started":
             if let msg = MessageCoder.decode(STTStateMessage.self, from: data) {
+                clientSelectedWindowId = msg.windowId
+                pendingInputForWindow.insert(msg.windowId)
+
+                // Snapshot current terminal content so we can detect when Claude writes new output
+                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
+                    let termApp = terminalAppForWindow(window)
+                    sttBaselineContent[msg.windowId] = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: window.windowNumber) ?? ""
+                }
+
+                // Poll the terminal content; fire TTS as soon as it has changed enough
+                // to contain a new response. Times out after 60s.
+                let wid = msg.windowId
+                schedulePendingInputResponseCheck(windowId: wid, attempt: 0)
                 terminalStateDetector.setSTTActive(for: msg.windowId)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     terminalColorManager.updateColor(for: msg.windowId, state: .sttActive, terminalApp: terminalAppForWindow(window))
@@ -268,6 +427,48 @@ struct QuipMacApp: App {
     }
 
     /// Auto-track enabled terminal windows with the state detector
+    /// Poll the terminal until its content is unchanged across two reads, indicating
+    /// Claude has finished streaming tokens. Waits up to `maxWaitSeconds` total.
+    /// Completion fires on main with the stable content, or nil if timeout.
+    @MainActor
+    private func waitForStableContent(termApp: TerminalApp, windowNumber: CGWindowID,
+                                      pollInterval: TimeInterval = 0.2,
+                                      maxWaitSeconds: TimeInterval = 2.5,
+                                      completion: @escaping (String?) -> Void) {
+        let deadline = Date().addingTimeInterval(maxWaitSeconds)
+        var previous = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber) ?? ""
+
+        func checkNext() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + pollInterval) { [self] in
+                let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber) ?? ""
+                if current == previous && !current.isEmpty {
+                    // Stable
+                    completion(current)
+                    return
+                }
+                if Date() >= deadline {
+                    // Give up and use whatever we have
+                    completion(current.isEmpty ? nil : current)
+                    return
+                }
+                previous = current
+                checkNext()
+            }
+        }
+        checkNext()
+    }
+
+    /// Get the last chunk of terminal content to synthesize. Hard-capped at 25 lines
+    /// regardless of what changed — TTS should read only the latest response, not scrollback.
+    /// The Python filter handles removing UI chrome from whatever we send.
+    @MainActor
+    private func computeDelta(windowId: String, newContent: String) -> String {
+        let newLines: [String] = newContent.components(separatedBy: "\n")
+        // Always take the last 25 lines. Claude's most recent response fits in this window,
+        // UI chrome below it gets stripped by the Python filter.
+        return Array(newLines.suffix(25)).joined(separator: "\n")
+    }
+
     @MainActor
     private func syncTrackedWindows() {
         let terminalBundleIds: Set<String> = [

@@ -147,6 +147,33 @@ struct OutputDeltaMessage: Codable, Sendable {
     }
 }
 
+/// Pre-synthesized audio for TTS playback on the client. Streams sentence-by-sentence —
+/// each message is one sentence's worth of audio. `sessionId` identifies a response batch;
+/// iOS plays chunks with the same sessionId in sequence and cancels the queue when a new
+/// sessionId arrives. `isFinal` marks the last chunk in a session.
+struct TTSAudioMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+    let windowName: String
+    let sessionId: String
+    let sequence: Int
+    let isFinal: Bool
+    let audioBase64: String
+    let format: String  // "wav"
+
+    init(windowId: String, windowName: String, sessionId: String, sequence: Int,
+         isFinal: Bool, audioBase64: String, format: String = "wav") {
+        self.type = "tts_audio"
+        self.windowId = windowId
+        self.windowName = windowName
+        self.sessionId = sessionId
+        self.sequence = sequence
+        self.isFinal = isFinal
+        self.audioBase64 = audioBase64
+        self.format = format
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {

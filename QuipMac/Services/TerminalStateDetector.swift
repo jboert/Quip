@@ -24,7 +24,7 @@ final class TerminalStateDetector {
     var cpuIdleThreshold: Double = 5.0
 
     /// Polling interval in seconds
-    var pollingInterval: TimeInterval = 0.5
+    var pollingInterval: TimeInterval = 0.25
 
     private var pollTimer: Timer?
 
@@ -99,17 +99,10 @@ final class TerminalStateDetector {
         processSources[windowId, default: []].append(source)
     }
 
-    /// Called when a watched process exits — immediately re-detect state and refresh child watches
+    /// Called when a watched process exits — re-detect state but DO NOT transition immediately.
+    /// The debounce in pollAllWindows will confirm it over the next couple polls.
     private func handleProcessEvent(windowId: String) {
         guard let shellPid = trackedWindows[windowId] else { return }
-        if windowStates[windowId] != .sttActive {
-            let newState = detectState(shellPid: shellPid)
-            let oldState = windowStates[windowId] ?? .neutral
-            if oldState != newState {
-                windowStates[windowId] = newState
-                onStateTransition?(windowId, oldState, newState)
-            }
-        }
         refreshChildWatches(windowId: windowId, shellPid: shellPid)
     }
 
@@ -141,19 +134,38 @@ final class TerminalStateDetector {
 
     // MARK: - Polling
 
+    /// Debounce counter: how many consecutive polls have shown the same "candidate" state.
+    /// 2 consecutive agreeing polls (~0.5s at 0.25s polling) is enough to avoid most
+    /// false transitions while keeping latency low.
+    private var debounceCount: [String: (state: TerminalState, count: Int)] = [:]
+    private let debounceThreshold = 2
+
     /// Check all tracked windows' process states
     private func pollAllWindows() {
         for (windowId, shellPid) in trackedWindows {
             if windowStates[windowId] == .sttActive { continue }
 
-            let newState = detectState(shellPid: shellPid)
-            let oldState = windowStates[windowId] ?? .neutral
-            if oldState != newState {
-                windowStates[windowId] = newState
-                onStateTransition?(windowId, oldState, newState)
+            let detected = detectState(shellPid: shellPid)
+            let currentState = windowStates[windowId] ?? .neutral
+
+            if detected == currentState {
+                // No change — clear debounce
+                debounceCount[windowId] = nil
+            } else {
+                // Different from current — accumulate evidence before transitioning
+                let prev = debounceCount[windowId]
+                if prev?.state == detected {
+                    debounceCount[windowId] = (detected, (prev?.count ?? 0) + 1)
+                } else {
+                    debounceCount[windowId] = (detected, 1)
+                }
+                if let entry = debounceCount[windowId], entry.count >= debounceThreshold {
+                    windowStates[windowId] = detected
+                    debounceCount[windowId] = nil
+                    onStateTransition?(windowId, currentState, detected)
+                }
             }
 
-            // Keep child watches up to date (catches new children between kqueue events)
             refreshChildWatches(windowId: windowId, shellPid: shellPid)
         }
     }

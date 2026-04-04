@@ -15,36 +15,13 @@ final class SpeechService {
 
     // All audio work happens through this helper on a background queue
     private let worker = AudioWorker()
-    private let synthesizer = AVSpeechSynthesizer()
 
-    /// Cached high-quality voice — picks premium/enhanced en-US voice if available
-    @ObservationIgnored private var _preferredVoice: AVSpeechSynthesisVoice?
-    private var preferredVoice: AVSpeechSynthesisVoice? {
-        if let v = _preferredVoice { return v }
-        let enUSVoices = AVSpeechSynthesisVoice.speechVoices().filter {
-            $0.language.hasPrefix("en-US") || $0.language.hasPrefix("en_US")
-        }
-        // Prefer: premium > enhanced > default. Within each tier, prefer personality voices
-        let preferredNames = ["Ava", "Samantha", "Evan", "Zoe", "Allison", "Susan", "Tom"]
-        let byQuality: [AVSpeechSynthesisVoiceQuality] = [.premium, .enhanced, .default]
-        for quality in byQuality {
-            let voicesAtQuality = enUSVoices.filter { $0.quality == quality }
-            for name in preferredNames {
-                if let voice = voicesAtQuality.first(where: { $0.name == name }) {
-                    _preferredVoice = voice
-                    return voice
-                }
-            }
-            if let voice = voicesAtQuality.first {
-                _preferredVoice = voice
-                return voice
-            }
-        }
-        let fallback = AVSpeechSynthesisVoice(language: "en-US")
-        _preferredVoice = fallback
-        return fallback
-    }
-    private let synthDelegate = SynthDelegate()
+    // Audio playback for pre-synthesized TTS audio from the Mac (Kokoro).
+    // Queues chunks by sessionId — playing one chunk triggers the next in the queue.
+    @ObservationIgnored private var audioPlayer: AVAudioPlayer?
+    @ObservationIgnored private var playerDelegate: PlayerDelegate?
+    @ObservationIgnored private var audioQueue: [Data] = []
+    @ObservationIgnored private var currentSessionId: String?
 
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
@@ -91,38 +68,77 @@ final class SpeechService {
         return transcribedText
     }
 
-    /// Speak text aloud using TTS
-    func speak(_ text: String) {
-        guard !text.isEmpty else { return }
-        // Don't interrupt recording
+    /// Enqueue a WAV chunk for streaming playback. Chunks sharing the same sessionId
+    /// play back-to-back. A new sessionId stops current playback and clears the queue.
+    func enqueueAudio(_ data: Data, sessionId: String, isFinal: Bool) {
         guard !isRecording else { return }
-        if synthesizer.delegate == nil {
-            synthDelegate.onFinish = { [weak self] in
-                DispatchQueue.main.async { self?.isSpeaking = false }
-            }
-            synthesizer.delegate = synthDelegate
+
+        // New session? Drop everything and start fresh.
+        if sessionId != currentSessionId {
+            stopSpeaking()
+            currentSessionId = sessionId
         }
-        synthesizer.stopSpeaking(at: .immediate)
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        utterance.pitchMultiplier = 1.0
-        utterance.voice = preferredVoice
-        synthesizer.speak(utterance)
-        isSpeaking = true
+
+        // Final-marker messages arrive with empty audio — just signal no more chunks coming
+        if !data.isEmpty {
+            audioQueue.append(data)
+            if audioPlayer == nil {
+                playNextChunk()
+            }
+        }
     }
 
+    /// Back-compat single-shot playback (used by tap-to-silence overlay if needed)
     func stopSpeaking() {
-        synthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
+        audioPlayer = nil
+        playerDelegate = nil
+        audioQueue.removeAll()
+        currentSessionId = nil
         isSpeaking = false
+    }
+
+    private func playNextChunk() {
+        guard let data = audioQueue.first else {
+            audioPlayer = nil
+            playerDelegate = nil
+            isSpeaking = false
+            return
+        }
+        audioQueue.removeFirst()
+
+        // Configure audio session once per play (cheap if already set)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .default,
+                                 options: [.mixWithOthers, .defaultToSpeaker])
+        try? session.setActive(true)
+
+        do {
+            let player = try AVAudioPlayer(data: data)
+            let delegate = PlayerDelegate { [weak self] in
+                DispatchQueue.main.async { self?.playNextChunk() }
+            }
+            self.playerDelegate = delegate
+            player.delegate = delegate
+            player.volume = 1.0
+            player.prepareToPlay()
+            player.play()
+            self.audioPlayer = player
+            self.isSpeaking = true
+        } catch {
+            NSLog("[Quip] AVAudioPlayer failed: %@", error.localizedDescription)
+            // Skip this chunk and try next
+            DispatchQueue.main.async { [weak self] in self?.playNextChunk() }
+        }
     }
 }
 
-/// Delegate helper that detects when AVSpeechSynthesizer finishes speaking.
-private class SynthDelegate: NSObject, AVSpeechSynthesizerDelegate, @unchecked Sendable {
-    var onFinish: (() -> Void)?
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        onFinish?()
+/// Delegate wrapper to detect end of audio playback
+private class PlayerDelegate: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
+    let onFinish: () -> Void
+    init(onFinish: @escaping () -> Void) { self.onFinish = onFinish }
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        onFinish()
     }
 }
 

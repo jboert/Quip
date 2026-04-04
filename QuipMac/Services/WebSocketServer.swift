@@ -91,18 +91,18 @@ final class WebSocketServer {
                 switch state {
                 case .ready:
                     Self.wslog("Connection ready (pending auth)")
+                    KokoroTTSDebug.log("WS connection ready from \(connection.endpoint)")
                     DispatchQueue.main.async {
                         self.clients.append(ClientConnection(connection: connection))
                         self.connectedClientCount = self.clients.count
-                        // Send auth_required immediately so the client knows
-                        // the connection is alive (bypasses WebSocket ping/pong issues)
                         if self.requireAuth {
+                            KokoroTTSDebug.log("WS sending auth_required")
                             self.send(AuthResultMessage(success: false, error: "auth_required"), to: connection)
                         } else {
-                            // Auto-authenticate when PIN not required
                             if let idx = self.clients.firstIndex(where: { $0.connection === connection }) {
                                 self.clients[idx].isAuthenticated = true
                             }
+                            KokoroTTSDebug.log("WS sending auth_result success (no auth required)")
                             self.send(AuthResultMessage(success: true, error: nil), to: connection)
                         }
                         Self.wslog("Sent auth signal, starting receiveMessage")
@@ -110,6 +110,7 @@ final class WebSocketServer {
                     }
                 case .failed(let error):
                     Self.wslog("Connection FAILED: \(error)")
+                    KokoroTTSDebug.log("WS connection FAILED: \(error)")
                     DispatchQueue.main.async {
                         self.removeConnection(connection)
                     }
@@ -239,21 +240,26 @@ final class WebSocketServer {
     }
 
     private func handleAuthMessage(_ data: Data, from connection: NWConnection) {
+        KokoroTTSDebug.log("handleAuthMessage: \(data.count) bytes from \(connection.endpoint)")
         guard let authMsg = MessageCoder.decode(AuthMessage.self, from: data) else {
+            KokoroTTSDebug.log("auth: failed to decode AuthMessage")
             send(AuthResultMessage(success: false, error: "Malformed auth message"), to: connection)
             return
         }
 
         guard let expectedPIN = pinManager?.pin, !expectedPIN.isEmpty else {
+            KokoroTTSDebug.log("auth: no PIN configured in pinManager (pinManager=\(pinManager == nil ? "nil" : "set"))")
             send(AuthResultMessage(success: false, error: "Server PIN not configured"), to: connection)
             return
         }
 
         if authMsg.pin == expectedPIN {
+            KokoroTTSDebug.log("auth: PIN matched, sending success")
             setAuthenticated(connection)
             send(AuthResultMessage(success: true, error: nil), to: connection)
             print("[WebSocketServer] Client authenticated successfully")
         } else {
+            KokoroTTSDebug.log("auth: PIN mismatch (got '\(authMsg.pin)', expected '\(expectedPIN)')")
             send(AuthResultMessage(success: false, error: "Incorrect PIN"), to: connection)
             print("[WebSocketServer] Authentication failed: incorrect PIN")
         }
@@ -274,6 +280,7 @@ final class WebSocketServer {
             if let data = content, !data.isEmpty {
                 // Drop oversized messages (64KB limit)
                 if data.count > 65_536 {
+                    KokoroTTSDebug.log("WS: dropping oversized msg \(data.count) bytes")
                     print("[WebSocketServer] Dropping oversized message (\(data.count) bytes)")
                     self.receiveMessage(on: connection)
                     return
@@ -282,6 +289,7 @@ final class WebSocketServer {
                 let receivedData = data
                 DispatchQueue.main.async {
                     let messageType = MessageCoder.messageType(from: receivedData)
+                    KokoroTTSDebug.log("WS received: type=\(messageType ?? "unknown") (\(receivedData.count) bytes)")
 
                     // Auth messages bypass rate limiting and auth checks
                     if messageType == "auth" {
