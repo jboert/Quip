@@ -101,6 +101,12 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
                 var addr4 = sockaddr_in()
                 (data as NSData).getBytes(&addr4, length: MemoryLayout<sockaddr_in>.size)
                 let ip = String(cString: inet_ntoa(addr4.sin_addr))
+                // Skip loopback addresses — connecting to 127.x.x.x from the phone
+                // would hit the phone's own loopback, not the Mac
+                if ip.hasPrefix("127.") {
+                    print("[BonjourBrowser] Skipping loopback address: \(ip)")
+                    continue
+                }
                 print("[BonjourBrowser] Resolved: \(sender.name) -> \(ip):\(port)")
                 onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port))
                 return

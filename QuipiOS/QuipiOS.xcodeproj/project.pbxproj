@@ -10,25 +10,41 @@
 		27A74A861ADFE1E98398F75B /* HardwareButtonHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE3536452049152370298FC /* HardwareButtonHandler.swift */; };
 		2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */; };
 		3375938E1D5448AFF51C8CCC /* WindowRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1915E043776D1E063159AA6F /* WindowRectangle.swift */; };
+		3B0A61B36766076F5CB8523A /* QuipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_241EC568-C338-4C9F-8443-6C6C57E39481" /* QuipApp.swift */; };
 		48A7F1C63240B8460DD3ECE8 /* RemoteLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CF517BB2FBF2BF1205E4925 /* RemoteLayoutView.swift */; };
 		4FE31B60A886712C37A7E7C4 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0138BDEB9F24496B18E6EAE /* ConnectionStatusBar.swift */; };
 		5280CB5DBDF05BF2905026BA /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945E5EFD19ABDFD55DD6B209 /* BonjourBrowser.swift */; };
 		716C98AD23EECA0DDCAB89A4 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57175DB3942BF9D94577E602 /* SpeechService.swift */; };
 		7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414AD810B644C175CFB73EE5 /* WindowInfo.swift */; };
 		7FF8B004060633E319D8D791 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9319DA20B5E31E84424916 /* Color+Hex.swift */; };
-		819DA09631900A9605497785 /* QuipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_809D7A26-5CDE-4185-9DB1-D54A46F831A4" /* QuipApp.swift */; };
+		85F00ED5BE755A7047346B5A /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68EE7A37927B53963DCF4506 /* MessageProtocolTests.swift */; };
+		9420823AF0EA7D82FCFE0914 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */; };
 		A760CC0FAF316124E853473D /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C96267C7E324E99F9E25608 /* WebSocketClient.swift */; };
+		AAB730EA16F7AD54D918DD77 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_EC6F5FFB-530F-4CAC-B122-87C32937E0B3" /* Assets.xcassets */; };
 		AEA260F455D1F45EBC3CE818 /* ContextMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85649AFF24A63D27AE36A435 /* ContextMenuView.swift */; };
-		EA8008238F7CDEC4AB5B04E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_6249B708-8422-4B7E-9FF3-67E5D3285467" /* Assets.xcassets */; };
+		B9528CA355BD0960AAC67C6F /* QuipTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB1964CA940539AAAFAC01FC /* QuipTheme.swift */; };
+		D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */; };
 		F6F15D37F8337C2D5D92511B /* TerminalContentOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12B5FE3F0AA80CAD06D3A0F /* TerminalContentOverlay.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A700083DAD11081C5B039D1F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1FFEE7473E4CC1ABAFA5B870 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0106693FA1DD6F4A224F80DD;
+			remoteInfo = QuipiOS;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		01EA3B9F2E651E55A79DFB40 /* QuipiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = QuipiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1915E043776D1E063159AA6F /* WindowRectangle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRectangle.swift; sourceTree = "<group>"; };
+		2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuipiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3D9319DA20B5E31E84424916 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
 		414AD810B644C175CFB73EE5 /* WindowInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowInfo.swift; sourceTree = "<group>"; };
 		57175DB3942BF9D94577E602 /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
+		68EE7A37927B53963DCF4506 /* MessageProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocolTests.swift; sourceTree = "<group>"; };
 		6C96267C7E324E99F9E25608 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
 		85649AFF24A63D27AE36A435 /* ContextMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuView.swift; sourceTree = "<group>"; };
 		8CF517BB2FBF2BF1205E4925 /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
@@ -36,10 +52,12 @@
 		B12B5FE3F0AA80CAD06D3A0F /* TerminalContentOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalContentOverlay.swift; sourceTree = "<group>"; };
 		BEE3536452049152370298FC /* HardwareButtonHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareButtonHandler.swift; sourceTree = "<group>"; };
 		D0138BDEB9F24496B18E6EAE /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
+		DB1964CA940539AAAFAC01FC /* QuipTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipTheme.swift; sourceTree = "<group>"; };
 		FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocol.swift; sourceTree = "<group>"; };
-		"TEMP_6249B708-8422-4B7E-9FF3-67E5D3285467" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		"TEMP_809D7A26-5CDE-4185-9DB1-D54A46F831A4" /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
-		"TEMP_E3773C47-B2ED-4679-8A98-F2CEE1BF3E07" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTStressTests.swift; sourceTree = "<group>"; };
+		"TEMP_241EC568-C338-4C9F-8443-6C6C57E39481" /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
+		"TEMP_EA595BE1-319B-4A1A-B0EE-B2F98B7DEE10" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_EC6F5FFB-530F-4CAC-B122-87C32937E0B3" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -49,6 +67,7 @@
 				E96781A6729F4AC1D1B88B16 /* Models */,
 				00C81D8E06C7AD6C80C65C66 /* Quip */,
 				66E1CF9CCD2A9D367395438A /* Services */,
+				538976D44E5C8716FFE3D88D /* Tests */,
 				46B179CEB89BF9C2D149CE33 /* Views */,
 				4EF44FB6F45A8981AE807AEA /* Products */,
 			);
@@ -69,6 +88,7 @@
 				3D9319DA20B5E31E84424916 /* Color+Hex.swift */,
 				D0138BDEB9F24496B18E6EAE /* ConnectionStatusBar.swift */,
 				85649AFF24A63D27AE36A435 /* ContextMenuView.swift */,
+				DB1964CA940539AAAFAC01FC /* QuipTheme.swift */,
 				8CF517BB2FBF2BF1205E4925 /* RemoteLayoutView.swift */,
 				B12B5FE3F0AA80CAD06D3A0F /* TerminalContentOverlay.swift */,
 				1915E043776D1E063159AA6F /* WindowRectangle.swift */,
@@ -80,8 +100,18 @@
 			isa = PBXGroup;
 			children = (
 				01EA3B9F2E651E55A79DFB40 /* QuipiOS.app */,
+				2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		538976D44E5C8716FFE3D88D /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				68EE7A37927B53963DCF4506 /* MessageProtocolTests.swift */,
+				FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */,
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
 		66E1CF9CCD2A9D367395438A /* Services */ = {
@@ -111,12 +141,12 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
-		"TEMP_84DCD0D4-0D3C-4AEA-A309-41F7F07BE5F1" /* QuipiOS */ = {
+		"TEMP_836DDDD2-AAC8-4FAA-B2E9-1795C5DD62D7" /* QuipiOS */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_6249B708-8422-4B7E-9FF3-67E5D3285467" /* Assets.xcassets */,
-				"TEMP_809D7A26-5CDE-4185-9DB1-D54A46F831A4" /* QuipApp.swift */,
-				"TEMP_E3773C47-B2ED-4679-8A98-F2CEE1BF3E07" /* Info.plist */,
+				"TEMP_EC6F5FFB-530F-4CAC-B122-87C32937E0B3" /* Assets.xcassets */,
+				"TEMP_241EC568-C338-4C9F-8443-6C6C57E39481" /* QuipApp.swift */,
+				"TEMP_EA595BE1-319B-4A1A-B0EE-B2F98B7DEE10" /* Info.plist */,
 				E96781A6729F4AC1D1B88B16 /* Models */,
 				46B179CEB89BF9C2D149CE33 /* Views */,
 				66E1CF9CCD2A9D367395438A /* Services */,
@@ -144,6 +174,24 @@
 			productName = QuipiOS;
 			productReference = 01EA3B9F2E651E55A79DFB40 /* QuipiOS.app */;
 			productType = "com.apple.product-type.application";
+		};
+		FE4AE6E8B87960D72E2FEAD5 /* QuipiOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A127B1CD0336B7931EC862C4 /* Build configuration list for PBXNativeTarget "QuipiOSTests" */;
+			buildPhases = (
+				4E0C3F20535DB21A736D01B8 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F6908ACEDED58F2BCA7F02C8 /* PBXTargetDependency */,
+			);
+			name = QuipiOSTests;
+			packageProductDependencies = (
+			);
+			productName = QuipiOSTests;
+			productReference = 2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -175,6 +223,7 @@
 			projectRoot = "";
 			targets = (
 				0106693FA1DD6F4A224F80DD /* QuipiOS */,
+				FE4AE6E8B87960D72E2FEAD5 /* QuipiOSTests */,
 			);
 		};
 /* End PBXProject section */
@@ -184,13 +233,23 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				EA8008238F7CDEC4AB5B04E4 /* Assets.xcassets in Resources */,
+				AAB730EA16F7AD54D918DD77 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		4E0C3F20535DB21A736D01B8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9420823AF0EA7D82FCFE0914 /* MessageProtocol.swift in Sources */,
+				85F00ED5BE755A7047346B5A /* MessageProtocolTests.swift in Sources */,
+				D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D9E99051B59BC6D7B0670DE2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -201,7 +260,8 @@
 				AEA260F455D1F45EBC3CE818 /* ContextMenuView.swift in Sources */,
 				27A74A861ADFE1E98398F75B /* HardwareButtonHandler.swift in Sources */,
 				2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */,
-				819DA09631900A9605497785 /* QuipApp.swift in Sources */,
+				3B0A61B36766076F5CB8523A /* QuipApp.swift in Sources */,
+				B9528CA355BD0960AAC67C6F /* QuipTheme.swift in Sources */,
 				48A7F1C63240B8460DD3ECE8 /* RemoteLayoutView.swift in Sources */,
 				716C98AD23EECA0DDCAB89A4 /* SpeechService.swift in Sources */,
 				F6F15D37F8337C2D5D92511B /* TerminalContentOverlay.swift in Sources */,
@@ -212,6 +272,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F6908ACEDED58F2BCA7F02C8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0106693FA1DD6F4A224F80DD /* QuipiOS */;
+			targetProxy = A700083DAD11081C5B039D1F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		04A755C374A414438F54BE22 /* Debug */ = {
@@ -373,6 +441,38 @@
 			};
 			name = Debug;
 		};
+		6F42027E46AC3B885CA9AB1D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.quip.QuipiOSTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Quip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quip";
+			};
+			name = Release;
+		};
+		8BB7453BB6D544C83C995ED6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.quip.QuipiOSTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Quip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quip";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -381,6 +481,15 @@
 			buildConfigurations = (
 				57579322E15C7A1CFBE7378C /* Debug */,
 				209EB6C5D04422E1716AED36 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A127B1CD0336B7931EC862C4 /* Build configuration list for PBXNativeTarget "QuipiOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8BB7453BB6D544C83C995ED6 /* Debug */,
+				6F42027E46AC3B885CA9AB1D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

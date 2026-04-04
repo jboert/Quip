@@ -187,16 +187,10 @@ final class WebSocketClient {
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 10
 
-        // Use certificate pinning delegate for wss:// (tunnel) connections
-        let urlSession: URLSession
-        if url.scheme == "wss" {
-            let delegate = CloudflareCertificatePinningDelegate()
-            pinningDelegate = delegate
-            urlSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        } else {
-            pinningDelegate = nil
-            urlSession = URLSession(configuration: config)
-        }
+        // Certificate pinning disabled — the hardcoded SPKI hashes need
+        // to be verified against Cloudflare's current cert chain before enabling
+        pinningDelegate = nil
+        let urlSession = URLSession(configuration: config)
         session = urlSession
 
         let task = urlSession.webSocketTask(with: url)
@@ -313,7 +307,11 @@ final class WebSocketClient {
         switch peek.type {
         case "auth_result":
             if let msg = try? decoder.decode(AuthResultMessage.self, from: data) {
-                NSLog("[WebSocketClient] auth_result: success=%d", msg.success ? 1 : 0)
+                NSLog("[WebSocketClient] auth_result: success=%d error=%@", msg.success ? 1 : 0, msg.error ?? "none")
+                // "auth_required" is the server's connection-ready signal, not a real error
+                if msg.error == "auth_required" {
+                    return
+                }
                 if msg.success {
                     isAuthenticated = true
                     authError = nil

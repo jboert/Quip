@@ -17,27 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.0</string>
+	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
-	<!--
-		App Transport Security (ATS) Configuration
-
-		NSAllowsArbitraryLoads = true is required because Quip connects to the
-		desktop server via plain ws:// WebSocket on the local network (LAN).
-		The server's IP address is discovered dynamically (QR code scan or
-		Bonjour), so it cannot be whitelisted by domain in advance.
-
-		NSAllowsLocalNetworking = true is the preferred narrower exception and
-		covers local network connections on iOS 10+. Both keys are set for
-		backward compatibility.
-
-		Cloudflare tunnel connections use wss:// (TLS) and do not require
-		either exception. Certificate pinning for tunnel connections is
-		enforced in CloudflareCertificatePinningDelegate (WebSocketClient.swift).
-
-		See also: docs/specs/security-audit.md (L2 finding)
-	-->
+	<string>1</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

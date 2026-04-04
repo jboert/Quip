@@ -17,6 +17,7 @@ final class WebSocketServer {
 
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
+    private let networkQueue = DispatchQueue(label: "quip.websocket", qos: .userInitiated)
 
     /// Tracks a WebSocket connection, its authentication state, and rate limiting.
     private struct ClientConnection {
@@ -81,16 +82,41 @@ final class WebSocketServer {
             }
         }
 
-        listener.newConnectionHandler = { [weak self] connection in
-            guard let self else { return }
-            let endpoint = connection.endpoint
-            print("[WebSocketServer] New connection from: \(endpoint)")
-            DispatchQueue.main.async {
-                self.addConnection(connection)
+        listener.newConnectionHandler = { connection in
+            Self.wslog("newConnectionHandler fired for \(connection.endpoint)")
+            connection.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                Self.wslog("Connection state: \(state) for \(connection.endpoint)")
+                switch state {
+                case .ready:
+                    Self.wslog("Connection ready (pending auth)")
+                    DispatchQueue.main.async {
+                        self.clients.append(ClientConnection(connection: connection))
+                        self.connectedClientCount = self.clients.count
+                        // Send auth_required immediately so the client knows
+                        // the connection is alive (bypasses WebSocket ping/pong issues)
+                        self.send(AuthResultMessage(success: false, error: "auth_required"), to: connection)
+                        Self.wslog("Sent auth_required, starting receiveMessage")
+                        self.receiveMessage(on: connection)
+                    }
+                case .failed(let error):
+                    Self.wslog("Connection FAILED: \(error)")
+                    DispatchQueue.main.async {
+                        self.removeConnection(connection)
+                    }
+                case .cancelled:
+                    DispatchQueue.main.async {
+                        self.removeConnection(connection)
+                    }
+                default:
+                    break
+                }
             }
+            connection.start(queue: self.networkQueue)
+            Self.wslog("connection.start() called immediately")
         }
 
-        listener.start(queue: .main)
+        listener.start(queue: networkQueue)
     }
 
     func stop() {
@@ -151,34 +177,22 @@ final class WebSocketServer {
 
     // MARK: - Private
 
-    private func addConnection(_ connection: NWConnection) {
-        clients.append(ClientConnection(connection: connection))
-        connectedClientCount = clients.count
-
-        connection.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                print("[WebSocketServer] Connection ready (pending auth)")
-                DispatchQueue.main.async {
-                    self.receiveMessage(on: connection)
-                }
-            case .failed(let error):
-                print("[WebSocketServer] Connection failed: \(error)")
-                DispatchQueue.main.async {
-                    self.removeConnection(connection)
-                }
-            case .cancelled:
-                DispatchQueue.main.async {
-                    self.removeConnection(connection)
-                }
-            default:
-                break
-            }
+    private nonisolated static func wslog(_ msg: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(msg)\n"
+        let path = "/tmp/quip_ws_debug.log"
+        if let fh = FileHandle(forWritingAtPath: path) {
+            fh.seekToEndOfFile()
+            fh.write(Data(line.utf8))
+            fh.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
         }
-
-        connection.start(queue: .main)
+        print("[WebSocketServer] \(msg)")
     }
+
+    // addConnection is handled inline in newConnectionHandler to avoid
+    // DispatchQueue.main.async delay which causes ECONNABORTED
 
     private func removeConnection(_ connection: NWConnection) {
         clients.removeAll(where: { $0.connection === connection })
@@ -239,17 +253,17 @@ final class WebSocketServer {
 
                 let receivedData = data
                 DispatchQueue.main.async {
-                    // Rate limit: drop excess messages beyond 10/sec per client
-                    guard let clientIndex = self.clients.firstIndex(where: { $0.connection === connection }),
-                          self.clients[clientIndex].allowMessage() else {
+                    let messageType = MessageCoder.messageType(from: receivedData)
+
+                    // Auth messages bypass rate limiting and auth checks
+                    if messageType == "auth" {
+                        self.handleAuthMessage(receivedData, from: connection)
                         return
                     }
 
-                    let messageType = MessageCoder.messageType(from: receivedData)
-
-                    // Auth messages are always handled, regardless of auth state
-                    if messageType == "auth" {
-                        self.handleAuthMessage(receivedData, from: connection)
+                    // Rate limit: drop excess messages beyond 10/sec per client
+                    guard let clientIndex = self.clients.firstIndex(where: { $0.connection === connection }),
+                          self.clients[clientIndex].allowMessage() else {
                         return
                     }
 

@@ -18,10 +18,11 @@ final class BonjourAdvertiser {
     func startAdvertising(port: Int = 8765) {
         guard !isAdvertising else { return }
 
+        let hostName = Host.current().localizedName ?? "Mac"
         let service = NetService(
             domain: "local.",
             type: serviceType,
-            name: Host.current().localizedName ?? "Quip",
+            name: "Quip \(hostName)",
             port: Int32(port)
         )
         service.publish()
