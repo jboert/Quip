@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -9,22 +10,35 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, warn};
 
+use crate::protocol::messages::{encode_message, message_type, AuthMessage, AuthResultMessage};
+use crate::services::pin_manager::PINManager;
+
 type WsSink = SplitSink<WebSocketStream<TcpStream>, Message>;
+
+/// Per-connection state including auth status and write half of the socket.
+struct ClientConnection {
+    sink: WsSink,
+    authenticated: bool,
+}
 
 pub struct WsServer {
     port: u16,
-    clients: Arc<Mutex<Vec<WsSink>>>,
+    clients: Arc<Mutex<HashMap<usize, ClientConnection>>>,
     client_count: Arc<AtomicUsize>,
+    next_id: Arc<AtomicUsize>,
     message_tx: mpsc::UnboundedSender<String>,
+    pin_manager: PINManager,
 }
 
 impl WsServer {
-    pub fn new(port: u16, message_tx: mpsc::UnboundedSender<String>) -> Self {
+    pub fn new(port: u16, message_tx: mpsc::UnboundedSender<String>, pin_manager: PINManager) -> Self {
         Self {
             port,
-            clients: Arc::new(Mutex::new(Vec::new())),
+            clients: Arc::new(Mutex::new(HashMap::new())),
             client_count: Arc::new(AtomicUsize::new(0)),
+            next_id: Arc::new(AtomicUsize::new(0)),
             message_tx,
+            pin_manager,
         }
     }
 
@@ -52,7 +66,9 @@ impl WsServer {
 
             let clients = Arc::clone(&self.clients);
             let client_count = Arc::clone(&self.client_count);
+            let next_id = Arc::clone(&self.next_id);
             let message_tx = self.message_tx.clone();
+            let pin_manager = self.pin_manager.clone();
 
             tokio::spawn(async move {
                 let ws_stream = match tokio_tungstenite::accept_async(stream).await {
@@ -66,12 +82,17 @@ impl WsServer {
                 info!("WebSocket connection established with {peer}");
                 let (write, mut read) = ws_stream.split();
 
+                let client_id = next_id.fetch_add(1, Ordering::Relaxed);
+
                 {
                     let mut locked = clients.lock().await;
-                    locked.push(write);
+                    locked.insert(client_id, ClientConnection {
+                        sink: write,
+                        authenticated: false,
+                    });
                     client_count.store(locked.len(), Ordering::Relaxed);
                 }
-                info!("Client count: {}", client_count.load(Ordering::Relaxed));
+                info!("Client {peer} assigned id={client_id}, count: {}", client_count.load(Ordering::Relaxed));
 
                 while let Some(result) = read.next().await {
                     match result {
@@ -79,9 +100,51 @@ impl WsServer {
                             if msg.is_text() {
                                 let text = msg.into_text().unwrap_or_default();
                                 info!("WS recv from {peer}: {}", &text[..text.len().min(200)]);
-                                if message_tx.send(text).is_err() {
-                                    warn!("Message channel closed, dropping client {peer}");
-                                    break;
+
+                                // Check auth state
+                                let is_authenticated = {
+                                    let locked = clients.lock().await;
+                                    locked.get(&client_id).map(|c| c.authenticated).unwrap_or(false)
+                                };
+
+                                if is_authenticated {
+                                    // Forward to app handler
+                                    if message_tx.send(text).is_err() {
+                                        warn!("Message channel closed, dropping client {peer}");
+                                        break;
+                                    }
+                                } else {
+                                    // Only accept auth messages
+                                    let msg_type = message_type(&text);
+                                    if msg_type.as_deref() == Some("auth") {
+                                        let auth_msg: Option<AuthMessage> = serde_json::from_str(&text).ok();
+                                        if let Some(auth) = auth_msg {
+                                            if pin_manager.verify(&auth.pin) {
+                                                info!("Client {peer} authenticated successfully");
+                                                let result_msg = AuthResultMessage::success();
+                                                let json = encode_message(&result_msg).unwrap_or_default();
+
+                                                let mut locked = clients.lock().await;
+                                                if let Some(client) = locked.get_mut(&client_id) {
+                                                    client.authenticated = true;
+                                                    let _ = client.sink.send(Message::Text(json.into())).await;
+                                                }
+                                            } else {
+                                                warn!("Client {peer} auth failed: incorrect PIN");
+                                                let result_msg = AuthResultMessage::failure("Incorrect PIN".into());
+                                                let json = encode_message(&result_msg).unwrap_or_default();
+
+                                                let mut locked = clients.lock().await;
+                                                if let Some(client) = locked.get_mut(&client_id) {
+                                                    let _ = client.sink.send(Message::Text(json.into())).await;
+                                                }
+                                            }
+                                        } else {
+                                            warn!("Client {peer} sent malformed auth message");
+                                        }
+                                    } else {
+                                        info!("Dropping non-auth message from unauthenticated client {peer}");
+                                    }
                                 }
                             } else if msg.is_close() {
                                 info!("Client {peer} sent close frame");
@@ -97,31 +160,35 @@ impl WsServer {
                     }
                 }
 
-                // Client disconnected — we cannot easily identify which sink belongs
-                // to this peer without extra bookkeeping, so broadcast() will prune
-                // dead sinks on next send. Just update the count optimistically.
-                info!("Client {peer} disconnected");
-                // Count will be corrected on next broadcast when dead sinks are removed.
+                // Remove client on disconnect
+                info!("Client {peer} (id={client_id}) disconnected");
+                let mut locked = clients.lock().await;
+                locked.remove(&client_id);
+                client_count.store(locked.len(), Ordering::Relaxed);
             });
         }
     }
 
-    /// Send a text message to all connected clients, removing any that have errored.
+    /// Send a text message to all authenticated clients, removing any that have errored.
     pub async fn broadcast(&self, message: &str) {
         let mut clients = self.clients.lock().await;
-        let mut alive = Vec::with_capacity(clients.len());
+        let mut dead_ids = Vec::new();
 
-        for mut sink in clients.drain(..) {
-            match sink.send(Message::Text(message.into())).await {
-                Ok(()) => alive.push(sink),
-                Err(e) => {
-                    warn!("Dropping dead WebSocket client: {e}");
-                }
+        for (id, client) in clients.iter_mut() {
+            if !client.authenticated {
+                continue;
+            }
+            if let Err(e) = client.sink.send(Message::Text(message.into())).await {
+                warn!("Dropping dead WebSocket client id={id}: {e}");
+                dead_ids.push(*id);
             }
         }
 
-        self.client_count.store(alive.len(), Ordering::Relaxed);
-        *clients = alive;
+        for id in dead_ids {
+            clients.remove(&id);
+        }
+
+        self.client_count.store(clients.len(), Ordering::Relaxed);
     }
 
     pub fn client_count(&self) -> usize {

@@ -126,8 +126,9 @@ pub fn build_ui(app: &adw::Application) {
     settings_button.set_tooltip_text(Some("Settings"));
     let ss_settings = shared_state.clone();
     let win_ref = window.clone();
+    let pin_for_settings = pin_manager.clone();
     settings_button.connect_clicked(move |_| {
-        super::settings_dialog::show_settings(&win_ref, &ss_settings);
+        super::settings_dialog::show_settings(&win_ref, &ss_settings, &pin_for_settings);
     });
     header.pack_end(&settings_button);
 
@@ -140,8 +141,11 @@ pub fn build_ui(app: &adw::Application) {
     toolbar_view.set_content(Some(&main_box));
     window.set_content(Some(&toolbar_view));
 
+    // --- Create shared PINManager ---
+    let pin_manager = crate::services::pin_manager::PINManager::new();
+
     // --- Start background services ---
-    start_services(shared_state.clone(), window_backend.clone(), input_backend.clone());
+    start_services(shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone());
 
     // --- Periodic refresh ---
     let wb_timer = window_backend.clone();
@@ -214,6 +218,7 @@ fn start_services(
     shared_state: SharedState,
     window_backend: Arc<dyn platform::traits::WindowBackend>,
     input_backend: Arc<dyn platform::traits::InputBackend>,
+    pin_manager: crate::services::pin_manager::PINManager,
 ) {
     let port = {
         let state = shared_state.read().unwrap();
@@ -229,7 +234,7 @@ fn start_services(
     let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
     // Create WsServer before spawning the background thread so it can be shared
-    let ws_server = Arc::new(crate::services::ws_server::WsServer::new(port, msg_tx));
+    let ws_server = Arc::new(crate::services::ws_server::WsServer::new(port, msg_tx, pin_manager));
 
     // Tokio runtime on background thread
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");

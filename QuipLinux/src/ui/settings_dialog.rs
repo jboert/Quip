@@ -3,11 +3,12 @@ use gtk4::{self, Orientation};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
+use crate::services::pin_manager::PINManager;
 use crate::state::SharedState;
 use glib;
 
 /// Show the settings preferences window
-pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState) {
+pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState, pin_manager: &PINManager) {
     let prefs = adw::PreferencesWindow::builder()
         .title("Quip Settings")
         .transient_for(parent)
@@ -106,7 +107,61 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
 
     drop(state);
 
+    // Security page
+    let security_page = adw::PreferencesPage::builder()
+        .title("Security")
+        .icon_name("channel-secure-symbolic")
+        .build();
+
+    let pin_group = adw::PreferencesGroup::builder()
+        .title("PIN Authentication")
+        .description("Clients must enter this PIN to connect")
+        .build();
+
+    let pin_label = gtk4::Label::new(Some(&pin_manager.pin()));
+    pin_label.add_css_class("monospace");
+    pin_label.add_css_class("title-1");
+    pin_label.set_selectable(true);
+
+    let pin_row = adw::ActionRow::builder()
+        .title("Connection PIN")
+        .build();
+    pin_row.add_suffix(&pin_label);
+
+    pin_group.add(&pin_row);
+
+    // Copy button
+    let pin_for_copy = pin_manager.clone();
+    let copy_btn = gtk4::Button::with_label("Copy PIN");
+    copy_btn.add_css_class("flat");
+    copy_btn.connect_clicked(move |_| {
+        let pin_text = pin_for_copy.pin();
+        if let Some(display) = gdk4::Display::default() {
+            display.clipboard().set_text(&pin_text);
+        }
+    });
+
+    // Regenerate button
+    let pin_for_regen = pin_manager.clone();
+    let pin_label_for_regen = pin_label.clone();
+    let regen_btn = gtk4::Button::with_label("Regenerate PIN");
+    regen_btn.add_css_class("destructive-action");
+    regen_btn.connect_clicked(move |_| {
+        pin_for_regen.regenerate();
+        pin_label_for_regen.set_text(&pin_for_regen.pin());
+    });
+
+    let button_box = gtk4::Box::new(Orientation::Horizontal, 8);
+    button_box.set_halign(gtk4::Align::Center);
+    button_box.set_margin_top(8);
+    button_box.append(&copy_btn);
+    button_box.append(&regen_btn);
+
+    pin_group.add(&button_box);
+    security_page.add(&pin_group);
+
     prefs.add(&general_page);
     prefs.add(&colors_page);
+    prefs.add(&security_page);
     prefs.present();
 }
