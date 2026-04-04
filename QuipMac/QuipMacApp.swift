@@ -121,11 +121,13 @@ struct QuipMacApp: App {
         terminalStateDetector.startMonitoring()
         windowManager.refreshDisplays()
         windowManager.refreshWindowList()
+        syncTrackedWindows()
 
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             DispatchQueue.main.async {
                 windowManager.refreshWindowList()
                 windowManager.refreshSubtitles()
+                self.syncTrackedWindows()
                 broadcastLayout()
             }
         }
@@ -261,6 +263,31 @@ struct QuipMacApp: App {
             }
         case "toggle_enabled": windowManager.toggleWindow(window.id, enabled: !window.isEnabled)
         default: break
+        }
+    }
+
+    /// Auto-track enabled terminal windows with the state detector
+    @MainActor
+    private func syncTrackedWindows() {
+        let terminalBundleIds: Set<String> = [
+            TerminalApp.terminal.bundleIdentifier,
+            TerminalApp.iterm2.bundleIdentifier
+        ]
+        let enabledTerminals = windowManager.windows.filter {
+            $0.isEnabled && terminalBundleIds.contains($0.bundleId)
+        }
+        // Track new windows
+        for window in enabledTerminals {
+            if terminalStateDetector.trackedWindows[window.id] == nil {
+                terminalStateDetector.trackWindow(window.id, shellPid: window.pid)
+            }
+        }
+        // Untrack removed/disabled windows
+        let enabledIds = Set(enabledTerminals.map(\.id))
+        for windowId in terminalStateDetector.trackedWindows.keys {
+            if !enabledIds.contains(windowId) {
+                terminalStateDetector.untrackWindow(windowId)
+            }
         }
     }
 

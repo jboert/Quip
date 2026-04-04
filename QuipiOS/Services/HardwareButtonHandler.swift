@@ -41,8 +41,11 @@ final class HardwareButtonHandler {
             try session.setActive(true)
         } catch {}
 
-        // Capture current volume so we can restore it after each button press
-        savedVolume = session.outputVolume
+        // Force volume to midpoint so both up and down always have room to change.
+        // We restore this midpoint after every button press.
+        savedVolume = 0.5
+        suppressUntil = Date().addingTimeInterval(Self.volumeRestoreSuppression)
+        HiddenVolumeView.setVolume(0.5)
 
         volumeObservation = session.observe(\.outputVolume, options: [.new, .old]) {
             [weak self] _, change in
