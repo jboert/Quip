@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(WindowManager.self) private var windowManager
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
+    @Environment(PINManager.self) private var pinManager
 
     var body: some View {
         TabView {
@@ -28,6 +29,11 @@ struct SettingsView: View {
             ConnectionTab()
                 .tabItem {
                     Label("Connection", systemImage: "wifi")
+                }
+
+            SecurityTab()
+                .tabItem {
+                    Label("Security", systemImage: "lock.fill")
                 }
 
             ColorsTab()
@@ -349,6 +355,48 @@ private struct ConnectionTab: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(height: 100)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Security Tab
+
+private struct SecurityTab: View {
+    @Environment(PINManager.self) private var pinManager
+
+    var body: some View {
+        Form {
+            Section("Client Authentication") {
+                Text("Mobile clients must enter this PIN to connect. Read it from here and type it on your phone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                LabeledContent("PIN") {
+                    HStack(spacing: 8) {
+                        Text(pinManager.pin)
+                            .font(.system(size: 24, weight: .medium, design: .monospaced))
+                            .textSelection(.enabled)
+
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(pinManager.pin, forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Copy PIN")
+                    }
+                }
+
+                Button {
+                    pinManager.regeneratePIN()
+                } label: {
+                    Label("Generate New PIN", systemImage: "arrow.clockwise")
                 }
             }
         }
