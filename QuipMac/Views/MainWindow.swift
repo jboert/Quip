@@ -2,12 +2,41 @@
 // QuipMac — Top-level window view with sidebar, layout preview, and toolbars
 
 import SwiftUI
+import Darwin
 
 struct MainWindow: View {
     @Environment(WindowManager.self) private var windowManager
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(CloudflareTunnel.self) private var tunnel
+
+    @AppStorage("localOnlyMode") private var localOnlyMode = false
+
+    private var localWSURL: String {
+        let port = 8765
+        var address = "localhost"
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&ifaddr) == 0 {
+            var ptr = ifaddr
+            while let ifa = ptr {
+                let sa = ifa.pointee.ifa_addr.pointee
+                if sa.sa_family == UInt8(AF_INET) {
+                    let name = String(cString: ifa.pointee.ifa_name)
+                    if name.hasPrefix("en") {
+                        let addr = ifa.pointee.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                        let ip = String(cString: inet_ntoa(addr.sin_addr))
+                        if ip != "127.0.0.1" {
+                            address = ip
+                            break
+                        }
+                    }
+                }
+                ptr = ifa.pointee.ifa_next
+            }
+            freeifaddrs(ifaddr)
+        }
+        return "ws://\(address):\(port)"
+    }
 
     @State private var selectedDisplayId: String?
     @State private var selectedWindowId: String?
@@ -132,8 +161,9 @@ struct MainWindow: View {
     // MARK: - QR Popover
 
     private var tunnelQRPopover: some View {
-        VStack(spacing: 12) {
-            if tunnel.webSocketURL.isEmpty {
+        let qrURL = localOnlyMode ? localWSURL : tunnel.webSocketURL
+        return VStack(spacing: 12) {
+            if !localOnlyMode && qrURL.isEmpty {
                 ProgressView()
                     .controlSize(.small)
                 Text("Waiting for tunnel...")
@@ -143,7 +173,7 @@ struct MainWindow: View {
                 Text("Scan with iPhone")
                     .font(.headline)
 
-                if let qrImage = generateQR(from: tunnel.webSocketURL) {
+                if let qrImage = generateQR(from: qrURL) {
                     Image(nsImage: qrImage)
                         .interpolation(.none)
                         .resizable()
@@ -151,14 +181,14 @@ struct MainWindow: View {
                 }
 
                 HStack(spacing: 8) {
-                    Text(tunnel.webSocketURL)
+                    Text(qrURL)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
 
                     Button {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(tunnel.webSocketURL, forType: .string)
+                        NSPasteboard.general.setString(qrURL, forType: .string)
                     } label: {
                         Image(systemName: "doc.on.doc")
                             .font(.caption)
@@ -188,7 +218,27 @@ struct MainWindow: View {
 
     private var tunnelStatus: some View {
         HStack(spacing: 6) {
-            if tunnel.isRunning && !tunnel.webSocketURL.isEmpty {
+            if localOnlyMode {
+                Image(systemName: "house")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+                Text("Local only")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(localWSURL)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(localWSURL, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Copy local URL")
+            } else if tunnel.isRunning && !tunnel.webSocketURL.isEmpty {
                 Image(systemName: "globe")
                     .font(.caption)
                     .foregroundStyle(.green)
