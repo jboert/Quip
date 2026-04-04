@@ -1,5 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext (ws://) for local network connections -->
-    <base-config cleartextTrafficPermitted="true" />
+    <!--
+        Security policy: cleartext (ws://) restricted to local/private networks only.
+
+        Android's domain-config cannot express IP CIDR ranges (10.0.0.0/8,
+        172.16.0.0/12, 192.168.0.0/16), so private IP enforcement is handled
+        at the application level in WebSocketClient before establishing cleartext
+        connections. See NetworkValidator.kt.
+
+        base-config permits cleartext because the app connects to local servers
+        via ws:// using IP addresses discovered through mDNS/QR codes. Setting
+        cleartextTrafficPermitted="false" here would block these connections
+        with no way to whitelist IP ranges in the XML config.
+
+        The domain-config below enforces TLS for Cloudflare tunnel connections
+        as defense-in-depth (the app already uses wss:// for these).
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Force TLS for cloud tunnel connections (defense-in-depth) -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">trycloudflare.com</domain>
+    </domain-config>
 </network-security-config>
