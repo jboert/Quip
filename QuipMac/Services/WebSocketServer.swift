@@ -103,8 +103,9 @@ final class WebSocketServer {
                             if let idx = self.clients.firstIndex(where: { $0.connection === connection }) {
                                 self.clients[idx].isAuthenticated = true
                             }
+                            self.send(AuthResultMessage(success: true, error: nil), to: connection)
                         }
-                        Self.wslog("Sent auth_required, starting receiveMessage")
+                        Self.wslog("Sent auth signal, starting receiveMessage")
                         self.receiveMessage(on: connection)
                     }
                 case .failed(let error):
