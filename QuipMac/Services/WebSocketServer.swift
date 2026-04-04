@@ -14,6 +14,7 @@ final class WebSocketServer {
     var connectedClientCount: Int = 0
     var onMessageReceived: ((Data) -> Void)?
     var pinManager: PINManager?
+    var requireAuth: Bool = true
 
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
@@ -95,7 +96,14 @@ final class WebSocketServer {
                         self.connectedClientCount = self.clients.count
                         // Send auth_required immediately so the client knows
                         // the connection is alive (bypasses WebSocket ping/pong issues)
-                        self.send(AuthResultMessage(success: false, error: "auth_required"), to: connection)
+                        if self.requireAuth {
+                            self.send(AuthResultMessage(success: false, error: "auth_required"), to: connection)
+                        } else {
+                            // Auto-authenticate when PIN not required
+                            if let idx = self.clients.firstIndex(where: { $0.connection === connection }) {
+                                self.clients[idx].isAuthenticated = true
+                            }
+                        }
                         Self.wslog("Sent auth_required, starting receiveMessage")
                         self.receiveMessage(on: connection)
                     }
@@ -287,7 +295,7 @@ final class WebSocketServer {
                     }
 
                     // All other messages require authentication
-                    guard self.isAuthenticated(connection) else {
+                    guard !self.requireAuth || self.isAuthenticated(connection) else {
                         print("[WebSocketServer] Dropping message from unauthenticated client: \(messageType ?? "unknown")")
                         return
                     }

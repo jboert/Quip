@@ -52,6 +52,9 @@ struct QuipMacApp: App {
         guard !servicesStarted else { return }
         servicesStarted = true
         webSocketServer.pinManager = pinManager
+        let localOnly = UserDefaults.standard.bool(forKey: "localOnlyMode")
+        let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
+        webSocketServer.requireAuth = !localOnly || requirePIN
         webSocketServer.start()
         if !localOnlyMode {
             tunnel.webSocketServer = webSocketServer
