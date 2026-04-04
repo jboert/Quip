@@ -193,7 +193,7 @@
         "Typecheck passes"
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "HIGH (H2). File: QuipAndroid/app/src/main/res/xml/network_security_config.xml."
     },
     {
@@ -209,7 +209,7 @@
         "Typecheck passes"
       ],
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM (M1). Apply in the request_content handler in the macOS WebSocket server."
     },
     {

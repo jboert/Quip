@@ -19,12 +19,14 @@ Started: Fri Apr  3 20:44:47 EDT 2026
 - Linux WsServer uses HashMap<usize, ClientConnection> with per-connection auth state (not Vec<WsSink>)
 - PINManager is shared via Clone (Arc<RwLock<String>> interior) — same instance for UI and WsServer
 - Settings dialog `show_settings` requires `&PINManager` parameter
+- Android network_security_config.xml cannot express IP CIDR ranges — use code-level validation (NetworkValidator.kt) for private IP restrictions
 - PIN stored at XDG_CONFIG_HOME/quip/pin (defaults to ~/.config/quip/pin), file 0600, dir 0700
 - iOS auth flow: connection established → onAuthRequired callback → PIN entry UI → sendAuth(pin:) → auth_result handler. Cached PIN auto-sent on reconnect.
 - iOS UI state gates: use `client.isAuthenticated` (not `isConnected`) for enabling controls, landscape mode, and keyboard toggle
 - Android auth flow: connect → onAuthRequired callback → PIN entry UI (MainScreen) → sendAuth() → auth_result. Cached PIN auto-sent on reconnect. Controls gated on `isAuthenticated`.
 - Android UI state: `showPinEntry` controls PIN screen visibility; `isAuthenticated` gates LayoutScreen and landscape orientation
 - macOS tunnel log path: `~/Library/Caches/Quip/tunnel.log` (via FileManager cachesDirectory). Dir 0700, file 0600.
+- SecretRedactor (macOS) is a static enum with regex patterns — use same pattern list for Linux Rust equivalent
 - Linux tunnel log path: `XDG_CACHE_HOME/quip/tunnel.log` (defaults to `~/.cache/quip/tunnel.log`). Dir 0700, file 0600. Uses `prepare_tunnel_log()` helper.
 ---
 
@@ -176,4 +178,31 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - Using `sha256sum` command avoids adding `sha2`+`hex` crate dependencies; acceptable since `curl` is already a runtime dependency
   - Verification must happen BEFORE `chmod +x` — never make an unverified binary executable
   - `tokio::process::Command` already used in the download function, so the verify function uses the same async pattern
+---
+
+## 2026-04-03 - US-012
+- Restricted Android cleartext traffic to local/private networks using a two-layer approach
+- Updated network_security_config.xml: added domain-config enforcing TLS for trycloudflare.com (defense-in-depth), documented why base-config must stay cleartextTrafficPermitted="true"
+- Created NetworkValidator.kt: validates ws:// URLs target only private IPs (RFC 1918 via InetAddress.isSiteLocalAddress, loopback, link-local, localhost)
+- Added URL validation in MainViewModel.connect() — rejects ws:// to non-private networks before connecting
+- Files changed: QuipAndroid/app/src/main/res/xml/network_security_config.xml, QuipAndroid/app/src/main/java/dev/quip/android/services/NetworkValidator.kt (new), QuipAndroid/app/src/main/java/dev/quip/android/MainViewModel.kt
+- **Learnings for future iterations:**
+  - Android's network_security_config.xml `<domain>` cannot express IP CIDR ranges — `includeSubdomains` only works for DNS subdomain hierarchy, not IP subnets
+  - Setting `base-config cleartextTrafficPermitted="false"` blocks OkHttp cleartext connections to ALL non-whitelisted hosts (checked via `NetworkSecurityPolicy.isCleartextTrafficPermitted(hostname)`) — there is no way to whitelist IP ranges in XML
+  - For apps that connect to local IPs via ws://, the security enforcement must be split: XML for domain-based restrictions, code for IP-range restrictions
+  - `InetAddress.isSiteLocalAddress` covers exactly RFC 1918 ranges (10/8, 172.16/12, 192.168/16); `isLoopbackAddress` covers 127/8; `isLinkLocalAddress` covers 169.254/16
+  - OkHttp 4.12.0 normalizes ws:// to http:// internally, so the platform cleartext check applies to WebSocket connections
+---
+
+## 2026-04-03 - US-013
+- Added SecretRedactor.swift service with regex-based pattern matching for common secret types
+- Patterns redacted: sk-* (OpenAI), ghp_/gho_/ghs_/ghr_* (GitHub), AKIA* (AWS key IDs), AWS secret keys, Bearer tokens, token: values
+- Applied redaction in request_content handler (QuipMacApp.swift) before broadcasting terminal content
+- Added SecretRedactor.swift to Xcode project.pbxproj
+- Files changed: QuipMac/Services/SecretRedactor.swift (new), QuipMac/QuipMacApp.swift, QuipMac/QuipMac.xcodeproj/project.pbxproj
+- **Learnings for future iterations:**
+  - SecretRedactor uses NSRegularExpression with capture groups to preserve labels (e.g., "Bearer " prefix) while redacting the secret value
+  - Redaction applied to trimmed text (after 200-line limit) in the request_content handler, before broadcast
+  - Patterns use minimum length thresholds (e.g., 20+ chars) to avoid false positives on short strings
+  - US-014 (Linux equivalent) should use the same patterns but in Rust regex syntax
 ---
