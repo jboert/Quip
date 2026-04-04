@@ -1,0 +1,135 @@
+# Ralph Progress Log
+Started: Fri Apr  3 20:44:47 EDT 2026
+---
+
+## Codebase Patterns
+- macOS project builds with: `xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -configuration Debug build`
+- QuipLinux cannot be typechecked on macOS — requires GTK/GLib system libs only available on Linux. Verify Rust changes are type-safe by inspection.
+- AppleScript string escaping uses `escapeForAppleScript()` in KeystrokeInjector.swift — only escapes `\` and `"` (sufficient for `keystroke`, NOT for `do script`)
+- Terminal.app text injection uses System Events keystrokes; iTerm2 uses `write text` (iTerm2's API is safe as it doesn't interpret shell)
+- Multi-line text for Terminal.app must be split on newlines, each line typed with `keystroke`, then `key code 36` (Return) between lines
+- Rust protocol messages: use `Deserialize` only for incoming (client→server), `Serialize` only for outgoing (server→client). Use `#[serde(skip_serializing_if = "Option::is_none")]` for optional fields.
+- Protocol changes touch 5 files: Shared/MessageProtocol.swift, Protocol.kt, messages.rs, protocol.md, MessageProtocolTests.swift
+- Android Gradle build is broken (JDK version mismatch) — pre-existing, not caused by protocol changes
+- New services: add file to Xcode project.pbxproj (PBXBuildFile, PBXFileReference, PBXGroup children, PBXSourcesBuildPhase) and inject via `.environment()` in QuipMacApp.swift
+- Keychain storage pattern: use `kSecClassGenericPassword` with `kSecAttrAccount` as key, `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` for sensitive data
+- PINManager is `@Observable` — auto-generates on first launch, stores in Keychain, accessed via `@Environment(PINManager.self)`
+- WebSocketServer auth: connections start unauthenticated, only "auth" messages processed until authenticated. Set `pinManager` property before calling `start()`.
+- Per-connection send uses private `send(_:to:)` method; broadcast only goes to authenticated clients.
+- Linux WsServer uses HashMap<usize, ClientConnection> with per-connection auth state (not Vec<WsSink>)
+- PINManager is shared via Clone (Arc<RwLock<String>> interior) — same instance for UI and WsServer
+- Settings dialog `show_settings` requires `&PINManager` parameter
+- PIN stored at XDG_CONFIG_HOME/quip/pin (defaults to ~/.config/quip/pin), file 0600, dir 0700
+- iOS auth flow: connection established → onAuthRequired callback → PIN entry UI → sendAuth(pin:) → auth_result handler. Cached PIN auto-sent on reconnect.
+- iOS UI state gates: use `client.isAuthenticated` (not `isConnected`) for enabling controls, landscape mode, and keyboard toggle
+- Android auth flow: connect → onAuthRequired callback → PIN entry UI (MainScreen) → sendAuth() → auth_result. Cached PIN auto-sent on reconnect. Controls gated on `isAuthenticated`.
+- Android UI state: `showPinEntry` controls PIN screen visibility; `isAuthenticated` gates LayoutScreen and landscape orientation
+---
+
+## 2026-04-03 - US-001
+- Replaced `do script` with System Events `keystroke` for all Terminal.app text injection
+- Split multi-line text into individual lines, type each with `keystroke`, press Return (key code 36) between lines
+- Each line individually escaped via `escapeForAppleScript()`
+- iTerm2 behavior unchanged (uses `write text` which is safe)
+- Files changed: QuipMac/Services/KeystrokeInjector.swift
+- **Learnings for future iterations:**
+  - `do script` in Terminal.app AppleScript executes text as a shell command — never use it with untrusted input
+  - System Events `keystroke` types characters literally, so shell metacharacters ($, `, |, etc.) are safe
+  - The `escapeForAppleScript` function only escapes `\` and `"` — sufficient for AppleScript string literals but not for shell interpretation
+  - Input `text` can contain real newline characters; must split on `"\n"` not `"\\n"`
+---
+
+## 2026-04-03 - US-002
+- Changed `0.0.0.0` to `127.0.0.1` in ws_server.rs bind address (line 32)
+- Cloudflare tunnel connects locally so it is unaffected
+- Files changed: QuipLinux/src/services/ws_server.rs
+- **Learnings for future iterations:**
+  - QuipLinux depends on GTK/GLib and cannot `cargo check` on macOS — only on a Linux host
+  - The bind address is a string literal format arg, so changing it has zero type implications
+---
+
+## 2026-04-03 - US-003
+- Added `AuthMessage` (type: "auth", pin: String) and `AuthResultMessage` (type: "auth_result", success: Bool, error: String?) to all platform protocol files
+- Updated protocol documentation in docs/protocol.md with Authentication section
+- Added encoding, decoding, and round-trip tests for both auth message types
+- Files changed: Shared/MessageProtocol.swift, QuipAndroid/.../Protocol.kt, QuipLinux/src/protocol/messages.rs, docs/protocol.md, QuipiOS/Tests/MessageProtocolTests.swift
+- **Learnings for future iterations:**
+  - Shared/MessageProtocol.swift is used by BOTH QuipMac and QuipiOS projects — changes compile-check via either xcodebuild
+  - Android Gradle build is broken due to JDK version mismatch (pre-existing) — Kotlin changes verified by pattern inspection only
+  - iOS build requires provisioning profile and connected device or simulator — no simulators installed on this machine
+  - Rust `AuthMessage` only needs `Deserialize` (server receives it), `AuthResultMessage` only needs `Serialize` (server sends it)
+  - Use `#[serde(skip_serializing_if = "Option::is_none")]` on optional fields in Rust to match Swift/Kotlin null-omission behavior
+---
+
+## 2026-04-03 - US-004
+- Created PINManager.swift service: auto-generates 6-digit PIN on first launch, stores/loads from Keychain
+- Added Security tab to SettingsView with PIN display (monospaced, selectable), copy button, and regenerate button
+- Injected PINManager into app via `.environment()` in QuipMacApp.swift Settings scene
+- Updated Xcode project.pbxproj with new file references
+- Files changed: QuipMac/Services/PINManager.swift (new), QuipMac/QuipMacApp.swift, QuipMac/Views/SettingsView.swift, QuipMac/QuipMac.xcodeproj/project.pbxproj
+- **Learnings for future iterations:**
+  - Keychain requires delete-before-add pattern (SecItemDelete then SecItemAdd) — there's no upsert
+  - `@Observable` classes with `init()` that loads state work well for auto-generate-on-first-launch patterns
+  - SettingsView uses private structs for each tab — follow the same pattern for new tabs
+  - PINManager only needs to be injected into Settings scene (not MainWindow or MenuBarExtra) for US-004, but US-005 will need it in the main app for auth enforcement
+---
+
+## 2026-04-03 - US-005
+- Enforced PIN authentication on macOS WebSocket server
+- New connections start in "pending auth" state — all non-auth messages silently dropped until authenticated
+- Auth messages handled directly in WebSocketServer (not forwarded to app handler)
+- PINManager wired into WebSocketServer via property injection in startServicesOnce()
+- Broadcast now only sends to authenticated clients
+- Added per-connection send method for auth result messages
+- Files changed: QuipMac/Services/WebSocketServer.swift, QuipMac/QuipMacApp.swift
+- **Learnings for future iterations:**
+  - Auth gating lives in the WebSocket server layer, not the app message handler — keeps separation clean
+  - `NWConnection` is a class (reference type), so `===` identity comparison works for tracking connections
+  - `ClientConnection` struct wraps NWConnection with auth state — mutated via index lookup in the clients array
+  - `broadcast()` filters to authenticated clients only, so layout updates don't leak to unauthenticated connections
+---
+
+## 2026-04-03 - US-006
+- Created PINManager service: generates 6-digit PIN, stores in ~/.config/quip/pin (XDG_CONFIG_HOME aware)
+- Refactored WsServer to use HashMap<usize, ClientConnection> with per-connection auth state
+- New connections start unauthenticated; only "auth" messages processed until PIN verified
+- Auth result sent back to specific client via per-connection sink
+- Broadcast only targets authenticated clients
+- Added Security page to settings dialog with PIN display, copy, and regenerate buttons
+- PINManager shared between settings UI and WsServer via Arc<RwLock<String>> interior
+- Added `rand` 0.9 dependency for PIN generation
+- Files changed: QuipLinux/src/services/pin_manager.rs (new), QuipLinux/src/services/ws_server.rs, QuipLinux/src/services/mod.rs, QuipLinux/src/ui/main_window.rs, QuipLinux/src/ui/settings_dialog.rs, QuipLinux/Cargo.toml, QuipLinux/Cargo.lock
+- **Learnings for future iterations:**
+  - PINManager uses Arc<RwLock<String>> so clones share state — regeneration in settings UI immediately affects WsServer auth checks
+  - WsServer now uses HashMap<usize, ClientConnection> instead of Vec<WsSink> — each client has a unique ID for targeted sends and cleanup
+  - `rand::random_range(0..N)` is the rand 0.9 free function for generating random numbers in a range
+  - Settings dialog `show_settings` now takes a `&PINManager` parameter — any callers must be updated
+  - The broadcast call in `handle_incoming_message` (RequestContent handler) was already calling async broadcast without `.await` — pre-existing issue, not introduced here
+---
+
+## 2026-04-03 - US-007
+- Added PIN authentication flow to iOS client (WebSocketClient + MainiOSView)
+- WebSocketClient: added `isAuthenticated`, `authError`, `sessionPIN` state; handles `auth_result` messages; gates data messages behind auth; auto-sends cached PIN on reconnect
+- MainiOSView: new `authenticatingBar` with PIN entry UI (numeric keypad, 6-digit input, submit button, error display); controls gated on `isAuthenticated` not just `isConnected`; orientation locked to portrait until authenticated
+- Files changed: QuipiOS/Services/WebSocketClient.swift, QuipiOS/QuipApp.swift
+- **Learnings for future iterations:**
+  - iOS build requires provisioning profile — typecheck via macOS build (shared MessageProtocol.swift compiles in both)
+  - `@Bindable var client: WebSocketClient` in SwiftUI views auto-tracks `@Observable` property changes — no manual `objectWillChange` needed
+  - Connection state flow is now: disconnected → connecting → connected (unauthenticated) → authenticated; landscape mode tied to authenticated, not connected
+  - PIN cached in `sessionPIN` for seamless reconnects — cleared on intentional disconnect or failed auth (bad PIN)
+  - `onAuthRequired` callback fires when connection established but no cached PIN; `onAuthResult` fires on server response
+---
+
+## 2026-04-03 - US-008
+- Added PIN authentication flow to Android client (WebSocketClient + MainViewModel + MainScreen)
+- WebSocketClient: added `isAuthenticated`, `authError`, `sessionPIN` state; handles `auth_result` messages; gates data messages behind auth; auto-sends cached PIN on reconnect
+- MainViewModel: added `isAuthenticated`, `authError`, `showPinEntry`, `pinText` state; wires auth callbacks; `sendAuth()` method; gates landscape orientation behind auth
+- MainScreen: added `PinEntryContent` composable with numeric keypad, 6-digit input (min 4 to submit), error display, disconnect button; screen shown when connected but not authenticated
+- Files changed: QuipAndroid/.../services/WebSocketClient.kt, QuipAndroid/.../MainViewModel.kt, QuipAndroid/.../ui/screens/MainScreen.kt, QuipAndroid/.../MainActivity.kt
+- **Learnings for future iterations:**
+  - Android auth mirrors iOS pattern: connect → onAuthRequired → PIN entry UI → sendAuth → auth_result handler
+  - `@Volatile` on WebSocketClient state fields ensures thread-safe reads from main thread when writes happen on OkHttp threads
+  - Android Gradle build still broken (JDK mismatch) — changes verified by inspection per established pattern
+  - MainScreen uses named parameters with defaults for backward-compatible additions — new auth params added between existing groups
+  - PIN "pinning" in ConnectionManager is unrelated to auth PIN — naming collision but no code conflict
+---
