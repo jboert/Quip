@@ -257,10 +257,74 @@ async fn download_cloudflared() -> Result<String, String> {
         return Err(format!("failed to download cloudflared: {stderr}"));
     }
 
+    // Verify SHA256 checksum against the published .sha256 file
+    verify_sha256(&dest, &url).await.map_err(|e| {
+        // Delete the unverified binary
+        let _ = std::fs::remove_file(&dest);
+        error!("SHA256 verification failed, deleted unverified binary: {e}");
+        e
+    })?;
+
     std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
         .map_err(|e| format!("failed to chmod cloudflared: {e}"))?;
 
     let path = dest.to_string_lossy().to_string();
     info!("cloudflared installed to {path}");
     Ok(path)
+}
+
+/// Verify the SHA256 checksum of a downloaded binary against the published .sha256 file.
+async fn verify_sha256(binary_path: &std::path::Path, binary_url: &str) -> Result<(), String> {
+    let checksum_url = format!("{binary_url}.sha256");
+    info!("Downloading SHA256 checksum from {checksum_url}");
+
+    // Download the .sha256 file contents
+    let output = tokio::process::Command::new("curl")
+        .args(["-fsSL", &checksum_url])
+        .output()
+        .await
+        .map_err(|e| format!("failed to run curl for checksum: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("failed to download checksum file: {stderr}"));
+    }
+
+    // Parse expected hash from the .sha256 file (format: "<hash>  <filename>" or just "<hash>")
+    let checksum_text = String::from_utf8_lossy(&output.stdout);
+    let expected_hash = checksum_text
+        .trim()
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "checksum file is empty".to_string())?
+        .to_lowercase();
+
+    // Compute SHA256 of the downloaded binary using sha256sum
+    let sha_output = tokio::process::Command::new("sha256sum")
+        .arg(binary_path)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run sha256sum: {e}"))?;
+
+    if !sha_output.status.success() {
+        let stderr = String::from_utf8_lossy(&sha_output.stderr);
+        return Err(format!("sha256sum failed: {stderr}"));
+    }
+
+    let sha_text = String::from_utf8_lossy(&sha_output.stdout);
+    let computed_hash = sha_text
+        .trim()
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "sha256sum produced no output".to_string())?
+        .to_lowercase();
+
+    if computed_hash != expected_hash {
+        return Err(format!(
+            "SHA256 mismatch: expected {expected_hash}, got {computed_hash}"
+        ));
+    }
+
+    info!("SHA256 verification passed: {computed_hash}");
+    Ok(())
 }
