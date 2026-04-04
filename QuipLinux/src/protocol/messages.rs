@@ -124,6 +124,44 @@ impl TerminalContentMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Authentication messages
+// ---------------------------------------------------------------------------
+
+/// Client sends PIN to authenticate
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthMessage {
+    pub pin: String,
+}
+
+/// Server responds with auth result
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthResultMessage {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl AuthResultMessage {
+    pub fn success() -> Self {
+        Self {
+            type_: "auth_result".into(),
+            success: true,
+            error: None,
+        }
+    }
+
+    pub fn failure(error: String) -> Self {
+        Self {
+            type_: "auth_result".into(),
+            success: false,
+            error: Some(error),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Encoding helpers — JSON with sorted keys to match Swift's sortedKeys output
 // ---------------------------------------------------------------------------
 

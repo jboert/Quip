@@ -75,6 +75,19 @@ data class TerminalContentMessage(
     val screenshot: String? = null
 )
 
+// MARK: - Authentication Messages
+
+data class AuthMessage(
+    val type: String = "auth",
+    val pin: String
+)
+
+data class AuthResultMessage(
+    val type: String = "auth_result",
+    val success: Boolean,
+    val error: String? = null
+)
+
 // MARK: - Message Envelope (for peeking at type before full deserialization)
 
 data class MessageEnvelope(val type: String)

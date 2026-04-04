@@ -131,6 +131,30 @@ struct TerminalContentMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Authentication Messages
+
+struct AuthMessage: Codable, Sendable {
+    let type: String
+    let pin: String
+
+    init(pin: String) {
+        self.type = "auth"
+        self.pin = pin
+    }
+}
+
+struct AuthResultMessage: Codable, Sendable {
+    let type: String
+    let success: Bool
+    let error: String?
+
+    init(success: Bool, error: String? = nil) {
+        self.type = "auth_result"
+        self.success = success
+        self.error = error
+    }
+}
+
 // MARK: - Message Encoding/Decoding Helpers
 
 enum MessageCoder {
