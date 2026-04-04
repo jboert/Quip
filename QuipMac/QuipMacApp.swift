@@ -52,6 +52,7 @@ struct QuipMacApp: App {
         servicesStarted = true
         webSocketServer.pinManager = pinManager
         webSocketServer.start()
+        tunnel.webSocketServer = webSocketServer
         tunnel.start()
         // Small delay to let WebSocket listener reach .ready before advertising
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -79,7 +80,7 @@ struct QuipMacApp: App {
 
     @MainActor
     private func broadcastLayout() {
-        guard webSocketServer.connectedClientCount > 0 else { return }
+        guard webSocketServer.hasConnectedClients else { return }
         let display = windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first
         let screenBounds = display?.frame ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
 
