@@ -26,7 +26,7 @@ Started: Fri Apr  3 20:44:47 EDT 2026
 - Android auth flow: connect → onAuthRequired callback → PIN entry UI (MainScreen) → sendAuth() → auth_result. Cached PIN auto-sent on reconnect. Controls gated on `isAuthenticated`.
 - Android UI state: `showPinEntry` controls PIN screen visibility; `isAuthenticated` gates LayoutScreen and landscape orientation
 - macOS tunnel log path: `~/Library/Caches/Quip/tunnel.log` (via FileManager cachesDirectory). Dir 0700, file 0600.
-- SecretRedactor (macOS) is a static enum with regex patterns — use same pattern list for Linux Rust equivalent
+- SecretRedactor (macOS) is a static enum with regex patterns; Linux equivalent is `secret_redactor::redact()` using `LazyLock<Vec<RedactPattern>>`
 - Linux tunnel log path: `XDG_CACHE_HOME/quip/tunnel.log` (defaults to `~/.cache/quip/tunnel.log`). Dir 0700, file 0600. Uses `prepare_tunnel_log()` helper.
 ---
 
@@ -205,4 +205,16 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - Redaction applied to trimmed text (after 200-line limit) in the request_content handler, before broadcast
   - Patterns use minimum length thresholds (e.g., 20+ chars) to avoid false positives on short strings
   - US-014 (Linux equivalent) should use the same patterns but in Rust regex syntax
+---
+
+## 2026-04-03 - US-014
+- Created secret_redactor.rs with same regex patterns as macOS SecretRedactor.swift, translated to Rust regex syntax
+- Applied redaction in request_content handler (main_window.rs) after trimming, before broadcast — same position as macOS
+- Registered module in services/mod.rs
+- Files changed: QuipLinux/src/services/secret_redactor.rs (new), QuipLinux/src/services/mod.rs, QuipLinux/src/ui/main_window.rs
+- **Learnings for future iterations:**
+  - Rust `regex` crate uses `${1}` for capture group references in replacement strings (not `$1`)
+  - `std::sync::LazyLock` is stable in Rust — no need for `once_cell` or `lazy_static` crates
+  - The `regex` crate was already in Cargo.toml, so no dependency additions needed
+  - Redaction sits between content trimming and TerminalContentMessage::new — shadow the `content` variable with `let content = redact(&content);`
 ---
