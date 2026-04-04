@@ -103,6 +103,7 @@ struct QuipMacApp: App {
 
         case "send_text":
             if let msg = MessageCoder.decode(SendTextMessage.self, from: data) {
+                AuditLogger.log(messageType: "send_text", clientIdentifier: "ws-client", textContent: msg.text)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     let termApp = terminalAppForWindow(window)
                     // Focus the window via AX first, then target by name in AppleScript
@@ -116,6 +117,7 @@ struct QuipMacApp: App {
             }
         case "quick_action":
             if let msg = MessageCoder.decode(QuickActionMessage.self, from: data) {
+                AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     handleQuickAction(msg.action, for: window)
                 }
