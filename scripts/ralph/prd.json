@@ -224,7 +224,7 @@
         "Typecheck passes"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM (M1). Linux equivalent of US-013."
     },
     {
