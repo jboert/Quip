@@ -1,5 +1,6 @@
 use regex::Regex;
-use std::io::BufRead;
+use std::io::{BufRead, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use tracing::{error, info, warn};
@@ -64,9 +65,13 @@ impl CloudflareTunnel {
             .spawn()
             .map_err(|e| format!("Failed to spawn cloudflared: {e}"))?;
 
+        // Prepare the tunnel log file in a private cache directory
+        let log_path = prepare_tunnel_log()
+            .map_err(|e| { warn!("Could not prepare tunnel log: {e}"); e })?;
+
         // Read stderr on a background thread to find the tunnel URL.
         // The thread continues draining stderr after we find the URL so
-        // cloudflared doesn't get SIGPIPE.
+        // cloudflared doesn't get SIGPIPE. Lines are also written to the log file.
         let stderr = child.stderr.take()
             .ok_or_else(|| "Failed to capture cloudflared stderr".to_string())?;
 
@@ -77,10 +82,18 @@ impl CloudflareTunnel {
             .name("cloudflared-stderr".into())
             .spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
+                let mut log_file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&log_path)
+                    .ok();
                 let mut sent = false;
                 for line in reader.lines() {
                     match line {
                         Ok(line) => {
+                            // Write to tunnel log file
+                            if let Some(ref mut f) = log_file {
+                                let _ = writeln!(f, "{line}");
+                            }
                             if !sent {
                                 if let Some(m) = url_regex.find(&line) {
                                     let _ = tx.send(m.as_str().to_string());
@@ -140,6 +153,40 @@ impl Drop for CloudflareTunnel {
             let _ = child.wait();
         }
     }
+}
+
+/// Return the path for the tunnel log file (~/.cache/quip/tunnel.log or XDG_CACHE_HOME/quip/tunnel.log).
+fn tunnel_log_path() -> std::path::PathBuf {
+    let cache_dir = std::env::var("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            std::path::PathBuf::from(home).join(".cache")
+        });
+    cache_dir.join("quip").join("tunnel.log")
+}
+
+/// Ensure the tunnel log directory and file exist with private permissions.
+fn prepare_tunnel_log() -> Result<std::path::PathBuf, String> {
+    let log_path = tunnel_log_path();
+    let log_dir = log_path.parent().unwrap();
+
+    std::fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create tunnel log dir: {e}"))?;
+    std::fs::set_permissions(log_dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("failed to set log dir permissions: {e}"))?;
+
+    // Create or truncate the log file with 0600 permissions
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|e| format!("failed to create tunnel log file: {e}"))?;
+    std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("failed to set log file permissions: {e}"))?;
+
+    Ok(log_path)
 }
 
 /// Search common locations for the cloudflared binary.
@@ -210,7 +257,6 @@ async fn download_cloudflared() -> Result<String, String> {
         return Err(format!("failed to download cloudflared: {stderr}"));
     }
 
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
         .map_err(|e| format!("failed to chmod cloudflared: {e}"))?;
 
