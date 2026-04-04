@@ -232,3 +232,17 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - `Date().timeIntervalSince(windowStart) >= 1.0` is a simple 1-second sliding window approach; no timer needed
   - US-016 (Linux equivalent) should use the same pattern: per-client counter + timestamp in `ClientConnection` HashMap entry
 ---
+
+## 2026-04-03 - US-016
+- Added per-client rate limiting (10 messages/second) to Linux WebSocket server
+- Extended `ClientConnection` struct with `message_count: u32` and `window_start: Instant` fields
+- Added `allow_message()` method on `ClientConnection` impl block
+- Rate check applied before auth check in message receive loop — prevents unauthenticated flood attacks
+- Excess messages silently dropped with info log; window resets after 1 second
+- Files changed: QuipLinux/src/services/ws_server.rs
+- **Learnings for future iterations:**
+  - `std::time::Instant` is the right choice for rate limiting in Rust (monotonic, no syscall overhead)
+  - Rate limit check requires `get_mut` on the HashMap entry since `allow_message()` mutates state
+  - The lock scope for rate limiting is separate from the auth check lock scope — drop the lock between checks to avoid holding it longer than needed
+  - Pattern matches macOS exactly: per-client counter + timestamp, 10 msg/s cap, silent drop
+---

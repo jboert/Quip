@@ -254,7 +254,7 @@
         "Typecheck passes"
       ],
       "priority": 16,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM (M2). Linux equivalent of US-015."
     },
     {
