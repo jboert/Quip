@@ -115,7 +115,11 @@ class MainActivity : ComponentActivity() {
                         terminalContentWindowName = vm.terminalContentWindowName,
                         onDismissContent = { vm.dismissTerminalContent() },
                         onRefreshContent = { vm.refreshTerminalContent() },
-                        onSendTerminalAction = { action -> vm.sendTerminalAction(action) }
+                        onSendTerminalAction = { action -> vm.sendTerminalAction(action) },
+                        showUrlWarning = vm.showUrlWarning,
+                        pendingUnsafeUrl = vm.pendingUnsafeUrl,
+                        onConnectAnyway = { vm.connectAnyway() },
+                        onDismissUrlWarning = { vm.dismissUrlWarning() }
                     )
                 }
             }

@@ -66,8 +66,35 @@ fun MainScreen(
     onDismissContent: () -> Unit = {},
     onRefreshContent: () -> Unit = {},
     onSendTerminalAction: (String) -> Unit = {},
+    showUrlWarning: Boolean = false,
+    pendingUnsafeUrl: String? = null,
+    onConnectAnyway: () -> Unit = {},
+    onDismissUrlWarning: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    if (showUrlWarning && pendingUnsafeUrl != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = onDismissUrlWarning,
+            title = { Text("Unrecognized Server") },
+            text = {
+                Text(
+                    "This URL doesn't match expected patterns (local network or Cloudflare tunnel):" +
+                    "\n\n$pendingUnsafeUrl\n\n" +
+                    "Connecting to an unknown server could expose your data."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onConnectAnyway) {
+                    Text("Connect Anyway", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissUrlWarning) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
     Box(modifier = modifier) {
     if (isConnected && showPinEntry && !isAuthenticated) {
         PinEntryContent(

@@ -83,6 +83,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var pinText by mutableStateOf("")
     var showTextInput by mutableStateOf(false)
     var textInputValue by mutableStateOf("")
+    var showUrlWarning by mutableStateOf(false)
+        private set
+    var pendingUnsafeUrl by mutableStateOf<String?>(null)
+        private set
 
     // Orientation request callback — set by Activity
     var onRequestOrientation: ((Int) -> Unit)? = null
@@ -301,7 +305,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connect(url: String) {
         if (url.isBlank()) return
-        val context = getApplication<Application>()
 
         val wsUrl = when {
             url.startsWith("wss://") || url.startsWith("ws://") -> url
@@ -316,9 +319,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        urlText = url
+        // Warn about unrecognized URLs (not local network or Cloudflare tunnel)
+        if (!NetworkValidator.isURLTrusted(wsUrl)) {
+            pendingUnsafeUrl = wsUrl
+            showUrlWarning = true
+            return
+        }
+
+        doConnect(wsUrl)
+    }
+
+    fun connectAnyway() {
+        val url = pendingUnsafeUrl ?: return
+        showUrlWarning = false
+        pendingUnsafeUrl = null
+        doConnect(url)
+    }
+
+    fun dismissUrlWarning() {
+        showUrlWarning = false
+        pendingUnsafeUrl = null
+    }
+
+    private fun doConnect(wsUrl: String) {
+        val context = getApplication<Application>()
+
+        urlText = wsUrl
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putString(KEY_LAST_URL, url).apply()
+            .edit().putString(KEY_LAST_URL, wsUrl).apply()
 
         ConnectionManager.saveRecent(context, wsUrl)
         recentConnections.clear()
