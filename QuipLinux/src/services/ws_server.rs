@@ -49,10 +49,15 @@ pub struct WsServer {
     next_id: Arc<AtomicUsize>,
     message_tx: mpsc::UnboundedSender<String>,
     pin_manager: PINManager,
+    require_auth: bool,
 }
 
 impl WsServer {
     pub fn new(port: u16, message_tx: mpsc::UnboundedSender<String>, pin_manager: PINManager) -> Self {
+        Self::with_auth(port, message_tx, pin_manager, true)
+    }
+
+    pub fn with_auth(port: u16, message_tx: mpsc::UnboundedSender<String>, pin_manager: PINManager, require_auth: bool) -> Self {
         Self {
             port,
             clients: Arc::new(Mutex::new(HashMap::new())),
@@ -60,6 +65,7 @@ impl WsServer {
             next_id: Arc::new(AtomicUsize::new(0)),
             message_tx,
             pin_manager,
+            require_auth,
         }
     }
 
@@ -90,6 +96,7 @@ impl WsServer {
             let next_id = Arc::clone(&self.next_id);
             let message_tx = self.message_tx.clone();
             let pin_manager = self.pin_manager.clone();
+            let require_auth = self.require_auth;
 
             tokio::spawn(async move {
                 let ws_stream = match tokio_tungstenite::accept_async(stream).await {
@@ -109,13 +116,18 @@ impl WsServer {
                     let mut locked = clients.lock().await;
                     locked.insert(client_id, ClientConnection {
                         sink: write,
-                        authenticated: false,
+                        // Auto-authenticate when auth is not required (local-only without PIN)
+                        authenticated: !require_auth,
                         message_count: 0,
                         window_start: Instant::now(),
                     });
                     client_count.store(locked.len(), Ordering::Relaxed);
                 }
-                info!("Client {peer} assigned id={client_id}, count: {}", client_count.load(Ordering::Relaxed));
+                if !require_auth {
+                    info!("Client {peer} assigned id={client_id} (auto-authenticated, auth disabled), count: {}", client_count.load(Ordering::Relaxed));
+                } else {
+                    info!("Client {peer} assigned id={client_id}, count: {}", client_count.load(Ordering::Relaxed));
+                }
 
                 while let Some(result) = read.next().await {
                     match result {

@@ -236,8 +236,14 @@ fn start_services(
     let (gtk_tx, gtk_rx) = async_channel::bounded::<String>(256);
     let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
+    // Compute require_auth: always true unless local-only mode is on and PIN is not required
+    let require_auth = {
+        let state = shared_state.read().unwrap();
+        !state.settings.general.local_only_mode || state.settings.general.require_pin_for_local
+    };
+
     // Create WsServer before spawning the background thread so it can be shared
-    let ws_server = Arc::new(crate::services::ws_server::WsServer::new(port, msg_tx, pin_manager));
+    let ws_server = Arc::new(crate::services::ws_server::WsServer::with_auth(port, msg_tx, pin_manager, require_auth));
 
     // Tokio runtime on background thread
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -270,32 +276,41 @@ fn start_services(
                 Err(e) => tracing::warn!("Failed to start mDNS: {e}"),
             }
 
-            // Start Cloudflare tunnel
-            let ss_tunnel = ss_bg.clone();
-            tokio::spawn(async move {
-                let mut tunnel = crate::services::cloudflare_tunnel::CloudflareTunnel::new();
-                {
-                    let mut state = ss_tunnel.write().unwrap();
-                    state.tunnel_running = true;
-                }
-                match tunnel.start(port).await {
-                    Ok(()) => {
-                        tracing::info!("Cloudflare tunnel started: {}", tunnel.ws_url());
+            // Start Cloudflare tunnel (unless local-only mode is on)
+            let local_only = {
+                let state = ss_bg.read().unwrap();
+                state.settings.general.local_only_mode
+            };
+
+            if !local_only {
+                let ss_tunnel = ss_bg.clone();
+                tokio::spawn(async move {
+                    let mut tunnel = crate::services::cloudflare_tunnel::CloudflareTunnel::new();
+                    {
                         let mut state = ss_tunnel.write().unwrap();
-                        state.tunnel_url = tunnel.public_url().to_string();
-                        state.tunnel_ws_url = tunnel.ws_url().to_string();
+                        state.tunnel_running = true;
                     }
-                    Err(e) => {
-                        tracing::warn!("Cloudflare tunnel failed: {e}");
-                        let mut state = ss_tunnel.write().unwrap();
-                        state.tunnel_running = false;
+                    match tunnel.start(port).await {
+                        Ok(()) => {
+                            tracing::info!("Cloudflare tunnel started: {}", tunnel.ws_url());
+                            let mut state = ss_tunnel.write().unwrap();
+                            state.tunnel_url = tunnel.public_url().to_string();
+                            state.tunnel_ws_url = tunnel.ws_url().to_string();
+                        }
+                        Err(e) => {
+                            tracing::warn!("Cloudflare tunnel failed: {e}");
+                            let mut state = ss_tunnel.write().unwrap();
+                            state.tunnel_running = false;
+                        }
                     }
-                }
-                // Keep tunnel alive
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                }
-            });
+                    // Keep tunnel alive
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    }
+                });
+            } else {
+                tracing::info!("Local-only mode enabled — Cloudflare tunnel not started");
+            }
 
             // Broadcast layout periodically
             let ss_broadcast = ss_bg.clone();

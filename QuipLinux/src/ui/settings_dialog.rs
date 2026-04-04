@@ -170,6 +170,62 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
     pin_group.add(&button_box);
     security_page.add(&pin_group);
 
+    // Network mode group
+    let network_group = adw::PreferencesGroup::builder()
+        .title("Network Mode")
+        .description("Control whether the Cloudflare tunnel is used for remote access")
+        .build();
+
+    let local_only_switch = gtk4::Switch::new();
+    {
+        let state = shared_state.read().unwrap();
+        local_only_switch.set_active(state.settings.general.local_only_mode);
+    }
+    local_only_switch.set_valign(gtk4::Align::Center);
+    let local_only_row = adw::ActionRow::builder()
+        .title("Local Only (no Cloudflare tunnel)")
+        .subtitle("Only accept connections on the local network via mDNS")
+        .build();
+    local_only_row.add_suffix(&local_only_switch);
+    local_only_row.set_activatable_widget(Some(&local_only_switch));
+
+    let require_pin_switch = gtk4::Switch::new();
+    {
+        let state = shared_state.read().unwrap();
+        require_pin_switch.set_active(state.settings.general.require_pin_for_local);
+        require_pin_switch.set_sensitive(state.settings.general.local_only_mode);
+    }
+    require_pin_switch.set_valign(gtk4::Align::Center);
+    let require_pin_row = adw::ActionRow::builder()
+        .title("Require PIN for local connections")
+        .subtitle("When local-only is on, still require PIN auth from local clients")
+        .build();
+    require_pin_row.add_suffix(&require_pin_switch);
+    require_pin_row.set_activatable_widget(Some(&require_pin_switch));
+
+    // Update require_pin sensitivity when local_only toggles
+    let require_pin_switch_clone = require_pin_switch.clone();
+    let ss_local = shared_state.clone();
+    local_only_switch.connect_state_set(move |_, active| {
+        require_pin_switch_clone.set_sensitive(active);
+        let mut state = ss_local.write().unwrap();
+        state.settings.general.local_only_mode = active;
+        state.settings.save();
+        glib::Propagation::Proceed
+    });
+
+    let ss_pin_local = shared_state.clone();
+    require_pin_switch.connect_state_set(move |_, active| {
+        let mut state = ss_pin_local.write().unwrap();
+        state.settings.general.require_pin_for_local = active;
+        state.settings.save();
+        glib::Propagation::Proceed
+    });
+
+    network_group.add(&local_only_row);
+    network_group.add(&require_pin_row);
+    security_page.add(&network_group);
+
     prefs.add(&general_page);
     prefs.add(&colors_page);
     prefs.add(&security_page);
