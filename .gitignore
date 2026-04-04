@@ -4,3 +4,5 @@ QuipAndroid/app/build/
 QuipAndroid/build/
 QuipAndroid/local.properties
 TODO.md
+.superpowers/
+docs/specs/
