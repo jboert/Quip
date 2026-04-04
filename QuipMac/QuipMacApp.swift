@@ -10,6 +10,7 @@ struct QuipMacApp: App {
     @State private var keystrokeInjector = KeystrokeInjector()
     @State private var tunnel = CloudflareTunnel()
     @State private var pinManager = PINManager()
+    @AppStorage("localOnlyMode") private var localOnlyMode = false
 
     var body: some Scene {
         WindowGroup {
@@ -52,8 +53,10 @@ struct QuipMacApp: App {
         servicesStarted = true
         webSocketServer.pinManager = pinManager
         webSocketServer.start()
-        tunnel.webSocketServer = webSocketServer
-        tunnel.start()
+        if !localOnlyMode {
+            tunnel.webSocketServer = webSocketServer
+            tunnel.start()
+        }
         // Small delay to let WebSocket listener reach .ready before advertising
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             bonjourAdvertiser.startAdvertising()
