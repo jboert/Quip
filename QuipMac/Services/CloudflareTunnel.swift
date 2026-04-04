@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Observation
+import CommonCrypto
 
 @MainActor
 @Observable
@@ -9,6 +10,10 @@ final class CloudflareTunnel {
     var isRunning = false
     var publicURL: String = ""
     var webSocketURL: String = ""
+
+    /// Set by QuipMacApp to allow tunnel clients to send messages
+    /// to the same handler as direct WebSocket clients
+    var webSocketServer: WebSocketServer?
 
     private var process: Process?
     private var pollTimer: Timer?
@@ -24,8 +29,8 @@ final class CloudflareTunnel {
     func start(localPort: UInt16 = 8765) {
         guard !isRunning else { return }
 
-        // Start the WebSocket header proxy first
-        startProxy(backendPort: localPort)
+        // Start the tunnel proxy — handles WebSocket framing that cloudflared strips
+        startProxy()
 
         // Use bundled binary first, fall back to Homebrew
         let bundledPath = Bundle.main.path(forResource: "cloudflared", ofType: nil)
@@ -49,7 +54,7 @@ final class CloudflareTunnel {
 
         let shell = Process()
         shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // Point cloudflared to the proxy port, not the WebSocket port directly
+        // Point cloudflared to the proxy port
         shell.arguments = ["-c", "\(cfPath) tunnel --url http://localhost:\(proxyPort) > \(Self.logPath) 2>&1"]
 
         shell.terminationHandler = { [weak self] _ in
@@ -97,12 +102,12 @@ final class CloudflareTunnel {
         webSocketURL = url.replacingOccurrences(of: "https://", with: "wss://")
     }
 
-    // MARK: - WebSocket Header Proxy
-    // Cloudflared strips Connection: Upgrade and Upgrade: websocket headers
-    // when proxying to HTTP backends. This proxy sits between cloudflared and
-    // the NWListener WebSocket server, reconstructing the proper upgrade headers.
+    // MARK: - Tunnel Proxy
+    // Cloudflared strips WebSocket upgrade headers and handles framing at the edge.
+    // This proxy speaks plain HTTP/TCP with cloudflared and handles WebSocket
+    // handshake + framing manually, then routes messages to WebSocketServer.
 
-    private func startProxy(backendPort: UInt16) {
+    private func startProxy() {
         do {
             let params = NWParameters.tcp
             proxyListener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: proxyPort)!)
@@ -111,107 +116,196 @@ final class CloudflareTunnel {
             return
         }
 
-        proxyListener?.newConnectionHandler = { [weak self] clientConn in
-            guard let self else { return }
-            self.handleProxyConnection(clientConn, backendPort: backendPort)
+        proxyListener?.newConnectionHandler = { [weak self] conn in
+            self?.handleTunnelConnection(conn)
         }
 
         proxyListener?.start(queue: proxyQueue)
-        print("[TunnelProxy] Listening on \(proxyPort) -> \(backendPort)")
+        print("[TunnelProxy] Listening on \(proxyPort)")
     }
 
-    private nonisolated func handleProxyConnection(_ clientConn: NWConnection, backendPort: UInt16) {
-        clientConn.start(queue: proxyQueue)
+    private nonisolated func handleTunnelConnection(_ conn: NWConnection) {
+        conn.start(queue: proxyQueue)
 
         // Read the HTTP request from cloudflared
-        clientConn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, _, error in
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, _, error in
             guard let self, let data = content, !data.isEmpty else {
-                clientConn.cancel()
+                conn.cancel()
                 return
             }
 
             let request = String(data: data, encoding: .utf8) ?? ""
 
-            // Extract WebSocket key from the request
+            // Extract WebSocket key for the handshake response
             var wsKey = ""
-            var wsVersion = "13"
-            var host = "localhost"
             for line in request.components(separatedBy: "\r\n") {
-                let lower = line.lowercased()
-                if lower.hasPrefix("sec-websocket-key:") {
+                if line.lowercased().hasPrefix("sec-websocket-key:") {
                     wsKey = String(line.dropFirst("sec-websocket-key:".count)).trimmingCharacters(in: .whitespaces)
-                } else if lower.hasPrefix("sec-websocket-version:") {
-                    wsVersion = String(line.dropFirst("sec-websocket-version:".count)).trimmingCharacters(in: .whitespaces)
-                } else if lower.hasPrefix("host:") {
-                    host = String(line.dropFirst("host:".count)).trimmingCharacters(in: .whitespaces)
                 }
             }
 
-            // Build a clean WebSocket upgrade request
-            let cleanRequest = "GET / HTTP/1.1\r\nHost: \(host)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: \(wsKey)\r\nSec-WebSocket-Version: \(wsVersion)\r\n\r\n"
+            // Send 101 Switching Protocols back to cloudflared
+            let acceptKey = self.computeWebSocketAccept(key: wsKey)
+            let response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(acceptKey)\r\n\r\n"
 
-            // Connect to the actual WebSocket server
-            let backendConn = NWConnection(host: "::1", port: NWEndpoint.Port(rawValue: backendPort)!, using: .tcp)
-            backendConn.start(queue: self.proxyQueue)
+            conn.send(content: Data(response.utf8), completion: .contentProcessed({ _ in
+                // Send auth_required as a WebSocket text frame
+                let authMsg = "{\"type\":\"auth_result\",\"success\":false,\"error\":\"auth_required\"}"
+                self.sendWSFrame(text: authMsg, on: conn)
 
-            backendConn.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    // Send the clean upgrade request
-                    backendConn.send(content: Data(cleanRequest.utf8), completion: .contentProcessed({ _ in
-                        // Read the 101 response — parse until \r\n\r\n to avoid
-                        // eating WebSocket frames that follow immediately
-                        self.consumeHTTPResponse(from: backendConn, buffer: Data()) {
-                            self.bridgeConnections(clientConn, backendConn)
-                        }
-                    }))
-                case .failed, .cancelled:
-                    clientConn.cancel()
-                default:
-                    break
-                }
-            }
+                // Start receiving WebSocket frames from cloudflared
+                self.receiveTunnelFrames(on: conn)
+            }))
         }
     }
 
-    /// Read from connection byte-by-byte until the HTTP response headers end (\r\n\r\n).
-    /// Any data after the headers (WebSocket frames) is forwarded to the client connection
-    /// via the bridge, not consumed here.
-    private nonisolated func consumeHTTPResponse(from conn: NWConnection, buffer: Data, then completion: @escaping () -> Void) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { content, _, _, error in
-            guard let data = content, !data.isEmpty else {
-                completion()
+    // MARK: - WebSocket Frame Handling
+
+    private nonisolated func computeWebSocketAccept(key: String) -> String {
+        let magic = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
+        magic.data(using: .utf8)!.withUnsafeBytes { CC_SHA1($0.baseAddress, CC_LONG(magic.count), &hash) }
+        return Data(hash).base64EncodedString()
+    }
+
+    /// Send a WebSocket text frame (opcode 0x81)
+    private nonisolated func sendWSFrame(text: String, on conn: NWConnection) {
+        let payload = Data(text.utf8)
+        var frame = Data()
+        frame.append(0x81) // FIN + text opcode
+        if payload.count < 126 {
+            frame.append(UInt8(payload.count))
+        } else if payload.count <= 65535 {
+            frame.append(126)
+            frame.append(UInt8(payload.count >> 8))
+            frame.append(UInt8(payload.count & 0xFF))
+        } else {
+            frame.append(127)
+            for i in (0..<8).reversed() {
+                frame.append(UInt8((payload.count >> (i * 8)) & 0xFF))
+            }
+        }
+        frame.append(payload)
+        conn.send(content: frame, completion: .contentProcessed({ _ in }))
+    }
+
+    /// Receive and parse WebSocket frames from the tunnel client
+    private nonisolated func receiveTunnelFrames(on conn: NWConnection) {
+        conn.receive(minimumIncompleteLength: 2, maximumLength: 65536) { [weak self] content, _, isComplete, error in
+            guard let self, let data = content, !data.isEmpty else {
+                conn.cancel()
                 return
             }
-            var combined = buffer + data
-            // Look for the end of HTTP headers
-            let separator = Data([0x0D, 0x0A, 0x0D, 0x0A]) // \r\n\r\n
-            if let range = combined.range(of: separator) {
-                // Headers end found — any data after is WebSocket frames, leave it for the bridge
-                // The NWConnection buffers unread data, so the bridge will pick it up
-                completion()
-            } else {
-                // Haven't found the end of headers yet, keep reading
-                self.consumeHTTPResponse(from: conn, buffer: combined, then: completion)
+
+            // Parse WebSocket frame(s) from the data
+            self.parseWSFrames(data: data, conn: conn)
+
+            if !isComplete && error == nil {
+                self.receiveTunnelFrames(on: conn)
             }
         }
     }
 
-    private nonisolated func bridgeConnections(_ a: NWConnection, _ b: NWConnection) {
-        pipeData(from: a, to: b)
-        pipeData(from: b, to: a)
+    private nonisolated func parseWSFrames(data: Data, conn: NWConnection) {
+        var offset = 0
+        while offset < data.count {
+            guard offset + 1 < data.count else { break }
+
+            let byte0 = data[offset]
+            let byte1 = data[offset + 1]
+            let opcode = byte0 & 0x0F
+            let masked = (byte1 & 0x80) != 0
+            var payloadLen = Int(byte1 & 0x7F)
+            offset += 2
+
+            if payloadLen == 126 {
+                guard offset + 2 <= data.count else { break }
+                payloadLen = Int(data[offset]) << 8 | Int(data[offset + 1])
+                offset += 2
+            } else if payloadLen == 127 {
+                guard offset + 8 <= data.count else { break }
+                payloadLen = 0
+                for i in 0..<8 { payloadLen = (payloadLen << 8) | Int(data[offset + i]) }
+                offset += 8
+            }
+
+            var maskKey: [UInt8] = []
+            if masked {
+                guard offset + 4 <= data.count else { break }
+                maskKey = Array(data[offset..<offset+4])
+                offset += 4
+            }
+
+            guard offset + payloadLen <= data.count else { break }
+            var payload = Data(data[offset..<offset+payloadLen])
+            offset += payloadLen
+
+            // Unmask if needed
+            if masked {
+                for i in 0..<payload.count {
+                    payload[i] ^= maskKey[i % 4]
+                }
+            }
+
+            // Handle based on opcode
+            switch opcode {
+            case 0x01: // Text frame
+                self.handleTunnelMessage(payload, on: conn)
+            case 0x08: // Close
+                conn.cancel()
+                return
+            case 0x09: // Ping — respond with pong
+                self.sendWSPong(payload: payload, on: conn)
+            default:
+                break
+            }
+        }
     }
 
-    private nonisolated func pipeData(from src: NWConnection, to dst: NWConnection) {
-        src.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
-            if let data = content, !data.isEmpty {
-                dst.send(content: data, completion: .contentProcessed({ _ in
-                    self?.pipeData(from: src, to: dst)
-                }))
-            } else if isComplete || error != nil {
-                dst.cancel()
+    private nonisolated func sendWSPong(payload: Data, on conn: NWConnection) {
+        var frame = Data()
+        frame.append(0x8A) // FIN + pong opcode
+        frame.append(UInt8(payload.count))
+        frame.append(payload)
+        conn.send(content: frame, completion: .contentProcessed({ _ in }))
+    }
+
+    private nonisolated func handleTunnelMessage(_ data: Data, on conn: NWConnection) {
+        // Route to WebSocketServer's message handler on the main thread
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let server = self.webSocketServer else { return }
+
+            let messageType = MessageCoder.messageType(from: data)
+
+            if messageType == "auth" {
+                // Handle auth directly — check PIN and respond
+                if let authMsg = MessageCoder.decode(AuthMessage.self, from: data),
+                   let pin = server.pinManager?.pin, !pin.isEmpty {
+                    let response: AuthResultMessage
+                    if authMsg.pin == pin {
+                        response = AuthResultMessage(success: true, error: nil)
+                        print("[TunnelProxy] Client authenticated")
+                    } else {
+                        response = AuthResultMessage(success: false, error: "Incorrect PIN")
+                        print("[TunnelProxy] Auth failed: wrong PIN")
+                    }
+                    if let responseData = try? JSONEncoder().encode(response),
+                       let json = String(data: responseData, encoding: .utf8) {
+                        self.sendWSFrame(text: json, on: conn)
+                    }
+                    // If authenticated, start forwarding layout updates etc.
+                    if authMsg.pin == pin {
+                        // Register this tunnel connection for broadcasts
+                        server.registerTunnelClient(conn) { data in
+                            if let json = String(data: data, encoding: .utf8) {
+                                self.sendWSFrame(text: json, on: conn)
+                            }
+                        }
+                    }
+                }
             } else {
-                self?.pipeData(from: src, to: dst)
+                // Forward other messages to the server's message handler
+                server.onMessageReceived?(data)
             }
         }
     }

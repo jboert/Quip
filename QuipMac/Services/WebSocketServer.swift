@@ -131,10 +131,20 @@ final class WebSocketServer {
         print("[WebSocketServer] Stopped")
     }
 
-    func broadcast<T: Encodable & Sendable>(_ message: T) {
-        let authenticatedClients = clients.filter(\.isAuthenticated)
-        guard !authenticatedClients.isEmpty else { return }
+    /// Tunnel clients that handle their own WebSocket framing
+    private var tunnelBroadcasters: [(Data) -> Void] = []
 
+    var hasConnectedClients: Bool {
+        !clients.isEmpty || !tunnelBroadcasters.isEmpty
+    }
+
+    /// Register a tunnel connection for receiving broadcast messages
+    func registerTunnelClient(_ conn: NWConnection, sender: @escaping (Data) -> Void) {
+        tunnelBroadcasters.append(sender)
+        print("[WebSocketServer] Tunnel client registered. \(tunnelBroadcasters.count) tunnel client(s)")
+    }
+
+    func broadcast<T: Encodable & Sendable>(_ message: T) {
         let data: Data
         do {
             data = try JSONEncoder().encode(message)
@@ -143,15 +153,24 @@ final class WebSocketServer {
             return
         }
 
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-        let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
+        // Send to authenticated direct WebSocket clients
+        let authenticatedClients = clients.filter(\.isAuthenticated)
+        if !authenticatedClients.isEmpty {
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+            let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
 
-        for client in authenticatedClients {
-            client.connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ error in
-                if let error = error {
-                    print("[WebSocketServer] Send error: \(error)")
-                }
-            }))
+            for client in authenticatedClients {
+                client.connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ error in
+                    if let error = error {
+                        print("[WebSocketServer] Send error: \(error)")
+                    }
+                }))
+            }
+        }
+
+        // Send to authenticated tunnel clients
+        for sender in tunnelBroadcasters {
+            sender(data)
         }
     }
 
