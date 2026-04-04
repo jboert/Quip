@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AUD1TL0GG3R00000000001 /* AuditLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUD1TL0GG3R00000000002 /* AuditLogger.swift */; };
 		0553EF1A21F0C774DAA2F0D6 /* LayoutPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5EFE906905D43F124D49A7A /* LayoutPreview.swift */; };
 		1A23A388645C53D6E41A1238 /* LayoutPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8726F91288D7DA56A936419F /* LayoutPreset.swift */; };
 		2D3A9D787C29669647538F78 /* TerminalStateDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */; };
@@ -33,6 +34,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AUD1TL0GG3R00000000002 /* AuditLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuditLogger.swift; sourceTree = "<group>"; };
 		2212F34B839B3C63906BAD2C /* CloudflareTunnel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudflareTunnel.swift; sourceTree = "<group>"; };
 		3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
 		3EC90466A8AD9BEAE5A07DDC /* WebSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServer.swift; sourceTree = "<group>"; };
@@ -64,6 +66,7 @@
 		7F6C02F2E9E2A8E7C337FC26 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				AUD1TL0GG3R00000000002 /* AuditLogger.swift */,
 				EBFB66F35E0DB7CFEA44761B /* BonjourAdvertiser.swift */,
 				2212F34B839B3C63906BAD2C /* CloudflareTunnel.swift */,
 				A56A336266F29BFDA4CB1C10 /* KeystrokeInjector.swift */,
@@ -253,6 +256,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AUD1TL0GG3R00000000001 /* AuditLogger.swift in Sources */,
 				F0BDBE94C7CB5AD6685E33E5 /* BonjourAdvertiser.swift in Sources */,
 				CDECFE9CA16389D2F1B455D5 /* CloudflareTunnel.swift in Sources */,
 				864A7798EAC351C8B5E8E39F /* Color+Hex.swift in Sources */,
