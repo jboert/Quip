@@ -25,6 +25,7 @@ Started: Fri Apr  3 20:44:47 EDT 2026
 - Android auth flow: connect → onAuthRequired callback → PIN entry UI (MainScreen) → sendAuth() → auth_result. Cached PIN auto-sent on reconnect. Controls gated on `isAuthenticated`.
 - Android UI state: `showPinEntry` controls PIN screen visibility; `isAuthenticated` gates LayoutScreen and landscape orientation
 - macOS tunnel log path: `~/Library/Caches/Quip/tunnel.log` (via FileManager cachesDirectory). Dir 0700, file 0600.
+- Linux tunnel log path: `XDG_CACHE_HOME/quip/tunnel.log` (defaults to `~/.cache/quip/tunnel.log`). Dir 0700, file 0600. Uses `prepare_tunnel_log()` helper.
 ---
 
 ## 2026-04-03 - US-001
@@ -145,4 +146,18 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - `FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)` resolves to ~/Library/Caches on macOS
   - Use `createFile(atPath:contents:attributes:)` instead of `String.write(toFile:)` when you need to set file permissions
   - `logPath` changed from `static let` to `static var` (computed) since it depends on FileManager at runtime
+---
+
+## 2026-04-03 - US-010
+- Moved Linux tunnel log from no-log-at-all to ~/.cache/quip/tunnel.log (XDG_CACHE_HOME aware)
+- Added `tunnel_log_path()` and `prepare_tunnel_log()` helper functions
+- Directory created with 0700 permissions, log file with 0600 permissions
+- Stderr reader thread now writes each line to the log file while also parsing for the tunnel URL
+- Moved `PermissionsExt` import to top level (was duplicated in `download_cloudflared`)
+- Files changed: QuipLinux/src/services/cloudflare_tunnel.rs
+- **Learnings for future iterations:**
+  - Linux cloudflare_tunnel.rs previously had no log file — it only parsed stderr in-memory, unlike macOS which wrote to a file
+  - `XDG_CACHE_HOME` defaults to `~/.cache` per XDG Base Directory spec — same pattern as `XDG_CONFIG_HOME` used by PINManager
+  - `std::fs::OpenOptions::new().append(true).open()` is idiomatic for appending to existing files in Rust
+  - `prepare_tunnel_log()` creates/truncates the file fresh each tunnel start, then the stderr thread opens it in append mode
 ---
