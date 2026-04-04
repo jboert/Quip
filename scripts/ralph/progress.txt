@@ -24,6 +24,7 @@ Started: Fri Apr  3 20:44:47 EDT 2026
 - iOS UI state gates: use `client.isAuthenticated` (not `isConnected`) for enabling controls, landscape mode, and keyboard toggle
 - Android auth flow: connect → onAuthRequired callback → PIN entry UI (MainScreen) → sendAuth() → auth_result. Cached PIN auto-sent on reconnect. Controls gated on `isAuthenticated`.
 - Android UI state: `showPinEntry` controls PIN screen visibility; `isAuthenticated` gates LayoutScreen and landscape orientation
+- macOS tunnel log path: `~/Library/Caches/Quip/tunnel.log` (via FileManager cachesDirectory). Dir 0700, file 0600.
 ---
 
 ## 2026-04-03 - US-001
@@ -132,4 +133,16 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - Android Gradle build still broken (JDK mismatch) — changes verified by inspection per established pattern
   - MainScreen uses named parameters with defaults for backward-compatible additions — new auth params added between existing groups
   - PIN "pinning" in ConnectionManager is unrelated to auth PIN — naming collision but no code conflict
+---
+
+## 2026-04-03 - US-009
+- Moved tunnel log from /tmp/quip_tunnel.log to ~/Library/Caches/Quip/tunnel.log
+- Log directory created with 0700 permissions, log file with 0600 permissions
+- Used FileManager.cachesDirectory for proper macOS path resolution
+- Replaced `try? "".write(...)` with `createFile(atPath:contents:attributes:)` for permission control
+- Files changed: QuipMac/Services/CloudflareTunnel.swift
+- **Learnings for future iterations:**
+  - `FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)` resolves to ~/Library/Caches on macOS
+  - Use `createFile(atPath:contents:attributes:)` instead of `String.write(toFile:)` when you need to set file permissions
+  - `logPath` changed from `static let` to `static var` (computed) since it depends on FileManager at runtime
 ---
