@@ -33,6 +33,9 @@ Started: Fri Apr  3 20:44:47 EDT 2026
 - Certificate pinning: pin intermediate + root CA SPKI hashes (not leaf); trycloudflare.com uses Google Trust Services chain (WE1 → GTS Root R4)
 - iOS typecheck without provisioning: `swiftc -typecheck -sdk $(xcrun --sdk iphoneos --show-sdk-path) -target arm64-apple-ios17.0 <files>`
 - OkHttp CertificatePinner only applies to HTTPS/WSS — no special handling needed to skip ws:// connections
+- URL trust validation: trusted = wss://*.trycloudflare.com OR ws:// to private IPs (10/8, 172.16/12, 192.168/16, loopback, link-local, localhost)
+- Audit logging: AuditLogger (macOS) is a static enum with background DispatchQueue; log to ~/Library/Logs/Quip/audit.log, 10MB rotation
+- Linux XDG paths: config=XDG_CONFIG_HOME (~/.config), cache=XDG_CACHE_HOME (~/.cache), data=XDG_DATA_HOME (~/.local/share) — each under /quip/ subdir
 ---
 
 ## 2026-04-03 - US-001
@@ -304,4 +307,74 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - Pin format is `sha256/<base64-hash>` — same base64 SPKI hashes as iOS but with `sha256/` prefix
   - CertificatePinner only checks pins for HTTPS/WSS connections — cleartext ws:// is unaffected automatically
   - Android Gradle build still broken (JDK mismatch) — changes verified by inspection per established pattern
+---
+
+## 2026-04-03 - US-021
+- Added `.claude/settings.local.json` to .gitignore
+- File was not tracked by git, so no `git rm --cached` needed
+- macOS build passes typecheck
+- Files changed: .gitignore
+- **Learnings for future iterations:**
+  - Always check `git ls-files --error-unmatch` before running `git rm --cached` — avoids errors on untracked files
+  - .gitignore sections are organized by category with comments — follow the pattern when adding new entries
+---
+
+## 2026-04-03 - US-022
+- Added XML comment block in Info.plist directly above NSAppTransportSecurity dict explaining:
+  - NSAllowsArbitraryLoads required for local ws:// WebSocket to dynamically-discovered desktop IPs
+  - NSAllowsLocalNetworking is the narrower iOS 10+ exception
+  - Cloudflare tunnel uses wss:// with certificate pinning (no ATS exception needed)
+  - Cross-reference to docs/specs/security-audit.md L2 finding
+- Files changed: QuipiOS/Info.plist
+- **Learnings for future iterations:**
+  - XML comments (`<!-- ... -->`) work fine in Apple plist files — Xcode preserves them
+  - Info.plist documentation is best done inline with XML comments rather than a separate companion doc, since developers look at the plist first
+  - macOS build still typechecks Info.plist changes since Shared/ is compiled in both projects
+---
+
+## 2026-04-03 - US-023
+- Created AuditLogger.swift: static enum with background serial queue for non-blocking writes
+- Logs send_text and quick_action messages to ~/Library/Logs/Quip/audit.log
+- Log entries include: ISO8601 timestamp, client identifier, message type, text content (first 200 chars)
+- Log directory created with 0700 permissions, log file with 0600 permissions
+- Log rotation: when file exceeds 10MB, rotates to audit.log.1 (keeps one backup)
+- Audit logging calls added in handleIncomingMessage() for send_text and quick_action cases
+- Added AuditLogger.swift to Xcode project.pbxproj
+- Files changed: QuipMac/Services/AuditLogger.swift (new), QuipMac/QuipMacApp.swift, QuipMac/QuipMac.xcodeproj/project.pbxproj
+- **Learnings for future iterations:**
+  - `FileHandle(forWritingTo:)` + `seekToEndOfFile()` + `write()` is the idiomatic append pattern in Swift (no need for OutputStream)
+  - Background DispatchQueue with `.utility` QoS is ideal for audit logging — doesn't block message processing
+  - Simple rotation (current → .1, delete old .1) is sufficient for a single 10MB cap — no need for numbered rotation
+  - `chmod()` from C stdlib works directly in Swift for setting directory permissions after `createDirectory`
+  - US-024 (Linux equivalent) should use the same pattern: background thread, ~/.local/share/quip/audit.log, 10MB rotation
+---
+
+## 2026-04-03 - US-024
+- Created audit_logger.rs: background writer thread with mpsc channel for non-blocking logging
+- Logs send_text and quick_action messages to ~/.local/share/quip/audit.log (XDG_DATA_HOME aware)
+- Log entries include: ISO8601 UTC timestamp, client identifier, message type, text content (first 200 chars)
+- Log directory created with 0700 permissions, log file with 0600 permissions
+- Log rotation: when file exceeds 10MB, rotates to audit.log.1 (keeps one backup)
+- AuditLogger created in start_services(), cloned to GTK handler, passed to handle_incoming_message()
+- Files changed: QuipLinux/src/services/audit_logger.rs (new), QuipLinux/src/services/mod.rs, QuipLinux/src/ui/main_window.rs
+- **Learnings for future iterations:**
+  - `std::sync::mpsc::Sender` is `Clone` — ideal for sharing a logging channel across threads without Arc
+  - Avoided adding `chrono` dependency by computing UTC timestamp from SystemTime/UNIX_EPOCH manually
+  - XDG_DATA_HOME defaults to ~/.local/share per XDG Base Directory spec — different from XDG_CACHE_HOME (tunnel log) and XDG_CONFIG_HOME (PIN)
+  - `std::fs::OpenOptions::new().append(true).open()` is the idiomatic Rust append pattern, matching the tunnel log approach
+  - QuipLinux cannot be typechecked on macOS — verified type safety by inspection per established pattern
+---
+
+## 2026-04-03 - US-025
+- Added QR code URL validation on iOS with warning alert for unrecognized URLs
+- `isURLTrusted()` validates: wss://*.trycloudflare.com (tunnel) and ws:// to private IPs (RFC 1918, loopback, link-local, localhost)
+- Non-matching URLs trigger an "Unrecognized Server" alert with "Connect Anyway" override and "Cancel" options
+- Validation applies to all connection paths (QR scan, manual entry, clipboard paste) since they all go through `doConnect()`
+- Files changed: QuipiOS/QuipApp.swift
+- **Learnings for future iterations:**
+  - SwiftUI `.alert(isPresented:)` with `role: .destructive` on the override button gives the right UX weight for security warnings
+  - `URL.host` returns optional and lowercased comparison is needed for case-insensitive domain matching
+  - IPv4 private range check via splitting host string on "." and comparing UInt8 octets is simple and avoids importing Network framework
+  - The same `doConnect()` path handles QR scan, manual URL entry, and clipboard paste — one validation point covers all entry vectors
+  - US-026 (Android equivalent) should use the same patterns: private IP check + trycloudflare.com domain match + warning dialog with override
 ---

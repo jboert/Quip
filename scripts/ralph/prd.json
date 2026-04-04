@@ -323,7 +323,7 @@
         "Typecheck passes"
       ],
       "priority": 21,
-      "passes": false,
+      "passes": true,
       "notes": "LOW (L1)."
     },
     {
@@ -336,7 +336,7 @@
         "Typecheck passes"
       ],
       "priority": 22,
-      "passes": false,
+      "passes": true,
       "notes": "LOW (L2). File: QuipiOS/Info.plist."
     },
     {
@@ -352,7 +352,7 @@
         "Typecheck passes"
       ],
       "priority": 23,
-      "passes": false,
+      "passes": true,
       "notes": "LOW (L4). macOS audit logging."
     },
     {
@@ -368,7 +368,7 @@
         "Typecheck passes"
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": "LOW (L4). Linux equivalent of US-023."
     },
     {
@@ -382,7 +382,7 @@
         "Typecheck passes"
       ],
       "priority": 25,
-      "passes": false,
+      "passes": true,
       "notes": "LOW (L5). iOS QR validation."
     },
     {
