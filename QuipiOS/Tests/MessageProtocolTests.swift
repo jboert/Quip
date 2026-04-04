@@ -74,6 +74,65 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(dict["windowId"] as? String, "win-3")
     }
 
+    // MARK: - Authentication messages
+
+    func testAuthMessageEncoding() throws {
+        let msg = AuthMessage(pin: "123456")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "auth")
+        XCTAssertEqual(dict["pin"] as? String, "123456")
+    }
+
+    func testAuthMessageRoundTrip() throws {
+        let original = AuthMessage(pin: "987654")
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(AuthMessage.self, from: data))
+        XCTAssertEqual(original.pin, restored.pin)
+        XCTAssertEqual(original.type, restored.type)
+    }
+
+    func testAuthResultSuccessEncoding() throws {
+        let msg = AuthResultMessage(success: true)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "auth_result")
+        XCTAssertEqual(dict["success"] as? Bool, true)
+    }
+
+    func testAuthResultFailureEncoding() throws {
+        let msg = AuthResultMessage(success: false, error: "Invalid PIN")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "auth_result")
+        XCTAssertEqual(dict["success"] as? Bool, false)
+        XCTAssertEqual(dict["error"] as? String, "Invalid PIN")
+    }
+
+    func testAuthResultDecoding() throws {
+        let json = """
+        {"type":"auth_result","success":true,"error":null}
+        """.data(using: .utf8)!
+
+        let msg = try XCTUnwrap(MessageCoder.decode(AuthResultMessage.self, from: json))
+        XCTAssertEqual(msg.type, "auth_result")
+        XCTAssertTrue(msg.success)
+        XCTAssertNil(msg.error)
+    }
+
+    func testAuthResultFailureDecoding() throws {
+        let json = """
+        {"type":"auth_result","success":false,"error":"Invalid PIN"}
+        """.data(using: .utf8)!
+
+        let msg = try XCTUnwrap(MessageCoder.decode(AuthResultMessage.self, from: json))
+        XCTAssertFalse(msg.success)
+        XCTAssertEqual(msg.error, "Invalid PIN")
+    }
+
     // MARK: - Incoming messages (Mac → iPhone)
 
     func testLayoutUpdateDecoding() throws {
@@ -160,6 +219,8 @@ final class MessageProtocolTests: XCTestCase {
             (#"{"type":"stt_started","windowId":"w1"}"#, "stt_started"),
             (#"{"type":"stt_ended","windowId":"w1"}"#, "stt_ended"),
             (#"{"type":"request_content","windowId":"w1"}"#, "request_content"),
+            (#"{"type":"auth","pin":"123456"}"#, "auth"),
+            (#"{"type":"auth_result","success":true,"error":null}"#, "auth_result"),
         ]
 
         for (json, expectedType) in cases {

@@ -66,6 +66,45 @@ Response to `request_content`. Contains the last ~200 lines of terminal output a
 
 `screenshot` is `null` when capture is unavailable.
 
+## Authentication
+
+After connecting, clients must authenticate before the server will process any other messages. The server holds connections in a "pending auth" state until a valid PIN is received.
+
+### auth
+
+Client sends PIN to authenticate with the server.
+
+```json
+{
+  "type": "auth",
+  "pin": "123456"
+}
+```
+
+### auth_result
+
+Server responds with the authentication result.
+
+```json
+{
+  "type": "auth_result",
+  "success": true,
+  "error": null
+}
+```
+
+On failure:
+
+```json
+{
+  "type": "auth_result",
+  "success": false,
+  "error": "Invalid PIN"
+}
+```
+
+`error` is `null` when `success` is `true`.
+
 ## Mobile → Desktop
 
 ### select_window
