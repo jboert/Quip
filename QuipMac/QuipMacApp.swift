@@ -9,6 +9,7 @@ struct QuipMacApp: App {
     @State private var terminalColorManager = TerminalColorManager()
     @State private var keystrokeInjector = KeystrokeInjector()
     @State private var tunnel = CloudflareTunnel()
+    @State private var pinManager = PINManager()
 
 
     var body: some Scene {
@@ -41,6 +42,7 @@ struct QuipMacApp: App {
                 .environment(windowManager)
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
+                .environment(pinManager)
         }
     }
 
