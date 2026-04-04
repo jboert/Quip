@@ -33,23 +33,34 @@ final class KeystrokeInjector {
         let script: String
         switch terminalApp {
         case .terminal:
-            if pressReturn {
-                script = """
-                tell application "Terminal"
-                    do script "\(escapedText)" in front window
-                end tell
-                """
-            } else {
-                script = """
-                tell application "Terminal" to activate
-                delay 0.1
-                tell application "System Events"
-                    tell process "Terminal"
-                        keystroke "\(escapedText)"
-                    end tell
-                end tell
-                """
+            // Always use System Events keystrokes for Terminal.app to avoid
+            // shell command injection via 'do script'. Each line is typed as
+            // literal keystrokes, then Return is pressed between lines.
+            let lines = text.components(separatedBy: "\n")
+            var keystrokeCmds: [String] = []
+            for (i, line) in lines.enumerated() {
+                if !line.isEmpty {
+                    let escapedLine = escapeForAppleScript(line)
+                    keystrokeCmds.append("keystroke \"\(escapedLine)\"")
+                }
+                // Press Return between lines, and at the end if pressReturn is true
+                if i < lines.count - 1 {
+                    keystrokeCmds.append("key code 36") // Return
+                }
             }
+            if pressReturn {
+                keystrokeCmds.append("key code 36") // Return
+            }
+            let cmds = keystrokeCmds.joined(separator: "\n                        ")
+            script = """
+            tell application "Terminal" to activate
+            delay 0.1
+            tell application "System Events"
+                tell process "Terminal"
+                    \(cmds)
+                end tell
+            end tell
+            """
 
         case .iterm2:
             // Try matching by window ID first, then by name, then fallback to front window
