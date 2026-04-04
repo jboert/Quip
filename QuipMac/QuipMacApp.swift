@@ -31,9 +31,9 @@ struct QuipMacApp: App {
                         tunnel.webSocketServer = webSocketServer
                         tunnel.start()
                     }
-                    // Update auth requirement
+                    // Local connections only require auth if requirePINForLocal is set
                     let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
-                    webSocketServer.requireAuth = !isLocalOnly || requirePIN
+                    webSocketServer.requireAuth = requirePIN
                 }
         }
         .windowStyle(.titleBar)
@@ -65,9 +65,10 @@ struct QuipMacApp: App {
         guard !servicesStarted else { return }
         servicesStarted = true
         webSocketServer.pinManager = pinManager
-        let localOnly = UserDefaults.standard.bool(forKey: "localOnlyMode")
+        // WebSocket server only handles direct (local) connections.
+        // Tunnel clients get auth_required from CloudflareTunnel independently.
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
-        webSocketServer.requireAuth = !localOnly || requirePIN
+        webSocketServer.requireAuth = requirePIN
         webSocketServer.start()
         if !localOnlyMode {
             tunnel.webSocketServer = webSocketServer
