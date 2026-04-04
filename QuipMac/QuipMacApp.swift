@@ -24,6 +24,17 @@ struct QuipMacApp: App {
                 .environment(keystrokeInjector)
                 .environment(tunnel)
                 .onAppear { startServicesOnce() }
+                .onChange(of: localOnlyMode) { _, isLocalOnly in
+                    if isLocalOnly {
+                        tunnel.stop()
+                    } else {
+                        tunnel.webSocketServer = webSocketServer
+                        tunnel.start()
+                    }
+                    // Update auth requirement
+                    let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
+                    webSocketServer.requireAuth = !isLocalOnly || requirePIN
+                }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 960, height: 640)
@@ -43,6 +54,7 @@ struct QuipMacApp: App {
                 .environment(windowManager)
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
+                .environment(tunnel)
                 .environment(pinManager)
         }
     }

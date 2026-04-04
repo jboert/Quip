@@ -341,14 +341,11 @@ private struct ConnectionTab: View {
             Section("Network Mode") {
                 Toggle("Local only (no Cloudflare tunnel)", isOn: $localOnlyMode)
 
-                if localOnlyMode {
-                    Toggle("Require PIN for local connections", isOn: $requirePINForLocal)
-                        .padding(.leading, 16)
-                }
+                Toggle("Require PIN for local connections", isOn: $requirePINForLocal)
 
                 Text(localOnlyMode
                     ? "Clients must be on the same network. QR code shows local address."
-                    : "Cloudflare tunnel enables connections from anywhere.")
+                    : "Cloudflare tunnel enables connections from anywhere. Local connections always require PIN when tunnel is active.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
