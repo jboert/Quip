@@ -29,6 +29,10 @@ Started: Fri Apr  3 20:44:47 EDT 2026
 - SecretRedactor (macOS) is a static enum with regex patterns; Linux equivalent is `secret_redactor::redact()` using `LazyLock<Vec<RedactPattern>>`
 - Rate limiting: per-client counter + window start timestamp in ClientConnection; `allowMessage()` resets counter when ≥1s elapsed, drops when count > 10
 - Linux tunnel log path: `XDG_CACHE_HOME/quip/tunnel.log` (defaults to `~/.cache/quip/tunnel.log`). Dir 0700, file 0600. Uses `prepare_tunnel_log()` helper.
+- Message size limit: 64KB (65,536 bytes) — check before any processing, drop silently, keep connection alive
+- Certificate pinning: pin intermediate + root CA SPKI hashes (not leaf); trycloudflare.com uses Google Trust Services chain (WE1 → GTS Root R4)
+- iOS typecheck without provisioning: `swiftc -typecheck -sdk $(xcrun --sdk iphoneos --show-sdk-path) -target arm64-apple-ios17.0 <files>`
+- OkHttp CertificatePinner only applies to HTTPS/WSS — no special handling needed to skip ws:// connections
 ---
 
 ## 2026-04-03 - US-001
@@ -245,4 +249,59 @@ Started: Fri Apr  3 20:44:47 EDT 2026
   - Rate limit check requires `get_mut` on the HashMap entry since `allow_message()` mutates state
   - The lock scope for rate limiting is separate from the auth check lock scope — drop the lock between checks to avoid holding it longer than needed
   - Pattern matches macOS exactly: per-client counter + timestamp, 10 msg/s cap, silent drop
+---
+
+## 2026-04-03 - US-017
+- Added 64KB message size limit to macOS WebSocket server
+- Size check applied in `receiveMessage` callback immediately after receiving data, before dispatching to main queue
+- Oversized messages silently dropped with a log line; connection stays open, receive loop continues
+- Files changed: QuipMac/Services/WebSocketServer.swift
+- **Learnings for future iterations:**
+  - Size check goes before the `DispatchQueue.main.async` block — no need to consume main thread for oversized messages
+  - The `receiveMessage` closure captures `content` as `Data?` from NWConnection — `data.count` gives byte length directly
+  - Must call `self.receiveMessage(on: connection)` after dropping to continue the receive loop (early return skips the one at the bottom)
+  - US-018 (Linux equivalent) should apply the same pattern in the Rust WebSocket message receive loop
+---
+
+## 2026-04-03 - US-018
+- Added 64KB message size limit to Linux WebSocket server
+- Size check applied immediately after extracting text, before rate limit check and before logging the message content
+- Oversized messages silently dropped with info log; connection stays open, receive loop continues via `continue`
+- Files changed: QuipLinux/src/services/ws_server.rs
+- **Learnings for future iterations:**
+  - `const` inside a function body is fine in Rust — no need for a module-level constant for single-use values
+  - Size check should go before rate limiting — don't count oversized messages against the rate limit
+  - The `text.len()` in Rust gives byte length (UTF-8), which is the right metric for message size limiting
+  - Pattern matches macOS exactly: 64KB cap, silent drop, connection stays alive
+---
+
+## 2026-04-03 - US-019
+- Added certificate pinning for Cloudflare tunnel (wss://*.trycloudflare.com) on iOS
+- Created `CloudflareCertificatePinningDelegate` (URLSessionDelegate) with SPKI SHA-256 hash validation
+- Pins intermediate (WE1 / Google Trust Services) and root (GTS Root R4) CA public keys
+- Local ws:// connections bypass pinning entirely — only wss:// uses the delegate
+- Pin update mechanism documented in code comments and docs/protocol.md
+- Files changed: QuipiOS/Services/WebSocketClient.swift, docs/protocol.md
+- **Learnings for future iterations:**
+  - trycloudflare.com currently uses Google Trust Services (WE1 intermediate, GTS Root R4 root), NOT Cloudflare's own CAs
+  - `SecTrustCopyCertificateChain()` returns CFArray — must cast to `[SecCertificate]` before subscripting
+  - `SecKeyCopyExternalRepresentation` extracts the raw public key data; hash with CC_SHA256 for SPKI pinning
+  - URLSession delegate must be stored as a strong reference (property on the client) — otherwise it gets deallocated
+  - Pin intermediate + root CAs, never the leaf (leaf rotates frequently)
+  - iOS build requires provisioning profile — typecheck via `swiftc -typecheck` with iOS SDK directly
+---
+
+## 2026-04-03 - US-020
+- Added certificate pinning for Cloudflare tunnel (wss://*.trycloudflare.com) on Android
+- Used OkHttp's built-in `CertificatePinner` with same SPKI SHA-256 hashes as iOS (WE1 intermediate + GTS Root R4)
+- Added `certificatePinner` to OkHttpClient builder in `establishConnection()`
+- Local ws:// connections unaffected — CertificatePinner only applies to HTTPS/WSS
+- Pin update docs already in docs/protocol.md (added during US-019)
+- Files changed: QuipAndroid/.../services/WebSocketClient.kt
+- **Learnings for future iterations:**
+  - OkHttp `CertificatePinner` is much simpler than iOS — just add pins to the builder, no delegate needed
+  - `CertificatePinner.add()` accepts vararg pins — can pass multiple hashes in one call
+  - Pin format is `sha256/<base64-hash>` — same base64 SPKI hashes as iOS but with `sha256/` prefix
+  - CertificatePinner only checks pins for HTTPS/WSS connections — cleartext ws:// is unaffected automatically
+  - Android Gradle build still broken (JDK mismatch) — changes verified by inspection per established pattern
 ---
