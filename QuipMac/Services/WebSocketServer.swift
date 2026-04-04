@@ -230,6 +230,13 @@ final class WebSocketServer {
             }
 
             if let data = content, !data.isEmpty {
+                // Drop oversized messages (64KB limit)
+                if data.count > 65_536 {
+                    print("[WebSocketServer] Dropping oversized message (\(data.count) bytes)")
+                    self.receiveMessage(on: connection)
+                    return
+                }
+
                 let receivedData = data
                 DispatchQueue.main.async {
                     // Rate limit: drop excess messages beyond 10/sec per client
