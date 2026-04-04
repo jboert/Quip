@@ -1,0 +1,416 @@
+{
+  "project": "Quip",
+  "branchName": "ralph/security-audit-remediation",
+  "description": "Security Audit Remediation - Fix all 15 findings from the v1.2.0 security audit across macOS, iOS, Android, and Linux",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Replace do script with keystroke in macOS Terminal injection",
+      "description": "As a user, I want text sent to Terminal.app typed as keystrokes rather than executed as shell commands, so that a malicious WebSocket message cannot achieve arbitrary command execution.",
+      "acceptanceCriteria": [
+        "KeystrokeInjector.swift no longer uses 'do script' for Terminal.app",
+        "Uses System Events 'keystroke' + 'keystroke return' instead",
+        "Multi-line text handled correctly (each line typed then return pressed)",
+        "Special characters (quotes, backslashes, backticks, $(), pipes) typed literally, not interpreted",
+        "Existing behavior for iTerm2 and other terminals unchanged",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "CRITICAL (C1). File: QuipMac/Services/KeystrokeInjector.swift:36-41. Current escaping only handles \\ and \" which is insufficient for do script."
+    },
+    {
+      "id": "US-002",
+      "title": "Bind Linux WebSocket server to localhost only",
+      "description": "As a user, I want the Linux server to only accept local connections so remote hosts on my network cannot directly connect without going through the Cloudflare tunnel.",
+      "acceptanceCriteria": [
+        "ws_server.rs line 32 changed from 0.0.0.0 to 127.0.0.1",
+        "Cloudflare tunnel still works (it connects locally)",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "CRITICAL (C2). One-line fix in QuipLinux/src/services/ws_server.rs:32."
+    },
+    {
+      "id": "US-003",
+      "title": "Define auth message in shared protocol",
+      "description": "As a developer, I need the protocol to define an auth message type so servers and clients can implement PIN authentication.",
+      "acceptanceCriteria": [
+        "New 'auth' message type added to MessageProtocol: {type: 'auth', pin: '123456'}",
+        "New 'auth_result' message type: {type: 'auth_result', success: true/false, error: 'string'}",
+        "Protocol documentation in docs/protocol.md updated",
+        "Shared/MessageProtocol.swift updated with new message types",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "CRITICAL (C3). Foundation for US-004 through US-008. Must be done before server or client auth work."
+    },
+    {
+      "id": "US-004",
+      "title": "Add PIN generation and storage to macOS server",
+      "description": "As a user, I want the macOS desktop app to generate and store a 6+ digit PIN so I can authenticate mobile clients.",
+      "acceptanceCriteria": [
+        "Auto-generate random 6-digit numeric PIN on first launch",
+        "Store PIN in UserDefaults or Keychain",
+        "PIN displayed in the app UI for user to read to their phone",
+        "User can regenerate PIN via a button in the UI",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "CRITICAL (C3). macOS server side - PIN generation and UI display only. Auth enforcement is US-005."
+    },
+    {
+      "id": "US-005",
+      "title": "Enforce PIN authentication on macOS WebSocket server",
+      "description": "As a user, I want the macOS WebSocket server to require PIN authentication before accepting any commands.",
+      "acceptanceCriteria": [
+        "New WebSocket connections start in 'pending auth' state",
+        "No send_text, quick_action, or request_content messages processed until auth succeeds",
+        "Server checks incoming 'auth' message PIN against stored PIN",
+        "Correct PIN moves connection to 'authenticated' state",
+        "Incorrect PIN returns auth_result with success=false and error message",
+        "Unauthenticated messages other than 'auth' are silently dropped",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "CRITICAL (C3). Depends on US-003 (protocol) and US-004 (PIN storage)."
+    },
+    {
+      "id": "US-006",
+      "title": "Add PIN generation and auth enforcement to Linux server",
+      "description": "As a user, I want the same PIN authentication on the Linux desktop app as macOS.",
+      "acceptanceCriteria": [
+        "Auto-generate random 6-digit numeric PIN on first launch",
+        "Store PIN in ~/.config/quip/pin or equivalent",
+        "PIN displayed in the Linux app UI",
+        "User can regenerate PIN via UI button",
+        "WebSocket connections held in pending auth state until correct PIN received",
+        "No commands processed until authenticated",
+        "Same auth/auth_result protocol messages as macOS",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "CRITICAL (C3). Linux equivalent of US-004 + US-005 combined (Rust is one file touch)."
+    },
+    {
+      "id": "US-007",
+      "title": "Add PIN entry to iOS client",
+      "description": "As a user, I want to enter the desktop PIN on my iPhone so I can authenticate my connection.",
+      "acceptanceCriteria": [
+        "PIN entry screen shown after connecting to a server, before controls are enabled",
+        "Numeric keypad input for 6-digit PIN",
+        "Sends 'auth' message with entered PIN",
+        "On auth_result success: transition to normal connected state with controls enabled",
+        "On auth_result failure: show error, allow retry",
+        "PIN cached in memory for session (no re-prompt on brief reconnects)",
+        "Connection state UI reflects 'authenticating' vs 'connected'",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "CRITICAL (C3). Depends on US-003 (protocol)."
+    },
+    {
+      "id": "US-008",
+      "title": "Add PIN entry to Android client",
+      "description": "As a user, I want to enter the desktop PIN on my Android phone so I can authenticate my connection.",
+      "acceptanceCriteria": [
+        "PIN entry screen shown after connecting to a server, before controls are enabled",
+        "Numeric keypad input for 6-digit PIN",
+        "Sends 'auth' message with entered PIN",
+        "On auth_result success: transition to normal connected state",
+        "On auth_result failure: show error, allow retry",
+        "PIN cached in memory for session",
+        "Connection state UI reflects 'authenticating' vs 'connected'",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "CRITICAL (C3). Depends on US-003 (protocol)."
+    },
+    {
+      "id": "US-009",
+      "title": "Move Cloudflare tunnel log to private directory on macOS",
+      "description": "As a user, I want the tunnel URL log stored in a user-private location so other system users cannot read my tunnel URL.",
+      "acceptanceCriteria": [
+        "Tunnel log moved from /tmp/quip_tunnel.log to ~/Library/Caches/Quip/tunnel.log",
+        "Directory created with 0700 permissions if it does not exist",
+        "Log file created with 0600 permissions",
+        "Old /tmp path no longer used",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "HIGH (H1). File: QuipMac/Services/CloudflareTunnel.swift."
+    },
+    {
+      "id": "US-010",
+      "title": "Move Cloudflare tunnel log to private directory on Linux",
+      "description": "As a user, I want the Linux tunnel URL log stored in a user-private location.",
+      "acceptanceCriteria": [
+        "Tunnel log moved to ~/.cache/quip/tunnel.log or XDG_CACHE_HOME equivalent",
+        "Directory created with 0700 permissions if it does not exist",
+        "Log file created with 0600 permissions",
+        "Old path no longer used",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "HIGH (H1). File: QuipLinux/src/services/cloudflare_tunnel.rs."
+    },
+    {
+      "id": "US-011",
+      "title": "Add SHA256 verification for cloudflared auto-download on Linux",
+      "description": "As a user, I want the auto-downloaded cloudflared binary verified against a known checksum so a compromised download cannot execute malicious code.",
+      "acceptanceCriteria": [
+        "After downloading cloudflared, compute SHA256 of the binary",
+        "Download the .sha256 checksum file from the same GitHub release",
+        "Compare computed hash against published hash",
+        "If verification fails: delete binary, show error to user, do not execute",
+        "If verification succeeds: proceed with chmod and execution",
+        "Verification failure logged clearly",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "HIGH (H3). File: QuipLinux/src/services/cloudflare_tunnel.rs:190-206."
+    },
+    {
+      "id": "US-012",
+      "title": "Restrict Android cleartext traffic to local networks",
+      "description": "As a user, I want cleartext HTTP traffic restricted to local/private IP ranges so future features do not accidentally send data in the clear.",
+      "acceptanceCriteria": [
+        "network_security_config.xml: base-config cleartextTrafficPermitted set to false",
+        "domain-config allows cleartext for 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, localhost",
+        "Local WebSocket connections still work",
+        "Cloudflare tunnel wss:// connections still work",
+        "App builds without errors",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "HIGH (H2). File: QuipAndroid/app/src/main/res/xml/network_security_config.xml."
+    },
+    {
+      "id": "US-013",
+      "title": "Add secret pattern redaction to macOS terminal content responses",
+      "description": "As a user, I want common secret patterns redacted from terminal output sent to my phone so API keys and tokens are not transmitted over the network.",
+      "acceptanceCriteria": [
+        "Before sending request_content response, scan for common secret patterns",
+        "Patterns redacted: sk-*, ghp_*, gho_*, AWS*KEY*, AKIA*, Bearer tokens, token: values",
+        "Redacted values replaced with [REDACTED]",
+        "Redaction applied server-side before transmission",
+        "Normal non-secret terminal output unaffected",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "MEDIUM (M1). Apply in the request_content handler in the macOS WebSocket server."
+    },
+    {
+      "id": "US-014",
+      "title": "Add secret pattern redaction to Linux terminal content responses",
+      "description": "As a user, I want the same secret redaction on the Linux server as macOS.",
+      "acceptanceCriteria": [
+        "Same secret patterns redacted as macOS (sk-*, ghp_*, gho_*, AWS*KEY*, AKIA*, Bearer, token:)",
+        "Redacted values replaced with [REDACTED]",
+        "Redaction applied server-side before transmission",
+        "Normal terminal output unaffected",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "MEDIUM (M1). Linux equivalent of US-013."
+    },
+    {
+      "id": "US-015",
+      "title": "Add per-client rate limiting to macOS WebSocket server",
+      "description": "As a user, I want incoming WebSocket messages throttled so a malfunctioning client cannot flood my terminal.",
+      "acceptanceCriteria": [
+        "Max 10 messages per second per connected client",
+        "Excess messages silently dropped (not queued)",
+        "Rate limit resets each second",
+        "Normal usage (voice transcription, quick actions) unaffected",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "MEDIUM (M2). Implement independently in macOS server."
+    },
+    {
+      "id": "US-016",
+      "title": "Add per-client rate limiting to Linux WebSocket server",
+      "description": "As a user, I want the same rate limiting on the Linux server as macOS.",
+      "acceptanceCriteria": [
+        "Max 10 messages per second per connected client",
+        "Excess messages silently dropped",
+        "Rate limit resets each second",
+        "Normal usage unaffected",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "MEDIUM (M2). Linux equivalent of US-015."
+    },
+    {
+      "id": "US-017",
+      "title": "Add message size limits to macOS WebSocket server",
+      "description": "As a user, I want incoming WebSocket messages capped at a reasonable size so oversized payloads cannot overwhelm the server.",
+      "acceptanceCriteria": [
+        "Reject incoming messages larger than 64KB",
+        "Oversized messages dropped, connection remains open",
+        "Normal messages (transcribed speech, quick actions) unaffected",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "MEDIUM (M3). Implement in macOS WebSocket server."
+    },
+    {
+      "id": "US-018",
+      "title": "Add message size limits to Linux WebSocket server",
+      "description": "As a user, I want the same message size limits on the Linux server as macOS.",
+      "acceptanceCriteria": [
+        "Reject incoming messages larger than 64KB",
+        "Oversized messages dropped, connection remains open",
+        "Normal messages unaffected",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "MEDIUM (M3). Linux equivalent of US-017."
+    },
+    {
+      "id": "US-019",
+      "title": "Add certificate pinning for Cloudflare tunnel on iOS",
+      "description": "As a user, I want my iPhone to pin Cloudflare's certificate chain when connecting via tunnel so a compromised CA cannot intercept my connection.",
+      "acceptanceCriteria": [
+        "Pin Cloudflare root/intermediate certificate for wss://*.trycloudflare.com connections",
+        "Direct LAN ws:// connections not affected by pinning",
+        "Pin update mechanism documented (what to do when Cloudflare rotates certs)",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "MEDIUM (M4). Use URLSessionDelegate for pinning."
+    },
+    {
+      "id": "US-020",
+      "title": "Add certificate pinning for Cloudflare tunnel on Android",
+      "description": "As a user, I want my Android phone to pin Cloudflare's certificate chain when connecting via tunnel.",
+      "acceptanceCriteria": [
+        "Pin Cloudflare root/intermediate certificate for wss://*.trycloudflare.com connections",
+        "Direct LAN ws:// connections not affected",
+        "Pin update mechanism documented",
+        "Typecheck passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "MEDIUM (M4). Use OkHttp CertificatePinner or Android network security config."
+    },
+    {
+      "id": "US-021",
+      "title": "Add .claude/settings.local.json to .gitignore",
+      "description": "As a developer, I want local settings excluded from version control so developer-specific configuration is not committed.",
+      "acceptanceCriteria": [
+        ".claude/settings.local.json added to .gitignore",
+        "File removed from git tracking if currently tracked (git rm --cached)",
+        "Typecheck passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "LOW (L1)."
+    },
+    {
+      "id": "US-022",
+      "title": "Document iOS ATS bypass justification",
+      "description": "As a developer, I want the ATS bypass in Info.plist documented so future contributors understand why it exists.",
+      "acceptanceCriteria": [
+        "Comment in Info.plist or companion doc explains NSAllowsArbitraryLoads is required for local ws:// WebSocket",
+        "NSAllowsLocalNetworking usage documented",
+        "Typecheck passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": "LOW (L2). File: QuipiOS/Info.plist."
+    },
+    {
+      "id": "US-023",
+      "title": "Add audit logging for remote commands on macOS",
+      "description": "As a user, I want keystroke injections from remote clients logged so I have an audit trail of commands sent to my terminal.",
+      "acceptanceCriteria": [
+        "Log send_text and quick_action messages to ~/Library/Logs/Quip/audit.log",
+        "Log entries include: timestamp, client identifier, message type, text content (first 200 chars)",
+        "Log directory created if it does not exist",
+        "Log file capped at 10MB with rotation",
+        "Logging does not block or slow message processing",
+        "Typecheck passes"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "LOW (L4). macOS audit logging."
+    },
+    {
+      "id": "US-024",
+      "title": "Add audit logging for remote commands on Linux",
+      "description": "As a user, I want the same audit logging on the Linux server as macOS.",
+      "acceptanceCriteria": [
+        "Log send_text and quick_action messages to ~/.local/share/quip/audit.log",
+        "Log entries include: timestamp, client identifier, message type, text content (first 200 chars)",
+        "Log directory created if it does not exist",
+        "Log file capped at 10MB with rotation",
+        "Logging does not block message processing",
+        "Typecheck passes"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": "LOW (L4). Linux equivalent of US-023."
+    },
+    {
+      "id": "US-025",
+      "title": "Add QR code URL validation on iOS",
+      "description": "As a user, I want the app to validate QR code URLs before connecting so a malicious QR code cannot redirect me to an attacker's server.",
+      "acceptanceCriteria": [
+        "QR code URL must match expected patterns: ws:// + local IP, or wss://*.trycloudflare.com",
+        "Non-matching URLs show a warning to the user before connecting",
+        "User can still choose to connect (override) if they know what they are doing",
+        "Typecheck passes"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "LOW (L5). iOS QR validation."
+    },
+    {
+      "id": "US-026",
+      "title": "Add QR code URL validation on Android",
+      "description": "As a user, I want the same QR URL validation on Android as iOS.",
+      "acceptanceCriteria": [
+        "QR code URL must match expected patterns: ws:// + local IP, or wss://*.trycloudflare.com",
+        "Non-matching URLs show a warning before connecting",
+        "User can override and connect anyway",
+        "Typecheck passes"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": "LOW (L5). Android equivalent of US-025."
+    },
+    {
+      "id": "US-027",
+      "title": "Document cloudflared binary update process",
+      "description": "As a developer, I want a documented process for updating the bundled cloudflared binary so it does not go stale with known vulnerabilities.",
+      "acceptanceCriteria": [
+        "README or CONTRIBUTING doc includes steps to update QuipMac/Resources/cloudflared",
+        "Includes where to download, how to verify checksum, and how to test",
+        "Typecheck passes"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": "LOW (L3). Documentation only."
+    }
+  ]
+}
