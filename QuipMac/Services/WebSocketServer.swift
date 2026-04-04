@@ -13,9 +13,16 @@ final class WebSocketServer {
     var isRunning: Bool = false
     var connectedClientCount: Int = 0
     var onMessageReceived: ((Data) -> Void)?
+    var pinManager: PINManager?
 
     private var listener: NWListener?
-    private var connections: [NWConnection] = []
+    private var clients: [ClientConnection] = []
+
+    /// Tracks a WebSocket connection and its authentication state.
+    private struct ClientConnection {
+        let connection: NWConnection
+        var isAuthenticated: Bool = false
+    }
 
     func start() {
         guard !isRunning else { return }
@@ -72,17 +79,18 @@ final class WebSocketServer {
     func stop() {
         listener?.cancel()
         listener = nil
-        for connection in connections {
-            connection.cancel()
+        for client in clients {
+            client.connection.cancel()
         }
-        connections.removeAll()
+        clients.removeAll()
         connectedClientCount = 0
         isRunning = false
         print("[WebSocketServer] Stopped")
     }
 
     func broadcast<T: Encodable & Sendable>(_ message: T) {
-        guard !connections.isEmpty else { return }
+        let authenticatedClients = clients.filter(\.isAuthenticated)
+        guard !authenticatedClients.isEmpty else { return }
 
         let data: Data
         do {
@@ -95,8 +103,8 @@ final class WebSocketServer {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
 
-        for connection in connections {
-            connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ error in
+        for client in authenticatedClients {
+            client.connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ error in
                 if let error = error {
                     print("[WebSocketServer] Send error: \(error)")
                 }
@@ -104,17 +112,37 @@ final class WebSocketServer {
         }
     }
 
+    /// Send a message to a specific connection (used for auth results).
+    private func send<T: Encodable>(_ message: T, to connection: NWConnection) {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(message)
+        } catch {
+            print("[WebSocketServer] Encode error: \(error)")
+            return
+        }
+
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
+
+        connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ error in
+            if let error = error {
+                print("[WebSocketServer] Send error: \(error)")
+            }
+        }))
+    }
+
     // MARK: - Private
 
     private func addConnection(_ connection: NWConnection) {
-        connections.append(connection)
-        connectedClientCount = connections.count
+        clients.append(ClientConnection(connection: connection))
+        connectedClientCount = clients.count
 
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
             case .ready:
-                print("[WebSocketServer] Connection ready")
+                print("[WebSocketServer] Connection ready (pending auth)")
                 DispatchQueue.main.async {
                     self.receiveMessage(on: connection)
                 }
@@ -136,9 +164,40 @@ final class WebSocketServer {
     }
 
     private func removeConnection(_ connection: NWConnection) {
-        connections.removeAll(where: { $0 === connection })
-        connectedClientCount = connections.count
-        print("[WebSocketServer] Connection removed. \(connections.count) remaining.")
+        clients.removeAll(where: { $0.connection === connection })
+        connectedClientCount = clients.count
+        print("[WebSocketServer] Connection removed. \(clients.count) remaining.")
+    }
+
+    private func isAuthenticated(_ connection: NWConnection) -> Bool {
+        clients.first(where: { $0.connection === connection })?.isAuthenticated ?? false
+    }
+
+    private func setAuthenticated(_ connection: NWConnection) {
+        if let index = clients.firstIndex(where: { $0.connection === connection }) {
+            clients[index].isAuthenticated = true
+        }
+    }
+
+    private func handleAuthMessage(_ data: Data, from connection: NWConnection) {
+        guard let authMsg = MessageCoder.decode(AuthMessage.self, from: data) else {
+            send(AuthResultMessage(success: false, error: "Malformed auth message"), to: connection)
+            return
+        }
+
+        guard let expectedPIN = pinManager?.pin, !expectedPIN.isEmpty else {
+            send(AuthResultMessage(success: false, error: "Server PIN not configured"), to: connection)
+            return
+        }
+
+        if authMsg.pin == expectedPIN {
+            setAuthenticated(connection)
+            send(AuthResultMessage(success: true, error: nil), to: connection)
+            print("[WebSocketServer] Client authenticated successfully")
+        } else {
+            send(AuthResultMessage(success: false, error: "Incorrect PIN"), to: connection)
+            print("[WebSocketServer] Authentication failed: incorrect PIN")
+        }
     }
 
     private func receiveMessage(on connection: NWConnection) {
@@ -156,6 +215,20 @@ final class WebSocketServer {
             if let data = content, !data.isEmpty {
                 let receivedData = data
                 DispatchQueue.main.async {
+                    let messageType = MessageCoder.messageType(from: receivedData)
+
+                    // Auth messages are always handled, regardless of auth state
+                    if messageType == "auth" {
+                        self.handleAuthMessage(receivedData, from: connection)
+                        return
+                    }
+
+                    // All other messages require authentication
+                    guard self.isAuthenticated(connection) else {
+                        print("[WebSocketServer] Dropping message from unauthenticated client: \(messageType ?? "unknown")")
+                        return
+                    }
+
                     self.onMessageReceived?(receivedData)
                 }
             }
