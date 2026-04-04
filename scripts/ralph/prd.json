@@ -268,7 +268,7 @@
         "Typecheck passes"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM (M3). Implement in macOS WebSocket server."
     },
     {
@@ -282,7 +282,7 @@
         "Typecheck passes"
       ],
       "priority": 18,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM (M3). Linux equivalent of US-017."
     },
     {
@@ -296,7 +296,7 @@
         "Typecheck passes"
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM (M4). Use URLSessionDelegate for pinning."
     },
     {
@@ -310,7 +310,7 @@
         "Typecheck passes"
       ],
       "priority": 20,
-      "passes": false,
+      "passes": true,
       "notes": "MEDIUM (M4). Use OkHttp CertificatePinner or Android network security config."
     },
     {
