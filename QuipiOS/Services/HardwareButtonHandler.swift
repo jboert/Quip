@@ -25,6 +25,16 @@ final class HardwareButtonHandler {
     private var suppressUntil: Date = .distantPast
     private var savedVolume: Float?
 
+    /// Suppress volume KVO events for `duration` seconds. Call when audio session
+    /// is about to be reconfigured (e.g. TTS playback starting) so the phantom
+    /// volume changes that result don't get mistaken for button presses.
+    func suppressVolumeEvents(for duration: TimeInterval) {
+        let newUntil = Date().addingTimeInterval(duration)
+        if newUntil > suppressUntil {
+            suppressUntil = newUntil
+        }
+    }
+
     func startMonitoring(windowCount: Int) {
         guard windowCount > 0 else { return }
         self.windowCount = windowCount

@@ -15,7 +15,6 @@
 		4FE31B60A886712C37A7E7C4 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0138BDEB9F24496B18E6EAE /* ConnectionStatusBar.swift */; };
 		5280CB5DBDF05BF2905026BA /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945E5EFD19ABDFD55DD6B209 /* BonjourBrowser.swift */; };
 		716C98AD23EECA0DDCAB89A4 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57175DB3942BF9D94577E602 /* SpeechService.swift */; };
-		C1A2B3D4E5F60718293A4B5C /* TTSTextFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B3C4E5F6071829304B5C6D /* TTSTextFilter.swift */; };
 		7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414AD810B644C175CFB73EE5 /* WindowInfo.swift */; };
 		7FF8B004060633E319D8D791 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9319DA20B5E31E84424916 /* Color+Hex.swift */; };
 		85F00ED5BE755A7047346B5A /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68EE7A37927B53963DCF4506 /* MessageProtocolTests.swift */; };
@@ -45,7 +44,6 @@
 		3D9319DA20B5E31E84424916 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
 		414AD810B644C175CFB73EE5 /* WindowInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowInfo.swift; sourceTree = "<group>"; };
 		57175DB3942BF9D94577E602 /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
-		D2B3C4E5F6071829304B5C6D /* TTSTextFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSTextFilter.swift; sourceTree = "<group>"; };
 		68EE7A37927B53963DCF4506 /* MessageProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocolTests.swift; sourceTree = "<group>"; };
 		6C96267C7E324E99F9E25608 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
 		85649AFF24A63D27AE36A435 /* ContextMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuView.swift; sourceTree = "<group>"; };
@@ -122,7 +120,6 @@
 				945E5EFD19ABDFD55DD6B209 /* BonjourBrowser.swift */,
 				BEE3536452049152370298FC /* HardwareButtonHandler.swift */,
 				57175DB3942BF9D94577E602 /* SpeechService.swift */,
-				D2B3C4E5F6071829304B5C6D /* TTSTextFilter.swift */,
 				6C96267C7E324E99F9E25608 /* WebSocketClient.swift */,
 			);
 			path = Services;
@@ -267,7 +264,6 @@
 				B9528CA355BD0960AAC67C6F /* QuipTheme.swift in Sources */,
 				48A7F1C63240B8460DD3ECE8 /* RemoteLayoutView.swift in Sources */,
 				716C98AD23EECA0DDCAB89A4 /* SpeechService.swift in Sources */,
-				C1A2B3D4E5F60718293A4B5C /* TTSTextFilter.swift in Sources */,
 				F6F15D37F8337C2D5D92511B /* TerminalContentOverlay.swift in Sources */,
 				A760CC0FAF316124E853473D /* WebSocketClient.swift in Sources */,
 				7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */,

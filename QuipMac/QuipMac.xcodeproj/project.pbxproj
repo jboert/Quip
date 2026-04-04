@@ -31,6 +31,7 @@
 		F6BAA00D69BD1F037B3D22A1 /* TerminalColorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */; };
 		P1NM4N4G3R00000000000001 /* PINManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = P1NM4N4G3R00000000000002 /* PINManager.swift */; };
 		S3CR3TR3D4CT0R000000001 /* SecretRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3CR3TR3D4CT0R000000002 /* SecretRedactor.swift */; };
+		K0K0R0TTS000000000000001 /* KokoroTTS.swift in Sources */ = {isa = PBXBuildFile; fileRef = K0K0R0TTS000000000000002 /* KokoroTTS.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -57,6 +58,7 @@
 		FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalColorManager.swift; sourceTree = "<group>"; };
 		P1NM4N4G3R00000000000002 /* PINManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PINManager.swift; sourceTree = "<group>"; };
 		S3CR3TR3D4CT0R000000002 /* SecretRedactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretRedactor.swift; sourceTree = "<group>"; };
+		K0K0R0TTS000000000000002 /* KokoroTTS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroTTS.swift; sourceTree = "<group>"; };
 		"TEMP_0B715B0D-F7C2-4B97-88CB-072CD291DA80" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
 		"TEMP_4EA21B27-0E7F-4875-A285-CB8D00E4F943" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		"TEMP_601699DD-D2C9-4F2D-BCBA-55041EB8EC84" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -70,6 +72,7 @@
 				EBFB66F35E0DB7CFEA44761B /* BonjourAdvertiser.swift */,
 				2212F34B839B3C63906BAD2C /* CloudflareTunnel.swift */,
 				A56A336266F29BFDA4CB1C10 /* KeystrokeInjector.swift */,
+				K0K0R0TTS000000000000002 /* KokoroTTS.swift */,
 				P1NM4N4G3R00000000000002 /* PINManager.swift */,
 				S3CR3TR3D4CT0R000000002 /* SecretRedactor.swift */,
 				FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */,
@@ -247,7 +250,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "cp -f \"${SRCROOT}/Resources/cloudflared\" \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared\"\nchmod +x \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared\"\n";
+			shellScript = "cp -f \"${SRCROOT}/Resources/cloudflared\" \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared\"\nchmod +x \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared\"\ncp -f \"${SRCROOT}/Resources/kokoro_tts.py\" \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/kokoro_tts.py\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -261,6 +264,7 @@
 				CDECFE9CA16389D2F1B455D5 /* CloudflareTunnel.swift in Sources */,
 				864A7798EAC351C8B5E8E39F /* Color+Hex.swift in Sources */,
 				6A687DBD83641F9456CDB731 /* KeystrokeInjector.swift in Sources */,
+				K0K0R0TTS000000000000001 /* KokoroTTS.swift in Sources */,
 				1A23A388645C53D6E41A1238 /* LayoutPreset.swift in Sources */,
 				4C1F7E7F9836B4D3EF5D6FD7 /* LayoutPresetTabs.swift in Sources */,
 				0553EF1A21F0C774DAA2F0D6 /* LayoutPreview.swift in Sources */,

@@ -74,6 +74,12 @@ struct QuipApp: App {
                     }
                     UIViewController.attemptRotationToDeviceOrientation()
                 }
+                // Tell the Mac which window we currently have selected — but only
+                // if this is the first layout update after connection (wasEmpty = true).
+                // Subsequent selection changes are sent from the selection change handlers.
+                if wasEmpty, let wid = selectedWindowId, update.windows.contains(where: { $0.id == wid }) {
+                    client.send(SelectWindowMessage(windowId: wid))
+                }
             }
         }
 
@@ -94,6 +100,7 @@ struct QuipApp: App {
                 guard index >= 0, index < windows.count else { return }
                 let newId = windows[index].id
                 selectedWindowId = newId
+                client.send(SelectWindowMessage(windowId: newId))
                 // If viewing output, switch to the new window's content
                 if terminalContentText != nil {
                     terminalContentWindowId = newId
@@ -110,13 +117,16 @@ struct QuipApp: App {
             }
         }
 
-        client.onOutputDelta = { windowId, windowName, text, isFinal in
+        client.onTTSAudio = { windowId, windowName, sessionId, sequence, isFinal, wavData in
             DispatchQueue.main.async {
-                guard ttsEnabled, isFinal else { return }
-                let filtered = TTSTextFilter.filter(text)
-                guard !filtered.isEmpty else { return }
-                let spoken = "\(windowName): \(filtered)"
-                speech.speak(spoken)
+                guard ttsEnabled else { return }
+                guard windowId == selectedWindowId else {
+                    return
+                }
+                // Suppress volume KVO while we reconfigure the audio session for playback —
+                // otherwise phantom events cycle the selected window on their own.
+                volumeHandler.suppressVolumeEvents(for: 1.5)
+                speech.enqueueAudio(wavData, sessionId: sessionId, isFinal: isFinal)
             }
         }
 
@@ -172,8 +182,8 @@ struct QuipApp: App {
         }
         let windowId = selectedWindowId
         NSLog("[Quip] stopRecording called, windowId=%@", windowId ?? "nil")
-        // Allow extra recording time after button release for conversational pauses
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [self] in
+        // Brief delay to let the recognizer finalize the last bit of audio
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [self] in
             let text = speech.stopRecording()
             NSLog("[Quip] Transcribed: '%@' (length=%d)", text, text.count)
             if let windowId {
@@ -254,24 +264,46 @@ struct MainiOSView: View {
         }
         .overlay {
             if isRecording {
-                Color.black.opacity(0.001)
+                // Full-screen tap-to-stop layer
+                Color.black.opacity(0.25)
                     .ignoresSafeArea()
                     .onTapGesture { onStopRecording() }
 
-                VStack {
+                VStack(spacing: 12) {
                     Spacer()
-                    HStack {
+
+                    // Live transcription display
+                    if !speech.transcribedText.isEmpty {
+                        Text(speech.transcribedText)
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 16)
+                            .frame(maxWidth: .infinity)
+                            .background(.black.opacity(0.55))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+                            )
+                            .padding(.horizontal, 24)
+                            .transition(.opacity)
+                    }
+
+                    // Recording indicator pill
+                    HStack(spacing: 6) {
                         Circle()
                             .fill(.red)
                             .frame(width: 10, height: 10)
-                            .opacity(0.8)
-                        Text("Recording — tap to stop")
+                            .opacity(0.9)
+                        Text(speech.transcribedText.isEmpty ? "Listening — tap to stop" : "Tap to send")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(colors.textPrimary.opacity(0.8))
+                            .foregroundStyle(.white.opacity(0.9))
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(.red.opacity(0.2))
+                    .background(.red.opacity(0.35))
                     .clipShape(Capsule())
                     .padding(.bottom, 20)
                 }
