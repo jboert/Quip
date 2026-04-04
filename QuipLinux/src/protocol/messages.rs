@@ -111,6 +111,8 @@ pub struct TerminalContentMessage {
     #[serde(rename = "windowId")]
     pub window_id: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
 }
 
 impl TerminalContentMessage {
@@ -119,6 +121,16 @@ impl TerminalContentMessage {
             type_: "terminal_content".into(),
             window_id,
             content,
+            screenshot: None,
+        }
+    }
+
+    pub fn with_screenshot(window_id: String, content: String, screenshot: String) -> Self {
+        Self {
+            type_: "terminal_content".into(),
+            window_id,
+            content,
+            screenshot: Some(screenshot),
         }
     }
 }

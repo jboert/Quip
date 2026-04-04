@@ -366,4 +366,8 @@ impl InputBackend for WaylandInputBackend {
 
         Ok(content)
     }
+
+    fn capture_screenshot(&self, _window_id: u64) -> PlatformResult<String> {
+        Err(PlatformError::CommandFailed("Screenshot not yet implemented for Wayland".into()))
+    }
 }

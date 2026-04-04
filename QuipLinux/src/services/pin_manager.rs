@@ -54,6 +54,13 @@ impl PINManager {
         info!("PIN regenerated");
     }
 
+    /// Set a custom PIN and save it to disk.
+    pub fn set_pin(&self, new_pin: &str) {
+        Self::save_pin_to_disk(&Self::pin_path(), new_pin);
+        *self.pin.write().unwrap() = new_pin.to_string();
+        info!("PIN updated");
+    }
+
     /// Check if a given PIN matches the stored PIN.
     pub fn verify(&self, candidate: &str) -> bool {
         *self.pin.read().unwrap() == candidate

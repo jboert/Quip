@@ -198,7 +198,7 @@ impl WindowBackend for X11WindowBackend {
     fn focus_window(&self, window_id: u64) -> PlatformResult<()> {
         let wid_str = window_id.to_string();
         let output = Command::new("xdotool")
-            .args(["windowactivate", &wid_str])
+            .args(["windowactivate", "--sync", &wid_str])
             .output()
             .map_err(|e| PlatformError::CommandFailed(format!("xdotool windowactivate: {e}")))?;
 

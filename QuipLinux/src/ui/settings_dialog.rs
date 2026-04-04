@@ -1,3 +1,4 @@
+use gdk4::prelude::*;
 use gtk4::prelude::*;
 use gtk4::{self, Orientation};
 use libadwaita as adw;
@@ -118,19 +119,29 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
         .description("Clients must enter this PIN to connect")
         .build();
 
-    let pin_label = gtk4::Label::new(Some(&pin_manager.pin()));
-    pin_label.add_css_class("monospace");
-    pin_label.add_css_class("title-1");
-    pin_label.set_selectable(true);
+    let pin_entry = gtk4::Entry::new();
+    pin_entry.set_text(&pin_manager.pin());
+    pin_entry.add_css_class("monospace");
+    pin_entry.set_valign(gtk4::Align::Center);
+    pin_entry.set_width_chars(12);
 
     let pin_row = adw::ActionRow::builder()
         .title("Connection PIN")
         .build();
-    pin_row.add_suffix(&pin_label);
+    pin_row.add_suffix(&pin_entry);
+
+    // Save on every edit
+    let pin_for_change = pin_manager.clone();
+    pin_entry.connect_changed(move |entry| {
+        let text = entry.text().to_string();
+        if !text.is_empty() {
+            pin_for_change.set_pin(&text);
+        }
+    });
 
     pin_group.add(&pin_row);
 
-    // Copy button
+    // Button row: Copy + Regenerate
     let pin_for_copy = pin_manager.clone();
     let copy_btn = gtk4::Button::with_label("Copy PIN");
     copy_btn.add_css_class("flat");
@@ -141,14 +152,13 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
         }
     });
 
-    // Regenerate button
     let pin_for_regen = pin_manager.clone();
-    let pin_label_for_regen = pin_label.clone();
+    let entry_for_regen = pin_entry.clone();
     let regen_btn = gtk4::Button::with_label("Regenerate PIN");
     regen_btn.add_css_class("destructive-action");
     regen_btn.connect_clicked(move |_| {
         pin_for_regen.regenerate();
-        pin_label_for_regen.set_text(&pin_for_regen.pin());
+        entry_for_regen.set_text(&pin_for_regen.pin());
     });
 
     let button_box = gtk4::Box::new(Orientation::Horizontal, 8);

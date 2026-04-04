@@ -122,6 +122,9 @@ pub fn build_ui(app: &adw::Application) {
     header.pack_end(&arrange_button);
 
     // Settings button
+    // --- Create shared PINManager ---
+    let pin_manager = crate::services::pin_manager::PINManager::new();
+
     let settings_button = gtk4::Button::from_icon_name("emblem-system-symbolic");
     settings_button.set_tooltip_text(Some("Settings"));
     let ss_settings = shared_state.clone();
@@ -140,9 +143,6 @@ pub fn build_ui(app: &adw::Application) {
     toolbar_view.add_top_bar(&header);
     toolbar_view.set_content(Some(&main_box));
     window.set_content(Some(&toolbar_view));
-
-    // --- Create shared PINManager ---
-    let pin_manager = crate::services::pin_manager::PINManager::new();
 
     // --- Start background services ---
     start_services(shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone());
@@ -336,12 +336,12 @@ fn start_services(
     let al_handler = audit_logger.clone();
     glib::spawn_future_local(async move {
         while let Ok(json) = gtk_rx.recv().await {
-            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler, &al_handler);
+            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler, &al_handler).await;
         }
     });
 }
 
-fn handle_incoming_message(
+async fn handle_incoming_message(
     json: &str,
     shared_state: &SharedState,
     window_backend: &dyn platform::traits::WindowBackend,
@@ -363,84 +363,112 @@ fn handle_incoming_message(
         }
     };
 
-    let mut state = shared_state.write().unwrap();
+    // Build broadcast payload inside the lock, then send after dropping it
+    // to avoid deadlock (broadcast awaits a tokio Mutex while we hold the RwLock)
+    let broadcast_json = {
+        let mut state = shared_state.write().unwrap();
 
-    match action {
-        IncomingAction::SelectWindow(window_id) => {
-            state.focus_window(&window_id, window_backend);
-        }
-        IncomingAction::SendText { window_id, text, press_return } => {
-            audit_logger.log("send_text", "ws-client", &text);
-            tracing::info!("SendText: window_id={window_id}, text={text}, press_return={press_return}");
-            if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
-                let wid = w.window_id;
-                tracing::info!("Found window, xdotool target wid={wid}");
+        match action {
+            IncomingAction::SelectWindow(window_id) => {
                 state.focus_window(&window_id, window_backend);
-                if let Err(e) = input_backend.send_text(wid, &text, press_return) {
-                    tracing::warn!("Failed to send text to {window_id}: {e}");
+                None
+            }
+            IncomingAction::SendText { window_id, text, press_return } => {
+                audit_logger.log("send_text", "ws-client", &text);
+                tracing::info!("SendText: window_id={window_id}, text={text}, press_return={press_return}");
+                if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
+                    let wid = w.window_id;
+                    tracing::info!("Found window, xdotool target wid={wid}");
+                    state.focus_window(&window_id, window_backend);
+                    if let Err(e) = input_backend.send_text(wid, &text, press_return) {
+                        tracing::warn!("Failed to send text to {window_id}: {e}");
+                    } else {
+                        tracing::info!("Text sent successfully");
+                    }
                 } else {
-                    tracing::info!("Text sent successfully");
+                    tracing::warn!("Window not found for id: {window_id}");
                 }
-            } else {
-                tracing::warn!("Window not found for id: {window_id}");
+                None
             }
-        }
-        IncomingAction::QuickAction { window_id, action } => {
-            audit_logger.log("quick_action", "ws-client", &action);
-            if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
-                let wid = w.window_id;
-                match action.as_str() {
-                    "press_return" => { let _ = input_backend.send_keystroke(wid, "return"); }
-                    "press_ctrl_c" => { let _ = input_backend.send_keystroke(wid, "ctrl+c"); }
-                    "clear_terminal" => { let _ = input_backend.send_text(wid, "/clear", true); }
-                    "restart_claude" => {
-                        let _ = input_backend.send_keystroke(wid, "ctrl+c");
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        let _ = input_backend.send_text(wid, "claude", true);
+            IncomingAction::QuickAction { window_id, action } => {
+                audit_logger.log("quick_action", "ws-client", &action);
+                if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
+                    let wid = w.window_id;
+                    state.focus_window(&window_id, window_backend);
+                    match action.as_str() {
+                        "press_return" => { let _ = input_backend.send_keystroke(wid, "return"); }
+                        "press_ctrl_c" => { let _ = input_backend.send_keystroke(wid, "ctrl+c"); }
+                        "press_ctrl_d" => { let _ = input_backend.send_keystroke(wid, "ctrl+d"); }
+                        "press_escape" => { let _ = input_backend.send_keystroke(wid, "escape"); }
+                        "press_tab" => { let _ = input_backend.send_keystroke(wid, "tab"); }
+                        "press_y" => { let _ = input_backend.send_keystroke(wid, "y"); }
+                        "press_n" => { let _ = input_backend.send_keystroke(wid, "n"); }
+                        "clear_terminal" => { let _ = input_backend.send_text(wid, "/clear", true); }
+                        "restart_claude" => {
+                            let _ = input_backend.send_keystroke(wid, "ctrl+c");
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            let _ = input_backend.send_text(wid, "claude", true);
+                        }
+                        "toggle_enabled" => {
+                            let enabled = w.is_enabled;
+                            state.toggle_window(&window_id, !enabled);
+                        }
+                        _ => {}
                     }
-                    "toggle_enabled" => {
-                        let enabled = w.is_enabled;
-                        state.toggle_window(&window_id, !enabled);
-                    }
-                    _ => {}
+                }
+                None
+            }
+            IncomingAction::SttStarted(window_id) => {
+                state.state_detector.set_stt_active(&window_id);
+                if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
+                    crate::services::terminal_color::set_background_color(
+                        w.pid,
+                        &state.settings.colors.stt_active,
+                    );
+                }
+                None
+            }
+            IncomingAction::SttEnded(window_id) => {
+                state.state_detector.clear_stt(&window_id);
+                if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
+                    crate::services::terminal_color::reset_background_color(w.pid);
+                }
+                None
+            }
+            IncomingAction::RequestContent(window_id) => {
+                if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
+                    let wid = w.window_id;
+                    // Try tmux text content first (scrollable, best UX)
+                    let text_content = input_backend.read_content(wid).unwrap_or_default();
+                    let text_content = crate::services::secret_redactor::redact(&text_content);
+
+                    let msg = if !text_content.is_empty() {
+                        // Got text from tmux — send text only (scrollable on iOS)
+                        crate::protocol::messages::TerminalContentMessage::new(window_id, text_content)
+                    } else {
+                        // No tmux — fall back to screenshot
+                        match input_backend.capture_screenshot(wid) {
+                            Ok(ss) => crate::protocol::messages::TerminalContentMessage::with_screenshot(
+                                window_id, "(Run terminals in tmux for scrollable text)".into(), ss,
+                            ),
+                            Err(e) => {
+                                tracing::warn!("Screenshot failed: {e}");
+                                crate::protocol::messages::TerminalContentMessage::new(
+                                    window_id, format!("(No tmux detected, screenshot failed: {e})"),
+                                )
+                            }
+                        }
+                    };
+                    crate::protocol::messages::encode_message(&msg)
+                } else {
+                    let msg = crate::protocol::messages::TerminalContentMessage::new(window_id, "(Window not found)".into());
+                    crate::protocol::messages::encode_message(&msg)
                 }
             }
         }
-        IncomingAction::SttStarted(window_id) => {
-            state.state_detector.set_stt_active(&window_id);
-            // Apply terminal color
-            if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
-                crate::services::terminal_color::set_background_color(
-                    w.pid,
-                    &state.settings.colors.stt_active,
-                );
-            }
-        }
-        IncomingAction::SttEnded(window_id) => {
-            state.state_detector.clear_stt(&window_id);
-            if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
-                crate::services::terminal_color::reset_background_color(w.pid);
-            }
-        }
-        IncomingAction::RequestContent(window_id) => {
-            let content = if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
-                match input_backend.read_content(w.window_id) {
-                    Ok(text) => {
-                        // Trim to last ~200 lines
-                        let lines: Vec<&str> = text.lines().collect();
-                        let start = lines.len().saturating_sub(200);
-                        lines[start..].join("\n")
-                    }
-                    Err(e) => format!("(Failed to read terminal content: {e})"),
-                }
-            } else {
-                "(Window not found)".into()
-            };
-            let content = crate::services::secret_redactor::redact(&content);
-            let msg = crate::protocol::messages::TerminalContentMessage::new(window_id, content);
-            if let Some(json) = crate::protocol::messages::encode_message(&msg) {
-                ws_server.broadcast(&json);
-            }
-        }
+    }; // state lock dropped here
+
+    if let Some(json) = broadcast_json {
+        ws_server.broadcast(&json).await;
     }
 }
