@@ -1,3 +1,4 @@
+pub mod audit_logger;
 pub mod cloudflare_tunnel;
 pub mod mdns_advertiser;
 pub mod message_router;

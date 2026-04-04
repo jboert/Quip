@@ -229,6 +229,9 @@ fn start_services(
         state.settings.general.bonjour_name.clone()
     };
 
+    // Audit logger for remote command logging
+    let audit_logger = crate::services::audit_logger::AuditLogger::new();
+
     // Channel for incoming WS messages -> GTK thread
     let (gtk_tx, gtk_rx) = async_channel::bounded::<String>(256);
     let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -330,9 +333,10 @@ fn start_services(
     let ib_handler = input_backend.clone();
     let wb_handler = window_backend.clone();
     let ws_handler = ws_server.clone();
+    let al_handler = audit_logger.clone();
     glib::spawn_future_local(async move {
         while let Ok(json) = gtk_rx.recv().await {
-            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler);
+            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler, &al_handler);
         }
     });
 }
@@ -343,6 +347,7 @@ fn handle_incoming_message(
     window_backend: &dyn platform::traits::WindowBackend,
     input_backend: &dyn platform::traits::InputBackend,
     ws_server: &crate::services::ws_server::WsServer,
+    audit_logger: &crate::services::audit_logger::AuditLogger,
 ) {
     use message_router::IncomingAction;
 
@@ -365,6 +370,7 @@ fn handle_incoming_message(
             state.focus_window(&window_id, window_backend);
         }
         IncomingAction::SendText { window_id, text, press_return } => {
+            audit_logger.log("send_text", "ws-client", &text);
             tracing::info!("SendText: window_id={window_id}, text={text}, press_return={press_return}");
             if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                 let wid = w.window_id;
@@ -380,6 +386,7 @@ fn handle_incoming_message(
             }
         }
         IncomingAction::QuickAction { window_id, action } => {
+            audit_logger.log("quick_action", "ws-client", &action);
             if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                 let wid = w.window_id;
                 match action.as_str() {
