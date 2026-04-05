@@ -8,8 +8,15 @@ use crate::services::pin_manager::PINManager;
 use crate::state::SharedState;
 use glib;
 
+use super::main_window::RuntimeCommand;
+
 /// Show the settings preferences window
-pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState, pin_manager: &PINManager) {
+pub fn show_settings(
+    parent: &adw::ApplicationWindow,
+    shared_state: &SharedState,
+    pin_manager: &PINManager,
+    runtime_cmd_tx: &async_channel::Sender<RuntimeCommand>,
+) {
     let prefs = adw::PreferencesWindow::builder()
         .title("Quip Settings")
         .transient_for(parent)
@@ -193,31 +200,38 @@ pub fn show_settings(parent: &adw::ApplicationWindow, shared_state: &SharedState
     {
         let state = shared_state.read().unwrap();
         require_pin_switch.set_active(state.settings.general.require_pin_for_local);
-        require_pin_switch.set_sensitive(state.settings.general.local_only_mode);
     }
     require_pin_switch.set_valign(gtk4::Align::Center);
     let require_pin_row = adw::ActionRow::builder()
         .title("Require PIN for local connections")
-        .subtitle("When local-only is on, still require PIN auth from local clients")
+        .subtitle("Local clients must enter the PIN before connecting")
         .build();
     require_pin_row.add_suffix(&require_pin_switch);
     require_pin_row.set_activatable_widget(Some(&require_pin_switch));
 
-    let require_pin_switch_clone = require_pin_switch.clone();
     let ss_local = shared_state.clone();
+    let cmd_tx_local = runtime_cmd_tx.clone();
     local_only_switch.connect_state_set(move |_, active| {
-        require_pin_switch_clone.set_sensitive(active);
-        let mut state = ss_local.write().unwrap();
-        state.settings.general.local_only_mode = active;
-        state.settings.save();
+        {
+            let mut state = ss_local.write().unwrap();
+            state.settings.general.local_only_mode = active;
+            state.settings.save();
+        }
+        // Live-apply: start/stop the Cloudflare tunnel and reload auth without restart
+        let _ = cmd_tx_local.try_send(RuntimeCommand::SetLocalOnly(active));
         glib::Propagation::Proceed
     });
 
     let ss_pin_local = shared_state.clone();
+    let cmd_tx_pin = runtime_cmd_tx.clone();
     require_pin_switch.connect_state_set(move |_, active| {
-        let mut state = ss_pin_local.write().unwrap();
-        state.settings.general.require_pin_for_local = active;
-        state.settings.save();
+        {
+            let mut state = ss_pin_local.write().unwrap();
+            state.settings.general.require_pin_for_local = active;
+            state.settings.save();
+        }
+        // Live-apply: update require_auth on the running WebSocket server
+        let _ = cmd_tx_pin.try_send(RuntimeCommand::ReloadAuth);
         glib::Propagation::Proceed
     });
 

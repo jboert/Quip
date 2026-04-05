@@ -19,6 +19,18 @@ use super::layout_preview::LayoutPreviewWidget;
 use super::status_bar::StatusBar;
 use super::window_list::WindowListWidget;
 
+/// Commands sent from the GTK thread to the tokio runtime to reconfigure services
+/// without needing an app restart.
+#[derive(Debug, Clone)]
+pub enum RuntimeCommand {
+    /// User toggled local-only mode. Start or stop the Cloudflare tunnel to match,
+    /// and reload require_auth on the WebSocket server from current settings.
+    SetLocalOnly(bool),
+    /// User changed the "require PIN for local" toggle. Reload require_auth on
+    /// the WebSocket server from current settings.
+    ReloadAuth,
+}
+
 /// Build the main GTK4 UI and start background services
 pub fn build_ui(app: &adw::Application) {
     let shared_state = state::new_shared_state();
@@ -128,12 +140,6 @@ pub fn build_ui(app: &adw::Application) {
 
     let settings_button = gtk4::Button::from_icon_name("emblem-system-symbolic");
     settings_button.set_tooltip_text(Some("Settings"));
-    let ss_settings = shared_state.clone();
-    let win_ref = window.clone();
-    let pin_for_settings = pin_manager.clone();
-    settings_button.connect_clicked(move |_| {
-        super::settings_dialog::show_settings(&win_ref, &ss_settings, &pin_for_settings);
-    });
     header.pack_end(&settings_button);
 
     main_box.append(&sidebar_frame);
@@ -146,7 +152,16 @@ pub fn build_ui(app: &adw::Application) {
     window.set_content(Some(&toolbar_view));
 
     // --- Start background services ---
-    let broadcast_tx = start_services(shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone());
+    let (broadcast_tx, runtime_cmd_tx) = start_services(shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone());
+
+    // Wire the settings button now that we have the runtime command channel
+    let ss_settings = shared_state.clone();
+    let win_ref = window.clone();
+    let pin_for_settings = pin_manager.clone();
+    let cmd_tx_for_settings = runtime_cmd_tx.clone();
+    settings_button.connect_clicked(move |_| {
+        super::settings_dialog::show_settings(&win_ref, &ss_settings, &pin_for_settings, &cmd_tx_for_settings);
+    });
 
     // --- Periodic refresh ---
     let wb_timer = window_backend.clone();
@@ -272,13 +287,65 @@ fn arrange_windows(
     tracing::info!("Arranged {} windows", enabled.len());
 }
 
-/// Returns a sender for broadcasting messages to all WebSocket clients from the GTK thread.
+/// Start the Cloudflare tunnel and record its state/URLs into SharedState.
+async fn tunnel_start(
+    tunnel: &mut crate::services::cloudflare_tunnel::CloudflareTunnel,
+    port: u16,
+    shared_state: &SharedState,
+) {
+    {
+        let mut state = shared_state.write().unwrap();
+        state.tunnel_running = true;
+    }
+    match tunnel.start(port).await {
+        Ok(()) => {
+            tracing::info!("Cloudflare tunnel started: {}", tunnel.ws_url());
+            let mut state = shared_state.write().unwrap();
+            state.tunnel_url = tunnel.public_url().to_string();
+            state.tunnel_ws_url = tunnel.ws_url().to_string();
+        }
+        Err(e) => {
+            tracing::warn!("Cloudflare tunnel failed: {e}");
+            let mut state = shared_state.write().unwrap();
+            state.tunnel_running = false;
+        }
+    }
+}
+
+/// Stop the Cloudflare tunnel and clear its recorded URLs.
+fn tunnel_stop(
+    tunnel: &mut crate::services::cloudflare_tunnel::CloudflareTunnel,
+    shared_state: &SharedState,
+) {
+    tunnel.stop();
+    let mut state = shared_state.write().unwrap();
+    state.tunnel_running = false;
+    state.tunnel_url.clear();
+    state.tunnel_ws_url.clear();
+}
+
+/// Reload require_auth on the WebSocket server from current settings.
+/// New connections will see the new value; existing authenticated clients are unaffected.
+fn reload_require_auth(
+    ws_server: &Arc<crate::services::ws_server::WsServer>,
+    shared_state: &SharedState,
+) {
+    let require_auth = {
+        let state = shared_state.read().unwrap();
+        state.settings.general.require_pin_for_local
+    };
+    ws_server.set_require_auth(require_auth);
+    tracing::info!("WebSocket require_auth updated to {require_auth}");
+}
+
+/// Returns a broadcast sender (for GTK → WS clients) and a runtime command sender
+/// (for the settings dialog → tokio runtime live-reconfiguration).
 fn start_services(
     shared_state: SharedState,
     window_backend: Arc<dyn platform::traits::WindowBackend>,
     input_backend: Arc<dyn platform::traits::InputBackend>,
     pin_manager: crate::services::pin_manager::PINManager,
-) -> async_channel::Sender<String> {
+) -> (async_channel::Sender<String>, async_channel::Sender<RuntimeCommand>) {
     let port = {
         let state = shared_state.read().unwrap();
         state.settings.general.websocket_port
@@ -296,11 +363,15 @@ fn start_services(
     let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     // Channel for outbound broadcasts from GTK -> tokio (state changes, TTS)
     let (broadcast_tx, broadcast_rx) = async_channel::bounded::<String>(64);
+    // Channel for runtime reconfiguration commands from settings dialog -> tokio
+    let (runtime_cmd_tx, runtime_cmd_rx) = async_channel::bounded::<RuntimeCommand>(16);
 
-    // Compute require_auth: always true unless local-only mode is on and PIN is not required
+    // WebSocket server only handles direct (local) connections.
+    // Tunnel clients get auth_required from CloudflareTunnel independently.
+    // Local connections only require auth if require_pin_for_local is set.
     let require_auth = {
         let state = shared_state.read().unwrap();
-        !state.settings.general.local_only_mode || state.settings.general.require_pin_for_local
+        state.settings.general.require_pin_for_local
     };
 
     // Create WsServer before spawning the background thread so it can be shared
@@ -337,41 +408,45 @@ fn start_services(
                 Err(e) => tracing::warn!("Failed to start mDNS: {e}"),
             }
 
-            // Start Cloudflare tunnel (unless local-only mode is on)
-            let local_only = {
-                let state = ss_bg.read().unwrap();
-                state.settings.general.local_only_mode
-            };
+            // Command handler: owns the Cloudflare tunnel across its lifetime so
+            // it can be started, stopped, and restarted at runtime in response to
+            // settings changes. Also handles the initial tunnel start.
+            let ss_tunnel = ss_bg.clone();
+            let ws_for_cmds = ws_server.clone();
+            tokio::spawn(async move {
+                let mut tunnel = crate::services::cloudflare_tunnel::CloudflareTunnel::new();
 
-            if !local_only {
-                let ss_tunnel = ss_bg.clone();
-                tokio::spawn(async move {
-                    let mut tunnel = crate::services::cloudflare_tunnel::CloudflareTunnel::new();
-                    {
-                        let mut state = ss_tunnel.write().unwrap();
-                        state.tunnel_running = true;
-                    }
-                    match tunnel.start(port).await {
-                        Ok(()) => {
-                            tracing::info!("Cloudflare tunnel started: {}", tunnel.ws_url());
-                            let mut state = ss_tunnel.write().unwrap();
-                            state.tunnel_url = tunnel.public_url().to_string();
-                            state.tunnel_ws_url = tunnel.ws_url().to_string();
+                // Initial tunnel state based on current settings
+                let initial_local_only = {
+                    let state = ss_tunnel.read().unwrap();
+                    state.settings.general.local_only_mode
+                };
+
+                if !initial_local_only {
+                    tunnel_start(&mut tunnel, port, &ss_tunnel).await;
+                } else {
+                    tracing::info!("Local-only mode enabled — Cloudflare tunnel not started");
+                }
+
+                // Handle live reconfiguration commands from the settings dialog
+                while let Ok(cmd) = runtime_cmd_rx.recv().await {
+                    match cmd {
+                        RuntimeCommand::SetLocalOnly(true) => {
+                            tracing::info!("Runtime: switching to local-only mode, stopping tunnel");
+                            tunnel_stop(&mut tunnel, &ss_tunnel);
+                            reload_require_auth(&ws_for_cmds, &ss_tunnel);
                         }
-                        Err(e) => {
-                            tracing::warn!("Cloudflare tunnel failed: {e}");
-                            let mut state = ss_tunnel.write().unwrap();
-                            state.tunnel_running = false;
+                        RuntimeCommand::SetLocalOnly(false) => {
+                            tracing::info!("Runtime: leaving local-only mode, starting tunnel");
+                            tunnel_start(&mut tunnel, port, &ss_tunnel).await;
+                            reload_require_auth(&ws_for_cmds, &ss_tunnel);
+                        }
+                        RuntimeCommand::ReloadAuth => {
+                            reload_require_auth(&ws_for_cmds, &ss_tunnel);
                         }
                     }
-                    // Keep tunnel alive
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    }
-                });
-            } else {
-                tracing::info!("Local-only mode enabled — Cloudflare tunnel not started");
-            }
+                }
+            });
 
             // Broadcast layout periodically
             let ss_broadcast = ss_bg.clone();
@@ -424,7 +499,7 @@ fn start_services(
         }
     });
 
-    broadcast_tx
+    (broadcast_tx, runtime_cmd_tx)
 }
 
 async fn handle_incoming_message(
