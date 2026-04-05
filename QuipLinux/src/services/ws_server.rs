@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -49,7 +49,7 @@ pub struct WsServer {
     next_id: Arc<AtomicUsize>,
     message_tx: mpsc::UnboundedSender<String>,
     pin_manager: PINManager,
-    require_auth: bool,
+    require_auth: Arc<AtomicBool>,
 }
 
 impl WsServer {
@@ -65,8 +65,14 @@ impl WsServer {
             next_id: Arc::new(AtomicUsize::new(0)),
             message_tx,
             pin_manager,
-            require_auth,
+            require_auth: Arc::new(AtomicBool::new(require_auth)),
         }
+    }
+
+    /// Update the auth requirement for NEW connections. Existing clients keep
+    /// whatever auth state they already had — only incoming handshakes see the new value.
+    pub fn set_require_auth(&self, require: bool) {
+        self.require_auth.store(require, Ordering::Relaxed);
     }
 
     pub async fn run(&self) {
@@ -96,7 +102,7 @@ impl WsServer {
             let next_id = Arc::clone(&self.next_id);
             let message_tx = self.message_tx.clone();
             let pin_manager = self.pin_manager.clone();
-            let require_auth = self.require_auth;
+            let require_auth = self.require_auth.load(Ordering::Relaxed);
 
             tokio::spawn(async move {
                 let ws_stream = match tokio_tungstenite::accept_async(stream).await {
@@ -116,7 +122,7 @@ impl WsServer {
                     let mut locked = clients.lock().await;
                     locked.insert(client_id, ClientConnection {
                         sink: write,
-                        // Auto-authenticate when auth is not required (local-only without PIN)
+                        // Auto-authenticate when auth is not required
                         authenticated: !require_auth,
                         message_count: 0,
                         window_start: Instant::now(),
