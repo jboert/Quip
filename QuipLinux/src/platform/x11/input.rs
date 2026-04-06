@@ -126,8 +126,14 @@ impl InputBackend for X11InputBackend {
     fn send_text(&self, window_id: u64, text: &str, press_return: bool) -> PlatformResult<()> {
         let wid_str = window_id.to_string();
 
+        // Focus the window first — xdotool --window doesn't reliably
+        // deliver to GTK3 terminals like Terminator
+        let _ = Command::new("xdotool")
+            .args(["windowactivate", "--sync", &wid_str])
+            .output();
+
         let output = Command::new("xdotool")
-            .args(["type", "--clearmodifiers", "--window", &wid_str, text])
+            .args(["type", "--clearmodifiers", text])
             .output()
             .map_err(|e| PlatformError::CommandFailed(format!("xdotool type: {e}")))?;
 
@@ -140,7 +146,7 @@ impl InputBackend for X11InputBackend {
 
         if press_return {
             let output = Command::new("xdotool")
-                .args(["key", "--window", &wid_str, "Return"])
+                .args(["key", "--clearmodifiers", "Return"])
                 .output()
                 .map_err(|e| PlatformError::CommandFailed(format!("xdotool key Return: {e}")))?;
 
