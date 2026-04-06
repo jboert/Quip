@@ -168,6 +168,18 @@ impl WsServer {
                                 };
 
                                 if is_authenticated {
+                                    // If already authenticated and client sends auth, just confirm
+                                    let msg_type = message_type(&text);
+                                    if msg_type.as_deref() == Some("auth") {
+                                        info!("Client {peer} already authenticated, confirming");
+                                        let result_msg = AuthResultMessage::success();
+                                        let json = encode_message(&result_msg).unwrap_or_default();
+                                        let mut locked = clients.lock().await;
+                                        if let Some(client) = locked.get_mut(&client_id) {
+                                            let _ = client.sink.send(Message::Text(json.into())).await;
+                                        }
+                                        continue;
+                                    }
                                     // Forward to app handler
                                     if message_tx.send(text).is_err() {
                                         warn!("Message channel closed, dropping client {peer}");
