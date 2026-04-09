@@ -243,17 +243,24 @@ final class TerminalStateDetector {
         task.arguments = ["-o", "pid,pcpu,comm", "-g", "\(parentPid)"]
 
         let pipe = Pipe()
+        let errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = Pipe()
+        task.standardError = errPipe
 
         do {
             try task.run()
             task.waitUntilExit()
         } catch {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+            try? errPipe.fileHandleForReading.close()
+            try? errPipe.fileHandleForWriting.close()
             return nil
         }
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        try? pipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
         guard let output = String(data: data, encoding: .utf8) else { return nil }
 
         var results: [ProcessInfo] = []
