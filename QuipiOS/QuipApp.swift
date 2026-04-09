@@ -54,6 +54,9 @@ struct QuipApp: App {
                 setup()
                 bonjourBrowser.startBrowsing()
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                volumeHandler.resumeAfterBackground()
+            }
         }
     }
 
