@@ -103,6 +103,20 @@ final class HardwareButtonHandler {
         HiddenVolumeView.setVolume(target)
     }
 
+    /// Re-activate the audio session and reset volume after returning from background.
+    /// The OS deactivates the session when backgrounded, killing volume KVO.
+    func resumeAfterBackground() {
+        guard volumeObservation != nil else { return }
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.mixWithOthers, .defaultToSpeaker])
+            try session.setActive(true)
+        } catch {}
+        suppressUntil = Date().addingTimeInterval(Self.volumeRestoreSuppression)
+        HiddenVolumeView.setVolume(0.5)
+    }
+
     func stopMonitoring() {
         volumeObservation?.invalidate()
         volumeObservation = nil
