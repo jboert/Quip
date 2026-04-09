@@ -47,6 +47,7 @@ fun MainScreen(
     onRename: (SavedConnection, String) -> Unit,
     onDelete: (SavedConnection) -> Unit,
     onScanQR: () -> Unit,
+    transcribedText: String = "",
     onSelectWindow: (String) -> Unit,
     onWindowAction: (String, String) -> Unit,
     onStopRecording: () -> Unit,
@@ -110,6 +111,7 @@ fun MainScreen(
             selectedWindowId = selectedWindowId,
             isConnected = isConnected,
             isRecording = isRecording,
+            transcribedText = transcribedText,
             monitorName = monitorName,
             onSelectWindow = onSelectWindow,
             onWindowAction = onWindowAction,
@@ -183,8 +185,8 @@ private fun PinEntryContent(
         OutlinedTextField(
             value = pinText,
             onValueChange = { value ->
-                // Only allow digits, max 6 characters
-                val filtered = value.filter { it.isDigit() }.take(6)
+                // Only allow digits, max 12 characters
+                val filtered = value.filter { it.isDigit() }.take(12)
                 onPinChange(filtered)
             },
             label = { Text("PIN") },

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.quip.android.models.WindowState
@@ -56,6 +57,7 @@ fun LayoutScreen(
     selectedWindowId: String?,
     isConnected: Boolean,
     isRecording: Boolean,
+    transcribedText: String = "",
     monitorName: String,
     onSelectWindow: (String) -> Unit,
     onWindowAction: (String, String) -> Unit,
@@ -151,7 +153,10 @@ fun LayoutScreen(
 
         // Recording overlay
         if (isRecording) {
-            RecordingOverlay(onStopRecording = onStopRecording)
+            RecordingOverlay(
+                transcribedText = transcribedText,
+                onStopRecording = onStopRecording
+            )
         }
 
         // Context menu dialog
@@ -334,7 +339,10 @@ private fun TextInputBar(
 }
 
 @Composable
-private fun RecordingOverlay(onStopRecording: () -> Unit) {
+private fun RecordingOverlay(
+    transcribedText: String,
+    onStopRecording: () -> Unit
+) {
     val infiniteTransition = rememberInfiniteTransition(label = "recPulse")
     val alpha by infiniteTransition.animateFloat(
         initialValue = 0.5f,
@@ -349,30 +357,52 @@ private fun RecordingOverlay(onStopRecording: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.25f))
             .clickable(onClick = onStopRecording),
         contentAlignment = Alignment.BottomCenter
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .padding(bottom = 24.dp)
-                .clip(RoundedCornerShape(50))
-                .background(Color.Red.copy(alpha = 0.2f))
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(bottom = 20.dp)
         ) {
-            Box(
+            // Live transcription display
+            if (transcribedText.isNotEmpty()) {
+                Text(
+                    text = transcribedText,
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(Color.Red.copy(alpha = alpha))
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Recording \u2014 tap to stop",
-                color = LocalQuipColors.current.textPrimary.copy(alpha = 0.8f),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Red.copy(alpha = 0.35f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(Color.Red.copy(alpha = alpha))
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (transcribedText.isEmpty()) "Listening \u2014 tap to stop" else "Tap to send",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }
