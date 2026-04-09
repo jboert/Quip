@@ -178,7 +178,7 @@ final class KeystrokeInjector {
     // MARK: - Read Terminal Content
 
     /// Read the visible/recent text content from a terminal window via AppleScript.
-    func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0) -> String? {
+    nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0) -> String? {
         let script: String
         switch terminalApp {
         case .terminal:
@@ -217,7 +217,7 @@ final class KeystrokeInjector {
 
     /// Capture a screenshot of a specific window via the `screencapture` CLI.
     /// Returns base64-encoded PNG data, or nil on failure.
-    func captureWindowScreenshot(cgWindowNumber: CGWindowID) -> String? {
+    nonisolated func captureWindowScreenshot(cgWindowNumber: CGWindowID) -> String? {
         guard cgWindowNumber != 0 else { return nil }
         let tmpPath = NSTemporaryDirectory() + "quip_capture_\(cgWindowNumber).png"
         let process = Process()

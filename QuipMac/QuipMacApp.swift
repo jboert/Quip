@@ -205,7 +205,7 @@ struct QuipMacApp: App {
 
     /// Return the text of the LAST Claude Code response marker (⏺ prose line),
     /// or empty string if none found. Used to detect when a new response has been added.
-    private func lastResponseMarkerText(in text: String) -> String {
+    private nonisolated func lastResponseMarkerText(in text: String) -> String {
         var lastText = ""
         for line in text.split(separator: "\n") {
             let stripped = line.trimmingCharacters(in: .whitespaces)
@@ -338,15 +338,11 @@ struct QuipMacApp: App {
                 AuditLogger.log(messageType: "send_text", clientIdentifier: "ws-client", textContent: msg.text)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     let termApp = terminalAppForWindow(window)
-                    // Focus the window via AX first, then run AppleScript off main
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    let text = msg.text
-                    let windowId = msg.windowId
-                    let pressReturn = msg.pressReturn
-                    DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.08) { [keystrokeInjector] in
-                        keystrokeInjector.sendText(text, to: windowId, pressReturn: pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
                     }
                 }
             }
@@ -432,45 +428,45 @@ struct QuipMacApp: App {
         if action != "toggle_enabled" {
             windowManager.focusWindow(wid)
         }
-        // Run AppleScript keystroke injection off main to avoid blocking tunnel messages
         switch action {
         case "press_return":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendKeystroke("return", to: wid, terminalApp: termApp)
             }
         case "press_ctrl_c":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp)
             }
         case "press_ctrl_d":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp)
             }
         case "press_escape":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp)
             }
         case "press_tab":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp)
             }
         case "press_y":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp)
             }
         case "press_n":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp)
             }
         case "clear_terminal":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp)
             }
         case "restart_claude":
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp)
-                Thread.sleep(forTimeInterval: 0.5)
-                keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp)
+                }
             }
         case "toggle_enabled": windowManager.toggleWindow(window.id, enabled: !window.isEnabled)
         default: break

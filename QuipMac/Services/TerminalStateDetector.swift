@@ -47,19 +47,32 @@ final class TerminalStateDetector {
             let tracked = self.trackedWindows
             let currentStates = self.windowStates
             let sttWindows = currentStates.filter { $0.value == .sttActive }.keys
+            let threshold = self.cpuIdleThreshold
             self.pollQueue.async { [weak self] in
                 guard let self else { return }
                 var results: [(String, TerminalState)] = []
+                // Collect child PIDs off main (spawns ps processes)
+                var childPidsByWindow: [String: Set<pid_t>] = [:]
                 for (windowId, shellPid) in tracked {
                     if sttWindows.contains(windowId) { continue }
-                    let detected = self.detectState(shellPid: shellPid)
+                    let detected = self.detectState(shellPid: shellPid, cpuThreshold: threshold)
                     results.append((windowId, detected))
-                    // Refresh child process watches (spawns ps — keep off main)
-                    self.refreshChildWatches(windowId: windowId, shellPid: shellPid)
+                    if let children = self.getChildProcesses(of: shellPid) {
+                        childPidsByWindow[windowId] = Set(children.map(\.pid))
+                    }
                 }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.applyPollResults(results)
+                    // Install kqueue watches on main where MainActor state lives
+                    for (windowId, currentPids) in childPidsByWindow {
+                        let known = self.knownChildren[windowId] ?? []
+                        let newPids = currentPids.subtracting(known)
+                        self.knownChildren[windowId] = currentPids
+                        for pid in newPids {
+                            self.installProcessSource(windowId: windowId, pid: pid)
+                        }
+                    }
                 }
             }
         }
@@ -186,13 +199,13 @@ final class TerminalStateDetector {
     private func pollAllWindows() {
         for (windowId, shellPid) in trackedWindows {
             if windowStates[windowId] == .sttActive { continue }
-            let detected = detectState(shellPid: shellPid)
+            let detected = detectState(shellPid: shellPid, cpuThreshold: cpuIdleThreshold)
             applyPollResults([(windowId, detected)])
         }
     }
 
     /// Detect whether a shell's child process (claude/node) is busy or idle
-    private func detectState(shellPid: pid_t) -> TerminalState {
+    private nonisolated func detectState(shellPid: pid_t, cpuThreshold: Double) -> TerminalState {
         guard let children = getChildProcesses(of: shellPid) else {
             return .waitingForInput
         }
@@ -208,7 +221,7 @@ final class TerminalStateDetector {
 
         let totalCPU = claudeProcesses.reduce(0.0) { $0 + $1.cpuPercent }
 
-        if totalCPU < cpuIdleThreshold {
+        if totalCPU < cpuThreshold {
             return .waitingForInput
         } else {
             return .neutral // busy
@@ -224,7 +237,7 @@ final class TerminalStateDetector {
     }
 
     /// Get child processes of a given PID using `ps`
-    private func getChildProcesses(of parentPid: pid_t) -> [ProcessInfo]? {
+    private nonisolated func getChildProcesses(of parentPid: pid_t) -> [ProcessInfo]? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
         task.arguments = ["-o", "pid,pcpu,comm", "-g", "\(parentPid)"]
