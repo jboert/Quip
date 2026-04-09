@@ -28,8 +28,34 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     let frame: WindowFrame
     let state: String
     let color: String
+    /// True when Claude/node processes are running in this window's terminal
+    let isThinking: Bool
 
     // Synthesized Equatable compares ALL fields including frame
+
+    /// Backward-compat: default isThinking to false if missing from JSON
+    init(id: String, name: String, app: String, enabled: Bool,
+         frame: WindowFrame, state: String, color: String, isThinking: Bool = false) {
+        self.id = id; self.name = name; self.app = app; self.enabled = enabled
+        self.frame = frame; self.state = state; self.color = color
+        self.isThinking = isThinking
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        app = try c.decode(String.self, forKey: .app)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        frame = try c.decode(WindowFrame.self, forKey: .frame)
+        state = try c.decode(String.self, forKey: .state)
+        color = try c.decode(String.self, forKey: .color)
+        isThinking = (try? c.decode(Bool.self, forKey: .isThinking)) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, app, enabled, frame, state, color, isThinking
+    }
 }
 
 struct WindowFrame: Codable, Sendable, Equatable, Hashable {

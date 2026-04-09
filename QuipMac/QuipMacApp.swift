@@ -13,6 +13,8 @@ struct QuipMacApp: App {
     @AppStorage("localOnlyMode") private var localOnlyMode = false
     @State private var outputHighWaterMarks: [String: String] = [:]
     @State private var ttsGeneration: [String: Int] = [:]
+    /// Windows where Claude is actively thinking (detected from terminal content)
+    @State private var thinkingWindows: Set<String> = []
     /// Last window the phone client selected — only this one gets TTS synthesis
     @State private var clientSelectedWindowId: String? = nil
     /// Windows that must see a "busy" state (Claude processing) before the next
@@ -108,6 +110,7 @@ struct QuipMacApp: App {
             }
 
             if newState == .waitingForInput {
+                thinkingWindows.remove(windowId)
                 if pendingInputForWindow.contains(windowId) {
                     KokoroTTSDebug.log("TTS suppressed: \(windowId) still pending input response")
                     return
@@ -229,15 +232,17 @@ struct QuipMacApp: App {
         let wn = window.windowNumber
         let name = window.name
 
-        let processContent: (String) -> Void = { [self] content in
-            doTriggerTTSBody(windowId: windowId, name: name, content: content)
+        let processContent: @Sendable (String) -> Void = { content in
+            DispatchQueue.main.async { [self] in
+                doTriggerTTSBody(windowId: windowId, name: name, content: content)
+            }
         }
 
         if skipStableWait {
             DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
                 let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
                 if !content.isEmpty {
-                    DispatchQueue.main.async { processContent(content) }
+                    processContent(content)
                 }
             }
             return
@@ -245,7 +250,9 @@ struct QuipMacApp: App {
 
         waitForStableContent(termApp: termApp, windowNumber: wn) { stableContent in
             guard let content = stableContent else { return }
-            processContent(content)
+            DispatchQueue.main.async { [self] in
+                doTriggerTTSBody(windowId: windowId, name: name, content: content)
+            }
         }
     }
 
@@ -256,11 +263,6 @@ struct QuipMacApp: App {
             guard !delta.isEmpty else { return }
 
             webSocketServer.broadcast(OutputDeltaMessage(windowId: windowId, windowName: name, text: delta, isFinal: true))
-
-            guard windowId == clientSelectedWindowId else {
-                KokoroTTSDebug.log("TTS skipped: \(windowId) not selected (selected=\(clientSelectedWindowId ?? "nil"))")
-                return
-            }
 
             let gen = (ttsGeneration[windowId] ?? 0) + 1
             ttsGeneration[windowId] = gen
@@ -315,7 +317,8 @@ struct QuipMacApp: App {
         let states = windowManager.windows.filter(\.isEnabled).map { window in
             window.toWindowState(
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
-                screenBounds: screenBounds
+                screenBounds: screenBounds,
+                isThinking: thinkingWindows.contains(window.id)
             )
         }
         let update = LayoutUpdate(monitor: display?.name ?? "Display 1", windows: states)
@@ -337,6 +340,7 @@ struct QuipMacApp: App {
             if let msg = MessageCoder.decode(SendTextMessage.self, from: data) {
                 AuditLogger.log(messageType: "send_text", clientIdentifier: "ws-client", textContent: msg.text)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
+                    if msg.pressReturn { thinkingWindows.insert(msg.windowId) }
                     let termApp = terminalAppForWindow(window)
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
@@ -349,6 +353,7 @@ struct QuipMacApp: App {
         case "quick_action":
             if let msg = MessageCoder.decode(QuickActionMessage.self, from: data) {
                 AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
+                thinkingWindows.insert(msg.windowId)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     handleQuickAction(msg.action, for: window)
                 }
@@ -357,6 +362,7 @@ struct QuipMacApp: App {
             if let msg = MessageCoder.decode(STTStateMessage.self, from: data) {
                 clientSelectedWindowId = msg.windowId
                 pendingInputForWindow.insert(msg.windowId)
+                thinkingWindows.insert(msg.windowId)
 
                 let wid = msg.windowId
                 terminalStateDetector.setSTTActive(for: wid)
@@ -481,7 +487,7 @@ struct QuipMacApp: App {
     private func waitForStableContent(termApp: TerminalApp, windowNumber: CGWindowID,
                                       pollInterval: TimeInterval = 0.2,
                                       maxWaitSeconds: TimeInterval = 2.5,
-                                      completion: @escaping (String?) -> Void) {
+                                      completion: @Sendable @escaping (String?) -> Void) {
         // Run the heavy AppleScript reads on a background thread so they
         // don't block main and starve tunnel message delivery.
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
@@ -504,14 +510,19 @@ struct QuipMacApp: App {
         }
     }
 
-    /// Get the last chunk of terminal content to synthesize. Hard-capped at 25 lines
-    /// regardless of what changed — TTS should read only the latest response, not scrollback.
-    /// The Python filter handles removing UI chrome from whatever we send.
+    /// Compute what's new since last TTS. Returns empty if nothing changed.
+    /// On first call for a window (no high-water mark), seeds the mark and returns empty
+    /// so we don't read back old content from before the app started.
     @MainActor
     private func computeDelta(windowId: String, newContent: String) -> String {
-        let newLines: [String] = newContent.components(separatedBy: "\n")
-        // Always take the last 25 lines. Claude's most recent response fits in this window,
-        // UI chrome below it gets stripped by the Python filter.
+        guard let previous = outputHighWaterMarks[windowId] else {
+            // First time seeing this window — seed the mark, don't TTS old content
+            return ""
+        }
+        // If content hasn't changed, nothing to speak
+        if newContent == previous { return "" }
+        // Take the last 25 lines — the Python filter handles stripping UI chrome
+        let newLines = newContent.components(separatedBy: "\n")
         return Array(newLines.suffix(25)).joined(separator: "\n")
     }
 

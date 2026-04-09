@@ -14,6 +14,13 @@ enum TerminalApp: String, Codable, CaseIterable, Identifiable, Sendable {
         case .iterm2: "com.googlecode.iterm2"
         }
     }
+
+    static func fromBundleId(_ bundleId: String) -> TerminalApp {
+        switch bundleId {
+        case "com.apple.Terminal": return .terminal
+        default: return .iterm2
+        }
+    }
 }
 
 // MARK: - Terminal State

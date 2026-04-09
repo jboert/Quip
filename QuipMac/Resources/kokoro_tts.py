@@ -28,7 +28,7 @@ MODEL_PATH = VOICES_DIR / "kokoro-v1.0.onnx"
 VOICES_PATH = VOICES_DIR / "voices-v1.0.bin"
 DEFAULT_VOICE = "af_heart"
 DEFAULT_LANG = "en-us"
-DEFAULT_SPEED = 1.0
+DEFAULT_SPEED = 0.95
 
 
 def filter_text(text: str) -> str:
@@ -202,17 +202,40 @@ def filter_text(text: str) -> str:
     text = re.sub(r"\*(.+?)\*", r"\1", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"(?m)^[\-\*]\s+", "", text)
-    text = re.sub(r"(?m)^\d+\.\s+", "", text)
+    # Numbered list prefixes (allow leading whitespace)
+    text = re.sub(r"(?m)^\s*\d+\.\s+", "", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = text.strip()
+
+    # Unicode symbols → speakable replacements
+    text = text.replace("→", " to ")
+    text = text.replace("←", " from ")
+    text = text.replace("—", ", ")
+    text = text.replace("–", ", ")
+    text = text.replace("…", "...")
+
+    # Code-like patterns → natural speech:
+    #   "dht.toArray()" → "dht toArray"
+    #   "dht.table.toArray()" → "dht table toArray"
+    # Match word.word chains optionally ending with ()
+    text = re.sub(r"(\w+(?:\.\w+)+)\(\)", lambda m: m.group(1).replace(".", " "), text)
+    text = re.sub(r"(\w+(?:\.\w+)+)", lambda m: m.group(1).replace(".", " ") if not re.match(r"^\d+(\.\d+)+$", m.group(1)) else m.group(1), text)
+    # Remaining bare parentheses around empty args
+    text = re.sub(r"\(\)", "", text)
+    # Version numbers: "1.3.1" → "1 point 3 point 1"
+    text = re.sub(r"\b(\d+)\.(\d+)(?:\.(\d+))?\b",
+                  lambda m: m.group(1) + " point " + m.group(2) + (" point " + m.group(3) if m.group(3) else ""),
+                  text)
 
     # Strip any remaining TTS-unfriendly symbols that Kokoro would read by name
     # (e.g. ⏺ → "record button", ⎿ → "bottom left corner", etc.)
     TTS_UNSPEAKABLE = "⏺⎿●✻✳✢◆◇◈◉○◎◐◑◒◓⏵⏴▶◀►◄▲▼▸▹▾▿⟦⟧⌁⌂⌃⌄⌇✦✧✩✪✫★☆═━─│┃"
     text = "".join(c if c not in TTS_UNSPEAKABLE else " " for c in text)
-    # Collapse any extra whitespace from the strip
+    # Collapse any extra whitespace and fix punctuation spacing
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)
+    # Fix space-before-comma from symbol replacements (e.g. "fix , text" → "fix, text")
+    text = re.sub(r" +,", ",", text)
     text = text.strip()
 
     # Cap total text at 1000 chars so we don't stream for minutes
@@ -328,34 +351,68 @@ def _synth_with_cached(text: str, voice: str, speed: float, lang: str) -> bytes:
     return buf.getvalue()
 
 
+def _add_prosody_hints(text: str) -> str:
+    """Insert commas at natural pause points to help Kokoro breathe.
+    Adds pauses before conjunctions and after introductory phrases."""
+    # Add comma before conjunctions when missing (but not if already punctuated)
+    text = re.sub(r"(?<=[a-z]) (but|however|although|though|since|because|so that|which means) ",
+                  r", \1 ", text)
+    # Add comma after common introductory words at start of clause
+    text = re.sub(r"(?:^|(?<=\. ))(Also|Additionally|However|Meanwhile|Finally|Overall|Instead|Basically|Essentially) ",
+                  r"\1, ", text)
+    return text
+
+
 def _split_sentences(text: str):
     """Split text into sentences for streaming synthesis.
-    Prefers to keep sentences between 20 and 200 chars for smooth playback.
+    Keeps chunks short (under 150 chars) for better prosody — Kokoro sounds
+    more natural with shorter inputs that represent single thoughts.
     """
-    # Split on sentence boundaries
-    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    text = _add_prosody_hints(text)
+
+    # Split on newlines first — each line is a natural thought/clause
+    lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+
+    # Then split each line on sentence boundaries (.!?) but NOT after "digit."
+    parts = []
+    for line in lines:
+        parts.extend(re.split(r"(?<=[.!?])(?<!\d\.)\s+", line))
+
+    # Then split long parts at clause boundaries (semicolons, colons, dashes)
+    clause_split = []
+    for p in parts:
+        if len(p) > 150:
+            # Split at semicolons, colons, em-dashes, and " - " as clause boundaries
+            sub = re.split(r"(?<=[;:])\s+|(?<=,)\s+(?=and |or |but |so |yet )|(?:\s+-\s+)", p)
+            clause_split.extend(s.strip() for s in sub if s.strip())
+        else:
+            clause_split.append(p)
+
     # Merge very short fragments with neighbors to avoid choppy playback
     merged = []
-    for p in parts:
+    for p in clause_split:
         p = p.strip()
         if not p:
             continue
-        if merged and (len(merged[-1]) < 30 or len(p) < 15):
+        if merged and (len(merged[-1]) < 25 or len(p) < 12):
             merged[-1] = merged[-1] + " " + p
         else:
             merged.append(p)
-    # Break up very long sentences
+
+    # Break up anything still over 150 chars at comma boundaries
     final = []
     for p in merged:
-        while len(p) > 300:
-            # Find a clause boundary within first 300 chars
-            cut = p.rfind(", ", 100, 300)
-            if cut < 50:
-                cut = p.rfind(" ", 200, 300)
-            if cut < 50:
-                cut = 300
+        while len(p) > 150:
+            cut = p.rfind(", ", 60, 150)
+            if cut < 40:
+                cut = p.rfind(" ", 100, 150)
+            if cut < 40:
+                cut = 150
             final.append(p[:cut].strip())
             p = p[cut:].strip()
+            # Strip leading comma from remainder
+            if p.startswith(", "):
+                p = p[2:]
         if p:
             final.append(p)
     return final

@@ -28,6 +28,8 @@ struct QuipApp: App {
     @State private var showPINEntry = false
     @State private var pinText = ""
     @AppStorage("ttsEnabled") private var ttsEnabled = false
+    /// Output delta text per window — used to display TTS overlay captions
+    @State private var ttsOverlayTexts: [String: String] = [:]
 
     var body: some Scene {
         WindowGroup {
@@ -43,6 +45,7 @@ struct QuipApp: App {
                 terminalContentWindowId: $terminalContentWindowId,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
+                ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
                 onStartRecording: { startRecording() },
                 onStopRecording: { stopRecording() },
@@ -92,7 +95,8 @@ struct QuipApp: App {
                     let w = windows[i]
                     windows[i] = WindowState(
                         id: w.id, name: w.name, app: w.app, enabled: w.enabled,
-                        frame: w.frame, state: newState, color: w.color
+                        frame: w.frame, state: newState, color: w.color,
+                        isThinking: w.isThinking
                     )
                 }
             }
@@ -120,13 +124,17 @@ struct QuipApp: App {
             }
         }
 
+        client.onOutputDelta = { windowId, windowName, text, isFinal in
+            DispatchQueue.main.async {
+                guard ttsEnabled else { return }
+                ttsOverlayTexts[windowId] = text
+            }
+        }
+
         client.onTTSAudio = { windowId, windowName, sessionId, sequence, isFinal, wavData in
             DispatchQueue.main.async {
                 guard ttsEnabled else { return }
-                guard windowId == selectedWindowId else {
-                    return
-                }
-                speech.enqueueAudio(wavData, sessionId: sessionId, isFinal: isFinal)
+                speech.enqueueAudio(wavData, windowId: windowId, sessionId: sessionId, isFinal: isFinal)
             }
         }
 
@@ -209,6 +217,7 @@ struct MainiOSView: View {
     @Binding var terminalContentWindowId: String?
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
+    var ttsOverlayTexts: [String: String]
     var monitorName: String
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
@@ -334,13 +343,23 @@ struct MainiOSView: View {
                 )
             }
         }
-        .overlay {
+        .overlay(alignment: .bottom) {
             if speech.isSpeaking {
-                Color.black.opacity(0.001)
-                    .ignoresSafeArea()
-                    .onTapGesture { speech.stopSpeaking() }
+                TTSNotificationOverlay(
+                    currentSpeakingWindowId: speech.currentSpeakingWindowId,
+                    windows: windows,
+                    ttsTexts: ttsOverlayTexts,
+                    onTap: { windowId in
+                        onRequestContent(windowId)
+                    },
+                    onSwipeDismiss: { speech.stopSpeaking() }
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.25), value: speech.isSpeaking)
             }
         }
+        .allowsHitTesting(true)
         .overlay { HiddenVolumeView().frame(width: 1, height: 1) }
         .environment(\.quipColors, colors)
         .onAppear { updateOrientation() }
