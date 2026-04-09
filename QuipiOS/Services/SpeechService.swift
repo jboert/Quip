@@ -107,11 +107,9 @@ final class SpeechService {
         }
         audioQueue.removeFirst()
 
-        // Configure audio session once per play (cheap if already set)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .default,
-                                 options: [.mixWithOthers, .defaultToSpeaker])
-        try? session.setActive(true)
+        // Audio session is already configured by HardwareButtonHandler (.playAndRecord).
+        // Do NOT call setCategory/setActive here — it triggers phantom outputVolume KVO
+        // events that the volume-button handler can't distinguish from real presses.
 
         do {
             let player = try AVAudioPlayer(data: data)
@@ -158,9 +156,12 @@ private class AudioWorker: @unchecked Sendable {
                 return
             }
 
-            // Do NOT reconfigure the audio session here — HardwareButtonHandler
-            // already set .playAndRecord and changing the mode/options triggers
-            // phantom outputVolume KVO notifications that cause a feedback loop.
+            // Don't call setCategory here — HardwareButtonHandler owns that and
+            // changing it triggers phantom volume KVO events. Just make sure the
+            // session is active (cheap no-op if it already is) so the audio engine
+            // can grab the mic after TTS playback releases it.
+            let session = AVAudioSession.sharedInstance()
+            try? session.setActive(true)
 
             // Create recognition request
             let request = SFSpeechAudioBufferRecognitionRequest()

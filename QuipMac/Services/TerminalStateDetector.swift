@@ -37,11 +37,30 @@ final class TerminalStateDetector {
     // MARK: - Start / Stop Monitoring
 
     /// Begin periodic polling of tracked terminal windows
+    private let pollQueue = DispatchQueue(label: "quip.terminal-state-poll", qos: .utility)
+
     func startMonitoring() {
         guard pollTimer == nil else { return }
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.pollAllWindows()
+            guard let self else { return }
+            // Snapshot what we need from main, then do the heavy ps(1) work off main.
+            let tracked = self.trackedWindows
+            let currentStates = self.windowStates
+            let sttWindows = currentStates.filter { $0.value == .sttActive }.keys
+            self.pollQueue.async { [weak self] in
+                guard let self else { return }
+                var results: [(String, TerminalState)] = []
+                for (windowId, shellPid) in tracked {
+                    if sttWindows.contains(windowId) { continue }
+                    let detected = self.detectState(shellPid: shellPid)
+                    results.append((windowId, detected))
+                    // Refresh child process watches (spawns ps — keep off main)
+                    self.refreshChildWatches(windowId: windowId, shellPid: shellPid)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.applyPollResults(results)
+                }
             }
         }
         print("[TerminalStateDetector] Started monitoring (interval: \(pollingInterval)s)")
@@ -141,18 +160,14 @@ final class TerminalStateDetector {
     private let debounceThreshold = 2
 
     /// Check all tracked windows' process states
-    private func pollAllWindows() {
-        for (windowId, shellPid) in trackedWindows {
-            if windowStates[windowId] == .sttActive { continue }
-
-            let detected = detectState(shellPid: shellPid)
+    /// Apply poll results on main — only does lightweight state comparisons.
+    private func applyPollResults(_ results: [(String, TerminalState)]) {
+        for (windowId, detected) in results {
             let currentState = windowStates[windowId] ?? .neutral
 
             if detected == currentState {
-                // No change — clear debounce
                 debounceCount[windowId] = nil
             } else {
-                // Different from current — accumulate evidence before transitioning
                 let prev = debounceCount[windowId]
                 if prev?.state == detected {
                     debounceCount[windowId] = (detected, (prev?.count ?? 0) + 1)
@@ -165,8 +180,14 @@ final class TerminalStateDetector {
                     onStateTransition?(windowId, currentState, detected)
                 }
             }
+        }
+    }
 
-            refreshChildWatches(windowId: windowId, shellPid: shellPid)
+    private func pollAllWindows() {
+        for (windowId, shellPid) in trackedWindows {
+            if windowStates[windowId] == .sttActive { continue }
+            let detected = detectState(shellPid: shellPid)
+            applyPollResults([(windowId, detected)])
         }
     }
 

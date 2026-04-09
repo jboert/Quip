@@ -13,13 +13,29 @@ final class CloudflareTunnel {
 
     /// Set by QuipMacApp to allow tunnel clients to send messages
     /// to the same handler as direct WebSocket clients
-    var webSocketServer: WebSocketServer?
+    var webSocketServer: WebSocketServer? {
+        didSet {
+            cachedPIN = webSocketServer?.pinManager?.pin ?? ""
+            cachedServer = webSocketServer
+        }
+    }
+
+    /// Snapshot of the PIN for the proxy queue — avoids MainActor isolation issues.
+    /// Updated whenever webSocketServer is assigned.
+    @ObservationIgnored
+    nonisolated(unsafe) var cachedPIN: String = ""
+
+    /// Cached reference to the server for proxy-queue access.
+    @ObservationIgnored
+    nonisolated(unsafe) var cachedServer: WebSocketServer?
 
     private var process: Process?
     private var pollTimer: Timer?
+    private var healthTimer: Timer?
     private var proxyListener: NWListener?
     private let proxyPort: UInt16 = 8766
     private let proxyQueue = DispatchQueue(label: "quip.tunnel-proxy")
+    private var stoppedIntentionally = false
 
     private static var logPath: String {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -28,6 +44,7 @@ final class CloudflareTunnel {
 
     func start(localPort: UInt16 = 8765) {
         guard !isRunning else { return }
+        stoppedIntentionally = false
 
         // Start the tunnel proxy — handles WebSocket framing that cloudflared strips
         startProxy()
@@ -59,8 +76,19 @@ final class CloudflareTunnel {
 
         shell.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
-                self?.isRunning = false
-                self?.pollTimer?.invalidate()
+                guard let self else { return }
+                self.isRunning = false
+                self.pollTimer?.invalidate()
+                self.healthTimer?.invalidate()
+                if !self.stoppedIntentionally {
+                    print("[CloudflareTunnel] Process died, restarting in 3 seconds")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                        guard let self, !self.stoppedIntentionally, !self.isRunning else { return }
+                        self.publicURL = ""
+                        self.webSocketURL = ""
+                        self.start()
+                    }
+                }
             }
         }
 
@@ -77,14 +105,31 @@ final class CloudflareTunnel {
                     self.checkLogForURL()
                 }
             }
+
+            // Health check — verify cloudflared is still alive every 60 seconds
+            healthTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    if let proc = self.process, !proc.isRunning {
+                        print("[CloudflareTunnel] Health check: process not running, restarting")
+                        self.publicURL = ""
+                        self.webSocketURL = ""
+                        self.isRunning = false
+                        self.start()
+                    }
+                }
+            }
         } catch {
             isRunning = false
         }
     }
 
     func stop() {
+        stoppedIntentionally = true
         pollTimer?.invalidate()
         pollTimer = nil
+        healthTimer?.invalidate()
+        healthTimer = nil
         process?.terminate()
         process = nil
         proxyListener?.cancel()
@@ -270,41 +315,52 @@ final class CloudflareTunnel {
         conn.send(content: frame, completion: .contentProcessed({ _ in }))
     }
 
+    /// Whether this tunnel connection has been authenticated.
+    /// Accessed only from the proxyQueue so no synchronization needed.
+    @ObservationIgnored
+    private nonisolated(unsafe) var tunnelAuthenticated: [ObjectIdentifier: Bool] = [:]
+
     private nonisolated func handleTunnelMessage(_ data: Data, on conn: NWConnection) {
-        // Route to WebSocketServer's message handler on the main thread
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let server = self.webSocketServer else { return }
+        let messageType = MessageCoder.messageType(from: data)
 
-            let messageType = MessageCoder.messageType(from: data)
-
-            if messageType == "auth" {
-                // Handle auth directly — check PIN and respond
-                if let authMsg = MessageCoder.decode(AuthMessage.self, from: data),
-                   let pin = server.pinManager?.pin, !pin.isEmpty {
-                    let response: AuthResultMessage
-                    if authMsg.pin == pin {
-                        response = AuthResultMessage(success: true, error: nil)
-                        print("[TunnelProxy] Client authenticated")
-                    } else {
-                        response = AuthResultMessage(success: false, error: "Incorrect PIN")
-                        print("[TunnelProxy] Auth failed: wrong PIN")
-                    }
-                    if let responseData = try? JSONEncoder().encode(response),
-                       let json = String(data: responseData, encoding: .utf8) {
-                        self.sendWSFrame(text: json, on: conn)
-                    }
-                    // If authenticated, start forwarding layout updates etc.
-                    if authMsg.pin == pin {
-                        // Register this tunnel connection for broadcasts
-                        server.registerTunnelClient(conn) { data in
-                            if let json = String(data: data, encoding: .utf8) {
-                                self.sendWSFrame(text: json, on: conn)
-                            }
+        if messageType == "auth" {
+            // Auth is handled entirely on the proxy queue — no main-queue hop.
+            // This prevents auth hangs when the main queue is congested.
+            if let authMsg = MessageCoder.decode(AuthMessage.self, from: data) {
+                let pin = self.cachedPIN
+                let response: AuthResultMessage
+                if !pin.isEmpty && authMsg.pin == pin {
+                    response = AuthResultMessage(success: true, error: nil)
+                    self.tunnelAuthenticated[ObjectIdentifier(conn)] = true
+                    print("[TunnelProxy] Client authenticated")
+                    // Register for broadcasts immediately — registerTunnelClient is thread-safe
+                    self.cachedServer?.registerTunnelClient(conn) { [weak self] (data: Data) in
+                        if let json = String(data: data, encoding: .utf8) {
+                            self?.sendWSFrame(text: json, on: conn)
                         }
                     }
+                } else {
+                    response = AuthResultMessage(success: false, error: pin.isEmpty ? "Server PIN not configured" : "Incorrect PIN")
+                    print("[TunnelProxy] Auth failed: \(pin.isEmpty ? "no PIN configured" : "wrong PIN")")
                 }
-            } else {
-                // Forward other messages to the server's message handler
+                if let responseData = try? JSONEncoder().encode(response),
+                   let json = String(data: responseData, encoding: .utf8) {
+                    self.sendWSFrame(text: json, on: conn)
+                }
+            }
+        } else {
+            // Non-auth messages must be authenticated and forwarded on main
+            guard self.tunnelAuthenticated[ObjectIdentifier(conn)] == true else {
+                print("[TunnelProxy] Dropping message from unauthenticated tunnel client")
+                return
+            }
+            let arrivedAt = Date()
+            let msgType = messageType ?? "?"
+            KokoroTTSDebug.log("TUNNEL recv \(msgType) at proxy queue")
+            DispatchQueue.main.async { [weak self] in
+                let mainDelay = Date().timeIntervalSince(arrivedAt)
+                KokoroTTSDebug.log("TUNNEL \(msgType) reached main after \(String(format: "%.1f", mainDelay))s")
+                guard let self, let server = self.cachedServer else { return }
                 server.onMessageReceived?(data)
             }
         }

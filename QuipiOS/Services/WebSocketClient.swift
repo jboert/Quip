@@ -126,6 +126,7 @@ final class WebSocketClient {
     private var reconnectDelay: TimeInterval = 1.0
     private var reconnectTask: Task<Void, Never>?
     private var connectionTimeoutTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
 
     func connect(to url: URL) {
         intentionalDisconnect = false
@@ -138,6 +139,8 @@ final class WebSocketClient {
 
     func disconnect() {
         intentionalDisconnect = true
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
         connectionTimeoutTask?.cancel()
@@ -236,6 +239,7 @@ final class WebSocketClient {
                     self.authError = nil
                     self.lastError = nil
                     self.reconnectDelay = 1.0
+                    self.startKeepalive()
                     // Auto-send cached PIN on reconnect, or prompt for PIN
                     // (skip if server already auto-authenticated us)
                     if !self.isAuthenticated {
@@ -361,8 +365,29 @@ final class WebSocketClient {
         }
     }
 
+    /// Ping the server every 30 seconds. If a ping fails, tear down and reconnect.
+    private func startKeepalive() {
+        keepaliveTask?.cancel()
+        keepaliveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled, let self, let task = self.webSocketTask else { return }
+                task.sendPing { error in
+                    DispatchQueue.main.async {
+                        if let error {
+                            NSLog("[WebSocketClient] Keepalive ping failed: %@", error.localizedDescription)
+                            self.handleDisconnect()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func handleDisconnect() {
         guard !intentionalDisconnect else { return }
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
         isConnected = false
         isConnecting = true
         isAuthenticated = false
