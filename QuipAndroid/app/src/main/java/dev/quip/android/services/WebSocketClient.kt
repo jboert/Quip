@@ -146,20 +146,22 @@ class QuipWebSocketClient {
                 synchronized(lock) {
                     isConnected = true
                     isConnecting = false
-                    isAuthenticated = false
+                    // Do NOT reset isAuthenticated here — the server may have already
+                    // sent auth_result: success (no-PIN mode). We wait for handleMessage
+                    // to process the first auth_result before deciding to prompt.
                     authError = null
                     lastError = null
                     reconnectDelay = INITIAL_RECONNECT_DELAY_MS
                 }
                 notifyConnectionStateChanged()
 
-                // Auto-send cached PIN or request PIN entry
+                // Auto-send cached PIN if we have one — otherwise wait for the server's
+                // first auth_result to decide whether to prompt (no-PIN mode sends success,
+                // PIN-required mode sends error="auth_required").
                 val cachedPin = sessionPIN
                 if (cachedPin != null) {
                     Log.i(TAG, "Auto-sending cached PIN")
                     send(AuthMessage(pin = cachedPin))
-                } else {
-                    mainHandler.post { onAuthRequired?.invoke() }
                 }
             }
 
@@ -193,14 +195,22 @@ class QuipWebSocketClient {
                         Log.i(TAG, "Authentication successful")
                         isAuthenticated = true
                         authError = null
+                        notifyConnectionStateChanged()
+                        mainHandler.post { onAuthResult?.invoke(true, null) }
+                    } else if (result.error == "auth_required") {
+                        // Server is telling us auth is required — prompt for PIN
+                        Log.i(TAG, "Server requires PIN authentication")
+                        isAuthenticated = false
+                        notifyConnectionStateChanged()
+                        mainHandler.post { onAuthRequired?.invoke() }
                     } else {
                         Log.w(TAG, "Authentication failed: ${result.error}")
                         isAuthenticated = false
                         authError = result.error ?: "Authentication failed"
                         sessionPIN = null
+                        notifyConnectionStateChanged()
+                        mainHandler.post { onAuthResult?.invoke(false, result.error) }
                     }
-                    notifyConnectionStateChanged()
-                    mainHandler.post { onAuthResult?.invoke(result.success, result.error) }
                 }
                 "layout_update" -> {
                     if (!isAuthenticated) return

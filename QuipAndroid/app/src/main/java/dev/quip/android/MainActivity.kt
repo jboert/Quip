@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
                         isConnecting = vm.isConnecting,
                         isAuthenticated = vm.isAuthenticated,
                         isRecording = vm.isRecording,
+                        transcribedText = vm.transcribedText,
                         windows = vm.windows.toList(),
                         selectedWindowId = vm.selectedWindowId,
                         monitorName = vm.monitorName,

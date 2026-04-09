@@ -9,8 +9,8 @@ import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
@@ -40,9 +40,12 @@ class NsdBrowser {
     private var multicastLock: WifiManager.MulticastLock? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Channel-based resolve queue replaces LinkedList+synchronized+volatile
-    private val resolveChannel = Channel<NsdServiceInfo>(Channel.UNLIMITED)
+    // Channel-based resolve queue replaces LinkedList+synchronized+volatile.
+    // Recreated on each startDiscovery() so stale in-flight resolves from a
+    // prior session don't bleed into the new one.
+    private var resolveChannel: Channel<NsdServiceInfo>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var resolveJob: Job? = null
 
     private val discoveryListener = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(serviceType: String) {
@@ -55,7 +58,7 @@ class NsdBrowser {
 
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
             Log.i(TAG, "Found service: ${serviceInfo.serviceName}")
-            resolveChannel.trySend(serviceInfo)
+            resolveChannel?.trySend(serviceInfo)
         }
 
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {
@@ -81,9 +84,14 @@ class NsdBrowser {
 
         discoveredHosts = emptyList()
 
+        // Fresh channel each session — a stopped session leaves the old one
+        // closed/empty, and we don't want events from a prior browse to leak in.
+        val channel = Channel<NsdServiceInfo>(Channel.UNLIMITED)
+        resolveChannel = channel
+
         // Launch coroutine that processes resolves serially from the channel
-        scope.launch {
-            for (serviceInfo in resolveChannel) {
+        resolveJob = scope.launch {
+            for (serviceInfo in channel) {
                 resolveService(serviceInfo)
             }
         }
@@ -113,7 +121,13 @@ class NsdBrowser {
         }
         nsdManager = null
         isSearching = false
-        scope.cancel()
+        // Cancel just the per-session resolve consumer + close its channel.
+        // Do NOT cancel `scope` itself — a cancelled scope stays cancelled,
+        // and any later startDiscovery() would silently fail to launch.
+        resolveChannel?.close()
+        resolveChannel = null
+        resolveJob?.cancel()
+        resolveJob = null
 
         try {
             multicastLock?.release()

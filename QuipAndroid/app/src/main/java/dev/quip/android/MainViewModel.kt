@@ -37,7 +37,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val TAG = "Quip"
         private const val PREFS_NAME = "quip_prefs"
         private const val KEY_LAST_URL = "last_url"
-        private const val STOP_RECORDING_DELAY_MS = 2500L  // extra recording after button release for conversational pauses
+        private const val STOP_RECORDING_DELAY_MS = 400L   // brief grace period for recognizer to finalize
         private const val RESULT_TIMEOUT_MS = 1500L
     }
 
@@ -86,6 +86,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var showUrlWarning by mutableStateOf(false)
         private set
     var pendingUnsafeUrl by mutableStateOf<String?>(null)
+        private set
+    // Observable live transcription shown in the recording overlay
+    var transcribedText by mutableStateOf("")
         private set
 
     // Orientation request callback — set by Activity
@@ -192,8 +195,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (recordingState !is RecordingState.Idle) return
         val windowId = selectedWindowId ?: return
 
+        transcribedText = ""
+        speechService.onPartialResult = { text ->
+            transcribedText = text
+        }
+
         speechService.onFinalResult = { text ->
             Log.d(TAG, "Final transcription: '$text' (length=${text.length})")
+            transcribedText = text
             val state = recordingState
             if (state is RecordingState.WaitingForResult) {
                 stopRecordingJob?.cancel()

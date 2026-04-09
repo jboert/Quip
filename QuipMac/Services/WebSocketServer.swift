@@ -14,7 +14,10 @@ final class WebSocketServer {
     var connectedClientCount: Int = 0
     var onMessageReceived: ((Data) -> Void)?
     var pinManager: PINManager?
-    var requireAuth: Bool = true
+    /// Read from the network queue during connection handshake, so it can't live
+    /// on the MainActor. It's a plain Bool — atomic reads/writes are fine.
+    @ObservationIgnored
+    nonisolated(unsafe) var requireAuth: Bool = true
 
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
@@ -92,21 +95,26 @@ final class WebSocketServer {
                 case .ready:
                     Self.wslog("Connection ready (pending auth)")
                     KokoroTTSDebug.log("WS connection ready from \(connection.endpoint)")
+                    // CRITICAL: fire the auth signal and start the receive loop
+                    // IMMEDIATELY on the network queue. We used to do this inside
+                    // DispatchQueue.main.async, but under reconnect storms main
+                    // would get backed up 3-26s by SwiftUI re-renders, iOS would
+                    // time out, and the socket would reset mid-handshake.
+                    let requireAuthNow = self.requireAuth
+                    let signalMsg: AuthResultMessage = requireAuthNow
+                        ? AuthResultMessage(success: false, error: "auth_required")
+                        : AuthResultMessage(success: true, error: nil)
+                    KokoroTTSDebug.log(requireAuthNow ? "WS sending auth_required" : "WS sending auth_result success (no auth required)")
+                    self.send(signalMsg, to: connection)
+                    self.receiveMessage(on: connection)
+                    Self.wslog("Sent auth signal, starting receiveMessage")
+                    // State mutation hops to main (this can be slow under load,
+                    // but the socket handshake no longer cares).
                     DispatchQueue.main.async {
-                        self.clients.append(ClientConnection(connection: connection))
+                        var client = ClientConnection(connection: connection)
+                        client.isAuthenticated = !requireAuthNow
+                        self.clients.append(client)
                         self.connectedClientCount = self.clients.count
-                        if self.requireAuth {
-                            KokoroTTSDebug.log("WS sending auth_required")
-                            self.send(AuthResultMessage(success: false, error: "auth_required"), to: connection)
-                        } else {
-                            if let idx = self.clients.firstIndex(where: { $0.connection === connection }) {
-                                self.clients[idx].isAuthenticated = true
-                            }
-                            KokoroTTSDebug.log("WS sending auth_result success (no auth required)")
-                            self.send(AuthResultMessage(success: true, error: nil), to: connection)
-                        }
-                        Self.wslog("Sent auth signal, starting receiveMessage")
-                        self.receiveMessage(on: connection)
                     }
                 case .failed(let error):
                     Self.wslog("Connection FAILED: \(error)")
@@ -141,17 +149,32 @@ final class WebSocketServer {
         print("[WebSocketServer] Stopped")
     }
 
-    /// Tunnel clients that handle their own WebSocket framing
-    private var tunnelBroadcasters: [(Data) -> Void] = []
+    /// Tunnel clients that handle their own WebSocket framing.
+    /// Protected by its own lock so registration can happen from the proxy queue
+    /// without waiting for the main queue, which may be congested.
+    @ObservationIgnored
+    private let tunnelBroadcastersLock = NSLock()
+    @ObservationIgnored
+    private nonisolated(unsafe) var tunnelBroadcasters: [@Sendable (Data) -> Void] = []
 
     var hasConnectedClients: Bool {
-        !clients.isEmpty || !tunnelBroadcasters.isEmpty
+        !clients.isEmpty || tunnelBroadcasterCount > 0
     }
 
-    /// Register a tunnel connection for receiving broadcast messages
-    func registerTunnelClient(_ conn: NWConnection, sender: @escaping (Data) -> Void) {
+    private var tunnelBroadcasterCount: Int {
+        tunnelBroadcastersLock.lock()
+        defer { tunnelBroadcastersLock.unlock() }
+        return tunnelBroadcasters.count
+    }
+
+    /// Register a tunnel connection for receiving broadcast messages.
+    /// Safe to call from any queue.
+    nonisolated func registerTunnelClient(_ conn: NWConnection, sender: @escaping @Sendable (Data) -> Void) {
+        tunnelBroadcastersLock.lock()
         tunnelBroadcasters.append(sender)
-        print("[WebSocketServer] Tunnel client registered. \(tunnelBroadcasters.count) tunnel client(s)")
+        let count = tunnelBroadcasters.count
+        tunnelBroadcastersLock.unlock()
+        print("[WebSocketServer] Tunnel client registered. \(count) tunnel client(s)")
     }
 
     func broadcast<T: Encodable & Sendable>(_ message: T) {
@@ -179,13 +202,18 @@ final class WebSocketServer {
         }
 
         // Send to authenticated tunnel clients
-        for sender in tunnelBroadcasters {
+        tunnelBroadcastersLock.lock()
+        let senders = tunnelBroadcasters
+        tunnelBroadcastersLock.unlock()
+        for sender in senders {
             sender(data)
         }
     }
 
     /// Send a message to a specific connection (used for auth results).
-    private func send<T: Encodable>(_ message: T, to connection: NWConnection) {
+    /// `nonisolated` because it's a pure encode-then-write helper that touches
+    /// no `self` state — safe to call from the network queue during handshake.
+    private nonisolated func send<T: Encodable>(_ message: T, to connection: NWConnection) {
         let data: Data
         do {
             data = try JSONEncoder().encode(message)
@@ -265,7 +293,10 @@ final class WebSocketServer {
         }
     }
 
-    private func receiveMessage(on connection: NWConnection) {
+    /// `nonisolated` because the body just arms an async receive callback on
+    /// the NWConnection — all `self` access inside the callback already hops
+    /// to main via `DispatchQueue.main.async`.
+    private nonisolated func receiveMessage(on connection: NWConnection) {
         connection.receiveMessage { [weak self] content, contentContext, isComplete, error in
             guard let self else { return }
 
