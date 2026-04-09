@@ -1,3 +1,7 @@
+# macOS resource forks and metadata
+._*
+.DS_Store
+
 QuipLinux/target/
 QuipAndroid/.gradle/
 QuipAndroid/app/build/
