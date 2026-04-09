@@ -50,39 +50,40 @@ struct TTSNotificationOverlay: View {
         let windowColor = Color(hex: window.color)
         let displayText = cleanForDisplay(text)
 
-        return HStack(alignment: .top, spacing: 10) {
+        return HStack(alignment: .top, spacing: 12) {
             // Window color accent bar
             RoundedRectangle(cornerRadius: 2)
                 .fill(windowColor)
-                .frame(width: 3)
+                .frame(width: 4)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 // Window name header
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 10))
+                        .font(.system(size: 12))
                         .foregroundStyle(windowColor.opacity(0.9))
                     Text(window.app)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.7))
                     Spacer()
                     Text("tap to view")
-                        .font(.system(size: 9, weight: .regular))
+                        .font(.system(size: 10, weight: .regular))
                         .foregroundStyle(.white.opacity(0.25))
                 }
 
-                // Spoken text — collapsed (2 lines) or expanded (up to 10)
+                // Spoken text — collapsed (3 lines) or expanded (up to 10)
                 if !displayText.isEmpty {
                     Text(displayText)
-                        .font(.system(size: 13, weight: .regular, design: .default))
+                        .font(.system(size: 14, weight: .regular, design: .default))
                         .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(expanded ? 10 : 2)
+                        .lineLimit(expanded ? 10 : 3)
+                        .lineSpacing(2)
                         .multilineTextAlignment(.leading)
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(.ultraThinMaterial)

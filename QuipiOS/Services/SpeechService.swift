@@ -1,6 +1,7 @@
 import AVFoundation
 import Observation
 import Speech
+import UIKit
 
 /// On-device speech-to-text. The audio engine and recognition run on a
 /// background queue to avoid Swift 6 @MainActor isolation issues.
@@ -28,6 +29,8 @@ final class SpeechService {
     @ObservationIgnored private var currentlyPlayingWindowId: String?
     /// Latest sessionId per window — used to drop stale chunks
     @ObservationIgnored private var activeSessionIds: [String: String] = [:]
+    /// Background task token — keeps the app alive between TTS audio chunks
+    @ObservationIgnored private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
 
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
@@ -111,6 +114,7 @@ final class SpeechService {
         currentlyPlayingWindowId = nil
         currentSpeakingWindowId = nil
         isSpeaking = false
+        endBackgroundTask()
     }
 
     /// Stop a specific window's audio — removes its queued chunks and stops
@@ -133,6 +137,7 @@ final class SpeechService {
             currentlyPlayingWindowId = nil
             currentSpeakingWindowId = nil
             isSpeaking = false
+            endBackgroundTask()
             return
         }
         audioQueue.removeFirst()
@@ -155,10 +160,28 @@ final class SpeechService {
             currentlyPlayingWindowId = next.windowId
             currentSpeakingWindowId = next.windowId
             isSpeaking = true
+            beginBackgroundTask()
         } catch {
             NSLog("[Quip] AVAudioPlayer failed: %@", error.localizedDescription)
             DispatchQueue.main.async { [weak self] in self?.playNextChunk() }
         }
+    }
+
+    /// Begin a background task so iOS keeps the app alive between TTS audio chunks.
+    /// The audio background mode keeps us running while audio plays, but gaps between
+    /// chunks could cause suspension — the background task bridges those gaps.
+    private func beginBackgroundTask() {
+        guard backgroundTaskId == .invalid else { return }
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "QuipTTS") { [weak self] in
+            // Expiration handler — OS is about to kill our time, end gracefully
+            DispatchQueue.main.async { self?.endBackgroundTask() }
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTaskId != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskId)
+        backgroundTaskId = .invalid
     }
 }
 
