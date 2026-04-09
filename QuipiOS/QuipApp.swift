@@ -1,12 +1,12 @@
 import SwiftUI
 import AVFoundation
 
-// Controls orientation lock — portrait when disconnected, landscape when connected
+// Controls orientation lock — portrait when disconnected, all orientations when connected
 class AppOrientationDelegate: NSObject, UIApplicationDelegate {
-    static var allowLandscape = false
+    static var allowAllOrientations = false
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        Self.allowLandscape ? .landscape : .portrait
+        Self.allowAllOrientations ? .allButUpsideDown : .portrait
     }
 }
 
@@ -58,7 +58,11 @@ struct QuipApp: App {
                 bonjourBrowser.startBrowsing()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-                volumeHandler.resumeAfterBackground()
+                // Only reset the audio session if TTS isn't actively playing —
+                // background audio mode keeps the session alive during playback
+                if !speech.isSpeaking {
+                    volumeHandler.resumeAfterBackground()
+                }
             }
         }
     }
@@ -72,11 +76,11 @@ struct QuipApp: App {
                 windows = update.windows
                 monitorName = update.monitor
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
-                // Switch to landscape on first layout received
+                // Allow all orientations once we have windows, suggest landscape
                 if wasEmpty && !update.windows.isEmpty {
-                    AppOrientationDelegate.allowLandscape = true
+                    AppOrientationDelegate.allowAllOrientations = true
                     if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
+                        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .allButUpsideDown))
                     }
                     UIViewController.attemptRotationToDeviceOrientation()
                 }
@@ -235,7 +239,9 @@ struct MainiOSView: View {
     @State private var showURLWarning = false
     @State private var pendingUnsafeURL: URL?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
+    private var isPortrait: Bool { verticalSizeClass == .regular }
 
     var body: some View {
         ZStack {
@@ -263,6 +269,12 @@ struct MainiOSView: View {
 
                 if showTextInput {
                     textInputBar
+                }
+
+                if isPortrait && client.isAuthenticated && !windows.isEmpty {
+                    portraitControls
+                        .padding(.horizontal, 8)
+                        .padding(.top, 4)
                 }
 
                 bottomBar
@@ -678,6 +690,105 @@ struct MainiOSView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
+    // MARK: - Portrait Controls
+
+    private var portraitControls: some View {
+        let selectedWindow = windows.first(where: { $0.id == selectedWindowId })
+        let windowColor = selectedWindow.map { Color(hex: $0.color) } ?? colors.textSecondary
+
+        return VStack(spacing: 8) {
+            // Selected window indicator
+            if let sel = selectedWindow {
+                HStack(spacing: 6) {
+                    Circle().fill(Color(hex: sel.color)).frame(width: 8, height: 8)
+                    Text(sel.app)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(colors.textPrimary.opacity(0.9))
+                    Text(sel.name)
+                        .font(.system(size: 11))
+                        .foregroundStyle(colors.textSecondary)
+                }
+            }
+
+            // Control buttons
+            HStack(spacing: 10) {
+                // Previous window
+                Button {
+                    cycleWindow(direction: -1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 44, height: 44)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(windows.count <= 1)
+
+                // Push to talk
+                Button {
+                    if isRecording {
+                        onStopRecording()
+                    } else {
+                        onStartRecording()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isRecording ? "stop.fill" : "mic.fill")
+                            .font(.system(size: 16))
+                        Text(isRecording ? "Stop" : "Push to Talk")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(isRecording ? .white : colors.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(isRecording ? Color.red.opacity(0.7) : colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                // View output
+                Button {
+                    if let wid = selectedWindowId {
+                        onRequestContent(wid)
+                    }
+                } label: {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 44, height: 44)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(selectedWindowId == nil)
+
+                // Next window
+                Button {
+                    cycleWindow(direction: 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 44, height: 44)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(windows.count <= 1)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    private func cycleWindow(direction: Int) {
+        guard windows.count > 1 else { return }
+        let currentIndex = windows.firstIndex(where: { $0.id == selectedWindowId }) ?? 0
+        let nextIndex = (currentIndex + direction + windows.count) % windows.count
+        let newId = windows[nextIndex].id
+        withAnimation(.spring(duration: 0.2)) {
+            selectedWindowId = newId
+        }
+        client.send(SelectWindowMessage(windowId: newId))
+    }
+
     // MARK: - Bottom Bar
 
     private var bottomBar: some View {
@@ -908,11 +1019,13 @@ struct MainiOSView: View {
     }
 
     private func updateOrientation() {
-        AppOrientationDelegate.allowLandscape = client.isAuthenticated
+        AppOrientationDelegate.allowAllOrientations = client.isAuthenticated
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        let mask: UIInterfaceOrientationMask = client.isAuthenticated ? .landscape : .portrait
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
-        // Force UIKit to re-query supported orientations
+        if !client.isAuthenticated {
+            // Lock to portrait when disconnected
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
+        }
+        // When authenticated, allow free rotation — don't force any specific orientation
         UIViewController.attemptRotationToDeviceOrientation()
     }
 

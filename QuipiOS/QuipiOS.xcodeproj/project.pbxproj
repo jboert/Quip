@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		1CD635F1DF5971041EFC42FA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_B6EA7FCD-5A06-4A12-8A1A-0D579AE75E70" /* Assets.xcassets */; };
 		27A74A861ADFE1E98398F75B /* HardwareButtonHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE3536452049152370298FC /* HardwareButtonHandler.swift */; };
 		2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */; };
 		3375938E1D5448AFF51C8CCC /* WindowRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1915E043776D1E063159AA6F /* WindowRectangle.swift */; };
@@ -18,9 +17,10 @@
 		7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414AD810B644C175CFB73EE5 /* WindowInfo.swift */; };
 		7FF8B004060633E319D8D791 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9319DA20B5E31E84424916 /* Color+Hex.swift */; };
 		85F00ED5BE755A7047346B5A /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68EE7A37927B53963DCF4506 /* MessageProtocolTests.swift */; };
+		885A3023BFB22F734B29C443 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_FE7E7BDF-3E62-4BD6-9EE7-7820F4381CF7" /* Assets.xcassets */; };
 		9420823AF0EA7D82FCFE0914 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */; };
-		97EEC008553FE5A9A68A9CD4 /* QuipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_A4284F9B-472B-4FEB-9601-CCEFA11D3AC8" /* QuipApp.swift */; };
 		A760CC0FAF316124E853473D /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C96267C7E324E99F9E25608 /* WebSocketClient.swift */; };
+		ACAA424EA34E61BC5E7A40B0 /* QuipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_0372666F-EC27-4BB8-AB98-0D8DA06AF834" /* QuipApp.swift */; };
 		AEA260F455D1F45EBC3CE818 /* ContextMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85649AFF24A63D27AE36A435 /* ContextMenuView.swift */; };
 		B70BD079D64FDDEC87ACAEA5 /* TTSNotificationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 044BCE18CD18E2E3D6DDD224 /* TTSNotificationOverlay.swift */; };
 		B9528CA355BD0960AAC67C6F /* QuipTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB1964CA940539AAAFAC01FC /* QuipTheme.swift */; };
@@ -57,9 +57,9 @@
 		DB1964CA940539AAAFAC01FC /* QuipTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipTheme.swift; sourceTree = "<group>"; };
 		FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocol.swift; sourceTree = "<group>"; };
 		FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTStressTests.swift; sourceTree = "<group>"; };
-		"TEMP_A4284F9B-472B-4FEB-9601-CCEFA11D3AC8" /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
-		"TEMP_B6EA7FCD-5A06-4A12-8A1A-0D579AE75E70" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		"TEMP_E86E149E-CF4F-42BB-9E85-FB18D144B21A" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_0372666F-EC27-4BB8-AB98-0D8DA06AF834" /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
+		"TEMP_2BA2977C-0380-404C-AD10-B2B0F9793DD9" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_FE7E7BDF-3E62-4BD6-9EE7-7820F4381CF7" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -144,12 +144,12 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
-		"TEMP_DED281CB-6886-4568-9970-820261ACA700" /* QuipiOS */ = {
+		"TEMP_52205ECA-9BBD-448B-A137-72D69A4014DF" /* QuipiOS */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_E86E149E-CF4F-42BB-9E85-FB18D144B21A" /* Info.plist */,
-				"TEMP_B6EA7FCD-5A06-4A12-8A1A-0D579AE75E70" /* Assets.xcassets */,
-				"TEMP_A4284F9B-472B-4FEB-9601-CCEFA11D3AC8" /* QuipApp.swift */,
+				"TEMP_2BA2977C-0380-404C-AD10-B2B0F9793DD9" /* Info.plist */,
+				"TEMP_0372666F-EC27-4BB8-AB98-0D8DA06AF834" /* QuipApp.swift */,
+				"TEMP_FE7E7BDF-3E62-4BD6-9EE7-7820F4381CF7" /* Assets.xcassets */,
 				E96781A6729F4AC1D1B88B16 /* Models */,
 				46B179CEB89BF9C2D149CE33 /* Views */,
 				66E1CF9CCD2A9D367395438A /* Services */,
@@ -236,7 +236,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1CD635F1DF5971041EFC42FA /* Assets.xcassets in Resources */,
+				885A3023BFB22F734B29C443 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -263,7 +263,7 @@
 				AEA260F455D1F45EBC3CE818 /* ContextMenuView.swift in Sources */,
 				27A74A861ADFE1E98398F75B /* HardwareButtonHandler.swift in Sources */,
 				2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */,
-				97EEC008553FE5A9A68A9CD4 /* QuipApp.swift in Sources */,
+				ACAA424EA34E61BC5E7A40B0 /* QuipApp.swift in Sources */,
 				B9528CA355BD0960AAC67C6F /* QuipTheme.swift in Sources */,
 				48A7F1C63240B8460DD3ECE8 /* RemoteLayoutView.swift in Sources */,
 				716C98AD23EECA0DDCAB89A4 /* SpeechService.swift in Sources */,

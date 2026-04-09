@@ -6,7 +6,6 @@ struct WindowRectangle: View {
     var onSelect: () -> Void = {}
     var onAction: ((WindowAction) -> Void)? = nil
 
-    @State private var pulsePhase: Bool = false
     @State private var spinAngle: Double = 0
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
@@ -26,13 +25,13 @@ struct WindowRectangle: View {
     private var glowRadius: Double {
         switch window.state {
         case "stt_active":
-            return pulsePhase ? 16 : 8
+            return 12
         case "waiting_for_input":
-            return pulsePhase ? 10 : 4
+            return 8
         case _ where window.isThinking:
-            return isSelected ? 8 : 4
+            return isSelected ? 6 : 3
         default:
-            return isSelected ? 8 : 0
+            return isSelected ? 6 : 0
         }
     }
 
@@ -80,7 +79,7 @@ struct WindowRectangle: View {
                     HStack {
                         Spacer()
                         Text("✽")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(.system(size: 20, weight: .bold))
                             .foregroundStyle(windowColor.opacity(0.8))
                             .rotationEffect(.degrees(spinAngle))
                             .padding(8)
@@ -103,12 +102,6 @@ struct WindowRectangle: View {
         .shadow(color: glowColor, radius: glowRadius)
         .scaleEffect(isSelected ? 1.02 : 1.0)
         .animation(.spring(duration: 0.35, bounce: 0.2), value: isSelected)
-        .animation(
-            window.state == "waiting_for_input" || window.state == "stt_active"
-                ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
-                : .default,
-            value: pulsePhase
-        )
         .onTapGesture {
             onSelect()
         }
@@ -155,18 +148,8 @@ struct WindowRectangle: View {
             }
         }
         .onAppear {
-            if window.state == "waiting_for_input" || window.state == "stt_active" {
-                pulsePhase = true
-            }
             if window.isThinking {
                 startSpin()
-            }
-        }
-        .onChange(of: window.state) { _, newValue in
-            if newValue == "waiting_for_input" || newValue == "stt_active" {
-                pulsePhase = true
-            } else {
-                pulsePhase = false
             }
         }
         .onChange(of: window.isThinking) { _, thinking in
