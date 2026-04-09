@@ -22,6 +22,8 @@ struct QuipMacApp: App {
     /// Terminal content snapshot at the moment STT was sent, per window.
     /// Used to verify Claude has actually written something new before firing TTS.
     @State private var sttBaselineContent: [String: String] = [:]
+    /// Throttle request_content to at most once per 5 seconds per window.
+    @State private var lastContentRequestTime: [String: Date] = [:]
     private let kokoroTTS = KokoroTTS()
 
     var body: some Scene {
@@ -122,12 +124,26 @@ struct QuipMacApp: App {
         // Pre-warm the Kokoro daemon so the first synth doesn't pay model load
         kokoroTTS.preload()
 
+        var subtitleCounter = 0
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            DispatchQueue.main.async {
-                windowManager.refreshWindowList()
-                windowManager.refreshSubtitles()
-                self.syncTrackedWindows()
-                broadcastLayout()
+            // All heavy work (CG queries, AppleScript) runs off main so it
+            // can't block tunnel message delivery or other main-queue work.
+            DispatchQueue.global(qos: .utility).async {
+                let snapshot = WindowManager.fetchWindowList()
+                subtitleCounter += 1
+                let subtitles: [CGWindowID: String]?
+                if subtitleCounter >= 5 {
+                    subtitleCounter = 0
+                    subtitles = WindowManager.fetchSubtitles()
+                } else {
+                    subtitles = nil
+                }
+                DispatchQueue.main.async {
+                    windowManager.applyWindowSnapshot(snapshot)
+                    if let subtitles { windowManager.applySubtitles(subtitles) }
+                    self.syncTrackedWindows()
+                    broadcastLayout()
+                }
             }
         }
     }
@@ -149,33 +165,40 @@ struct QuipMacApp: App {
             return
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [self] in
+        // Grab what we need from main-actor state, then do the heavy
+        // readContent call on a background thread so main stays responsive.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
             guard pendingInputForWindow.contains(windowId) else { return }
             guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
                 schedulePendingInputResponseCheck(windowId: windowId, attempt: attempt + 1)
                 return
             }
             let termApp = terminalAppForWindow(window)
-            let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: window.windowNumber) ?? ""
+            let wn = window.windowNumber
             let baseline = sttBaselineContent[windowId] ?? ""
 
-            let baselineLast = lastResponseMarkerText(in: baseline)
-            let currentLast = lastResponseMarkerText(in: current)
-            let currentState = terminalStateDetector.windowStates[windowId] ?? .neutral
+            DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
+                let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                let baselineLast = self.lastResponseMarkerText(in: baseline)
+                let currentLast = self.lastResponseMarkerText(in: current)
 
-            if attempt % 4 == 0 {
-                KokoroTTSDebug.log("poll[\(attempt)] \(windowId): lastMarker changed=\(baselineLast != currentLast), state=\(currentState.rawValue), content=\(current.count) bytes")
-            }
+                DispatchQueue.main.async { [self] in
+                    guard pendingInputForWindow.contains(windowId) else { return }
+                    let currentState = terminalStateDetector.windowStates[windowId] ?? .neutral
 
-            // Fire TTS if the last response marker text has changed AND state is idle
-            if baselineLast != currentLast && !currentLast.isEmpty && currentState == .waitingForInput {
-                KokoroTTSDebug.log("pendingInput: detected new response for \(windowId), firing TTS")
-                pendingInputForWindow.remove(windowId)
-                sttBaselineContent.removeValue(forKey: windowId)
-                // Skip stable-content wait — we've already verified the response is there
-                triggerTTSFor(windowId: windowId, skipStableWait: true)
-            } else {
-                schedulePendingInputResponseCheck(windowId: windowId, attempt: attempt + 1)
+                    if attempt % 4 == 0 {
+                        KokoroTTSDebug.log("poll[\(attempt)] \(windowId): lastMarker changed=\(baselineLast != currentLast), state=\(currentState.rawValue), content=\(current.count) bytes")
+                    }
+
+                    if baselineLast != currentLast && !currentLast.isEmpty && currentState == .waitingForInput {
+                        KokoroTTSDebug.log("pendingInput: detected new response for \(windowId), firing TTS")
+                        pendingInputForWindow.remove(windowId)
+                        sttBaselineContent.removeValue(forKey: windowId)
+                        triggerTTSFor(windowId: windowId, skipStableWait: true)
+                    } else {
+                        schedulePendingInputResponseCheck(windowId: windowId, attempt: attempt + 1)
+                    }
+                }
             }
         }
     }
@@ -211,8 +234,12 @@ struct QuipMacApp: App {
         }
 
         if skipStableWait {
-            let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
-            if !content.isEmpty { processContent(content) }
+            DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
+                let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                if !content.isEmpty {
+                    DispatchQueue.main.async { processContent(content) }
+                }
+            }
             return
         }
 
@@ -311,12 +338,15 @@ struct QuipMacApp: App {
                 AuditLogger.log(messageType: "send_text", clientIdentifier: "ws-client", textContent: msg.text)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     let termApp = terminalAppForWindow(window)
-                    // Focus the window via AX first, then target by name in AppleScript
+                    // Focus the window via AX first, then run AppleScript off main
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                        self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
+                    let text = msg.text
+                    let windowId = msg.windowId
+                    let pressReturn = msg.pressReturn
+                    DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.08) { [keystrokeInjector] in
+                        keystrokeInjector.sendText(text, to: windowId, pressReturn: pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
                     }
                 }
             }
@@ -332,21 +362,27 @@ struct QuipMacApp: App {
                 clientSelectedWindowId = msg.windowId
                 pendingInputForWindow.insert(msg.windowId)
 
-                // Snapshot current terminal content so we can detect when Claude writes new output
-                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
-                    let termApp = terminalAppForWindow(window)
-                    sttBaselineContent[msg.windowId] = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: window.windowNumber) ?? ""
-                }
-
-                // Poll the terminal content; fire TTS as soon as it has changed enough
-                // to contain a new response. Times out after 60s.
                 let wid = msg.windowId
-                schedulePendingInputResponseCheck(windowId: wid, attempt: 0)
-                terminalStateDetector.setSTTActive(for: msg.windowId)
-                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
-                    terminalColorManager.updateColor(for: msg.windowId, state: .sttActive, terminalApp: terminalAppForWindow(window))
+                terminalStateDetector.setSTTActive(for: wid)
+                if let window = windowManager.windows.first(where: { $0.id == wid }) {
+                    terminalColorManager.updateColor(for: wid, state: .sttActive, terminalApp: terminalAppForWindow(window))
                 }
-                webSocketServer.broadcast(StateChangeMessage(windowId: msg.windowId, state: "stt_active"))
+                webSocketServer.broadcast(StateChangeMessage(windowId: wid, state: "stt_active"))
+
+                // Snapshot terminal content on a background thread so main stays responsive
+                if let window = windowManager.windows.first(where: { $0.id == wid }) {
+                    let termApp = terminalAppForWindow(window)
+                    let wn = window.windowNumber
+                    DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
+                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                        DispatchQueue.main.async { [self] in
+                            sttBaselineContent[wid] = content
+                            schedulePendingInputResponseCheck(windowId: wid, attempt: 0)
+                        }
+                    }
+                } else {
+                    schedulePendingInputResponseCheck(windowId: wid, attempt: 0)
+                }
             }
         case "stt_ended":
             if let msg = MessageCoder.decode(STTStateMessage.self, from: data) {
@@ -357,16 +393,30 @@ struct QuipMacApp: App {
             }
         case "request_content":
             if let msg = MessageCoder.decode(RequestContentMessage.self, from: data) {
+                // Throttle: at most once per 10 seconds per window.
+                let now = Date()
+                if let last = lastContentRequestTime[msg.windowId],
+                   now.timeIntervalSince(last) < 10.0 {
+                    break
+                }
+                lastContentRequestTime[msg.windowId] = now
+
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     let termApp = terminalAppForWindow(window)
                     let wn = window.windowNumber
-                    let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
-                    // Send only last ~200 lines to keep payload reasonable
-                    let lines = content.components(separatedBy: "\n")
-                    let trimmed = lines.suffix(200).joined(separator: "\n")
-                    let redacted = SecretRedactor.redact(trimmed)
-                    let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
-                    webSocketServer.broadcast(TerminalContentMessage(windowId: msg.windowId, content: redacted, screenshot: screenshot))
+                    let wid = msg.windowId
+                    // Do the heavy AppleScript read + screenshot off main so it
+                    // can't block send_text, auth, or other time-sensitive messages.
+                    DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer] in
+                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                        let lines = content.components(separatedBy: "\n")
+                        let trimmed = lines.suffix(200).joined(separator: "\n")
+                        let redacted = SecretRedactor.redact(trimmed)
+                        let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
+                        DispatchQueue.main.async {
+                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot))
+                        }
+                    }
                 }
             }
         default:
@@ -377,49 +427,50 @@ struct QuipMacApp: App {
     @MainActor
     private func handleQuickAction(_ action: String, for window: ManagedWindow) {
         let termApp = terminalAppForWindow(window)
+        let wid = window.id
         // Focus the target window first so keystrokes land in the right place
         if action != "toggle_enabled" {
-            windowManager.focusWindow(window.id)
+            windowManager.focusWindow(wid)
         }
+        // Run AppleScript keystroke injection off main to avoid blocking tunnel messages
         switch action {
         case "press_return":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("return", to: window.id, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendKeystroke("return", to: wid, terminalApp: termApp)
             }
         case "press_ctrl_c":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp)
             }
         case "press_ctrl_d":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("ctrl+d", to: window.id, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp)
             }
         case "press_escape":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("escape", to: window.id, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp)
             }
         case "press_tab":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("tab", to: window.id, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp)
             }
         case "press_y":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                self.keystrokeInjector.sendText("y", to: window.id, pressReturn: true, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp)
             }
         case "press_n":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                self.keystrokeInjector.sendText("n", to: window.id, pressReturn: true, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp)
             }
         case "clear_terminal":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendText("/clear", to: window.id, pressReturn: true, terminalApp: termApp)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp)
             }
         case "restart_claude":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: window.id, terminalApp: termApp)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    keystrokeInjector.sendText("claude", to: window.id, pressReturn: true, terminalApp: termApp)
-                }
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.2) { [keystrokeInjector] in
+                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp)
+                Thread.sleep(forTimeInterval: 0.5)
+                keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp)
             }
         case "toggle_enabled": windowManager.toggleWindow(window.id, enabled: !window.isEnabled)
         default: break
@@ -435,27 +486,26 @@ struct QuipMacApp: App {
                                       pollInterval: TimeInterval = 0.2,
                                       maxWaitSeconds: TimeInterval = 2.5,
                                       completion: @escaping (String?) -> Void) {
-        let deadline = Date().addingTimeInterval(maxWaitSeconds)
-        var previous = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber) ?? ""
+        // Run the heavy AppleScript reads on a background thread so they
+        // don't block main and starve tunnel message delivery.
+        DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
+            let deadline = Date().addingTimeInterval(maxWaitSeconds)
+            var previous = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber) ?? ""
 
-        func checkNext() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + pollInterval) { [self] in
+            while true {
+                Thread.sleep(forTimeInterval: pollInterval)
                 let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber) ?? ""
                 if current == previous && !current.isEmpty {
-                    // Stable
-                    completion(current)
+                    DispatchQueue.main.async { completion(current) }
                     return
                 }
                 if Date() >= deadline {
-                    // Give up and use whatever we have
-                    completion(current.isEmpty ? nil : current)
+                    DispatchQueue.main.async { completion(current.isEmpty ? nil : current) }
                     return
                 }
                 previous = current
-                checkNext()
             }
         }
-        checkNext()
     }
 
     /// Get the last chunk of terminal content to synthesize. Hard-capped at 25 lines

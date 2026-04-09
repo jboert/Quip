@@ -93,6 +93,8 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
         guard let addresses = sender.addresses else { return }
         let port = sender.port
 
+        var linkLocalFallback: String?
+
         for data in addresses {
             var addr = sockaddr()
             (data as NSData).getBytes(&addr, length: MemoryLayout<sockaddr>.size)
@@ -101,16 +103,28 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
                 var addr4 = sockaddr_in()
                 (data as NSData).getBytes(&addr4, length: MemoryLayout<sockaddr_in>.size)
                 let ip = String(cString: inet_ntoa(addr4.sin_addr))
-                // Skip loopback addresses — connecting to 127.x.x.x from the phone
-                // would hit the phone's own loopback, not the Mac
                 if ip.hasPrefix("127.") {
                     print("[BonjourBrowser] Skipping loopback address: \(ip)")
+                    continue
+                }
+                // Prefer real LAN IPs over link-local (169.254.x.x) — the USB
+                // interface's link-local address often resets mid-handshake.
+                // Keep it as a fallback in case there's no LAN IP at all.
+                if ip.hasPrefix("169.254.") {
+                    print("[BonjourBrowser] Deferring link-local address: \(ip)")
+                    if linkLocalFallback == nil { linkLocalFallback = ip }
                     continue
                 }
                 print("[BonjourBrowser] Resolved: \(sender.name) -> \(ip):\(port)")
                 onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port))
                 return
             }
+        }
+
+        // No real LAN IP found — use link-local as last resort
+        if let ip = linkLocalFallback {
+            print("[BonjourBrowser] Resolved (link-local fallback): \(sender.name) -> \(ip):\(port)")
+            onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port))
         }
     }
 

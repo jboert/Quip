@@ -105,100 +105,84 @@ final class WindowManager {
 
     // MARK: - Refresh Window List
 
-    /// Enumerate all on-screen, normal-level windows (filters out menubar, dock, etc.)
-    func refreshWindowList() {
+    /// Raw window data fetched off main — no NSImage, no state merging.
+    struct RawWindowInfo: Sendable {
+        let id: String
+        let name: String
+        let app: String
+        let bundleId: String
+        let pid: pid_t
+        let windowNumber: CGWindowID
+        let bounds: CGRect
+    }
+
+    /// Fetch on-screen windows from CG. Safe to call from any thread.
+    nonisolated static func fetchWindowList() -> [RawWindowInfo] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let infoList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return
+            return []
         }
 
-        var refreshed: [ManagedWindow] = []
+        var result: [RawWindowInfo] = []
+        let systemApps: Set<String> = ["Window Server", "Control Center", "Notification Center", "SystemUIServer"]
 
         for info in infoList {
-            // Must have a valid window layer (0 = normal windows)
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else {
-                continue
-            }
-            guard let windowNumber = info[kCGWindowNumber as String] as? CGWindowID else {
-                continue
-            }
-            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t else {
-                continue
-            }
-            guard let ownerName = info[kCGWindowOwnerName as String] as? String else {
-                continue
-            }
-            // Filter out common system UI elements
-            let systemApps = ["Window Server", "Control Center", "Notification Center", "SystemUIServer"]
-            if systemApps.contains(ownerName) { continue }
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let windowNumber = info[kCGWindowNumber as String] as? CGWindowID,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                  let ownerName = info[kCGWindowOwnerName as String] as? String,
+                  !systemApps.contains(ownerName) else { continue }
 
             let title = info[kCGWindowName as String] as? String ?? ownerName
-
-            // Parse bounds
             var bounds = CGRect.zero
-            if let boundsDict = info[kCGWindowBounds as String] as? [String: Any] {
-                let x = boundsDict["X"] as? CGFloat ?? 0
-                let y = boundsDict["Y"] as? CGFloat ?? 0
-                let w = boundsDict["Width"] as? CGFloat ?? 0
-                let h = boundsDict["Height"] as? CGFloat ?? 0
-                bounds = CGRect(x: x, y: y, width: w, height: h)
+            if let d = info[kCGWindowBounds as String] as? [String: Any] {
+                bounds = CGRect(x: d["X"] as? CGFloat ?? 0, y: d["Y"] as? CGFloat ?? 0,
+                                width: d["Width"] as? CGFloat ?? 0, height: d["Height"] as? CGFloat ?? 0)
             }
-
-            // Skip tiny windows (toolbars, status items, etc.)
             if bounds.width < 50 || bounds.height < 50 { continue }
 
-            // Get bundle ID from running application
             let runningApp = NSRunningApplication(processIdentifier: pid)
             let bundleId = runningApp?.bundleIdentifier ?? "unknown.\(pid)"
-            let icon = runningApp?.icon
-
             let windowId = "\(bundleId).\(windowNumber)"
 
-            // Preserve existing state if this window was already tracked
-            if let existing = windows.first(where: { $0.id == windowId }) {
+            result.append(RawWindowInfo(id: windowId, name: title, app: ownerName,
+                                        bundleId: bundleId, pid: pid,
+                                        windowNumber: windowNumber, bounds: bounds))
+        }
+        return result
+    }
+
+    /// Apply pre-fetched window data on main. Merges with existing state, resolves icons.
+    func applyWindowSnapshot(_ raw: [RawWindowInfo]) {
+        var refreshed: [ManagedWindow] = []
+        for info in raw {
+            let icon = NSRunningApplication(processIdentifier: info.pid)?.icon
+            if let existing = windows.first(where: { $0.id == info.id }) {
                 refreshed.append(ManagedWindow(
-                    id: windowId,
-                    name: title,
-                    app: ownerName,
-                    subtitle: existing.subtitle,
-                    bundleId: bundleId,
-                    icon: icon,
-                    isEnabled: existing.isEnabled,
-                    assignedColor: existing.assignedColor,
-                    pid: pid,
-                    windowNumber: windowNumber,
-                    bounds: bounds
+                    id: info.id, name: info.name, app: info.app,
+                    subtitle: existing.subtitle, bundleId: info.bundleId, icon: icon,
+                    isEnabled: existing.isEnabled, assignedColor: existing.assignedColor,
+                    pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds
                 ))
             } else {
                 refreshed.append(ManagedWindow(
-                    id: windowId,
-                    name: title,
-                    app: ownerName,
-                    subtitle: "",
-                    bundleId: bundleId,
-                    icon: icon,
-                    isEnabled: false,
-                    assignedColor: assignColor(),
-                    pid: pid,
-                    windowNumber: windowNumber,
-                    bounds: bounds
+                    id: info.id, name: info.name, app: info.app,
+                    subtitle: "", bundleId: info.bundleId, icon: icon,
+                    isEnabled: false, assignedColor: assignColor(),
+                    pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds
                 ))
             }
         }
 
-        // Sort by customOrder if set, otherwise keep CG order
         if !customOrder.isEmpty {
             var ordered: [ManagedWindow] = []
             for id in customOrder {
-                if let w = refreshed.first(where: { $0.id == id }) {
-                    ordered.append(w)
-                }
+                if let w = refreshed.first(where: { $0.id == id }) { ordered.append(w) }
             }
             for w in refreshed where !customOrder.contains(w.id) {
                 ordered.append(w)
                 customOrder.append(w.id)
             }
-            // Remove stale IDs
             let activeIds = Set(refreshed.map(\.id))
             customOrder.removeAll { !activeIds.contains($0) }
             windows = ordered
@@ -206,6 +190,12 @@ final class WindowManager {
             windows = refreshed
             customOrder = refreshed.map(\.id)
         }
+    }
+
+    /// Convenience: fetch + apply in one call (runs CG query on main — use the
+    /// static fetchWindowList + applyWindowSnapshot pair for off-main usage).
+    func refreshWindowList() {
+        applyWindowSnapshot(Self.fetchWindowList())
     }
 
     // MARK: - Filter by Display
@@ -375,11 +365,16 @@ final class WindowManager {
 
     /// Query iTerm2 and Terminal.app for current session paths and update subtitles.
     func refreshSubtitles() {
-        refreshITerm2Subtitles()
-        refreshTerminalSubtitles()
+        let subs = Self.fetchSubtitles()
+        applySubtitles(subs)
     }
 
-    private func refreshITerm2Subtitles() {
+    /// Fetch subtitles off main — runs AppleScript that can block for 1-3 seconds.
+    /// Returns a dictionary of CGWindowID → subtitle string.
+    nonisolated static func fetchSubtitles() -> [CGWindowID: String] {
+        var result: [CGWindowID: String] = [:]
+
+        // iTerm2 subtitles via AppleScript
         let script = """
         set output to ""
         tell application "iTerm2"
@@ -398,38 +393,37 @@ final class WindowManager {
         return output
         """
 
-        guard let appleScript = NSAppleScript(source: script) else { return }
-        var error: NSDictionary?
-        let result = appleScript.executeAndReturnError(&error)
-        guard error == nil, let output = result.stringValue else { return }
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            let asResult = appleScript.executeAndReturnError(&error)
+            if error == nil, let output = asResult.stringValue {
+                for line in output.components(separatedBy: "\n") where !line.isEmpty {
+                    let parts = line.split(separator: ":", maxSplits: 1)
+                    guard parts.count == 2, let wid = Int(parts[0]) else { continue }
+                    let path = String(parts[1])
+                    result[CGWindowID(wid)] = (path as NSString).lastPathComponent
+                }
+            }
+        }
 
-        for line in output.components(separatedBy: "\n") where !line.isEmpty {
-            let parts = line.split(separator: ":", maxSplits: 1)
-            guard parts.count == 2, let wid = Int(parts[0]) else { continue }
-            let path = String(parts[1])
-            // Extract just the last folder name
-            let folder = (path as NSString).lastPathComponent
+        return result
+    }
 
-            // Find matching window by CG window number
-            if let index = windows.firstIndex(where: { $0.windowNumber == CGWindowID(wid) }) {
+    /// Apply pre-fetched subtitles to windows. Call on main.
+    func applySubtitles(_ subtitles: [CGWindowID: String]) {
+        for (wid, folder) in subtitles {
+            if let index = windows.firstIndex(where: { $0.windowNumber == wid }) {
                 windows[index].subtitle = folder
             }
         }
-    }
-
-    private func refreshTerminalSubtitles() {
-        // Terminal.app window names typically include the directory already
-        // Just extract the folder from the window name if possible
+        // Terminal.app — extract from window name
         for i in windows.indices where windows[i].bundleId == "com.apple.Terminal" {
             let name = windows[i].name
-            // Terminal titles look like "bcap — ~/Projects/foo — zsh"
             if name.contains("—") {
                 let parts = name.components(separatedBy: "—").map { $0.trimmingCharacters(in: .whitespaces) }
                 if parts.count >= 2 {
-                    // Use the path part (usually second segment)
                     let pathPart = parts[1]
-                    let folder = (pathPart as NSString).lastPathComponent
-                    windows[i].subtitle = folder
+                    windows[i].subtitle = (pathPart as NSString).lastPathComponent
                 }
             }
         }

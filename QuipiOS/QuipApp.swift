@@ -123,9 +123,6 @@ struct QuipApp: App {
                 guard windowId == selectedWindowId else {
                     return
                 }
-                // Suppress volume KVO while we reconfigure the audio session for playback —
-                // otherwise phantom events cycle the selected window on their own.
-                volumeHandler.suppressVolumeEvents(for: 1.5)
                 speech.enqueueAudio(wavData, sessionId: sessionId, isFinal: isFinal)
             }
         }
@@ -180,18 +177,16 @@ struct QuipApp: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             generator.impactOccurred(intensity: 1.0)
         }
+        // Grab the live transcription (already visible on screen) and send immediately.
+        // Then stop the recognizer — the text we saw is what we send.
+        let text = speech.stopRecording()
         let windowId = selectedWindowId
-        NSLog("[Quip] stopRecording called, windowId=%@", windowId ?? "nil")
-        // Brief delay to let the recognizer finalize the last bit of audio
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [self] in
-            let text = speech.stopRecording()
-            NSLog("[Quip] Transcribed: '%@' (length=%d)", text, text.count)
-            if let windowId {
-                client.send(STTStateMessage.ended(windowId: windowId))
-                if !text.isEmpty {
-                    NSLog("[Quip] Sending text to window %@", windowId)
-                    client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
-                }
+        NSLog("[Quip] stopRecording: windowId=%@, text='%@' (length=%d)", windowId ?? "nil", text, text.count)
+        if let windowId {
+            client.send(STTStateMessage.ended(windowId: windowId))
+            if !text.isEmpty {
+                NSLog("[Quip] Sending text to window %@", windowId)
+                client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
             }
         }
     }

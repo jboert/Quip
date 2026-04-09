@@ -128,17 +128,20 @@ final class TerminalColorManager {
     // MARK: - AppleScript Execution
 
     private func executeAppleScript(_ source: String) {
-        guard let appleScript = NSAppleScript(source: source) else {
-            print("[TerminalColorManager] Failed to create NSAppleScript")
-            return
-        }
+        // Run off main — AppleScript blocks for 1-3 seconds
+        DispatchQueue.global(qos: .utility).async {
+            guard let appleScript = NSAppleScript(source: source) else {
+                print("[TerminalColorManager] Failed to create NSAppleScript")
+                return
+            }
 
-        var error: NSDictionary?
-        appleScript.executeAndReturnError(&error)
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
 
-        if let error = error {
-            let message = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
-            print("[TerminalColorManager] AppleScript error: \(message)")
+            if let error = error {
+                let message = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
+                print("[TerminalColorManager] AppleScript error: \(message)")
+            }
         }
     }
 }
