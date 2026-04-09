@@ -35,6 +35,8 @@ pub struct WindowState {
     pub frame: WindowFrame,
     pub state: String,
     pub color: String,
+    #[serde(default, rename = "isThinking")]
+    pub is_thinking: bool,
 }
 
 /// Notify clients that a window's terminal state changed

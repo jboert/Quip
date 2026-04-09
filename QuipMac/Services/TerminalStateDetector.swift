@@ -20,6 +20,10 @@ final class TerminalStateDetector {
     /// Window IDs currently being tracked, mapped to their shell PIDs
     var trackedWindows: [String: pid_t] = [:]
 
+    /// Windows where Claude/node processes are currently running (regardless of CPU).
+    /// Updated every poll cycle. Used to drive the "thinking" indicator on iOS.
+    var windowsWithClaudeProcess: Set<String> = []
+
     /// CPU threshold below which a process is considered idle
     var cpuIdleThreshold: Double = 5.0
 
@@ -51,12 +55,14 @@ final class TerminalStateDetector {
             self.pollQueue.async { [weak self] in
                 guard let self else { return }
                 var results: [(String, TerminalState)] = []
+                var claudePresence: [String: Bool] = [:]
                 // Collect child PIDs off main (spawns ps processes)
                 var childPidsByWindow: [String: Set<pid_t>] = [:]
                 for (windowId, shellPid) in tracked {
                     if sttWindows.contains(windowId) { continue }
-                    let detected = self.detectState(shellPid: shellPid, cpuThreshold: threshold)
+                    let (detected, hasClaude) = self.detectState(shellPid: shellPid, cpuThreshold: threshold)
                     results.append((windowId, detected))
+                    claudePresence[windowId] = hasClaude
                     if let children = self.getChildProcesses(of: shellPid) {
                         childPidsByWindow[windowId] = Set(children.map(\.pid))
                     }
@@ -64,6 +70,14 @@ final class TerminalStateDetector {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.applyPollResults(results)
+                    // Update Claude process presence for thinking indicator
+                    for (windowId, hasClaude) in claudePresence {
+                        if hasClaude {
+                            self.windowsWithClaudeProcess.insert(windowId)
+                        } else {
+                            self.windowsWithClaudeProcess.remove(windowId)
+                        }
+                    }
                     // Install kqueue watches on main where MainActor state lives
                     for (windowId, currentPids) in childPidsByWindow {
                         let known = self.knownChildren[windowId] ?? []
@@ -199,15 +213,22 @@ final class TerminalStateDetector {
     private func pollAllWindows() {
         for (windowId, shellPid) in trackedWindows {
             if windowStates[windowId] == .sttActive { continue }
-            let detected = detectState(shellPid: shellPid, cpuThreshold: cpuIdleThreshold)
+            let (detected, hasClaude) = detectState(shellPid: shellPid, cpuThreshold: cpuIdleThreshold)
             applyPollResults([(windowId, detected)])
+            if hasClaude {
+                windowsWithClaudeProcess.insert(windowId)
+            } else {
+                windowsWithClaudeProcess.remove(windowId)
+            }
         }
     }
 
-    /// Detect whether a shell's child process (claude/node) is busy or idle
-    private nonisolated func detectState(shellPid: pid_t, cpuThreshold: Double) -> TerminalState {
+    /// Detect whether a shell's child process (claude/node) is busy or idle.
+    /// Returns (state, hasClaudeProcess) — the bool tracks process presence
+    /// regardless of CPU for the "thinking" indicator.
+    private nonisolated func detectState(shellPid: pid_t, cpuThreshold: Double) -> (TerminalState, Bool) {
         guard let children = getChildProcesses(of: shellPid) else {
-            return .waitingForInput
+            return (.waitingForInput, false)
         }
 
         let claudeProcesses = children.filter { info in
@@ -216,15 +237,15 @@ final class TerminalStateDetector {
         }
 
         if claudeProcesses.isEmpty {
-            return .waitingForInput
+            return (.waitingForInput, false)
         }
 
         let totalCPU = claudeProcesses.reduce(0.0) { $0 + $1.cpuPercent }
 
         if totalCPU < cpuThreshold {
-            return .waitingForInput
+            return (.waitingForInput, true)
         } else {
-            return .neutral // busy
+            return (.neutral, true) // busy
         }
     }
 
@@ -236,11 +257,12 @@ final class TerminalStateDetector {
         let command: String
     }
 
-    /// Get child processes of a given PID using `ps`
+    /// Get ALL descendant processes of a given PID by walking the process tree.
+    /// Uses `ps -ax` to get the full process list, then filters to descendants.
     private nonisolated func getChildProcesses(of parentPid: pid_t) -> [ProcessInfo]? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
-        task.arguments = ["-o", "pid,pcpu,comm", "-g", "\(parentPid)"]
+        task.arguments = ["-ax", "-o", "pid,ppid,pcpu,comm"]
 
         let pipe = Pipe()
         let errPipe = Pipe()
@@ -263,24 +285,38 @@ final class TerminalStateDetector {
         try? errPipe.fileHandleForReading.close()
         guard let output = String(data: data, encoding: .utf8) else { return nil }
 
-        var results: [ProcessInfo] = []
+        // Parse all processes into (pid, ppid, cpu, comm)
+        struct RawProc { let pid: pid_t; let ppid: pid_t; let cpu: Double; let comm: String }
+        var allProcs: [RawProc] = []
         let lines = output.components(separatedBy: "\n").dropFirst()
-
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
-
-            let parts = trimmed.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
-            guard parts.count >= 3 else { continue }
-
-            guard let pid = pid_t(parts[0]) else { continue }
-            guard pid != parentPid else { continue }
-            let cpu = Double(parts[1]) ?? 0.0
-            let comm = String(parts[2])
-
-            results.append(ProcessInfo(pid: pid, cpuPercent: cpu, command: comm))
+            let parts = trimmed.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+            guard parts.count >= 4,
+                  let pid = pid_t(parts[0]),
+                  let ppid = pid_t(parts[1]) else { continue }
+            let cpu = Double(parts[2]) ?? 0.0
+            let comm = String(parts[3])
+            allProcs.append(RawProc(pid: pid, ppid: ppid, cpu: cpu, comm: comm))
         }
 
-        return results
+        // Walk the tree: find all descendants of parentPid
+        var descendantPids: Set<pid_t> = [parentPid]
+        var changed = true
+        while changed {
+            changed = false
+            for proc in allProcs {
+                if descendantPids.contains(proc.ppid) && !descendantPids.contains(proc.pid) {
+                    descendantPids.insert(proc.pid)
+                    changed = true
+                }
+            }
+        }
+        descendantPids.remove(parentPid)
+
+        return allProcs
+            .filter { descendantPids.contains($0.pid) }
+            .map { ProcessInfo(pid: $0.pid, cpuPercent: $0.cpu, command: $0.comm) }
     }
 }

@@ -7,6 +7,7 @@ struct WindowRectangle: View {
     var onAction: ((WindowAction) -> Void)? = nil
 
     @State private var pulsePhase: Bool = false
+    @State private var spinAngle: Double = 0
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
@@ -28,6 +29,8 @@ struct WindowRectangle: View {
             return pulsePhase ? 16 : 8
         case "waiting_for_input":
             return pulsePhase ? 10 : 4
+        case _ where window.isThinking:
+            return isSelected ? 8 : 4
         default:
             return isSelected ? 8 : 0
         }
@@ -57,19 +60,34 @@ struct WindowRectangle: View {
                     lineWidth: borderWidth
                 )
 
-            // Labels
+            // Labels — app name first, folder below
             VStack(alignment: .leading, spacing: 3) {
-                Text(window.name)
+                Text(window.app)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(colors.textPrimary.opacity(0.9))
                     .lineLimit(1)
 
-                Text(window.app)
+                Text(window.name)
                     .font(.caption2)
                     .foregroundStyle(colors.textSecondary.opacity(0.7))
                     .lineLimit(1)
             }
             .padding(10)
+
+            // Thinking indicator — spinning star when Claude processes are running
+            if window.isThinking && window.enabled {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Text("✽")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(windowColor.opacity(0.8))
+                            .rotationEffect(.degrees(spinAngle))
+                            .padding(8)
+                    }
+                    Spacer()
+                }
+            }
 
             // Disabled overlay
             if !window.enabled {
@@ -140,6 +158,9 @@ struct WindowRectangle: View {
             if window.state == "waiting_for_input" || window.state == "stt_active" {
                 pulsePhase = true
             }
+            if window.isThinking {
+                startSpin()
+            }
         }
         .onChange(of: window.state) { _, newValue in
             if newValue == "waiting_for_input" || newValue == "stt_active" {
@@ -147,6 +168,20 @@ struct WindowRectangle: View {
             } else {
                 pulsePhase = false
             }
+        }
+        .onChange(of: window.isThinking) { _, thinking in
+            if thinking {
+                spinAngle = 0
+                startSpin()
+            } else {
+                spinAngle = 0
+            }
+        }
+    }
+
+    private func startSpin() {
+        withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+            spinAngle = 360
         }
     }
 }

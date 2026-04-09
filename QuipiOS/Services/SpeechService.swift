@@ -13,15 +13,21 @@ final class SpeechService {
     private(set) var isAuthorized = false
     private(set) var isSpeaking = false
 
+    /// The window ID whose audio is currently playing — drives the TTS overlay
+    private(set) var currentSpeakingWindowId: String?
+
     // All audio work happens through this helper on a background queue
     private let worker = AudioWorker()
 
-    // Audio playback for pre-synthesized TTS audio from the Mac (Kokoro).
-    // Queues chunks by sessionId — playing one chunk triggers the next in the queue.
+    // Single-player sequential queue. Chunks from different windows are interleaved
+    // but play one after another. A new sessionId for the SAME window drops that
+    // window's stale queued chunks without disturbing other windows' audio.
     @ObservationIgnored private var audioPlayer: AVAudioPlayer?
     @ObservationIgnored private var playerDelegate: PlayerDelegate?
-    @ObservationIgnored private var audioQueue: [Data] = []
-    @ObservationIgnored private var currentSessionId: String?
+    @ObservationIgnored private var audioQueue: [(windowId: String, sessionId: String, data: Data)] = []
+    @ObservationIgnored private var currentlyPlayingWindowId: String?
+    /// Latest sessionId per window — used to drop stale chunks
+    @ObservationIgnored private var activeSessionIds: [String: String] = [:]
 
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
@@ -68,40 +74,64 @@ final class SpeechService {
         return transcribedText
     }
 
-    /// Enqueue a WAV chunk for streaming playback. Chunks sharing the same sessionId
-    /// play back-to-back. A new sessionId stops current playback and clears the queue.
-    func enqueueAudio(_ data: Data, sessionId: String, isFinal: Bool) {
+    /// Enqueue a WAV chunk for sequential playback. Chunks from different windows
+    /// queue up and play one after another. A new sessionId for the same window drops
+    /// that window's stale queued chunks (and stops playback if it's the active one).
+    func enqueueAudio(_ data: Data, windowId: String, sessionId: String, isFinal: Bool) {
         guard !isRecording else { return }
 
-        // New session? Drop everything and start fresh.
-        if sessionId != currentSessionId {
-            stopSpeaking()
-            currentSessionId = sessionId
+        // New session for this window? Drop stale chunks for that window.
+        if activeSessionIds[windowId] != sessionId {
+            audioQueue.removeAll { $0.windowId == windowId }
+            // If the currently playing chunk is from this window's old session, stop it
+            if currentlyPlayingWindowId == windowId {
+                audioPlayer?.stop()
+                audioPlayer = nil
+                playerDelegate = nil
+            }
+            activeSessionIds[windowId] = sessionId
         }
 
-        // Final-marker messages arrive with empty audio — just signal no more chunks coming
+        // Final-marker messages arrive with empty audio — nothing to queue
         if !data.isEmpty {
-            audioQueue.append(data)
+            audioQueue.append((windowId: windowId, sessionId: sessionId, data: data))
             if audioPlayer == nil {
                 playNextChunk()
             }
         }
     }
 
-    /// Back-compat single-shot playback (used by tap-to-silence overlay if needed)
+    /// Stop all audio playback and clear the queue
     func stopSpeaking() {
         audioPlayer?.stop()
         audioPlayer = nil
         playerDelegate = nil
         audioQueue.removeAll()
-        currentSessionId = nil
+        activeSessionIds.removeAll()
+        currentlyPlayingWindowId = nil
+        currentSpeakingWindowId = nil
         isSpeaking = false
     }
 
-    private func playNextChunk() {
-        guard let data = audioQueue.first else {
+    /// Stop a specific window's audio — removes its queued chunks and stops
+    /// playback if that window is currently playing, then advances the queue.
+    func stopSpeaking(windowId: String) {
+        audioQueue.removeAll { $0.windowId == windowId }
+        activeSessionIds.removeValue(forKey: windowId)
+        if currentlyPlayingWindowId == windowId {
+            audioPlayer?.stop()
             audioPlayer = nil
             playerDelegate = nil
+            playNextChunk()
+        }
+    }
+
+    private func playNextChunk() {
+        guard let next = audioQueue.first else {
+            audioPlayer = nil
+            playerDelegate = nil
+            currentlyPlayingWindowId = nil
+            currentSpeakingWindowId = nil
             isSpeaking = false
             return
         }
@@ -112,7 +142,7 @@ final class SpeechService {
         // events that the volume-button handler can't distinguish from real presses.
 
         do {
-            let player = try AVAudioPlayer(data: data)
+            let player = try AVAudioPlayer(data: next.data)
             let delegate = PlayerDelegate { [weak self] in
                 DispatchQueue.main.async { self?.playNextChunk() }
             }
@@ -122,10 +152,11 @@ final class SpeechService {
             player.prepareToPlay()
             player.play()
             self.audioPlayer = player
-            self.isSpeaking = true
+            currentlyPlayingWindowId = next.windowId
+            currentSpeakingWindowId = next.windowId
+            isSpeaking = true
         } catch {
             NSLog("[Quip] AVAudioPlayer failed: %@", error.localizedDescription)
-            // Skip this chunk and try next
             DispatchQueue.main.async { [weak self] in self?.playNextChunk() }
         }
     }
