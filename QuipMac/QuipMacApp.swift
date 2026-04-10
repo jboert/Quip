@@ -26,6 +26,10 @@ struct QuipMacApp: App {
     @State private var sttBaselineContent: [String: String] = [:]
     /// Throttle request_content to at most once per 5 seconds per window.
     @State private var lastContentRequestTime: [String: Date] = [:]
+    /// Last Claude response marker text we spoke per window. Used to dedupe
+    /// repeated triggers where the raw terminal content changed slightly
+    /// (cursor, prompt line) but the actual response is the same.
+    @State private var lastSpokenMarker: [String: String] = [:]
     private let kokoroTTS = KokoroTTS()
 
     var body: some Scene {
@@ -261,6 +265,17 @@ struct QuipMacApp: App {
             let delta = computeDelta(windowId: windowId, newContent: content)
             outputHighWaterMarks[windowId] = content
             guard !delta.isEmpty else { return }
+
+            // Dedupe: if the last ⏺ response marker in the content matches
+            // what we already spoke for this window, skip. Catches the case
+            // where cursor/prompt changes cause a non-empty delta but the
+            // actual Claude response is unchanged.
+            let currentMarker = lastResponseMarkerText(in: content)
+            if !currentMarker.isEmpty && lastSpokenMarker[windowId] == currentMarker {
+                KokoroTTSDebug.log("doTriggerTTSBody skipped — marker unchanged for \(windowId)")
+                return
+            }
+            lastSpokenMarker[windowId] = currentMarker
 
             webSocketServer.broadcast(OutputDeltaMessage(windowId: windowId, windowName: name, text: delta, isFinal: true))
 

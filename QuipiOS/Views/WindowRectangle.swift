@@ -59,34 +59,35 @@ struct WindowRectangle: View {
                     lineWidth: borderWidth
                 )
 
-            // Labels — app name first, folder below
-            VStack(alignment: .leading, spacing: 3) {
-                Text(window.app)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(colors.textPrimary.opacity(0.9))
-                    .lineLimit(1)
+            // Labels and thinking indicator share the top row so labels
+            // truncate to make room for the spinning star on narrow windows.
+            HStack(alignment: .top, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(window.app)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(colors.textPrimary.opacity(0.9))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
-                Text(window.name)
-                    .font(.caption2)
-                    .foregroundStyle(colors.textSecondary.opacity(0.7))
-                    .lineLimit(1)
-            }
-            .padding(10)
+                    Text(window.name)
+                        .font(.caption2)
+                        .foregroundStyle(colors.textSecondary.opacity(0.7))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
 
-            // Thinking indicator — spinning star when Claude processes are running
-            if window.isThinking && window.enabled {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Text("✽")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(windowColor.opacity(0.8))
-                            .rotationEffect(.degrees(spinAngle))
-                            .padding(8)
-                    }
-                    Spacer()
+                Spacer(minLength: 0)
+
+                if window.isThinking && window.enabled {
+                    Text("✽")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(windowColor.opacity(0.8))
+                        .rotationEffect(.degrees(spinAngle))
+                        .fixedSize()
                 }
             }
+            .padding(10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             // Disabled overlay
             if !window.enabled {

@@ -719,6 +719,19 @@ struct MainiOSView: View {
                 }
                 .disabled(windows.count <= 1)
 
+                // Next window
+                Button {
+                    cycleWindow(direction: 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 56, height: 56)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(windows.count <= 1)
+
                 // Push to talk
                 Button {
                     if isRecording {
@@ -740,19 +753,6 @@ struct MainiOSView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                // Next window
-                Button {
-                    cycleWindow(direction: 1)
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 56, height: 56)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .disabled(windows.count <= 1)
-
                 // View output
                 Button {
                     if let wid = selectedWindowId {
@@ -760,6 +760,21 @@ struct MainiOSView: View {
                     }
                 } label: {
                     Image(systemName: "text.alignleft")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 56, height: 56)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(selectedWindowId == nil)
+
+                // Press Return
+                Button {
+                    if let wid = selectedWindowId {
+                        client.send(QuickActionMessage(windowId: wid, action: "press_return"))
+                    }
+                } label: {
+                    Image(systemName: "return")
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
                         .frame(width: 56, height: 56)
