@@ -32,6 +32,11 @@ final class SpeechService {
     /// Background task token — keeps the app alive between TTS audio chunks
     @ObservationIgnored private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
 
+    /// Detects whether the phone's ringer switch is on silent.
+    /// When silent, TTS audio plays at volume 0 so the overlay still shows
+    /// without actually making noise.
+    @ObservationIgnored let silentModeDetector = SilentModeDetector()
+
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         if speechStatus == .authorized {
@@ -146,6 +151,10 @@ final class SpeechService {
         // Do NOT call setCategory/setActive here — it triggers phantom outputVolume KVO
         // events that the volume-button handler can't distinguish from real presses.
 
+        // Re-check silent mode before each chunk so toggling the ringer switch
+        // takes effect immediately on the next chunk.
+        silentModeDetector.check()
+
         do {
             let player = try AVAudioPlayer(data: next.data)
             let delegate = PlayerDelegate { [weak self] in
@@ -153,7 +162,9 @@ final class SpeechService {
             }
             self.playerDelegate = delegate
             player.delegate = delegate
-            player.volume = 1.0
+            // Mute audio when silent mode is on, but still "play" so the
+            // overlay stays visible for the duration of the chunk.
+            player.volume = silentModeDetector.isSilent ? 0.0 : 1.0
             player.prepareToPlay()
             player.play()
             self.audioPlayer = player
@@ -239,51 +250,12 @@ private class AudioWorker: @unchecked Sendable {
                 return
             }
 
-            // Start recognition — accumulate text across task restarts so
-            // long recordings don't lose the beginning when iOS silently
-            // restarts the recognition task after ~60 seconds.
-            var accumulated = ""
+            // Start recognition
             recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-                if let text = result?.bestTranscription.formattedString {
-                    onUpdate(text, false)
-                }
+                let text = result?.bestTranscription.formattedString
                 let isFinal = result?.isFinal ?? false
-                if isFinal, let text = result?.bestTranscription.formattedString {
-                    accumulated = text
-                }
-                if let error = error {
-                    let nsError = error as NSError
-                    // Error code 1110 = "Recognition request was canceled" — iOS does
-                    // this silently after ~60s of continuous on-device recognition.
-                    // Restart with a fresh task and keep the accumulated text.
-                    if nsError.code == 1110 || nsError.code == 216 {
-                        let prefix = accumulated
-                        let newRequest = SFSpeechAudioBufferRecognitionRequest()
-                        newRequest.shouldReportPartialResults = true
-                        newRequest.requiresOnDeviceRecognition = true
-                        self.recognitionRequest = newRequest
-                        // Re-install the tap to feed the new request
-                        if self.audioEngine.isRunning {
-                            inputNode.removeTap(onBus: 0)
-                            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-                                newRequest.append(buffer)
-                            }
-                        }
-                        self.recognitionTask = recognizer.recognitionTask(with: newRequest) { result, error in
-                            if let text = result?.bestTranscription.formattedString {
-                                let combined = prefix.isEmpty ? text : "\(prefix) \(text)"
-                                onUpdate(combined, false)
-                            }
-                            let isFinal = result?.isFinal ?? false
-                            let hasError = error != nil
-                            if hasError || isFinal {
-                                onUpdate(nil, true)
-                            }
-                        }
-                    } else {
-                        onUpdate(nil, true)
-                    }
-                }
+                let hasError = error != nil
+                onUpdate(text, hasError || isFinal)
             }
         }
     }
