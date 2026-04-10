@@ -371,7 +371,9 @@ struct QuipMacApp: App {
                 }
                 webSocketServer.broadcast(StateChangeMessage(windowId: wid, state: "stt_active"))
 
-                // Snapshot terminal content on a background thread so main stays responsive
+                // Snapshot terminal content on a background thread so main stays responsive.
+                // Also update the high water mark so the next TTS delta only includes
+                // content written AFTER the STT was sent — prevents replaying old responses.
                 if let window = windowManager.windows.first(where: { $0.id == wid }) {
                     let termApp = terminalAppForWindow(window)
                     let wn = window.windowNumber
@@ -379,6 +381,7 @@ struct QuipMacApp: App {
                         let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
                         DispatchQueue.main.async { [self] in
                             sttBaselineContent[wid] = content
+                            outputHighWaterMarks[wid] = content
                             schedulePendingInputResponseCheck(windowId: wid, attempt: 0)
                         }
                     }

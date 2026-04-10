@@ -152,10 +152,15 @@ final class WebSocketServer {
     /// Tunnel clients that handle their own WebSocket framing.
     /// Protected by its own lock so registration can happen from the proxy queue
     /// without waiting for the main queue, which may be congested.
+    private struct TunnelBroadcaster: @unchecked Sendable {
+        let id: ObjectIdentifier
+        let sender: @Sendable (Data) -> Void
+    }
+
     @ObservationIgnored
     private let tunnelBroadcastersLock = NSLock()
     @ObservationIgnored
-    private nonisolated(unsafe) var tunnelBroadcasters: [@Sendable (Data) -> Void] = []
+    private nonisolated(unsafe) var tunnelBroadcasters: [TunnelBroadcaster] = []
 
     var hasConnectedClients: Bool {
         !clients.isEmpty || tunnelBroadcasterCount > 0
@@ -170,11 +175,25 @@ final class WebSocketServer {
     /// Register a tunnel connection for receiving broadcast messages.
     /// Safe to call from any queue.
     nonisolated func registerTunnelClient(_ conn: NWConnection, sender: @escaping @Sendable (Data) -> Void) {
+        let connId = ObjectIdentifier(conn)
         tunnelBroadcastersLock.lock()
-        tunnelBroadcasters.append(sender)
+        // Remove any existing broadcaster for this connection before adding
+        tunnelBroadcasters.removeAll { $0.id == connId }
+        tunnelBroadcasters.append(TunnelBroadcaster(id: connId, sender: sender))
         let count = tunnelBroadcasters.count
         tunnelBroadcastersLock.unlock()
         print("[WebSocketServer] Tunnel client registered. \(count) tunnel client(s)")
+    }
+
+    /// Unregister a tunnel connection when it disconnects.
+    /// Safe to call from any queue.
+    nonisolated func unregisterTunnelClient(_ conn: NWConnection) {
+        let connId = ObjectIdentifier(conn)
+        tunnelBroadcastersLock.lock()
+        tunnelBroadcasters.removeAll { $0.id == connId }
+        let count = tunnelBroadcasters.count
+        tunnelBroadcastersLock.unlock()
+        print("[WebSocketServer] Tunnel client unregistered. \(count) tunnel client(s)")
     }
 
     func broadcast<T: Encodable & Sendable>(_ message: T) {
@@ -193,9 +212,11 @@ final class WebSocketServer {
             let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
 
             for client in authenticatedClients {
-                client.connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ error in
-                    if let error = error {
-                        print("[WebSocketServer] Send error: \(error)")
+                client.connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ [weak self] error in
+                    if error != nil {
+                        DispatchQueue.main.async {
+                            self?.removeConnection(client.connection)
+                        }
                     }
                 }))
             }
@@ -203,10 +224,10 @@ final class WebSocketServer {
 
         // Send to authenticated tunnel clients
         tunnelBroadcastersLock.lock()
-        let senders = tunnelBroadcasters
+        let broadcasters = tunnelBroadcasters
         tunnelBroadcastersLock.unlock()
-        for sender in senders {
-            sender(data)
+        for broadcaster in broadcasters {
+            broadcaster.sender(data)
         }
     }
 

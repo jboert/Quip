@@ -46,6 +46,11 @@ final class CloudflareTunnel {
         guard !isRunning else { return }
         stoppedIntentionally = false
 
+        // Kill any orphaned cloudflared processes from previous app sessions.
+        // When the app is force-quit, cloudflared gets reparented to PID 1 and
+        // lives forever with stale edge connections, blocking new tunnels.
+        killOrphanedCloudflared()
+
         // Start the tunnel proxy — handles WebSocket framing that cloudflared strips
         startProxy()
 
@@ -147,6 +152,25 @@ final class CloudflareTunnel {
         webSocketURL = url.replacingOccurrences(of: "https://", with: "wss://")
     }
 
+    private func killOrphanedCloudflared() {
+        let pipe = Pipe()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        proc.arguments = ["-f", "cloudflared tunnel"]
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        try? proc.run()
+        proc.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let myPid = ProcessInfo.processInfo.processIdentifier
+        for line in output.split(separator: "\n") {
+            if let pid = Int32(line.trimmingCharacters(in: .whitespaces)), pid != myPid {
+                print("[CloudflareTunnel] Killing orphaned cloudflared (pid \(pid))")
+                kill(pid, SIGTERM)
+            }
+        }
+    }
+
     // MARK: - Tunnel Proxy
     // Cloudflared strips WebSocket upgrade headers and handles framing at the edge.
     // This proxy speaks plain HTTP/TCP with cloudflared and handles WebSocket
@@ -170,6 +194,16 @@ final class CloudflareTunnel {
     }
 
     private nonisolated func handleTunnelConnection(_ conn: NWConnection) {
+        // Monitor connection state so we clean up dead connections immediately
+        // — prevents send buffers from growing unboundedly on zombie connections.
+        conn.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled:
+                self?.cleanupTunnelConnection(conn)
+            default:
+                break
+            }
+        }
         conn.start(queue: proxyQueue)
 
         // Read the HTTP request from cloudflared
@@ -231,13 +265,19 @@ final class CloudflareTunnel {
             }
         }
         frame.append(payload)
-        conn.send(content: frame, completion: .contentProcessed({ _ in }))
+        conn.send(content: frame, completion: .contentProcessed({ [weak self] error in
+            if error != nil {
+                self?.cleanupTunnelConnection(conn)
+                conn.cancel()
+            }
+        }))
     }
 
     /// Receive and parse WebSocket frames from the tunnel client
     private nonisolated func receiveTunnelFrames(on conn: NWConnection) {
         conn.receive(minimumIncompleteLength: 2, maximumLength: 65536) { [weak self] content, _, isComplete, error in
             guard let self, let data = content, !data.isEmpty else {
+                self?.cleanupTunnelConnection(conn)
                 conn.cancel()
                 return
             }
@@ -247,6 +287,8 @@ final class CloudflareTunnel {
 
             if !isComplete && error == nil {
                 self.receiveTunnelFrames(on: conn)
+            } else {
+                self.cleanupTunnelConnection(conn)
             }
         }
     }
@@ -297,6 +339,7 @@ final class CloudflareTunnel {
             case 0x01: // Text frame
                 self.handleTunnelMessage(payload, on: conn)
             case 0x08: // Close
+                self.cleanupTunnelConnection(conn)
                 conn.cancel()
                 return
             case 0x09: // Ping — respond with pong
@@ -313,6 +356,11 @@ final class CloudflareTunnel {
         frame.append(UInt8(payload.count))
         frame.append(payload)
         conn.send(content: frame, completion: .contentProcessed({ _ in }))
+    }
+
+    private nonisolated func cleanupTunnelConnection(_ conn: NWConnection) {
+        tunnelAuthenticated.removeValue(forKey: ObjectIdentifier(conn))
+        cachedServer?.unregisterTunnelClient(conn)
     }
 
     /// Whether this tunnel connection has been authenticated.

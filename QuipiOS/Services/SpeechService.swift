@@ -239,12 +239,51 @@ private class AudioWorker: @unchecked Sendable {
                 return
             }
 
-            // Start recognition
+            // Start recognition — accumulate text across task restarts so
+            // long recordings don't lose the beginning when iOS silently
+            // restarts the recognition task after ~60 seconds.
+            var accumulated = ""
             recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-                let text = result?.bestTranscription.formattedString
+                if let text = result?.bestTranscription.formattedString {
+                    onUpdate(text, false)
+                }
                 let isFinal = result?.isFinal ?? false
-                let hasError = error != nil
-                onUpdate(text, hasError || isFinal)
+                if isFinal, let text = result?.bestTranscription.formattedString {
+                    accumulated = text
+                }
+                if let error = error {
+                    let nsError = error as NSError
+                    // Error code 1110 = "Recognition request was canceled" — iOS does
+                    // this silently after ~60s of continuous on-device recognition.
+                    // Restart with a fresh task and keep the accumulated text.
+                    if nsError.code == 1110 || nsError.code == 216 {
+                        let prefix = accumulated
+                        let newRequest = SFSpeechAudioBufferRecognitionRequest()
+                        newRequest.shouldReportPartialResults = true
+                        newRequest.requiresOnDeviceRecognition = true
+                        self.recognitionRequest = newRequest
+                        // Re-install the tap to feed the new request
+                        if self.audioEngine.isRunning {
+                            inputNode.removeTap(onBus: 0)
+                            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                                newRequest.append(buffer)
+                            }
+                        }
+                        self.recognitionTask = recognizer.recognitionTask(with: newRequest) { result, error in
+                            if let text = result?.bestTranscription.formattedString {
+                                let combined = prefix.isEmpty ? text : "\(prefix) \(text)"
+                                onUpdate(combined, false)
+                            }
+                            let isFinal = result?.isFinal ?? false
+                            let hasError = error != nil
+                            if hasError || isFinal {
+                                onUpdate(nil, true)
+                            }
+                        }
+                    } else {
+                        onUpdate(nil, true)
+                    }
+                }
             }
         }
     }

@@ -39,9 +39,7 @@ struct TTSNotificationOverlay: View {
                         }
                 )
                 .onTapGesture { onTap(window.id) }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.opacity)
                 .animation(.easeInOut(duration: 0.2), value: currentSpeakingWindowId)
         }
     }
@@ -71,19 +69,19 @@ struct TTSNotificationOverlay: View {
                         .foregroundStyle(.white.opacity(0.25))
                 }
 
-                // Spoken text — collapsed (3 lines) or expanded (up to 10)
+                // Spoken text — collapsed (6 lines) or expanded (up to 15)
                 if !displayText.isEmpty {
                     Text(displayText)
-                        .font(.system(size: 14, weight: .regular, design: .default))
+                        .font(.system(size: 16, weight: .regular, design: .default))
                         .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(expanded ? 10 : 3)
-                        .lineSpacing(2)
+                        .lineLimit(expanded ? 15 : 6)
+                        .lineSpacing(3)
                         .multilineTextAlignment(.leading)
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(.ultraThinMaterial)
@@ -96,11 +94,38 @@ struct TTSNotificationOverlay: View {
     }
 
     /// Strip terminal UI chrome to show clean prose matching TTS output.
+    /// Mirrors the Python filter_text() logic in kokoro_tts.py.
     private func cleanForDisplay(_ text: String) -> String {
         let decorSymbols = CharacterSet(charactersIn: "⏺●✻✳✢✔✓✗⚡⚠◆◇◈◉○◎◐◑◒◓⏵⏴▶◀►◄▲▼▸▹▾▿⟦⟧⌁⌂⌃⌄⌇✦✧✩✪✫✶✴✷✸✹✺✻★☆")
         let dropSymbols = CharacterSet(charactersIn: "⎿⊢⊣⊤⊥")
+        let toolVerbs: Set<String> = ["searched", "read", "edited", "wrote", "created", "deleted",
+                                       "moved", "copied", "found", "listed", "ran", "executed",
+                                       "updated", "modified", "fetched", "checked"]
+
+        // Step 1: Find the LAST "⏺ <prose>" line (not a tool call or tool summary)
+        // and take content from there onward — this is the key filter the Python uses.
+        let rawLines = text.components(separatedBy: "\n")
+        var lastResponseIdx: Int? = nil
+        for (idx, line) in rawLines.enumerated() {
+            let stripped = line.trimmingCharacters(in: .whitespaces)
+            guard stripped.hasPrefix("⏺") else { continue }
+            let rest = String(stripped.dropFirst()).trimmingCharacters(in: .whitespaces)
+            if rest.isEmpty { continue }
+            if rest.range(of: #"^[A-Z][A-Za-z]*\("#, options: .regularExpression) != nil { continue }
+            let firstWord = rest.split(separator: " ", maxSplits: 1).first.map { String($0).lowercased() } ?? ""
+            if toolVerbs.contains(firstWord) { continue }
+            lastResponseIdx = idx
+        }
+        let lines: [String]
+        if let idx = lastResponseIdx {
+            lines = Array(rawLines[idx...])
+        } else {
+            lines = rawLines
+        }
+
+        // Step 2: Filter individual lines
         var kept: [String] = []
-        for line in text.components(separatedBy: "\n") {
+        for line in lines {
             var s = line.trimmingCharacters(in: .whitespaces)
             if s.isEmpty { continue }
             // Drop tool-result lines
@@ -110,13 +135,35 @@ struct TTSNotificationOverlay: View {
                 s = String(s.dropFirst()).trimmingCharacters(in: .whitespaces)
             }
             if s.isEmpty { continue }
-            // Skip tool calls like "Read(file.txt)"
+            // Skip tool calls
             if s.range(of: #"^[A-Z][A-Za-z]*\("#, options: .regularExpression) != nil { continue }
-            // Skip status lines with · and tokens/context
             let low = s.lowercased()
+            // Skip status lines
             if s.contains("·") && (low.contains("tokens") || low.contains("context") || low.contains("shortcuts")) { continue }
+            if low.contains("? for shortcuts") || low.contains("esc to interrupt") { continue }
+            // Skip thinking indicators
+            if s.range(of: #"\b\w{4,}(ed|ing)\s+for\s+\d+\s*[mhs]"#, options: .regularExpression) != nil { continue }
+            // Skip shell prompts
+            if s.hasPrefix("➜") || s.hasPrefix("❯") || s.hasPrefix("»") { continue }
+            if s.range(of: #"^[\w.-]+@[\w.-]+[:\s]"#, options: .regularExpression) != nil { continue }
+            // Skip diff lines
+            if s.hasPrefix("+++ ") || s.hasPrefix("--- ") || s.hasPrefix("@@ ") { continue }
+            if line.range(of: #"^\s*\d{1,5}\s+[+\-]?\s"#, options: .regularExpression) != nil { continue }
             // Skip file paths
             if s.range(of: #"^/?[\w./-]+\.\w+(:\d+)?$"#, options: .regularExpression) != nil { continue }
+            // Skip lines with box-drawing characters
+            if s.unicodeScalars.contains(where: { $0.value >= 0x2500 && $0.value <= 0x259F }) { continue }
+            // Skip tmux/terminal bars with multiple separators
+            if s.filter({ $0 == "│" }).count >= 2 || s.filter({ $0 == "|" }).count >= 3 { continue }
+            // Skip progress bars
+            if s.range(of: #"[█▓▒░▌▐]{2,}"#, options: .regularExpression) != nil { continue }
+            // Skip indented code
+            if (line.hasPrefix("    ") || line.hasPrefix("\t")) &&
+               s.range(of: #"[{}()]|=>|->|import |def |fn |class |let |var |const |function"#, options: .regularExpression) != nil { continue }
+            // Skip tool summaries
+            if low.contains("ctrl+o to expand") || low.contains("ctrl+r to expand") || low.contains("to expand") { continue }
+            let firstWord = low.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+            if toolVerbs.contains(firstWord) { continue }
             // Strip markdown
             s = s.replacingOccurrences(of: "**", with: "")
             s = s.replacingOccurrences(of: "`", with: "")
@@ -128,8 +175,8 @@ struct TTSNotificationOverlay: View {
             if !s.isEmpty { kept.append(s) }
         }
         let joined = kept.joined(separator: "\n")
-        if joined.count > 300 {
-            return String(joined.prefix(300)) + "..."
+        if joined.count > 500 {
+            return String(joined.prefix(500)) + "..."
         }
         return joined
     }

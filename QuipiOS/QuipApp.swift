@@ -283,10 +283,11 @@ struct MainiOSView: View {
         }
         .overlay {
             if isRecording {
-                // Full-screen tap-to-stop layer
-                Color.black.opacity(0.25)
+                // Full-screen tap-to-stop layer (landscape) or dimmed backdrop (portrait)
+                Color.black.opacity(isPortrait ? 0.4 : 0.25)
                     .ignoresSafeArea()
-                    .onTapGesture { onStopRecording() }
+                    .allowsHitTesting(!isPortrait)
+                    .onTapGesture { if !isPortrait { onStopRecording() } }
 
                 VStack(spacing: 12) {
                     Spacer()
@@ -310,24 +311,28 @@ struct MainiOSView: View {
                             .transition(.opacity)
                     }
 
-                    // Recording indicator pill
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 10, height: 10)
-                            .opacity(0.9)
-                        Text(speech.transcribedText.isEmpty ? "Listening — tap to stop" : "Tap to send")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.9))
+                    if !isPortrait {
+                        // Recording indicator pill (landscape only)
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(.red)
+                                .frame(width: 10, height: 10)
+                                .opacity(0.9)
+                            Text(speech.transcribedText.isEmpty ? "Listening — tap to stop" : "Tap to send")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.9))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.red.opacity(0.35))
+                        .clipShape(Capsule())
+                        .padding(.bottom, 20)
+                    } else {
+                        // Leave space for portrait controls below
+                        Spacer().frame(height: 120)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(.red.opacity(0.35))
-                    .clipShape(Capsule())
-                    .padding(.bottom, 20)
                 }
-                .allowsHitTesting(true)
-                .onTapGesture { onStopRecording() }
+                .allowsHitTesting(!isPortrait)
             }
         }
         .overlay {
@@ -355,7 +360,7 @@ struct MainiOSView: View {
                 )
             }
         }
-        .overlay(alignment: .bottom) {
+        .overlay {
             if speech.isSpeaking {
                 TTSNotificationOverlay(
                     currentSpeakingWindowId: speech.currentSpeakingWindowId,
@@ -367,7 +372,9 @@ struct MainiOSView: View {
                     onSwipeDismiss: { speech.stopSpeaking() }
                 )
                 .fixedSize(horizontal: false, vertical: true)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .frame(maxWidth: 500)
+                .padding(.horizontal, 24)
+                .transition(.opacity)
                 .animation(.easeInOut(duration: 0.25), value: speech.isSpeaking)
             }
         }
@@ -697,19 +704,6 @@ struct MainiOSView: View {
         let windowColor = selectedWindow.map { Color(hex: $0.color) } ?? colors.textSecondary
 
         return VStack(spacing: 8) {
-            // Selected window indicator
-            if let sel = selectedWindow {
-                HStack(spacing: 6) {
-                    Circle().fill(Color(hex: sel.color)).frame(width: 8, height: 8)
-                    Text(sel.app)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(colors.textPrimary.opacity(0.9))
-                    Text(sel.name)
-                        .font(.system(size: 11))
-                        .foregroundStyle(colors.textSecondary)
-                }
-            }
-
             // Control buttons
             HStack(spacing: 10) {
                 // Previous window
@@ -717,11 +711,11 @@ struct MainiOSView: View {
                     cycleWindow(direction: -1)
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 56, height: 56)
                         .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .disabled(windows.count <= 1)
 
@@ -733,18 +727,31 @@ struct MainiOSView: View {
                         onStartRecording()
                     }
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         Image(systemName: isRecording ? "stop.fill" : "mic.fill")
-                            .font(.system(size: 16))
+                            .font(.system(size: 20))
                         Text(isRecording ? "Stop" : "Push to Talk")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 16, weight: .medium))
                     }
                     .foregroundStyle(isRecording ? .white : colors.textPrimary)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .frame(height: 56)
                     .background(isRecording ? Color.red.opacity(0.7) : colors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+
+                // Next window
+                Button {
+                    cycleWindow(direction: 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 56, height: 56)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(windows.count <= 1)
 
                 // View output
                 Button {
@@ -753,26 +760,13 @@ struct MainiOSView: View {
                     }
                 } label: {
                     Image(systemName: "text.alignleft")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 56, height: 56)
                         .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .disabled(selectedWindowId == nil)
-
-                // Next window
-                Button {
-                    cycleWindow(direction: 1)
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 44, height: 44)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-                .disabled(windows.count <= 1)
             }
         }
         .padding(.vertical, 8)
@@ -794,10 +788,13 @@ struct MainiOSView: View {
     private var bottomBar: some View {
         HStack(spacing: 0) {
             if let sel = windows.first(where: { $0.id == selectedWindowId }) {
-                Circle().fill(Color(hex: sel.color)).frame(width: 5, height: 5)
+                Circle().fill(Color(hex: sel.color)).frame(width: 6, height: 6)
+                Text(" \(sel.app)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(colors.textPrimary.opacity(0.9))
                 Text(" \(sel.name)")
                     .font(.system(size: 9))
-                    .foregroundStyle(colors.textTertiary)
+                    .foregroundStyle(colors.textSecondary)
             }
             Spacer()
             if client.isAuthenticated {
