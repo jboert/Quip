@@ -9,8 +9,13 @@ struct QuipMacApp: App {
     @State private var terminalColorManager = TerminalColorManager()
     @State private var keystrokeInjector = KeystrokeInjector()
     @State private var tunnel = CloudflareTunnel()
+    @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
-    @AppStorage("localOnlyMode") private var localOnlyMode = false
+    @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
+
+    private var networkMode: NetworkMode {
+        NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
+    }
     @State private var outputHighWaterMarks: [String: String] = [:]
     @State private var ttsGeneration: [String: Int] = [:]
     /// Windows where Claude is actively thinking (detected from terminal content)
@@ -42,17 +47,10 @@ struct QuipMacApp: App {
                 .environment(terminalColorManager)
                 .environment(keystrokeInjector)
                 .environment(tunnel)
+                .environment(tailscale)
                 .onAppear { startServicesOnce() }
-                .onChange(of: localOnlyMode) { _, isLocalOnly in
-                    if isLocalOnly {
-                        tunnel.stop()
-                    } else {
-                        tunnel.webSocketServer = webSocketServer
-                        tunnel.start()
-                    }
-                    // Local connections only require auth if requirePINForLocal is set
-                    let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
-                    webSocketServer.requireAuth = requirePIN
+                .onChange(of: networkModeRaw) { _, _ in
+                    applyNetworkMode()
                 }
         }
         .windowStyle(.titleBar)
@@ -64,6 +62,7 @@ struct QuipMacApp: App {
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
                 .environment(tunnel)
+                .environment(tailscale)
                 .onAppear { startServicesOnce() }
         }
         .menuBarExtraStyle(.window)
@@ -74,6 +73,7 @@ struct QuipMacApp: App {
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
                 .environment(tunnel)
+                .environment(tailscale)
                 .environment(pinManager)
         }
     }
@@ -83,19 +83,39 @@ struct QuipMacApp: App {
     private func startServicesOnce() {
         guard !servicesStarted else { return }
         servicesStarted = true
+
+        // One-time migration from legacy localOnlyMode bool to networkMode enum.
+        let migrated = migrateNetworkModeIfNeeded()
+        if networkModeRaw != migrated.rawValue {
+            networkModeRaw = migrated.rawValue
+        }
+
         webSocketServer.pinManager = pinManager
-        // WebSocket server only handles direct (local) connections.
-        // Tunnel clients get auth_required from CloudflareTunnel independently.
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
         webSocketServer.requireAuth = requirePIN
         webSocketServer.start()
-        if !localOnlyMode {
-            tunnel.webSocketServer = webSocketServer
-            tunnel.start()
-        }
+
+        // Apply current network mode (starts tunnel or Tailscale as needed).
+        applyNetworkMode()
+
         // Small delay to let WebSocket listener reach .ready before advertising
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             bonjourAdvertiser.startAdvertising()
+        }
+
+        // Re-detect Tailscale whenever another app activates — cheap way to
+        // pick up the case where the user opened the Tailscale app while Quip
+        // was already running and hadn't yet logged in.
+        NotificationCenter.default.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                if networkMode == .tailscale {
+                    tailscale.refresh()
+                }
+            }
         }
 
         webSocketServer.onMessageReceived = { [self] data in
@@ -152,6 +172,28 @@ struct QuipMacApp: App {
                     broadcastLayout()
                 }
             }
+        }
+    }
+
+    /// Switch between Cloudflare tunnel, Tailscale, and local-only based on
+    /// the current `networkMode`. Safe to call repeatedly — each branch is
+    /// idempotent on its own dependencies.
+    @MainActor
+    private func applyNetworkMode() {
+        let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
+        webSocketServer.requireAuth = requirePIN
+
+        switch networkMode {
+        case .cloudflareTunnel:
+            tailscale.stop()
+            tunnel.webSocketServer = webSocketServer
+            tunnel.start()
+        case .tailscale:
+            tunnel.stop()
+            tailscale.refresh()
+        case .localOnly:
+            tunnel.stop()
+            tailscale.stop()
         }
     }
 
