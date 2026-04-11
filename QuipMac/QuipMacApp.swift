@@ -85,10 +85,13 @@ struct QuipMacApp: App {
         servicesStarted = true
 
         // One-time migration from legacy localOnlyMode bool to networkMode enum.
-        let migrated = migrateNetworkModeIfNeeded()
-        if networkModeRaw != migrated.rawValue {
-            networkModeRaw = migrated.rawValue
-        }
+        // `migrateNetworkModeIfNeeded` writes directly to UserDefaults; @AppStorage
+        // reads that value fresh on the next access. We intentionally do NOT
+        // re-assign through `networkModeRaw` — that would risk firing the
+        // `.onChange(of: networkModeRaw)` handler and double-calling
+        // `applyNetworkMode()`. The explicit call below is the single source
+        // of truth for initial-mode startup.
+        _ = migrateNetworkModeIfNeeded()
 
         webSocketServer.pinManager = pinManager
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
@@ -106,7 +109,10 @@ struct QuipMacApp: App {
         // Re-detect Tailscale whenever another app activates — cheap way to
         // pick up the case where the user opened the Tailscale app while Quip
         // was already running and hadn't yet logged in.
-        NotificationCenter.default.addObserver(
+        // NOTE: NSWorkspace notifications post through its OWN notification
+        // center, NOT `NotificationCenter.default`. Registering on `.default`
+        // would silently no-op.
+        NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
