@@ -32,8 +32,11 @@ final class TerminalStateDetector {
 
     private var pollTimer: Timer?
 
-    /// kqueue-based process sources that fire when a child process exits or forks
-    private var processSources: [String: [DispatchSourceProcess]] = [:]
+    /// kqueue-based process sources that fire when a child process exits, keyed by
+    /// window and PID so an exited source can be located and removed after firing.
+    /// Without the pid key, sources for dead children pile up over the app's lifetime
+    /// — every claude/node/git helper spawned by a shell leaves a zombie watch behind.
+    private var processSources: [String: [pid_t: DispatchSourceProcess]] = [:]
 
     /// Known child PIDs per window, used to detect new/exited children
     private var knownChildren: [String: Set<pid_t>] = [:]
@@ -132,17 +135,29 @@ final class TerminalStateDetector {
 
     // MARK: - kqueue Process Sources
 
-    /// Watch a process for exit events via kqueue; triggers an immediate re-poll
+    /// Watch a process for exit events via kqueue; triggers an immediate re-poll.
+    /// After the exit fires, the source cancels and removes itself from the map
+    /// so stale watches don't accumulate across the many short-lived children a
+    /// shell spawns during a Claude session.
     private func installProcessSource(windowId: String, pid: pid_t) {
+        // Skip if this PID is already being watched under this window.
+        if processSources[windowId]?[pid] != nil { return }
+
         let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
         source.setEventHandler { [weak self] in
             Task { @MainActor [weak self] in
-                self?.handleProcessEvent(windowId: windowId)
+                guard let self else { return }
+                // The watched process has exited — cancel and drop the source
+                // before handling the event, so we don't leak kqueue entries.
+                if let src = self.processSources[windowId]?.removeValue(forKey: pid) {
+                    src.cancel()
+                }
+                self.handleProcessEvent(windowId: windowId)
             }
         }
         source.setCancelHandler {} // prevent crashes on dealloc
         source.resume()
-        processSources[windowId, default: []].append(source)
+        processSources[windowId, default: [:]][pid] = source
     }
 
     /// Called when a watched process exits — re-detect state but DO NOT transition immediately.
@@ -167,13 +182,13 @@ final class TerminalStateDetector {
 
     private func cancelProcessSources(for windowId: String) {
         if let sources = processSources.removeValue(forKey: windowId) {
-            for source in sources { source.cancel() }
+            for source in sources.values { source.cancel() }
         }
     }
 
     private func cancelAllProcessSources() {
         for (_, sources) in processSources {
-            for source in sources { source.cancel() }
+            for source in sources.values { source.cancel() }
         }
         processSources.removeAll()
     }

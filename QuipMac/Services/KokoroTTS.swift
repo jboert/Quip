@@ -1,17 +1,27 @@
 import Foundation
 
 /// Shared debug logger to /tmp/quip-kokoro.log (append-only).
+/// Uses the throwing `write(contentsOf:)` API so write failures surface as
+/// Swift errors instead of NSExceptions that would crash the app.
 enum KokoroTTSDebug {
     static let path = "/tmp/quip-kokoro.log"
+    private static let lock = NSLock()
+
     static func log(_ msg: String) {
         let line = "[\(Date())] \(msg)\n"
         guard let data = line.data(using: .utf8) else { return }
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: URL(fileURLWithPath: path))
+        lock.lock()
+        defer { lock.unlock() }
+        do {
+            if let handle = FileHandle(forWritingAtPath: path) {
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } else {
+                try data.write(to: URL(fileURLWithPath: path))
+            }
+        } catch {
+            // Swallow logging errors — never let the logger crash the app.
         }
     }
 }
@@ -174,7 +184,15 @@ final class KokoroTTS: @unchecked Sendable {
 
                 chunkCount += 1
                 KokoroTTSDebug.log("daemon: chunk \(chunkCount), \(wav.count) bytes")
-                onChunk(wav)
+                // Skip the onChunk callback once this session has gone stale —
+                // we still read the bytes to keep the daemon's pipe protocol in
+                // sync, but we avoid the wasted base64 + JSON + broadcast work
+                // (and the transient memory pressure from each 300–700 KB frame).
+                if shouldProceed() {
+                    onChunk(wav)
+                } else {
+                    KokoroTTSDebug.log("daemon: chunk \(chunkCount) discarded — stale gen")
+                }
             }
         }
     }
