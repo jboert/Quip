@@ -297,12 +297,29 @@ private struct DirectoriesTab: View {
 private struct ConnectionTab: View {
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
+    @Environment(TailscaleService.self) private var tailscale
 
     @AppStorage("wsPort") private var port: Int = 8765
     @AppStorage("bonjourServiceName") private var serviceName: String = "Quip"
-    @AppStorage("localOnlyMode") private var localOnlyMode = false
+    @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
+    @AppStorage("tailscaleHostnameOverride") private var tailscaleOverride: String = ""
     @AppStorage("requirePINForLocal") private var requirePINForLocal = false
     @State private var logEntries: [String] = []
+
+    private var networkMode: NetworkMode {
+        NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
+    }
+
+    private var modeCaption: String {
+        switch networkMode {
+        case .cloudflareTunnel:
+            return "Cloudflare tunnel enables connections from anywhere. Local connections always require PIN when tunnel is active."
+        case .tailscale:
+            return "Both devices must be on your Tailscale network. The URL stays stable across restarts."
+        case .localOnly:
+            return "Clients must be on the same network. QR code shows local address."
+        }
+    }
 
     var body: some View {
         Form {
@@ -339,15 +356,50 @@ private struct ConnectionTab: View {
             }
 
             Section("Network Mode") {
-                Toggle("Local only (no Cloudflare tunnel)", isOn: $localOnlyMode)
+                Picker("Network Mode", selection: $networkModeRaw) {
+                    ForEach(NetworkMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
 
-                Toggle("Require PIN for local connections", isOn: $requirePINForLocal)
-
-                Text(localOnlyMode
-                    ? "Clients must be on the same network. QR code shows local address."
-                    : "Cloudflare tunnel enables connections from anywhere. Local connections always require PIN when tunnel is active.")
+                Text(modeCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if networkMode == .tailscale {
+                    LabeledContent("Hostname") {
+                        if tailscale.hostname.isEmpty {
+                            Text("Not detected")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text(tailscale.hostname)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    Button {
+                        tailscale.refresh()
+                    } label: {
+                        Label("Re-detect", systemImage: "arrow.clockwise")
+                    }
+
+                    TextField("Hostname override (optional)", text: $tailscaleOverride)
+                        .textFieldStyle(.roundedBorder)
+                        .onChange(of: tailscaleOverride) { _, _ in
+                            tailscale.refresh()
+                        }
+
+                    if let err = tailscale.lastError {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Toggle("Require PIN for local connections", isOn: $requirePINForLocal)
             }
 
             Section("Connection Log") {
