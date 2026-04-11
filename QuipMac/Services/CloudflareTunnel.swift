@@ -177,8 +177,26 @@ final class CloudflareTunnel {
     // handshake + framing manually, then routes messages to WebSocketServer.
 
     private func startProxy() {
+        // The proxy listener survives cloudflared restarts — only create once.
+        // When cloudflared dies, its TCP connections to us get FIN/RST which
+        // fires .failed on each tunnel NWConnection and cleans up naturally via
+        // cleanupTunnelConnection. Recreating the listener on every restart
+        // leaks the old one (and any in-flight connections accepted on it) since
+        // nothing cancels it before the new one stomps the var.
+        guard proxyListener == nil else {
+            print("[TunnelProxy] Already listening on \(proxyPort), reusing")
+            return
+        }
+
         do {
-            let params = NWParameters.tcp
+            // Keepalive here too — cloudflared dying ungracefully wouldn't send
+            // TCP shutdown, so short probes speed up cleanup of dead tunnels.
+            let tcpOptions = NWProtocolTCP.Options()
+            tcpOptions.enableKeepalive = true
+            tcpOptions.keepaliveIdle = 15
+            tcpOptions.keepaliveInterval = 5
+            tcpOptions.keepaliveCount = 3
+            let params = NWParameters(tls: nil, tcp: tcpOptions)
             proxyListener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: proxyPort)!)
         } catch {
             print("[TunnelProxy] Failed to create listener: \(error)")

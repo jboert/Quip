@@ -49,8 +49,20 @@ final class WebSocketServer {
     func start() {
         guard !isRunning else { return }
 
-        let parameters = NWParameters.tcp
+        // Enable aggressive TCP keepalives so zombie connections — phones that
+        // went to background without sending FIN/RST — are reaped within ~30s
+        // instead of waiting for the 2h default RTO. Without this, every broadcast
+        // (including 300–700 KB TTS audio chunks) piles up in the dead connection's
+        // NWConnection send buffer until the socket finally times out.
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 15       // first probe after 15s of silence
+        tcpOptions.keepaliveInterval = 5    // 5s between probes
+        tcpOptions.keepaliveCount = 3       // 3 missed probes = dead (~30s total)
+
+        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
         let wsOptions = NWProtocolWebSocket.Options()
+        wsOptions.autoReplyPing = true
         parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
         // Bind to IPv4 localhost only

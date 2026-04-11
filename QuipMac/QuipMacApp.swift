@@ -566,6 +566,22 @@ struct QuipMacApp: App {
                 terminalStateDetector.untrackWindow(windowId)
             }
         }
+
+        // Prune per-window state for windows that no longer exist at all.
+        // Without this, dicts like outputHighWaterMarks and sttBaselineContent
+        // (each value holds tens of KB of terminal content) accumulate entries
+        // for long-dead windows over the app's lifetime.
+        let allCurrentIds = Set(windowManager.windows.map(\.id))
+        outputHighWaterMarks = outputHighWaterMarks.filter { allCurrentIds.contains($0.key) }
+        lastSpokenMarker = lastSpokenMarker.filter { allCurrentIds.contains($0.key) }
+        sttBaselineContent = sttBaselineContent.filter { allCurrentIds.contains($0.key) }
+        lastContentRequestTime = lastContentRequestTime.filter { allCurrentIds.contains($0.key) }
+        ttsGeneration = ttsGeneration.filter { allCurrentIds.contains($0.key) }
+        pendingInputForWindow = pendingInputForWindow.intersection(allCurrentIds)
+        thinkingWindows = thinkingWindows.intersection(allCurrentIds)
+        if let selected = clientSelectedWindowId, !allCurrentIds.contains(selected) {
+            clientSelectedWindowId = nil
+        }
     }
 
     private func terminalAppForWindow(_ window: ManagedWindow) -> TerminalApp {
