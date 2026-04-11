@@ -24,7 +24,9 @@ final class TailscaleService {
     private var generation: Int = 0
 
     /// Hardcoded candidate paths for the Tailscale CLI. Checked in order.
-    private static let cliCandidates: [String] = [
+    /// `nonisolated` so `detectViaCLI()` (also nonisolated) can read it from
+    /// a detached task without crossing MainActor isolation.
+    nonisolated private static let cliCandidates: [String] = [
         "/usr/local/bin/tailscale",
         "/opt/homebrew/bin/tailscale",
         "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
@@ -32,7 +34,13 @@ final class TailscaleService {
 
     /// Default WebSocket port — matches the @AppStorage("wsPort") default used
     /// elsewhere in the app. Read fresh on each refresh().
-    private static let defaultPort: Int = 8765
+    nonisolated private static let defaultPort: Int = 8765
+
+    /// Small error type so `detectViaCLI` can return a typed `Result`.
+    /// Just wraps a human-readable message; consumers read `.message` directly.
+    struct DetectionError: Error {
+        let message: String
+    }
 
     func refresh() {
         generation += 1
@@ -68,11 +76,11 @@ final class TailscaleService {
                         error: nil,
                         generation: myGen
                     )
-                case .failure(let message):
+                case .failure(let error):
                     self.hostname = ""
                     self.webSocketURL = ""
                     self.isAvailable = false
-                    self.lastError = message
+                    self.lastError = error.message
                 }
             }
         }
@@ -99,14 +107,14 @@ final class TailscaleService {
     /// Runs on a background task. Locates the CLI, shells out to
     /// `tailscale status --json`, parses the response, returns either a
     /// detected hostname or a human-readable error message.
-    private nonisolated static func detectViaCLI() -> Result<String, String> {
+    private nonisolated static func detectViaCLI() -> Result<String, DetectionError> {
         // 1. Locate the CLI.
         let fm = FileManager.default
         let cliPath = cliCandidates.first { path in
             fm.isExecutableFile(atPath: path)
         }
         guard let cli = cliPath else {
-            return .failure("Tailscale not installed — install from tailscale.com")
+            return .failure(DetectionError(message: "Tailscale not installed — install from tailscale.com"))
         }
 
         // 2. Shell out with a 3-second timeout.
@@ -121,7 +129,7 @@ final class TailscaleService {
         do {
             try process.run()
         } catch {
-            return .failure("Failed to run Tailscale CLI: \(error.localizedDescription)")
+            return .failure(DetectionError(message: "Failed to run Tailscale CLI: \(error.localizedDescription)"))
         }
 
         // Manual 3s timeout — Process has no built-in.
@@ -131,22 +139,22 @@ final class TailscaleService {
         }
         if process.isRunning {
             process.terminate()
-            return .failure("Tailscale CLI timed out — is the daemon running?")
+            return .failure(DetectionError(message: "Tailscale CLI timed out — is the daemon running?"))
         }
 
         guard process.terminationStatus == 0 else {
-            return .failure("Tailscale not running or not logged in")
+            return .failure(DetectionError(message: "Tailscale not running or not logged in"))
         }
 
         let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         guard !data.isEmpty else {
-            return .failure("Tailscale CLI returned no output")
+            return .failure(DetectionError(message: "Tailscale CLI returned no output"))
         }
 
         // 3. Parse JSON and extract the Self node's DNSName or first TailscaleIP.
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let selfNode = json["Self"] as? [String: Any] else {
-            return .failure("Could not parse Tailscale status JSON")
+            return .failure(DetectionError(message: "Could not parse Tailscale status JSON"))
         }
 
         if let dnsName = selfNode["DNSName"] as? String, !dnsName.isEmpty {
@@ -162,6 +170,6 @@ final class TailscaleService {
             return .success(first)
         }
 
-        return .failure("No Tailscale identity found — try logging in")
+        return .failure(DetectionError(message: "No Tailscale identity found — try logging in"))
     }
 }
