@@ -9,8 +9,13 @@ struct MainWindow: View {
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(CloudflareTunnel.self) private var tunnel
+    @Environment(TailscaleService.self) private var tailscale
 
-    @AppStorage("localOnlyMode") private var localOnlyMode = false
+    @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
+
+    private var networkMode: NetworkMode {
+        NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
+    }
 
     private var localWSURL: String {
         let port = 8765
@@ -161,14 +166,34 @@ struct MainWindow: View {
     // MARK: - QR Popover
 
     private var tunnelQRPopover: some View {
-        let qrURL = localOnlyMode ? localWSURL : tunnel.webSocketURL
+        let qrURL: String = {
+            switch networkMode {
+            case .cloudflareTunnel: return tunnel.webSocketURL
+            case .tailscale:        return tailscale.webSocketURL
+            case .localOnly:        return localWSURL
+            }
+        }()
+
         return VStack(spacing: 12) {
-            if !localOnlyMode && qrURL.isEmpty {
+            if networkMode == .cloudflareTunnel && qrURL.isEmpty {
                 ProgressView()
                     .controlSize(.small)
                 Text("Waiting for tunnel...")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if networkMode == .tailscale && qrURL.isEmpty {
+                if let err = tailscale.lastError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Detecting Tailscale...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 Text("Scan with iPhone")
                     .font(.headline)
@@ -218,7 +243,8 @@ struct MainWindow: View {
 
     private var tunnelStatus: some View {
         HStack(spacing: 6) {
-            if localOnlyMode {
+            switch networkMode {
+            case .localOnly:
                 Image(systemName: "house")
                     .font(.caption)
                     .foregroundStyle(.blue)
@@ -238,36 +264,69 @@ struct MainWindow: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Copy local URL")
-            } else if tunnel.isRunning && !tunnel.webSocketURL.isEmpty {
-                Image(systemName: "globe")
+
+            case .tailscale:
+                Image(systemName: "network")
                     .font(.caption)
-                    .foregroundStyle(.green)
-                Text(tunnel.webSocketURL)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(tunnel.webSocketURL, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
+                    .foregroundStyle(tailscale.isAvailable ? .blue : .red)
+                if tailscale.isAvailable && !tailscale.webSocketURL.isEmpty {
+                    Text(tailscale.webSocketURL)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(tailscale.webSocketURL, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Copy Tailscale URL")
+                } else if let err = tailscale.lastError {
+                    Text(err)
                         .font(.caption)
+                        .foregroundStyle(.red)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Detecting...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderless)
-                .help("Copy tunnel URL")
-            } else if tunnel.isRunning {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Starting tunnel...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Image(systemName: "globe")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                Text("Tunnel offline")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+            case .cloudflareTunnel:
+                if tunnel.isRunning && !tunnel.webSocketURL.isEmpty {
+                    Image(systemName: "globe")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                    Text(tunnel.webSocketURL)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(tunnel.webSocketURL, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Copy tunnel URL")
+                } else if tunnel.isRunning {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Starting tunnel...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "globe")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    Text("Tunnel offline")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
