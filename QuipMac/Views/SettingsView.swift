@@ -400,6 +400,9 @@ private struct ConnectionTab: View {
                 }
 
                 Toggle("Require PIN for local connections", isOn: $requirePINForLocal)
+                    .onChange(of: requirePINForLocal) { _, newValue in
+                        webSocketServer.requireAuth = newValue
+                    }
             }
 
             Section("Connection Log") {
