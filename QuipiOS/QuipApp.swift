@@ -939,6 +939,10 @@ struct MainiOSView: View {
             urlStr = urlText
         } else if urlText.contains("trycloudflare.com") {
             urlStr = "wss://\(urlText)"
+        } else if urlText.hasSuffix(".ts.net") || urlText.contains(".ts.net:") {
+            urlStr = "ws://\(urlText)"
+        } else if looksLikeTailscaleCGNAT(urlText) {
+            urlStr = "ws://\(urlText)"
         } else if urlText.contains(":") {
             urlStr = "ws://\(urlText)"
         } else {
@@ -964,21 +968,35 @@ struct MainiOSView: View {
             return true
         }
 
-        // ws:// to local/private IPs is trusted
+        // ws:// to local/private IPs and Tailscale targets is trusted
         if scheme == "ws" {
             if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
-            // RFC 1918 private ranges
+
+            // Tailscale MagicDNS hostnames (e.g. quip-mac.tail1234.ts.net)
+            if host.hasSuffix(".ts.net") { return true }
+
+            // RFC 1918 private ranges + Tailscale CGNAT 100.64.0.0/10
             let parts = host.split(separator: ".").compactMap { UInt8($0) }
             if parts.count == 4 {
                 if parts[0] == 10 { return true }                                    // 10.0.0.0/8
                 if parts[0] == 172 && (16...31).contains(parts[1]) { return true }   // 172.16.0.0/12
                 if parts[0] == 192 && parts[1] == 168 { return true }               // 192.168.0.0/16
                 if parts[0] == 169 && parts[1] == 254 { return true }               // 169.254.0.0/16 link-local
+                if parts[0] == 100 && (64...127).contains(parts[1]) { return true } // 100.64.0.0/10 Tailscale CGNAT
             }
             return false
         }
 
         return false
+    }
+
+    /// True if `raw` starts with a 100.64–127.x.x address (Tailscale CGNAT range).
+    /// Accepts optional port suffix.
+    private func looksLikeTailscaleCGNAT(_ raw: String) -> Bool {
+        let hostPart = raw.split(separator: ":").first.map(String.init) ?? raw
+        let parts = hostPart.split(separator: ".").compactMap { UInt8($0) }
+        guard parts.count == 4 else { return false }
+        return parts[0] == 100 && (64...127).contains(parts[1])
     }
 
     // MARK: - Recent Connections
