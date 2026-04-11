@@ -67,9 +67,10 @@ def filter_text(text: str) -> str:
     text = re.sub(r"```[^\n]*\n.*?```", "", text, flags=re.DOTALL)
 
     # Leading symbols that just decorate a response line — strip them, keep the text
-    STRIP_SYMBOLS = "⏺●✻✳✢✔✓✗⚡⚠◆◇◈◉○◎◐◑◒◓⏵⏴▶◀►◄▲▼▸▹▾▿⟦⟧⌁⌂⌃⌄⌇✦✧✩✪✫✶✴✷✸✹✺✻★☆"
-    # Leading symbols that mean "drop the whole line" (tool result output, etc.)
-    DROP_LINE_SYMBOLS = "⎿⊢⊣⊤⊥"
+    STRIP_SYMBOLS = "⏺●✻✳✢⚡⚠◆◇◈◉○◎◐◑◒◓⏵⏴▶◀►◄▲▼▸▹▾▿⟦⟧⌁⌂⌃⌄⌇✦✧✩✪✫✶✴✷✸✹✺✻★☆"
+    # Leading symbols that mean "drop the whole line" (tool result output,
+    # checklist items from TaskCreate/TodoWrite, etc.)
+    DROP_LINE_SYMBOLS = "⎿⊢⊣⊤⊥✔✓✗◼◻◾◽"
 
     kept = []
     for line in text.split("\n"):
@@ -146,6 +147,11 @@ def filter_text(text: str) -> str:
         if len(re.findall(r"\b\d+[:.]\s*\w", stripped)) >= 3:
             continue
         if re.match(r"^(searched|read|edited|wrote|created|deleted|moved|copied|found|listed|ran|executed|updated|modified)\s+(\d+|file|files|for|the|a|an)\b", low):
+            continue
+
+        # Task-list headers from TaskCreate/TodoWrite summaries
+        # e.g. "7 tasks (2 done, 1 in progress, 4 open)"
+        if re.match(r"^\d+\s+tasks?\s*\(\d+\s+(done|completed|in\s*progress|open|pending)", low):
             continue
 
         # tmux/terminal status bar pattern: contains multiple │ separators
