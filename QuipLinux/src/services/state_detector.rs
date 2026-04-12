@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::Instant;
 
@@ -17,6 +17,9 @@ pub struct StateDetector {
     tracked: HashMap<String, u32>,
     cpu_threshold: f64,
     prev_cpu: HashMap<u32, CpuSample>,
+    /// Windows where Claude/node processes are currently running (regardless of CPU).
+    /// Used to drive the "thinking" indicator on iOS.
+    pub windows_with_claude: HashSet<String>,
 }
 
 impl StateDetector {
@@ -26,6 +29,7 @@ impl StateDetector {
             tracked: HashMap::new(),
             cpu_threshold,
             prev_cpu: HashMap::new(),
+            windows_with_claude: HashSet::new(),
         }
     }
 
@@ -89,7 +93,15 @@ impl StateDetector {
                 continue;
             }
 
-            let new_state = self.detect_state(shell_pid);
+            let (new_state, has_claude) = self.detect_state(shell_pid);
+
+            // Update Claude process presence for thinking indicator
+            if has_claude {
+                self.windows_with_claude.insert(window_id.clone());
+            } else {
+                self.windows_with_claude.remove(&window_id);
+            }
+
             let prev = self.states.get(&window_id).copied().unwrap_or_default();
             if new_state != prev {
                 self.states.insert(window_id.clone(), new_state);
@@ -101,10 +113,12 @@ impl StateDetector {
     }
 
     /// Detect the terminal state for a given shell PID by inspecting /proc.
-    fn detect_state(&mut self, shell_pid: u32) -> TerminalState {
+    /// Returns (state, has_claude_process) — the bool tracks process presence
+    /// regardless of CPU for the "thinking" indicator.
+    fn detect_state(&mut self, shell_pid: u32) -> (TerminalState, bool) {
         let children = match find_claude_children(shell_pid) {
             Some(pids) if !pids.is_empty() => pids,
-            _ => return TerminalState::WaitingForInput,
+            _ => return (TerminalState::WaitingForInput, false),
         };
 
         // Check CPU usage of the claude/node children.
@@ -142,26 +156,29 @@ impl StateDetector {
         }
 
         if any_busy {
-            TerminalState::Neutral
+            (TerminalState::Neutral, true)
         } else {
-            TerminalState::WaitingForInput
+            (TerminalState::WaitingForInput, true)
         }
     }
 }
 
-/// Find child processes of `shell_pid` whose comm contains "claude" or "node".
+/// Find ALL descendant processes of `shell_pid` whose comm contains "claude" or "node".
+/// Walks the full process tree to catch nested children.
 fn find_claude_children(shell_pid: u32) -> Option<Vec<u32>> {
-    let task_dir = format!("/proc/{shell_pid}/task");
-    // First, enumerate all direct child PIDs via /proc/{pid}/task/{tid}/children
-    // or fall back to scanning /proc for processes whose ppid matches shell_pid.
-    let mut child_pids = Vec::new();
-
-    // Scan /proc for children of the shell.
+    // Parse all processes from /proc into (pid, ppid, comm)
     let proc_dir = match fs::read_dir("/proc") {
         Ok(d) => d,
         Err(_) => return None,
     };
 
+    struct ProcEntry {
+        pid: u32,
+        ppid: u32,
+        comm: String,
+    }
+
+    let mut all_procs = Vec::new();
     for entry in proc_dir.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
@@ -170,7 +187,6 @@ fn find_claude_children(shell_pid: u32) -> Option<Vec<u32>> {
             Err(_) => continue,
         };
 
-        // Read the stat file to get ppid (field 4) and comm (field 2).
         let stat_path = format!("/proc/{pid}/stat");
         let stat_content = match fs::read_to_string(&stat_path) {
             Ok(s) => s,
@@ -178,38 +194,35 @@ fn find_claude_children(shell_pid: u32) -> Option<Vec<u32>> {
         };
 
         if let Some((comm, ppid)) = parse_stat_comm_ppid(&stat_content) {
-            if ppid == shell_pid {
-                let comm_lower = comm.to_ascii_lowercase();
-                if comm_lower.contains("claude") || comm_lower.contains("node") {
-                    child_pids.push(pid);
-                }
-            }
+            all_procs.push(ProcEntry { pid, ppid, comm });
         }
     }
 
-    // Also check task threads of the shell itself for relevant names.
-    if let Ok(tasks) = fs::read_dir(&task_dir) {
-        for entry in tasks.flatten() {
-            let tid_str = entry.file_name();
-            let tid: u32 = match tid_str.to_string_lossy().parse() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-
-            let stat_path = format!("/proc/{shell_pid}/task/{tid}/stat");
-            if let Ok(content) = fs::read_to_string(&stat_path) {
-                if let Some((comm, _)) = parse_stat_comm_ppid(&content) {
-                    let comm_lower = comm.to_ascii_lowercase();
-                    if comm_lower.contains("claude") || comm_lower.contains("node") {
-                        // Use the tid as a pseudo-pid for CPU tracking.
-                        if !child_pids.contains(&tid) {
-                            child_pids.push(tid);
-                        }
-                    }
-                }
+    // Walk the tree: find all descendants of shell_pid
+    let mut descendants: HashSet<u32> = HashSet::new();
+    descendants.insert(shell_pid);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for proc in &all_procs {
+            if descendants.contains(&proc.ppid) && !descendants.contains(&proc.pid) {
+                descendants.insert(proc.pid);
+                changed = true;
             }
         }
     }
+    descendants.remove(&shell_pid);
+
+    // Filter to claude/node processes among descendants
+    let child_pids: Vec<u32> = all_procs
+        .iter()
+        .filter(|p| descendants.contains(&p.pid))
+        .filter(|p| {
+            let comm_lower = p.comm.to_ascii_lowercase();
+            comm_lower.contains("claude") || comm_lower.contains("node")
+        })
+        .map(|p| p.pid)
+        .collect();
 
     Some(child_pids)
 }

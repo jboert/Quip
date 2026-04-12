@@ -64,12 +64,15 @@ impl Rect {
                 height: 1.0,
             };
         }
-        WindowFrame {
-            x: (self.x - screen.x) as f64 / screen.width as f64,
-            y: (self.y - screen.y) as f64 / screen.height as f64,
-            width: self.width as f64 / screen.width as f64,
-            height: self.height as f64 / screen.height as f64,
-        }
+        // Clamp to [0,1]: a window may physically extend past the usable
+        // screen area (e.g. after the desktop panel reappears and the
+        // reported screen shrinks). Raw >1 values make the phone layout
+        // overflow past its viewport buttons in portrait.
+        let x = (((self.x - screen.x) as f64) / screen.width as f64).clamp(0.0, 1.0);
+        let y = (((self.y - screen.y) as f64) / screen.height as f64).clamp(0.0, 1.0);
+        let width = (self.width as f64 / screen.width as f64).clamp(0.0, 1.0 - x);
+        let height = (self.height as f64 / screen.height as f64).clamp(0.0, 1.0 - y);
+        WindowFrame { x, y, width, height }
     }
 
     pub fn center_x(&self) -> i32 {

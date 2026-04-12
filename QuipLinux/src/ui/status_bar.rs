@@ -3,6 +3,7 @@ use gtk4::{self, Align, Orientation};
 use gdk4::Display;
 use gdk_pixbuf;
 
+use crate::models::settings::NetworkMode;
 use crate::state::SharedState;
 
 /// Bottom status bar matching the Mac app layout:
@@ -108,16 +109,20 @@ impl StatusBar {
         widget
     }
 
-    /// Return the best available URL: tunnel URL if available, otherwise local WS address.
+    /// Return the best available URL for the currently selected network mode.
     fn best_url(shared_state: &SharedState) -> String {
         let state = shared_state.read().unwrap();
-        if !state.tunnel_ws_url.is_empty() {
-            state.tunnel_ws_url.clone()
-        } else if state.ws_running {
-            let ip = local_ipv4().unwrap_or_else(|| "localhost".into());
-            format!("ws://{}:{}", ip, state.settings.general.websocket_port)
-        } else {
-            String::new()
+        match state.settings.network_mode() {
+            NetworkMode::CloudflareTunnel => state.tunnel_ws_url.clone(),
+            NetworkMode::Tailscale => state.tailscale_ws_url.clone(),
+            NetworkMode::LocalOnly => {
+                if state.ws_running {
+                    let ip = local_ipv4().unwrap_or_else(|| "localhost".into());
+                    format!("ws://{}:{}", ip, state.settings.general.websocket_port)
+                } else {
+                    String::new()
+                }
+            }
         }
     }
 
@@ -152,34 +157,53 @@ impl StatusBar {
         }
 
         // ── URL display (right side) ───────────────────────────────────
-        let has_tunnel = !state.tunnel_ws_url.is_empty();
+        self.globe_icon.remove_css_class("error");
+        self.globe_icon.remove_css_class("success");
 
-        if has_tunnel {
-            self.globe_icon.set_icon_name(Some("network-server-symbolic"));
-            self.globe_icon.remove_css_class("error");
-            self.globe_icon.add_css_class("success");
-            self.url_label.set_text(&state.tunnel_ws_url);
-        } else if state.tunnel_running {
-            self.globe_icon.remove_css_class("error");
-            self.globe_icon.remove_css_class("success");
-            self.url_label.set_text("Starting tunnel...");
-        } else if state.ws_running {
-            // No tunnel, but WS is running — show local address
-            let ip = local_ipv4().unwrap_or_else(|| "localhost".into());
-            let local_url = format!("ws://{}:{}", ip, state.settings.general.websocket_port);
-            self.globe_icon.set_icon_name(Some("network-wired-symbolic"));
-            self.globe_icon.remove_css_class("error");
-            self.globe_icon.remove_css_class("success");
-            self.url_label.set_text(&local_url);
-        } else {
-            self.globe_icon.set_icon_name(Some("network-offline-symbolic"));
-            self.globe_icon.add_css_class("error");
-            self.globe_icon.remove_css_class("success");
-            self.url_label.set_text("Offline");
+        let mode = state.settings.network_mode();
+        let mut has_any_url = false;
+        match mode {
+            NetworkMode::CloudflareTunnel => {
+                self.globe_icon.set_icon_name(Some("network-server-symbolic"));
+                if !state.tunnel_ws_url.is_empty() {
+                    self.globe_icon.add_css_class("success");
+                    self.url_label.set_text(&state.tunnel_ws_url);
+                    has_any_url = true;
+                } else if state.tunnel_running {
+                    self.url_label.set_text("Starting tunnel...");
+                } else {
+                    self.globe_icon.add_css_class("error");
+                    self.url_label.set_text("Tunnel offline");
+                }
+            }
+            NetworkMode::Tailscale => {
+                self.globe_icon.set_icon_name(Some("network-vpn-symbolic"));
+                if state.tailscale_available && !state.tailscale_ws_url.is_empty() {
+                    self.globe_icon.add_css_class("success");
+                    self.url_label.set_text(&state.tailscale_ws_url);
+                    has_any_url = true;
+                } else if !state.tailscale_last_error.is_empty() {
+                    self.globe_icon.add_css_class("error");
+                    self.url_label.set_text(&state.tailscale_last_error);
+                } else {
+                    self.url_label.set_text("Detecting Tailscale...");
+                }
+            }
+            NetworkMode::LocalOnly => {
+                self.globe_icon.set_icon_name(Some("network-wired-symbolic"));
+                if state.ws_running {
+                    let ip = local_ipv4().unwrap_or_else(|| "localhost".into());
+                    let local_url =
+                        format!("ws://{}:{}", ip, state.settings.general.websocket_port);
+                    self.url_label.set_text(&local_url);
+                    has_any_url = true;
+                } else {
+                    self.globe_icon.add_css_class("error");
+                    self.url_label.set_text("Offline");
+                }
+            }
         }
 
-        // Always show copy/QR when we have any URL
-        let has_any_url = has_tunnel || state.ws_running;
         self.copy_button.set_visible(has_any_url);
         self.qr_button.set_visible(has_any_url);
     }

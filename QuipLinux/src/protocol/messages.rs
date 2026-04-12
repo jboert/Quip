@@ -205,6 +205,59 @@ impl AuthResultMessage {
 }
 
 // ---------------------------------------------------------------------------
+// TTS audio — streamed sentence-by-sentence to clients
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TTSAudioMessage {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    pub type_: String,
+    #[serde(rename = "windowId")]
+    pub window_id: String,
+    #[serde(rename = "windowName")]
+    pub window_name: String,
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub sequence: u32,
+    #[serde(rename = "isFinal")]
+    pub is_final: bool,
+    #[serde(rename = "audioBase64")]
+    pub audio_base64: String,
+    pub format: String,
+}
+
+impl TTSAudioMessage {
+    pub fn chunk(window_id: String, window_name: String, session_id: String,
+                 sequence: u32, audio_base64: String) -> Self {
+        Self {
+            type_: "tts_audio".into(),
+            window_id,
+            window_name,
+            session_id,
+            sequence,
+            is_final: false,
+            audio_base64,
+            format: "wav".into(),
+        }
+    }
+
+    pub fn final_marker(window_id: String, window_name: String, session_id: String,
+                        sequence: u32) -> Self {
+        Self {
+            type_: "tts_audio".into(),
+            window_id,
+            window_name,
+            session_id,
+            sequence,
+            is_final: true,
+            audio_base64: String::new(),
+            format: "wav".into(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Encoding helpers — JSON with sorted keys to match Swift's sortedKeys output
 // ---------------------------------------------------------------------------
 

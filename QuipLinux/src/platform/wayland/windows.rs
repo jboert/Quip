@@ -1,11 +1,18 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::RwLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::platform::traits::{
     DisplayInfo, PlatformError, PlatformResult, RawWindowInfo, WindowBackend,
 };
 use crate::protocol::types::Rect;
+
+fn is_in_path(program: &str) -> bool {
+    Command::new("which").arg(program).output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 
 /// Global mapping from hashed u64 IDs back to KDE UUID strings.
 /// kdotool uses UUIDs like {xxx-xxx} but our trait uses u64 window IDs.
@@ -298,10 +305,18 @@ impl WaylandWindowBackend {
         Ok(displays)
     }
 
-    // ── KDE (kdotool) ──────────────────────────────────────────────────
+    // ── KDE — try kdotool, fall back to KWin scripting via D-Bus ──────
 
     fn list_windows_kde(&self) -> PlatformResult<Vec<RawWindowInfo>> {
-        // kdotool search "" lists all window IDs, one per line.
+        // Try kdotool first (fast, if installed)
+        if is_in_path("kdotool") {
+            return self.list_windows_kdotool();
+        }
+        // Fall back to KWin scripting via D-Bus (no external tools needed)
+        self.list_windows_kwin_script()
+    }
+
+    fn list_windows_kdotool(&self) -> PlatformResult<Vec<RawWindowInfo>> {
         let output = Command::new("kdotool")
             .args(["search", ""])
             .output()
@@ -322,8 +337,6 @@ impl WaylandWindowBackend {
             if id_str.is_empty() {
                 continue;
             }
-            // kdotool IDs are KWin UUIDs like {xxx-xxx}; we hash them to u64
-            // for our window_id field and store the UUID as the string id.
             let window_id = Self::hash_kde_id(id_str);
             KDE_ID_MAP.write().unwrap().insert(window_id, id_str.to_string());
 
@@ -339,6 +352,134 @@ impl WaylandWindowBackend {
             if class.is_empty() {
                 continue;
             }
+
+            windows.push(RawWindowInfo {
+                window_id,
+                title,
+                app_name: class.clone(),
+                app_class: class,
+                pid,
+                bounds,
+            });
+        }
+
+        Ok(windows)
+    }
+
+    /// Enumerate windows using KWin's built-in scripting API via D-Bus.
+    /// This works on any KDE Plasma installation without extra tools.
+    fn list_windows_kwin_script(&self) -> PlatformResult<Vec<RawWindowInfo>> {
+        // Generate a unique marker so we can find our output in the journal
+        let marker = format!("QUIP_ENUM_{}", SystemTime::now()
+            .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis());
+
+        // Write a temporary KWin script that dumps window info via console.info
+        let script = format!(
+            r#"(function() {{
+    var clients = workspace.windowList();
+    var lines = [];
+    for (var i = 0; i < clients.length; i++) {{
+        var c = clients[i];
+        if (!c.normalWindow) continue;
+        var geo = c.frameGeometry;
+        lines.push(c.internalId + "\t" + c.caption + "\t" + c.resourceClass + "\t" + c.pid + "\t" + geo.x + "," + geo.y + "," + geo.width + "," + geo.height);
+    }}
+    console.info("{0}:" + lines.join("\\n"));
+}})();"#,
+            marker
+        );
+
+        let script_path = "/tmp/quip_kwin_enum.js";
+        std::fs::write(script_path, &script)
+            .map_err(|e| PlatformError::CommandFailed(format!("write script: {e}")))?;
+
+        let plugin_name = format!("quip_enum_{}", std::process::id());
+
+        // Unload any previous instance
+        let _ = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   "/Scripting", "org.kde.kwin.Scripting.unloadScript",
+                   &format!("string:{plugin_name}")])
+            .output();
+
+        // Load the script
+        let load_output = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   "/Scripting", "org.kde.kwin.Scripting.loadScript",
+                   &format!("string:{script_path}"), &format!("string:{plugin_name}")])
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("dbus loadScript: {e}")))?;
+
+        let load_stdout = String::from_utf8_lossy(&load_output.stdout);
+        let script_id = load_stdout.lines()
+            .filter_map(|l| l.trim().strip_prefix("int32 "))
+            .next()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .unwrap_or(-1);
+
+        if script_id < 0 {
+            return Err(PlatformError::CommandFailed("KWin script load failed".into()));
+        }
+
+        // Run the script
+        let _ = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   &format!("/Scripting/Script{script_id}"), "org.kde.kwin.Script.run"])
+            .output();
+
+        // Small delay for script to execute and log
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        // Read output from systemd journal
+        let journal = Command::new("journalctl")
+            .args(["--user", "-n", "50", "--output=cat", "--no-pager"])
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("journalctl: {e}")))?;
+
+        let journal_output = String::from_utf8_lossy(&journal.stdout);
+
+        // Unload the script
+        let _ = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   "/Scripting", "org.kde.kwin.Scripting.unloadScript",
+                   &format!("string:{plugin_name}")])
+            .output();
+
+        // Find our marker line. KWin's console.info outputs \n as literal
+        // backslash-n in the journal, so we split on that.
+        let data = journal_output.lines()
+            .find_map(|line| line.strip_prefix(&format!("{marker}:")))
+            .unwrap_or("");
+
+        let mut windows = Vec::new();
+        for entry in data.split("\\n") {
+            let entry = entry.trim();
+            if entry.is_empty() { continue; }
+            let parts: Vec<&str> = entry.splitn(5, '\t').collect();
+            if parts.len() < 5 { continue; }
+
+            let kde_id = parts[0].trim();
+            let title = parts[1].to_string();
+            let class = parts[2].to_string();
+            let pid: u32 = parts[3].parse().unwrap_or(0);
+
+            // Parse geometry: "x,y,w,h"
+            let geo_parts: Vec<&str> = parts[4].split(',').collect();
+            let bounds = if geo_parts.len() == 4 {
+                Rect {
+                    x: geo_parts[0].parse::<f64>().unwrap_or(0.0) as i32,
+                    y: geo_parts[1].parse::<f64>().unwrap_or(0.0) as i32,
+                    width: geo_parts[2].parse::<f64>().unwrap_or(0.0) as u32,
+                    height: geo_parts[3].parse::<f64>().unwrap_or(0.0) as u32,
+                }
+            } else {
+                Rect { x: 0, y: 0, width: 0, height: 0 }
+            };
+
+            if class.is_empty() { continue; }
+
+            let window_id = Self::hash_kde_id(kde_id);
+            KDE_ID_MAP.write().unwrap().insert(window_id, kde_id.to_string());
 
             windows.push(RawWindowInfo {
                 window_id,
@@ -573,6 +714,69 @@ impl WaylandWindowBackend {
         Ok(())
     }
 
+    /// Run a one-shot KWin script via D-Bus (no output needed).
+    /// Public alias for use from the input module.
+    pub fn kwin_script_run_pub(script_body: &str) -> PlatformResult<()> {
+        Self::kwin_script_run(script_body)
+    }
+
+    fn kwin_script_run(script_body: &str) -> PlatformResult<()> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        let script_path = format!("/tmp/quip_kwin_action_{seq}.js");
+        let plugin_name = format!("quip_act_{}_{seq}", std::process::id());
+
+        std::fs::write(&script_path, script_body)
+            .map_err(|e| PlatformError::CommandFailed(format!("write kwin script: {e}")))?;
+
+        // Unload any prior instance with this name (shouldn't exist, but safety)
+        let _ = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   "/Scripting", "org.kde.kwin.Scripting.unloadScript",
+                   &format!("string:{plugin_name}")])
+            .output();
+
+        let load_output = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   "/Scripting", "org.kde.kwin.Scripting.loadScript",
+                   &format!("string:{script_path}"),
+                   &format!("string:{plugin_name}")])
+            .output()
+            .map_err(|e| PlatformError::CommandFailed(format!("dbus loadScript: {e}")))?;
+
+        let load_stdout = String::from_utf8_lossy(&load_output.stdout);
+        let script_id = load_stdout.lines()
+            .filter_map(|l| l.trim().strip_prefix("int32 "))
+            .next()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .unwrap_or(-1);
+
+        if script_id < 0 {
+            let _ = std::fs::remove_file(&script_path);
+            return Err(PlatformError::CommandFailed("KWin script load failed".into()));
+        }
+
+        let _ = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   &format!("/Scripting/Script{script_id}"), "org.kde.kwin.Script.run"])
+            .output();
+
+        // Small delay to let script execute
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Unload and clean up
+        let _ = Command::new("dbus-send")
+            .args(["--session", "--dest=org.kde.KWin", "--print-reply",
+                   "/Scripting", "org.kde.kwin.Scripting.unloadScript",
+                   &format!("string:{plugin_name}")])
+            .output();
+        let _ = std::fs::remove_file(&script_path);
+
+        Ok(())
+    }
+
     /// Parse xrandr geometry string like "1920x1080+0+0" into a Rect.
     fn parse_xrandr_geometry(geom: &str) -> Option<Rect> {
         let (wh, rest) = geom.split_once('+')?;
@@ -625,7 +829,21 @@ impl WindowBackend for WaylandWindowBackend {
             }
             Compositor::Kde => {
                 let id = kde_id_from_hash(window_id);
-                Self::run_command("kdotool", &["windowactivate", &id], "kdotool windowactivate")
+                if is_in_path("kdotool") {
+                    Self::run_command("kdotool", &["windowactivate", &id], "kdotool windowactivate")
+                } else {
+                    Self::kwin_script_run(&format!(
+                        r#"(function() {{
+                            var clients = workspace.windowList();
+                            for (var i = 0; i < clients.length; i++) {{
+                                if (String(clients[i].internalId) === "{id}") {{
+                                    workspace.activeWindow = clients[i];
+                                    break;
+                                }}
+                            }}
+                        }})();"#
+                    ))
+                }
             }
             Compositor::Gnome => {
                 // Window Commander doesn't have a dedicated focus/activate method,
@@ -679,8 +897,23 @@ impl WindowBackend for WaylandWindowBackend {
             }
             Compositor::Kde => {
                 let id = kde_id_from_hash(window_id);
-                Self::run_command("kdotool", &["windowmove", &id, &x.to_string(), &y.to_string()], "kdotool windowmove")?;
-                Self::run_command("kdotool", &["windowsize", &id, &w.to_string(), &h.to_string()], "kdotool windowsize")
+                if is_in_path("kdotool") {
+                    Self::run_command("kdotool", &["windowmove", &id, &x.to_string(), &y.to_string()], "kdotool windowmove")?;
+                    Self::run_command("kdotool", &["windowsize", &id, &w.to_string(), &h.to_string()], "kdotool windowsize")
+                } else {
+                    Self::kwin_script_run(&format!(
+                        r#"(function() {{
+                            var clients = workspace.windowList();
+                            for (var i = 0; i < clients.length; i++) {{
+                                var c = clients[i];
+                                if (String(c.internalId) === "{id}") {{
+                                    c.frameGeometry = {{x: {x}, y: {y}, width: {w}, height: {h}}};
+                                    break;
+                                }}
+                            }}
+                        }})();"#
+                    ))
+                }
             }
             Compositor::Gnome => {
                 Self::run_command("gdbus", &[
@@ -701,5 +934,28 @@ impl WindowBackend for WaylandWindowBackend {
                 ))
             }
         }
+    }
+
+    fn batch_move_resize(&self, moves: &[(u64, i32, i32, u32, u32)]) -> PlatformResult<()> {
+        // Only KDE without kdotool benefits from batching into a single KWin script
+        if self.compositor != Compositor::Kde || is_in_path("kdotool") {
+            // Default: individual calls
+            for &(wid, x, y, w, h) in moves {
+                self.move_resize_window(wid, x, y, w, h)?;
+            }
+            return Ok(());
+        }
+
+        // Build a single KWin script that moves all windows at once
+        let mut script = String::from("(function() {\n    var clients = workspace.windowList();\n    var map = {};\n    for (var i = 0; i < clients.length; i++) { map[String(clients[i].internalId)] = clients[i]; }\n");
+        for &(wid, x, y, w, h) in moves {
+            let id = kde_id_from_hash(wid);
+            script.push_str(&format!(
+                "    if (map[\"{id}\"]) map[\"{id}\"].frameGeometry = {{x: {x}, y: {y}, width: {w}, height: {h}}};\n"
+            ));
+        }
+        script.push_str("})();");
+
+        Self::kwin_script_run(&script)
     }
 }
