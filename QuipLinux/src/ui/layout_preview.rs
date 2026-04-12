@@ -144,8 +144,9 @@ fn draw_preview(
         cr.set_font_size(11.0);
         let name = &window.name;
         let max_chars = (tile_w / 7.0) as usize;
-        let display_name = if name.len() > max_chars && max_chars > 3 {
-            format!("{}...", &name[..max_chars - 3])
+        let display_name = if name.chars().count() > max_chars && max_chars > 3 {
+            let truncated: String = name.chars().take(max_chars - 3).collect();
+            format!("{truncated}...")
         } else {
             name.clone()
         };

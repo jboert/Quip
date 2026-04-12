@@ -4,6 +4,7 @@ use gtk4::{self, Orientation};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
+use crate::models::settings::NetworkMode;
 use crate::services::pin_manager::PINManager;
 use crate::state::SharedState;
 use glib;
@@ -180,22 +181,126 @@ pub fn show_settings(
     // Network mode group
     let network_group = adw::PreferencesGroup::builder()
         .title("Network Mode")
-        .description("Control whether the Cloudflare tunnel is used for remote access")
+        .description("Pick how the phone reaches the Mac: Cloudflare tunnel, Tailscale, or local network only")
         .build();
 
-    let local_only_switch = gtk4::Switch::new();
+    // Three-way mode picker: linked toggle buttons (GTK equivalent of a segmented picker).
+    let initial_mode = {
+        let state = shared_state.read().unwrap();
+        state.settings.network_mode()
+    };
+
+    let mode_row = adw::ActionRow::builder().title("Connection").build();
+    let mode_buttons = gtk4::Box::new(Orientation::Horizontal, 0);
+    mode_buttons.add_css_class("linked");
+    mode_buttons.set_valign(gtk4::Align::Center);
+
+    let cloud_btn = gtk4::ToggleButton::with_label("Cloudflare");
+    let tailscale_btn = gtk4::ToggleButton::with_label("Tailscale");
+    let local_btn = gtk4::ToggleButton::with_label("Local only");
+    cloud_btn.set_group(Some(&tailscale_btn));
+    local_btn.set_group(Some(&tailscale_btn));
+    match initial_mode {
+        NetworkMode::CloudflareTunnel => cloud_btn.set_active(true),
+        NetworkMode::Tailscale => tailscale_btn.set_active(true),
+        NetworkMode::LocalOnly => local_btn.set_active(true),
+    }
+    mode_buttons.append(&cloud_btn);
+    mode_buttons.append(&tailscale_btn);
+    mode_buttons.append(&local_btn);
+    mode_row.add_suffix(&mode_buttons);
+
+    let caption_label = gtk4::Label::new(None);
+    caption_label.add_css_class("caption");
+    caption_label.add_css_class("dim-label");
+    caption_label.set_wrap(true);
+    caption_label.set_xalign(0.0);
+    caption_label.set_margin_start(12);
+    caption_label.set_margin_end(12);
+    caption_label.set_margin_top(4);
+    caption_label.set_margin_bottom(4);
+    set_mode_caption(&caption_label, initial_mode);
+
+    // Tailscale sub-section (only meaningful when tailscale mode is selected).
+    let tailscale_group = adw::PreferencesGroup::builder()
+        .title("Tailscale")
+        .build();
+
+    let tailscale_host_row = adw::ActionRow::builder()
+        .title("Detected hostname")
+        .subtitle("Not detected")
+        .build();
+    tailscale_group.add(&tailscale_host_row);
+
+    let tailscale_error_row = adw::ActionRow::builder()
+        .title("Last error")
+        .subtitle("")
+        .build();
+    tailscale_error_row.set_visible(false);
+    tailscale_group.add(&tailscale_error_row);
+
+    let override_entry = gtk4::Entry::new();
     {
         let state = shared_state.read().unwrap();
-        local_only_switch.set_active(state.settings.general.local_only_mode);
+        override_entry.set_text(&state.settings.general.tailscale_hostname_override);
     }
-    local_only_switch.set_valign(gtk4::Align::Center);
-    let local_only_row = adw::ActionRow::builder()
-        .title("Local Only (no Cloudflare tunnel)")
-        .subtitle("Only accept connections on the local network via mDNS")
+    override_entry.set_placeholder_text(Some("e.g. quip.tail1234.ts.net"));
+    override_entry.set_valign(gtk4::Align::Center);
+    override_entry.set_width_chars(24);
+    let override_row = adw::ActionRow::builder()
+        .title("Hostname override")
+        .subtitle("Leave blank to auto-detect via the Tailscale CLI")
         .build();
-    local_only_row.add_suffix(&local_only_switch);
-    local_only_row.set_activatable_widget(Some(&local_only_switch));
+    override_row.add_suffix(&override_entry);
+    tailscale_group.add(&override_row);
 
+    let redetect_btn = gtk4::Button::with_label("Re-detect");
+    redetect_btn.add_css_class("flat");
+    redetect_btn.set_valign(gtk4::Align::Center);
+    let redetect_row = adw::ActionRow::builder()
+        .title("Detection")
+        .subtitle("Re-run `tailscale status` to pick up hostname changes")
+        .build();
+    redetect_row.add_suffix(&redetect_btn);
+    tailscale_group.add(&redetect_row);
+
+    // Poll the shared state every second while the dialog is open so the
+    // Tailscale rows reflect the latest detection result without the user
+    // having to close and reopen the settings.
+    let ss_poll = shared_state.clone();
+    let host_row_poll = tailscale_host_row.clone();
+    let err_row_poll = tailscale_error_row.clone();
+    let ts_group_poll = tailscale_group.clone();
+    let poll_id_slot: std::rc::Rc<std::cell::RefCell<Option<glib::SourceId>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let poll_id = glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+        let state = ss_poll.read().unwrap();
+        let mode = state.settings.network_mode();
+        ts_group_poll.set_visible(matches!(mode, NetworkMode::Tailscale));
+        if state.tailscale_hostname.is_empty() {
+            host_row_poll.set_subtitle("Not detected");
+        } else {
+            host_row_poll.set_subtitle(&state.tailscale_hostname);
+        }
+        if state.tailscale_last_error.is_empty() {
+            err_row_poll.set_visible(false);
+        } else {
+            err_row_poll.set_subtitle(&state.tailscale_last_error);
+            err_row_poll.set_visible(true);
+        }
+        glib::ControlFlow::Continue
+    });
+    *poll_id_slot.borrow_mut() = Some(poll_id);
+    // Stop polling when the preferences window closes.
+    let slot_for_close = poll_id_slot.clone();
+    prefs.connect_close_request(move |_| {
+        if let Some(id) = slot_for_close.borrow_mut().take() {
+            id.remove();
+        }
+        glib::Propagation::Proceed
+    });
+
+    // Require PIN for local
     let require_pin_switch = gtk4::Switch::new();
     {
         let state = shared_state.read().unwrap();
@@ -209,17 +314,59 @@ pub fn show_settings(
     require_pin_row.add_suffix(&require_pin_switch);
     require_pin_row.set_activatable_widget(Some(&require_pin_switch));
 
-    let ss_local = shared_state.clone();
-    let cmd_tx_local = runtime_cmd_tx.clone();
-    local_only_switch.connect_state_set(move |_, active| {
+    // Wire up mode picker handlers
+    let dispatch_mode = {
+        let ss = shared_state.clone();
+        let cmd_tx = runtime_cmd_tx.clone();
+        let caption = caption_label.clone();
+        let ts_group = tailscale_group.clone();
+        move |mode: NetworkMode| {
+            {
+                let mut state = ss.write().unwrap();
+                state.settings.set_network_mode(mode);
+                state.settings.save();
+            }
+            set_mode_caption(&caption, mode);
+            ts_group.set_visible(matches!(mode, NetworkMode::Tailscale));
+            let _ = cmd_tx.try_send(RuntimeCommand::SetNetworkMode(mode));
+        }
+    };
+
+    let dm = dispatch_mode.clone();
+    cloud_btn.connect_toggled(move |b| {
+        if b.is_active() {
+            dm(NetworkMode::CloudflareTunnel);
+        }
+    });
+    let dm = dispatch_mode.clone();
+    tailscale_btn.connect_toggled(move |b| {
+        if b.is_active() {
+            dm(NetworkMode::Tailscale);
+        }
+    });
+    let dm = dispatch_mode.clone();
+    local_btn.connect_toggled(move |b| {
+        if b.is_active() {
+            dm(NetworkMode::LocalOnly);
+        }
+    });
+
+    // Hostname override: save on every keystroke and re-run detection.
+    let ss_override = shared_state.clone();
+    let cmd_tx_override = runtime_cmd_tx.clone();
+    override_entry.connect_changed(move |entry| {
         {
-            let mut state = ss_local.write().unwrap();
-            state.settings.general.local_only_mode = active;
+            let mut state = ss_override.write().unwrap();
+            state.settings.general.tailscale_hostname_override =
+                entry.text().to_string();
             state.settings.save();
         }
-        // Live-apply: start/stop the Cloudflare tunnel and reload auth without restart
-        let _ = cmd_tx_local.try_send(RuntimeCommand::SetLocalOnly(active));
-        glib::Propagation::Proceed
+        let _ = cmd_tx_override.try_send(RuntimeCommand::RefreshTailscale);
+    });
+
+    let cmd_tx_redetect = runtime_cmd_tx.clone();
+    redetect_btn.connect_clicked(move |_| {
+        let _ = cmd_tx_redetect.try_send(RuntimeCommand::RefreshTailscale);
     });
 
     let ss_pin_local = shared_state.clone();
@@ -230,14 +377,17 @@ pub fn show_settings(
             state.settings.general.require_pin_for_local = active;
             state.settings.save();
         }
-        // Live-apply: update require_auth on the running WebSocket server
         let _ = cmd_tx_pin.try_send(RuntimeCommand::ReloadAuth);
         glib::Propagation::Proceed
     });
 
-    network_group.add(&local_only_row);
+    network_group.add(&mode_row);
+    network_group.add(&caption_label);
     network_group.add(&require_pin_row);
     security_page.add(&network_group);
+    // Toggle visibility now based on initial mode.
+    tailscale_group.set_visible(matches!(initial_mode, NetworkMode::Tailscale));
+    security_page.add(&tailscale_group);
 
     // Projects page
     let projects_page = adw::PreferencesPage::builder()
@@ -315,6 +465,21 @@ pub fn show_settings(
     prefs.add(&colors_page);
     prefs.add(&security_page);
     prefs.present();
+}
+
+fn set_mode_caption(label: &gtk4::Label, mode: NetworkMode) {
+    let text = match mode {
+        NetworkMode::CloudflareTunnel => {
+            "Cloudflare tunnel enables connections from anywhere. Local connections always require PIN when tunnel is active."
+        }
+        NetworkMode::Tailscale => {
+            "Both devices must be on your Tailscale network. The URL stays stable across restarts."
+        }
+        NetworkMode::LocalOnly => {
+            "Clients must be on the same network. QR code shows the local address."
+        }
+    };
+    label.set_text(text);
 }
 
 fn build_project_row(dir: &str, list: &gtk4::ListBox, shared_state: &SharedState) -> adw::ActionRow {

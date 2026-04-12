@@ -58,6 +58,14 @@ pub trait WindowBackend: Send + Sync {
 
     /// Move and resize a window to absolute coordinates
     fn move_resize_window(&self, window_id: u64, x: i32, y: i32, w: u32, h: u32) -> PlatformResult<()>;
+
+    /// Batch move/resize multiple windows at once. Default falls back to individual calls.
+    fn batch_move_resize(&self, moves: &[(u64, i32, i32, u32, u32)]) -> PlatformResult<()> {
+        for &(wid, x, y, w, h) in moves {
+            self.move_resize_window(wid, x, y, w, h)?;
+        }
+        Ok(())
+    }
 }
 
 /// Backend for injecting keystrokes into windows
@@ -67,6 +75,46 @@ pub trait InputBackend: Send + Sync {
 
     /// Send a special keystroke (e.g., "ctrl+c", "return")
     fn send_keystroke(&self, window_id: u64, key: &str) -> PlatformResult<()>;
+
+    /// Type text with extra window metadata the backend may use to route input
+    /// through app-specific channels (e.g. Konsole D-Bus on KDE Wayland, where
+    /// the virtual-keyboard protocol is unsupported).
+    fn send_text_with_hints(
+        &self,
+        window_id: u64,
+        text: &str,
+        press_return: bool,
+        _pid: u32,
+        _title: &str,
+        _app_class: &str,
+    ) -> PlatformResult<()> {
+        self.send_text(window_id, text, press_return)
+    }
+
+    /// Send a keystroke with extra window metadata. See `send_text_with_hints`.
+    fn send_keystroke_with_hints(
+        &self,
+        window_id: u64,
+        key: &str,
+        _pid: u32,
+        _title: &str,
+        _app_class: &str,
+    ) -> PlatformResult<()> {
+        self.send_keystroke(window_id, key)
+    }
+
+    /// Read terminal content with extra window metadata. The Wayland backend
+    /// uses this to read from Konsole via D-Bus without stealing focus or
+    /// hijacking the clipboard.
+    fn read_content_with_hints(
+        &self,
+        window_id: u64,
+        _pid: u32,
+        _title: &str,
+        _app_class: &str,
+    ) -> PlatformResult<String> {
+        self.read_content(window_id)
+    }
 
     /// Spawn a new terminal window in a directory, running `claude` inside tmux
     fn spawn_terminal(&self, terminal: &str, directory: &str) -> PlatformResult<()>;

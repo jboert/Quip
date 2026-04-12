@@ -1,6 +1,40 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Three mutually-exclusive ways Quip can expose its WebSocket server to the phone:
+/// via a Cloudflare quick tunnel, via Tailscale, or local-only (LAN + mDNS).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    CloudflareTunnel,
+    Tailscale,
+    LocalOnly,
+}
+
+impl Default for NetworkMode {
+    fn default() -> Self {
+        NetworkMode::CloudflareTunnel
+    }
+}
+
+impl NetworkMode {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            NetworkMode::CloudflareTunnel => "Cloudflare Tunnel",
+            NetworkMode::Tailscale => "Tailscale",
+            NetworkMode::LocalOnly => "Local only",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NetworkMode::CloudflareTunnel => "cloudflare_tunnel",
+            NetworkMode::Tailscale => "tailscale",
+            NetworkMode::LocalOnly => "local_only",
+        }
+    }
+}
+
 /// Persisted application settings (TOML format in ~/.config/quip/settings.toml)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -32,6 +66,10 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub local_only_mode: bool,
     #[serde(default)]
+    pub network_mode: Option<NetworkMode>,
+    #[serde(default)]
+    pub tailscale_hostname_override: String,
+    #[serde(default)]
     pub require_pin_for_local: bool,
 }
 
@@ -47,6 +85,8 @@ impl Default for GeneralSettings {
                 .unwrap_or_else(|| "Quip Linux".into()),
             show_all_windows: false,
             local_only_mode: false,
+            network_mode: None,
+            tailscale_hostname_override: String::new(),
             require_pin_for_local: false,
         }
     }
@@ -89,12 +129,40 @@ impl AppSettings {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        if path.exists() {
+        let mut settings: Self = if path.exists() {
             let content = std::fs::read_to_string(&path).unwrap_or_default();
             toml::from_str(&content).unwrap_or_default()
         } else {
             Self::default()
+        };
+        // One-time migration from legacy local_only_mode bool to network_mode enum.
+        if settings.general.network_mode.is_none() {
+            settings.general.network_mode = Some(if settings.general.local_only_mode {
+                NetworkMode::LocalOnly
+            } else {
+                NetworkMode::CloudflareTunnel
+            });
+            settings.save();
         }
+        settings
+    }
+
+    /// Current network mode, resolving the legacy bool if migration hasn't run yet.
+    pub fn network_mode(&self) -> NetworkMode {
+        self.general
+            .network_mode
+            .unwrap_or(if self.general.local_only_mode {
+                NetworkMode::LocalOnly
+            } else {
+                NetworkMode::CloudflareTunnel
+            })
+    }
+
+    pub fn set_network_mode(&mut self, mode: NetworkMode) {
+        self.general.network_mode = Some(mode);
+        // Keep the legacy boolean roughly in sync so older builds don't suddenly
+        // decide to start the tunnel if the user downgrades.
+        self.general.local_only_mode = matches!(mode, NetworkMode::LocalOnly);
     }
 
     pub fn save(&self) {

@@ -131,6 +131,30 @@ impl CloudflareTunnel {
         Ok(())
     }
 
+    /// Check if the tunnel process is still alive. Returns false if it died.
+    pub fn check_health(&mut self) -> bool {
+        if let Some(ref mut child) = self.process {
+            match child.try_wait() {
+                Ok(Some(_status)) => {
+                    // Process exited
+                    warn!("cloudflared process exited unexpectedly");
+                    self.process = None;
+                    self.public_url.clear();
+                    self.ws_url.clear();
+                    self.is_running = false;
+                    false
+                }
+                Ok(None) => true, // still running
+                Err(e) => {
+                    warn!("Failed to check cloudflared status: {e}");
+                    true // assume running
+                }
+            }
+        } else {
+            false
+        }
+    }
+
     /// Stop the running tunnel.
     pub fn stop(&mut self) {
         if let Some(mut child) = self.process.take() {
@@ -257,13 +281,18 @@ async fn download_cloudflared() -> Result<String, String> {
         return Err(format!("failed to download cloudflared: {stderr}"));
     }
 
-    // Verify SHA256 checksum against the published .sha256 file
-    verify_sha256(&dest, &url).await.map_err(|e| {
-        // Delete the unverified binary
-        let _ = std::fs::remove_file(&dest);
-        error!("SHA256 verification failed, deleted unverified binary: {e}");
-        e
-    })?;
+    // Verify SHA256 checksum against the published .sha256 file (if available)
+    match verify_sha256(&dest, &url).await {
+        Ok(()) => {}
+        Err(e) if e.contains("404") || e.contains("checksum file") => {
+            warn!("SHA256 checksum file not available, skipping verification: {e}");
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&dest);
+            error!("SHA256 verification failed, deleted unverified binary: {e}");
+            return Err(e);
+        }
+    }
 
     std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
         .map_err(|e| format!("failed to chmod cloudflared: {e}"))?;

@@ -29,7 +29,7 @@ pub struct ManagedWindow {
 impl ManagedWindow {
     /// Convert to WindowState for protocol messages.
     /// Frame is normalized to 0-1 relative to the given screen bounds.
-    pub fn to_window_state(&self, state: &str, screen_bounds: &Rect) -> WindowState {
+    pub fn to_window_state(&self, state: &str, screen_bounds: &Rect, is_thinking: bool) -> WindowState {
         let frame = self.bounds.to_normalized(screen_bounds);
         WindowState {
             id: self.id.clone(),
@@ -43,6 +43,7 @@ impl ManagedWindow {
             frame,
             state: state.to_string(),
             color: self.assigned_color.clone(),
+            is_thinking,
         }
     }
 }

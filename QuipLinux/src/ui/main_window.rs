@@ -4,15 +4,17 @@ use gtk4::{self, Align, Orientation, PolicyType, ScrolledWindow};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::models::layout::{CustomLayoutTemplate, LayoutCalculator, LayoutMode};
+use crate::models::settings::NetworkMode;
 use crate::platform;
-use crate::protocol::messages::encode_message;
+use crate::protocol::messages::{encode_message, TTSAudioMessage};
 use crate::services::message_router;
+use crate::services::tailscale::TailscaleService;
 use crate::state::{self, SharedState};
 
 use super::layout_preview::LayoutPreviewWidget;
@@ -23,9 +25,11 @@ use super::window_list::WindowListWidget;
 /// without needing an app restart.
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
-    /// User toggled local-only mode. Start or stop the Cloudflare tunnel to match,
-    /// and reload require_auth on the WebSocket server from current settings.
-    SetLocalOnly(bool),
+    /// User switched the network mode. Start/stop the tunnel and Tailscale
+    /// detector to match, and reload require_auth on the WebSocket server.
+    SetNetworkMode(NetworkMode),
+    /// Manual "Re-detect" button in the Connection settings tab.
+    RefreshTailscale,
     /// User changed the "require PIN for local" toggle. Reload require_auth on
     /// the WebSocket server from current settings.
     ReloadAuth,
@@ -151,8 +155,30 @@ pub fn build_ui(app: &adw::Application) {
     toolbar_view.set_content(Some(&main_box));
     window.set_content(Some(&toolbar_view));
 
+    // --- TTS state ---
+    // Only the phone-selected window gets TTS synthesis
+    let client_selected_window: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    // Windows that need to see Claude go busy before TTS fires (prevents stale-response readback)
+    let pending_input: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
+
+    // Start Kokoro TTS daemon if available
+    let kokoro_tts: Rc<Option<crate::services::KokoroTTS>> = Rc::new(
+        if crate::services::kokoro_tts::KokoroTTS::is_available() {
+            let tts = crate::services::KokoroTTS::new();
+            tts.preload();
+            tracing::info!("Kokoro TTS available, daemon pre-warming");
+            Some(tts)
+        } else {
+            tracing::info!("Kokoro TTS not available (no venv or script)");
+            None
+        }
+    );
+
     // --- Start background services ---
-    let (broadcast_tx, runtime_cmd_tx) = start_services(shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone());
+    let (broadcast_tx, runtime_cmd_tx) = start_services(
+        shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone(),
+        client_selected_window.clone(), pending_input.clone(),
+    );
 
     // Wire the settings button now that we have the runtime command channel
     let ss_settings = shared_state.clone();
@@ -173,6 +199,8 @@ pub fn build_ui(app: &adw::Application) {
     let broadcast_tx_timer = broadcast_tx.clone();
     let output_high_water: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
     let output_hw_timer = output_high_water.clone();
+    let pi_timer = pending_input.clone();
+    let kokoro_timer = kokoro_tts.clone();
     glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
         let changes = {
             let mut state = ss_timer.write().unwrap();
@@ -189,6 +217,14 @@ pub fn build_ui(app: &adw::Application) {
                 crate::protocol::types::TerminalState::SttActive => "stt_active",
             };
 
+            // Clear pending-input when Claude goes busy
+            if matches!(new_state, crate::protocol::types::TerminalState::Neutral) {
+                let mut pi = pi_timer.borrow_mut();
+                if pi.remove(window_id) {
+                    tracing::info!("pendingInput cleared for {} — Claude is processing", window_id);
+                }
+            }
+
             // Send state_change message
             let msg = crate::protocol::messages::StateChangeMessage::new(
                 window_id.clone(), state_str.to_string(),
@@ -197,35 +233,93 @@ pub fn build_ui(app: &adw::Application) {
                 let _ = broadcast_tx_timer.try_send(json);
             }
 
-            // On transition to waiting_for_input, send output delta
+            // On transition to waiting_for_input, send output delta + TTS
             if matches!(new_state, crate::protocol::types::TerminalState::WaitingForInput) {
+                // Skip if still waiting for Claude to process our input
+                if pi_timer.borrow().contains(window_id) {
+                    tracing::info!("TTS suppressed: {} still pending input response", window_id);
+                    continue;
+                }
+
                 let state = ss_timer.read().unwrap();
                 if let Some(w) = state.windows.iter().find(|w| w.id == *window_id) {
                     let window_name = w.name.clone();
                     let wid = w.window_id;
+                    let pid = w.pid;
+                    let title = w.name.clone();
+                    let app_class = w.app_class.clone();
                     drop(state);
-                    if let Ok(content) = ib_timer.read_content(wid) {
+                    if let Ok(content) = ib_timer.read_content_with_hints(wid, pid, &title, &app_class) {
                         let mut hw = output_hw_timer.borrow_mut();
-                        let prev = hw.get(window_id).cloned().unwrap_or_default();
 
-                        // Compute delta: if previous content is a prefix, take the remainder
-                        let delta = if !prev.is_empty() && content.starts_with(&prev) {
-                            content[prev.len()..].trim().to_string()
+                        // Compute delta: first call seeds the mark, returns empty
+                        let delta = if !hw.contains_key(window_id) {
+                            // First time — seed, don't TTS old content
+                            hw.insert(window_id.clone(), content.clone());
+                            String::new()
                         } else {
-                            // No prefix match — take last 30 lines
-                            let lines: Vec<&str> = content.lines().collect();
-                            let start = lines.len().saturating_sub(30);
-                            lines[start..].join("\n").trim().to_string()
+                            let prev = hw.get(window_id).cloned().unwrap_or_default();
+                            hw.insert(window_id.clone(), content.clone());
+                            if content == prev {
+                                String::new()
+                            } else {
+                                // Take last 25 lines — Python filter strips UI chrome
+                                let lines: Vec<&str> = content.lines().collect();
+                                let start = lines.len().saturating_sub(25);
+                                lines[start..].join("\n").trim().to_string()
+                            }
                         };
 
-                        hw.insert(window_id.clone(), content);
-
                         if !delta.is_empty() {
+                            // Broadcast output_delta
                             let msg = crate::protocol::messages::OutputDeltaMessage::new(
-                                window_id.clone(), window_name, delta, true,
+                                window_id.clone(), window_name.clone(), delta.clone(), true,
                             );
                             if let Some(json) = encode_message(&msg) {
                                 let _ = broadcast_tx_timer.try_send(json);
+                            }
+
+                            // Trigger TTS synthesis for any window with new output
+                            if let Some(tts) = kokoro_timer.as_ref() {
+                                let session_id = uuid::Uuid::new_v4().to_string();
+                                let wid_tts = window_id.clone();
+                                let wname_tts = window_name.clone();
+                                let btx = broadcast_tx_timer.clone();
+                                let sid = session_id.clone();
+                                let sequence = Arc::new(std::sync::atomic::AtomicU32::new(0));
+                                let seq_chunk = sequence.clone();
+
+                                let wid_c = wid_tts.clone();
+                                let wname_c = wname_tts.clone();
+                                let sid_c = sid.clone();
+                                let btx_c = btx.clone();
+
+                                tts.synthesize(
+                                    delta,
+                                    move |wav_data| {
+                                        use base64::Engine as _;
+                                        let b64 = base64::engine::general_purpose::STANDARD
+                                            .encode(&wav_data);
+                                        let seq = seq_chunk.fetch_add(1, Ordering::Relaxed);
+                                        let msg = TTSAudioMessage::chunk(
+                                            wid_c.clone(), wname_c.clone(),
+                                            sid_c.clone(), seq, b64,
+                                        );
+                                        if let Some(json) = encode_message(&msg) {
+                                            let _ = btx_c.try_send(json);
+                                        }
+                                    },
+                                    move || {
+                                        let seq = sequence.load(Ordering::Relaxed);
+                                        let msg = TTSAudioMessage::final_marker(
+                                            wid_tts.clone(), wname_tts.clone(),
+                                            sid.clone(), seq,
+                                        );
+                                        if let Some(json) = encode_message(&msg) {
+                                            let _ = btx.try_send(json);
+                                        }
+                                    },
+                                );
                             }
                         }
                     }
@@ -269,6 +363,8 @@ fn arrange_windows(
         _ => LayoutCalculator::calculate(*layout_mode, enabled.len()),
     };
 
+    // Collect all window moves
+    let mut moves: Vec<(u64, i32, i32, u32, u32)> = Vec::new();
     for (i, window) in enabled.iter().enumerate() {
         if i >= frames.len() {
             break;
@@ -278,9 +374,16 @@ fn arrange_windows(
         let y = screen.y + (frame.y * screen.height as f64) as i32;
         let w = (frame.width * screen.width as f64) as u32;
         let h = (frame.height * screen.height as f64) as u32;
+        moves.push((window.window_id, x, y, w, h));
+    }
 
-        if let Err(e) = backend.move_resize_window(window.window_id, x, y, w, h) {
-            tracing::warn!("Failed to arrange window {}: {e}", window.id);
+    // Try batch move first (KDE KWin scripting benefits from batching)
+    if let Err(_) = backend.batch_move_resize(&moves) {
+        // Fall back to individual moves
+        for &(wid, x, y, w, h) in &moves {
+            if let Err(e) = backend.move_resize_window(wid, x, y, w, h) {
+                tracing::warn!("Failed to arrange window: {e}");
+            }
         }
     }
 
@@ -324,6 +427,42 @@ fn tunnel_stop(
     state.tunnel_ws_url.clear();
 }
 
+/// Switch between Cloudflare tunnel, Tailscale, and local-only based on the
+/// given network mode. Safe to call repeatedly — each branch is idempotent on
+/// its own dependencies.
+async fn apply_network_mode(
+    mode: NetworkMode,
+    tunnel: &std::sync::Arc<tokio::sync::Mutex<crate::services::cloudflare_tunnel::CloudflareTunnel>>,
+    tailscale: &std::sync::Arc<tokio::sync::Mutex<TailscaleService>>,
+    port: u16,
+    shared_state: &SharedState,
+    ws_server: &Arc<crate::services::ws_server::WsServer>,
+) {
+    reload_require_auth(ws_server, shared_state);
+
+    match mode {
+        NetworkMode::CloudflareTunnel => {
+            TailscaleService::stop(tailscale.clone(), shared_state.clone()).await;
+            let mut t = tunnel.lock().await;
+            tunnel_start(&mut t, port, shared_state).await;
+        }
+        NetworkMode::Tailscale => {
+            {
+                let mut t = tunnel.lock().await;
+                tunnel_stop(&mut t, shared_state);
+            }
+            TailscaleService::refresh(tailscale.clone(), shared_state.clone(), port).await;
+        }
+        NetworkMode::LocalOnly => {
+            {
+                let mut t = tunnel.lock().await;
+                tunnel_stop(&mut t, shared_state);
+            }
+            TailscaleService::stop(tailscale.clone(), shared_state.clone()).await;
+        }
+    }
+}
+
 /// Reload require_auth on the WebSocket server from current settings.
 /// New connections will see the new value; existing authenticated clients are unaffected.
 fn reload_require_auth(
@@ -345,6 +484,8 @@ fn start_services(
     window_backend: Arc<dyn platform::traits::WindowBackend>,
     input_backend: Arc<dyn platform::traits::InputBackend>,
     pin_manager: crate::services::pin_manager::PINManager,
+    client_selected_window: Rc<RefCell<Option<String>>>,
+    pending_input: Rc<RefCell<HashSet<String>>>,
 ) -> (async_channel::Sender<String>, async_channel::Sender<RuntimeCommand>) {
     let port = {
         let state = shared_state.read().unwrap();
@@ -408,38 +549,88 @@ fn start_services(
                 Err(e) => tracing::warn!("Failed to start mDNS: {e}"),
             }
 
-            // Command handler: owns the Cloudflare tunnel across its lifetime so
-            // it can be started, stopped, and restarted at runtime in response to
-            // settings changes. Also handles the initial tunnel start.
+            // Command handler: owns the Cloudflare tunnel and the Tailscale
+            // service across its lifetime so both can be started, stopped, and
+            // restarted at runtime in response to settings changes.
             let ss_tunnel = ss_bg.clone();
             let ws_for_cmds = ws_server.clone();
             tokio::spawn(async move {
-                let mut tunnel = crate::services::cloudflare_tunnel::CloudflareTunnel::new();
+                let tunnel = std::sync::Arc::new(tokio::sync::Mutex::new(
+                    crate::services::cloudflare_tunnel::CloudflareTunnel::new(),
+                ));
+                let tailscale = std::sync::Arc::new(tokio::sync::Mutex::new(
+                    TailscaleService::new(),
+                ));
 
-                // Initial tunnel state based on current settings
-                let initial_local_only = {
+                // Apply whatever mode is persisted in settings on startup.
+                let initial_mode = {
                     let state = ss_tunnel.read().unwrap();
-                    state.settings.general.local_only_mode
+                    state.settings.network_mode()
                 };
+                apply_network_mode(
+                    initial_mode,
+                    &tunnel,
+                    &tailscale,
+                    port,
+                    &ss_tunnel,
+                    &ws_for_cmds,
+                )
+                .await;
 
-                if !initial_local_only {
-                    tunnel_start(&mut tunnel, port, &ss_tunnel).await;
-                } else {
-                    tracing::info!("Local-only mode enabled — Cloudflare tunnel not started");
-                }
+                // Health check: every 60s, restart tunnel if process died.
+                // Only touches the tunnel when cloudflare mode is active.
+                let tunnel_health = tunnel.clone();
+                let ss_health = ss_tunnel.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        let mode = {
+                            let state = ss_health.read().unwrap();
+                            state.settings.network_mode()
+                        };
+                        if !matches!(mode, NetworkMode::CloudflareTunnel) {
+                            continue;
+                        }
+                        let needs_restart = {
+                            let mut t = tunnel_health.lock().await;
+                            if t.is_running() {
+                                !t.check_health()
+                            } else {
+                                false
+                            }
+                        };
+                        if needs_restart {
+                            tracing::info!("Health check: tunnel process died, restarting in 3s");
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            let mut t = tunnel_health.lock().await;
+                            tunnel_start(&mut t, port, &ss_health).await;
+                        }
+                    }
+                });
 
-                // Handle live reconfiguration commands from the settings dialog
+                // Handle live reconfiguration commands from the settings dialog.
                 while let Ok(cmd) = runtime_cmd_rx.recv().await {
                     match cmd {
-                        RuntimeCommand::SetLocalOnly(true) => {
-                            tracing::info!("Runtime: switching to local-only mode, stopping tunnel");
-                            tunnel_stop(&mut tunnel, &ss_tunnel);
-                            reload_require_auth(&ws_for_cmds, &ss_tunnel);
+                        RuntimeCommand::SetNetworkMode(mode) => {
+                            tracing::info!("Runtime: switching to network mode {:?}", mode);
+                            apply_network_mode(
+                                mode,
+                                &tunnel,
+                                &tailscale,
+                                port,
+                                &ss_tunnel,
+                                &ws_for_cmds,
+                            )
+                            .await;
                         }
-                        RuntimeCommand::SetLocalOnly(false) => {
-                            tracing::info!("Runtime: leaving local-only mode, starting tunnel");
-                            tunnel_start(&mut tunnel, port, &ss_tunnel).await;
-                            reload_require_auth(&ws_for_cmds, &ss_tunnel);
+                        RuntimeCommand::RefreshTailscale => {
+                            TailscaleService::refresh(
+                                tailscale.clone(),
+                                ss_tunnel.clone(),
+                                port,
+                            )
+                            .await;
                         }
                         RuntimeCommand::ReloadAuth => {
                             reload_require_auth(&ws_for_cmds, &ss_tunnel);
@@ -493,9 +684,14 @@ fn start_services(
     let wb_handler = window_backend.clone();
     let ws_handler = ws_server.clone();
     let al_handler = audit_logger.clone();
+    let csw_handler = client_selected_window;
+    let pi_handler = pending_input;
     glib::spawn_future_local(async move {
         while let Ok(json) = gtk_rx.recv().await {
-            handle_incoming_message(&json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler, &al_handler).await;
+            handle_incoming_message(
+                &json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler, &al_handler,
+                &csw_handler, &pi_handler,
+            ).await;
         }
     });
 
@@ -509,6 +705,8 @@ async fn handle_incoming_message(
     input_backend: &dyn platform::traits::InputBackend,
     ws_server: &crate::services::ws_server::WsServer,
     audit_logger: &crate::services::audit_logger::AuditLogger,
+    client_selected_window: &Rc<RefCell<Option<String>>>,
+    pending_input: &Rc<RefCell<HashSet<String>>>,
 ) {
     use message_router::IncomingAction;
 
@@ -531,17 +729,22 @@ async fn handle_incoming_message(
 
         match action {
             IncomingAction::SelectWindow(window_id) => {
+                *client_selected_window.borrow_mut() = Some(window_id.clone());
                 state.focus_window(&window_id, window_backend);
                 None
             }
             IncomingAction::SendText { window_id, text, press_return } => {
                 audit_logger.log("send_text", "ws-client", &text);
                 tracing::info!("SendText: window_id={window_id}, text={text}, press_return={press_return}");
-                if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
-                    let wid = w.window_id;
-                    tracing::info!("Found window, xdotool target wid={wid}");
+                let hint = state.windows.iter().find(|w| w.id == window_id).map(|w| {
+                    (w.window_id, w.pid, w.name.clone(), w.app_class.clone())
+                });
+                if let Some((wid, pid, title, app_class)) = hint {
+                    tracing::info!("Found window, target wid={wid} pid={pid} class={app_class}");
                     state.focus_window(&window_id, window_backend);
-                    if let Err(e) = input_backend.send_text(wid, &text, press_return) {
+                    if let Err(e) = input_backend.send_text_with_hints(
+                        wid, &text, press_return, pid, &title, &app_class,
+                    ) {
                         tracing::warn!("Failed to send text to {window_id}: {e}");
                     } else {
                         tracing::info!("Text sent successfully");
@@ -553,25 +756,32 @@ async fn handle_incoming_message(
             }
             IncomingAction::QuickAction { window_id, action } => {
                 audit_logger.log("quick_action", "ws-client", &action);
-                if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
-                    let wid = w.window_id;
+                let hint = state.windows.iter().find(|w| w.id == window_id).map(|w| {
+                    (w.window_id, w.pid, w.name.clone(), w.app_class.clone(), w.is_enabled)
+                });
+                if let Some((wid, pid, title, app_class, enabled)) = hint {
                     state.focus_window(&window_id, window_backend);
+                    let key = |k: &str| {
+                        let _ = input_backend.send_keystroke_with_hints(wid, k, pid, &title, &app_class);
+                    };
+                    let txt = |t: &str, ret: bool| {
+                        let _ = input_backend.send_text_with_hints(wid, t, ret, pid, &title, &app_class);
+                    };
                     match action.as_str() {
-                        "press_return" => { let _ = input_backend.send_keystroke(wid, "return"); }
-                        "press_ctrl_c" => { let _ = input_backend.send_keystroke(wid, "ctrl+c"); }
-                        "press_ctrl_d" => { let _ = input_backend.send_keystroke(wid, "ctrl+d"); }
-                        "press_escape" => { let _ = input_backend.send_keystroke(wid, "escape"); }
-                        "press_tab" => { let _ = input_backend.send_keystroke(wid, "tab"); }
-                        "press_y" => { let _ = input_backend.send_keystroke(wid, "y"); }
-                        "press_n" => { let _ = input_backend.send_keystroke(wid, "n"); }
-                        "clear_terminal" => { let _ = input_backend.send_text(wid, "/clear", true); }
+                        "press_return" => key("return"),
+                        "press_ctrl_c" => key("ctrl+c"),
+                        "press_ctrl_d" => key("ctrl+d"),
+                        "press_escape" => key("escape"),
+                        "press_tab" => key("tab"),
+                        "press_y" => key("y"),
+                        "press_n" => key("n"),
+                        "clear_terminal" => txt("/clear", true),
                         "restart_claude" => {
-                            let _ = input_backend.send_keystroke(wid, "ctrl+c");
+                            key("ctrl+c");
                             std::thread::sleep(std::time::Duration::from_millis(500));
-                            let _ = input_backend.send_text(wid, "claude", true);
+                            txt("claude", true);
                         }
                         "toggle_enabled" => {
-                            let enabled = w.is_enabled;
                             state.toggle_window(&window_id, !enabled);
                         }
                         _ => {}
@@ -580,6 +790,8 @@ async fn handle_incoming_message(
                 None
             }
             IncomingAction::SttStarted(window_id) => {
+                *client_selected_window.borrow_mut() = Some(window_id.clone());
+                pending_input.borrow_mut().insert(window_id.clone());
                 state.state_detector.set_stt_active(&window_id);
                 if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                     crate::services::terminal_color::set_background_color(
@@ -587,20 +799,36 @@ async fn handle_incoming_message(
                         &state.settings.colors.stt_active,
                     );
                 }
-                None
+                // Broadcast the state change so all viewers (including the
+                // one that triggered STT) paint the window as stt_active.
+                // poll_all skips STT windows so it will never emit this.
+                let msg = crate::protocol::messages::StateChangeMessage::new(
+                    window_id.clone(),
+                    "stt_active".into(),
+                );
+                encode_message(&msg)
             }
             IncomingAction::SttEnded(window_id) => {
                 state.state_detector.clear_stt(&window_id);
                 if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                     crate::services::terminal_color::reset_background_color(w.pid);
                 }
-                None
+                let msg = crate::protocol::messages::StateChangeMessage::new(
+                    window_id.clone(),
+                    "neutral".into(),
+                );
+                encode_message(&msg)
             }
             IncomingAction::RequestContent(window_id) => {
                 if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                     let wid = w.window_id;
+                    let pid = w.pid;
+                    let title = w.name.clone();
+                    let app_class = w.app_class.clone();
                     // Try tmux text content first (scrollable, best UX)
-                    let text_content = input_backend.read_content(wid).unwrap_or_default();
+                    let text_content = input_backend
+                        .read_content_with_hints(wid, pid, &title, &app_class)
+                        .unwrap_or_default();
                     let text_content = crate::services::secret_redactor::redact(&text_content);
 
                     let msg = if !text_content.is_empty() {

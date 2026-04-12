@@ -26,6 +26,12 @@ pub struct AppState {
     pub tunnel_url: String,
     pub tunnel_ws_url: String,
 
+    // --- Tailscale ---
+    pub tailscale_hostname: String,
+    pub tailscale_ws_url: String,
+    pub tailscale_available: bool,
+    pub tailscale_last_error: String,
+
     // --- Settings ---
     pub settings: AppSettings,
 
@@ -46,6 +52,10 @@ impl AppState {
             tunnel_running: false,
             tunnel_url: String::new(),
             tunnel_ws_url: String::new(),
+            tailscale_hostname: String::new(),
+            tailscale_ws_url: String::new(),
+            tailscale_available: false,
+            tailscale_last_error: String::new(),
             settings: AppSettings::load(),
             color_index: 0,
         }
@@ -163,7 +173,10 @@ impl AppState {
                 tracing::info!("Window '{}' raw bounds: {:?}", w.name, w.bounds);
                 let state = self.state_detector.get_state(&w.id)
                     .unwrap_or(TerminalState::Neutral);
-                let ws = w.to_window_state(state.as_str(), &screen_bounds);
+                // isThinking = claude process exists AND is actively busy (not idle)
+                let is_thinking = self.state_detector.windows_with_claude.contains(&w.id)
+                    && state == TerminalState::Neutral;
+                let ws = w.to_window_state(state.as_str(), &screen_bounds, is_thinking);
                 tracing::info!("Window '{}' normalized: x={:.3} y={:.3} w={:.3} h={:.3}", w.name, ws.frame.x, ws.frame.y, ws.frame.width, ws.frame.height);
                 ws
             })
@@ -201,22 +214,24 @@ impl AppState {
     }
 
     fn update_tracking(&mut self) {
-        // Track all windows by their PID for state detection
-        let current_ids: std::collections::HashSet<String> =
-            self.windows.iter().map(|w| w.id.clone()).collect();
+        // Only track terminal windows for state detection (matches Mac behaviour)
+        let terminal_ids: std::collections::HashSet<String> = self.windows.iter()
+            .filter(|w| is_terminal_class(&w.app_class))
+            .map(|w| w.id.clone())
+            .collect();
 
         // Remove stale
         let stale: Vec<String> = self.state_detector.tracked_ids()
-            .filter(|id| !current_ids.contains(*id))
+            .filter(|id| !terminal_ids.contains(*id))
             .map(|s| s.to_string())
             .collect();
         for id in stale {
             self.state_detector.untrack(&id);
         }
 
-        // Add new
+        // Add new terminal windows
         for window in &self.windows {
-            if !self.state_detector.is_tracked(&window.id) {
+            if is_terminal_class(&window.app_class) && !self.state_detector.is_tracked(&window.id) {
                 self.state_detector.track(&window.id, window.pid);
             }
         }
