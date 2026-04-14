@@ -281,36 +281,24 @@ final class KeystrokeInjector {
             }
         }
 
-        let windowSelection: String
-        // Skip the post-activate delay when we're using the iTerm2 explicit
-        // window-selection path — `select w` is synchronous inside AppleScript
-        // so the keystroke can fire immediately after. The fallback path still
-        // needs the delay because `tell app to activate` is async and the
-        // window may not actually be frontmost by the time System Events runs.
-        let postActivateDelay: String
-        if terminalApp == .iterm2 && cgWindowNumber != 0 {
-            windowSelection = """
-            tell application "iTerm2"
-                activate
-                try
-                    repeat with w in windows
-                        if id of w is \(cgWindowNumber) then
-                            select w
-                            exit repeat
-                        end if
-                    end repeat
-                end try
-            end tell
-            """
-            postActivateDelay = ""
-        } else {
-            windowSelection = "tell application \"\(appName)\" to activate"
-            postActivateDelay = "delay 0.1"
-        }
-
+        // NOTE on window targeting: an earlier version of this function tried
+        // to iterate iTerm2's windows and `select` one whose `id` matched the
+        // CGWindowID, so the keystroke would land in a specific window even
+        // when multiple iTerm2 windows were open. That DIDN'T WORK — iTerm2's
+        // AppleScript `id of window` returns iTerm2's internal window
+        // identifier, NOT a CGWindowID, so the repeat loop silently never
+        // matched. Combined with a removed `delay 0.1`, keystrokes were
+        // firing before iTerm2 was even frontmost.
+        //
+        // For now, we rely on `windowManager.focusWindow(windowId)` (called
+        // from the caller) to AX-raise the target window, and `delay 0.1`
+        // here to give that raise time to propagate. Multi-iTerm2-window
+        // targeting is a wishlist item — it needs a different identifier
+        // like iTerm2 session unique id, or a lower-level AX-based keystroke
+        // injection that bypasses System Events entirely.
         return """
-        \(windowSelection)
-        \(postActivateDelay)
+        tell application "\(appName)" to activate
+        delay 0.1
         tell application "System Events"
             tell process "\(appName)"
                 \(keystrokeCmd)
