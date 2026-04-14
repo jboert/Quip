@@ -57,7 +57,12 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
+          # NSAllowsLocalNetworking intentionally NOT set — when it's true
+          # alongside NSAllowsArbitraryLoads, iOS interprets it as "only local
+          # networking is allowed," which blocks Tailscale addresses (they look
+          # like the public internet to iOS). Commit f7bb347 originally removed
+          # this flag from Info.plist directly but forgot to update project.yml,
+          # so every xcodegen regeneration silently re-added it.
           NSAllowsArbitraryLoads: true
   QuipiOSTests:
     type: bundle.unit-test
