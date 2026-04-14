@@ -99,7 +99,24 @@ Dependencies: whichever window-targeting bug fix lands first — because these w
 
 ---
 
-### 9. Keyboard-input `onSubmit` + `pressReturn: true` double-Return bug
+### 9. Window list organized/filtered by application, iTerm2 at the top by default
+
+**Status:** Wishlist
+**Context:** The iPhone currently shows a flat list of all detected terminal windows in whatever order `WindowManager` delivers them. User wants the window list to be:
+- **Grouped by application** — all iTerm2 windows together, all Terminal.app windows together, etc. Probably as section headers in the SwiftUI list.
+- **Filterable** — ability to hide windows from apps the user doesn't care about, or show only one app at a time. Could be a segmented picker at the top of the list, or a context-menu toggle per app.
+- **Defaulted to iTerm2 at the top** — since iTerm2 is the user's primary terminal, its section should appear first without them having to change anything. Other terminal apps appear below in whatever order makes sense.
+
+Implementation touches:
+- `QuipiOS/QuipApp.swift` — window list rendering, add sectioning / filtering UI.
+- Possibly `QuipMac/Services/WindowManager.swift` — if the Mac should send pre-sorted or pre-grouped windows rather than having the iPhone sort them client-side. Client-side is probably simpler (keeps the protocol flat).
+- Decide whether the sort order is configurable in Settings or hardcoded to "iTerm2 first." Start hardcoded for v1; add a setting later if other users complain.
+
+No dependencies. Can be built any time after the current round of shortcut-button bug fixes lands.
+
+---
+
+### 10. Keyboard-input `onSubmit` + `pressReturn: true` double-Return bug
 
 **Status:** Wishlist — suspected bug, not yet reproduced
 **Context:** In `QuipiOS/QuipApp.swift` around line 916, the on-screen text-input `TextField` has `.onSubmit { sendTextInput() }`, and `sendTextInput` calls `client.send(SendTextMessage(..., pressReturn: true))`. When the user hits the iPhone's on-screen Return key while the TextField is focused, `onSubmit` fires the send handler, and the handler explicitly passes `pressReturn: true`. The net effect should be a single Return on the Mac side (the `pressReturn` flag tells the Mac to append one newline after the text), but it's worth double-checking that SwiftUI's Return key isn't *also* being propagated to the TextField's text buffer and arriving as an embedded `\n`. Needs verification and, if confirmed, fix.
