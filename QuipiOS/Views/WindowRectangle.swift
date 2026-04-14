@@ -108,31 +108,31 @@ struct WindowRectangle: View {
         }
         .contextMenu {
             Button {
-                onAction?(.pressReturn)
+                triggerAction(.pressReturn)
             } label: {
                 Label("Press Return", systemImage: "return")
             }
 
             Button {
-                onAction?(.cancel)
+                triggerAction(.cancel)
             } label: {
                 Label("Cancel (Ctrl+C)", systemImage: "xmark.octagon")
             }
 
             Button {
-                onAction?(.viewOutput)
+                triggerAction(.viewOutput)
             } label: {
                 Label("View Output", systemImage: "text.alignleft")
             }
 
             Button {
-                onAction?(.clearTerminal)
+                triggerAction(.clearTerminal)
             } label: {
                 Label("Clear Context", systemImage: "eraser")
             }
 
             Button {
-                onAction?(.restartClaude)
+                triggerAction(.restartClaude)
             } label: {
                 Label("Restart Claude", systemImage: "arrow.clockwise")
             }
@@ -140,7 +140,7 @@ struct WindowRectangle: View {
             Divider()
 
             Button {
-                onAction?(.toggleEnabled)
+                triggerAction(.toggleEnabled)
             } label: {
                 Label(
                     window.enabled ? "Disable Window" : "Enable Window",
@@ -167,6 +167,15 @@ struct WindowRectangle: View {
         withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
             spinAngle = 360
         }
+    }
+
+    // Long-press opens the context menu but doesn't fire onSelect, so picking
+    // an item would otherwise hit whichever window the user long-pressed even
+    // if a different one was "selected." Route every menu tap through onSelect
+    // first so the selection and the action agree.
+    private func triggerAction(_ action: WindowAction) {
+        onSelect()
+        onAction?(action)
     }
 }
 
