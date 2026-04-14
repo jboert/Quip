@@ -14,6 +14,10 @@ docs/specs/
 # Claude local settings
 .claude/settings.local.json
 
+# Machine-local scripts (carry signing / device IDs)
+*.local.sh
+*.local.md
+
 # Ralph
 scripts/ralph/
 tasks/
