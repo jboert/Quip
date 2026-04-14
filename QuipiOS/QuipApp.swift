@@ -878,6 +878,13 @@ struct MainiOSView: View {
                     .foregroundStyle(colors.textSecondary)
             }
             Spacer()
+            // Version marker — reads CFBundleShortVersionString so whatever
+            // `project.yml` sets (e.g. "1.0-eb-branch") shows up here, giving
+            // the user visual confirmation of which build is running.
+            Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(colors.textTertiary)
+                .padding(.trailing, 8)
             if client.isAuthenticated {
                 Button {
                     if speech.isSpeaking {
