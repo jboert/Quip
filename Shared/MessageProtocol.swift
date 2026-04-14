@@ -11,11 +11,14 @@ struct WSMessage: Codable {
 struct LayoutUpdate: Codable, Sendable {
     let type: String
     let monitor: String
+    /// width / height of the host display — lets clients render a correctly-proportioned thumbnail
+    let screenAspect: Double?
     let windows: [WindowState]
 
-    init(monitor: String, windows: [WindowState]) {
+    init(monitor: String, screenAspect: Double? = nil, windows: [WindowState]) {
         self.type = "layout_update"
         self.monitor = monitor
+        self.screenAspect = screenAspect
         self.windows = windows
     }
 }

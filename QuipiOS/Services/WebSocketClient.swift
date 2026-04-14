@@ -6,6 +6,7 @@ import Foundation
 import Observation
 import Security
 import CommonCrypto
+import UIKit
 
 // MARK: - Certificate Pinning for Cloudflare Tunnel
 
@@ -127,6 +128,8 @@ final class WebSocketClient {
     private var reconnectTask: Task<Void, Never>?
     private var connectionTimeoutTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
+    private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
+    private var foregroundProbeTask: Task<Void, Never>?
 
     func connect(to url: URL) {
         intentionalDisconnect = false
@@ -156,6 +159,71 @@ final class WebSocketClient {
         authError = nil
         sessionPIN = nil
         NSLog("[WebSocketClient] Disconnected intentionally")
+    }
+
+    /// Called when the app resigns active (user swipes away, switches apps, etc).
+    /// Starts a background task so iOS gives the socket ~30s of grace before suspending
+    /// network I/O — enough to cover most quick app switches without dropping the
+    /// connection at all.
+    func suspendForBackground() {
+        guard backgroundTaskId == .invalid else { return }
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "QuipWebSocket") { [weak self] in
+            DispatchQueue.main.async { self?.endBackgroundTask() }
+        }
+    }
+
+    /// Called when the app returns to active. Ends the background task, probes the
+    /// socket with a short-timeout ping, and force-reconnects (with backoff reset to 1s)
+    /// if the probe doesn't come back fast. Prevents the 2–10s "stuck reconnecting"
+    /// UI after a quick app switch.
+    func resumeFromBackground() {
+        endBackgroundTask()
+        foregroundProbeTask?.cancel()
+
+        // If we were already mid-reconnect, shortcut the exponential delay so the
+        // user doesn't wait out a 2–10s sleep after foregrounding.
+        if !isConnected && !intentionalDisconnect {
+            reconnectDelay = 1.0
+            reconnectTask?.cancel()
+            reconnectTask = nil
+            establishConnection()
+            return
+        }
+
+        guard let task = webSocketTask else { return }
+
+        foregroundProbeTask = Task { [weak self] in
+            let pongReceived = await Self.probeSocket(task: task, timeoutNanos: 2_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            if !pongReceived {
+                NSLog("[WebSocketClient] Foreground probe failed — forcing reconnect")
+                self.reconnectDelay = 1.0
+                self.handleDisconnect()
+            }
+        }
+    }
+
+    /// Send a WebSocket ping and wait up to `timeoutNanos` for a response.
+    /// Returns true if the pong came back in time, false otherwise.
+    private nonisolated static func probeSocket(task: URLSessionWebSocketTask, timeoutNanos: UInt64) async -> Bool {
+        let result = ProbeResult()
+        task.sendPing { error in
+            Task { await result.set(error == nil) }
+        }
+        try? await Task.sleep(nanoseconds: timeoutNanos)
+        return await result.get() ?? false
+    }
+
+    private actor ProbeResult {
+        private var value: Bool?
+        func set(_ v: Bool) { if value == nil { value = v } }
+        func get() -> Bool? { value }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTaskId != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskId)
+        backgroundTaskId = .invalid
     }
 
     func sendAuth(pin: String) {
