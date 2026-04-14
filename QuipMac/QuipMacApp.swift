@@ -534,6 +534,10 @@ struct QuipMacApp: App {
             DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
                 keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn)
             }
+        case "press_backspace":
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            }
         case "press_y":
             DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)

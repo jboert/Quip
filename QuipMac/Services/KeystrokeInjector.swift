@@ -137,6 +137,12 @@ final class KeystrokeInjector {
                 terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
+        case "backspace", "delete":
+            script = keystrokeScript(
+                key: "delete", using: "",
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
+            )
+
         default:
             return InjectionResult(success: false, error: "Unknown key: \(key)")
         }
@@ -258,7 +264,7 @@ final class KeystrokeInjector {
     /// model doesn't expose CGWindowID directly.
     private func keystrokeScript(key: String, using modifiers: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID, windowIndex: Int) -> String {
         let appName = terminalApp.rawValue
-        let isSpecialKey = ["return", "escape", "tab"].contains(key.lowercased())
+        let isSpecialKey = ["return", "escape", "tab", "delete"].contains(key.lowercased())
 
         let keystrokeCmd: String
         if isSpecialKey {
