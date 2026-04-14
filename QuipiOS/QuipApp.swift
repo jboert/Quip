@@ -21,6 +21,7 @@ struct QuipApp: App {
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
     @State private var monitorName: String = "Mac"
+    @State private var screenAspect: Double = 16.0 / 10.0
     @State private var isRecording = false
     @State private var terminalContentText: String?
     @State private var terminalContentScreenshot: String?
@@ -47,6 +48,7 @@ struct QuipApp: App {
                 pinText: $pinText,
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
+                screenAspect: screenAspect,
                 onStartRecording: { startRecording() },
                 onStopRecording: { stopRecording() },
                 onRequestContent: { windowId in
@@ -64,6 +66,16 @@ struct QuipApp: App {
                     volumeHandler.resumeAfterBackground()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+                // Buy ~30s of background execution so a quick app switch doesn't
+                // suspend the network stack and stale the WebSocket.
+                client.suspendForBackground()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                // Probe the socket on return; force-reconnect with reset backoff
+                // if the probe doesn't pong within 2s.
+                client.resumeFromBackground()
+            }
         }
     }
 
@@ -75,6 +87,7 @@ struct QuipApp: App {
                 let wasEmpty = windows.isEmpty
                 windows = update.windows
                 monitorName = update.monitor
+                if let a = update.screenAspect, a > 0 { screenAspect = a }
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
                 // Allow all orientations once we have windows, suggest landscape
                 if wasEmpty && !update.windows.isEmpty {
@@ -223,6 +236,7 @@ struct MainiOSView: View {
     @Binding var pinText: String
     var ttsOverlayTexts: [String: String]
     var monitorName: String
+    var screenAspect: Double
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
@@ -263,12 +277,41 @@ struct MainiOSView: View {
                         .padding(.top, 2)
                 }
 
-                windowLayout
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
+                if isPortrait {
+                    windowLayout
+                        .aspectRatio(CGFloat(screenAspect) / 1.45, contentMode: .fit)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                } else {
+                    windowLayout
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                }
 
                 if showTextInput {
                     textInputBar
+                }
+
+                if isPortrait && client.isAuthenticated && selectedWindowId != nil {
+                    InlineTerminalContent(
+                        content: terminalContentText ?? "",
+                        screenshot: terminalContentScreenshot,
+                        windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
+                        windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
+                        onRefresh: {
+                            if let wid = selectedWindowId { onRequestContent(wid) }
+                        },
+                        onSendAction: { action in
+                            if let wid = selectedWindowId {
+                                client.send(QuickActionMessage(windowId: wid, action: action))
+                            }
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 6)
+                    .padding(.top, 4)
+                } else if isPortrait {
+                    Spacer(minLength: 0)
                 }
 
                 if isPortrait && client.isAuthenticated && !windows.isEmpty {
@@ -280,6 +323,7 @@ struct MainiOSView: View {
                 bottomBar
                     .padding(.horizontal, 6)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .overlay {
             if isRecording {
@@ -336,7 +380,8 @@ struct MainiOSView: View {
             }
         }
         .overlay {
-            if let content = terminalContentText {
+            // In portrait the inline terminal view replaces this popup, so don't stack them.
+            if let content = terminalContentText, !isPortrait {
                 let windowName = windows.first(where: { $0.id == terminalContentWindowId })?.name ?? "Terminal"
                 TerminalContentOverlay(
                     content: content,
@@ -399,6 +444,10 @@ struct MainiOSView: View {
                 }
                 updateOrientation()
             }
+        }
+        .onChange(of: selectedWindowId) { _, newId in
+            // Auto-fetch terminal output for the inline view in portrait.
+            if isPortrait, let id = newId { onRequestContent(id) }
         }
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { code in
@@ -877,45 +926,68 @@ struct MainiOSView: View {
 
     private var windowLayout: some View {
         GeometryReader { geo in
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(colors.surface.opacity(0.5))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(colors.surfaceBorder, lineWidth: 0.5)
-                    )
+            let mac = hostScreenRect(in: geo.size, aspect: CGFloat(screenAspect))
+            ZStack(alignment: .topLeading) {
+                Color.clear
 
-                if windows.isEmpty {
-                    VStack(spacing: 6) {
-                        Image(systemName: "macwindow.on.rectangle")
-                            .font(.system(size: 24, weight: .light))
-                            .foregroundStyle(colors.textFaint)
-                        Text(client.isAuthenticated ? "No windows" : client.isConnected ? "Enter PIN" : "Enter tunnel URL")
-                            .font(.system(size: 10))
-                            .foregroundStyle(colors.textFaint)
-                    }
-                } else {
-                    ForEach(windows) { window in
-                        let rect = windowRect(frame: window.frame, in: geo.size, inset: 3)
-                        WindowRectangle(
-                            window: window,
-                            isSelected: window.id == selectedWindowId,
-                            onSelect: {
-                                withAnimation(.spring(duration: 0.2)) {
-                                    selectedWindowId = window.id
-                                }
-                                // Tell Mac to focus this window
-                                client.send(SelectWindowMessage(windowId: window.id))
-                            },
-                            onAction: { action in
-                                sendAction(windowId: window.id, action: action)
-                            }
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(colors.surface.opacity(0.5))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(colors.surfaceBorder, lineWidth: 0.5)
                         )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
+
+                    if windows.isEmpty {
+                        VStack(spacing: 6) {
+                            Image(systemName: "macwindow.on.rectangle")
+                                .font(.system(size: 24, weight: .light))
+                                .foregroundStyle(colors.textFaint)
+                            Text(client.isAuthenticated ? "No windows" : client.isConnected ? "Enter PIN" : "Enter tunnel URL")
+                                .font(.system(size: 10))
+                                .foregroundStyle(colors.textFaint)
+                        }
+                    } else {
+                        ForEach(windows) { window in
+                            let rect = windowRect(frame: window.frame, in: mac.size, inset: 3)
+                            WindowRectangle(
+                                window: window,
+                                isSelected: window.id == selectedWindowId,
+                                onSelect: {
+                                    withAnimation(.spring(duration: 0.2)) {
+                                        selectedWindowId = window.id
+                                    }
+                                    // Tell Mac to focus this window
+                                    client.send(SelectWindowMessage(windowId: window.id))
+                                },
+                                onAction: { action in
+                                    sendAction(windowId: window.id, action: action)
+                                }
+                            )
+                            .frame(width: rect.width, height: rect.height)
+                            .position(x: rect.midX, y: rect.midY)
+                        }
                     }
                 }
+                .frame(width: mac.width, height: mac.height)
+                .offset(x: mac.minX, y: mac.minY)
             }
+        }
+    }
+
+    /// Largest rect with the given aspect ratio (width/height) that fits inside `size`, centered.
+    private func hostScreenRect(in size: CGSize, aspect: CGFloat) -> CGRect {
+        guard aspect > 0, size.width > 0, size.height > 0 else {
+            return CGRect(origin: .zero, size: size)
+        }
+        let available = size.width / size.height
+        if available > aspect {
+            let w = size.height * aspect
+            return CGRect(x: (size.width - w) / 2, y: 0, width: w, height: size.height)
+        } else {
+            // Portrait: stretch vertically a bit so the thumbnail isn't a narrow strip.
+            let h = min(size.height, (size.width / aspect) * 1.45)
+            return CGRect(x: 0, y: (size.height - h) / 2, width: size.width, height: h)
         }
     }
 
@@ -1180,5 +1252,106 @@ struct SavedConnection: Codable, Identifiable {
             return short
         }
         return url
+    }
+}
+
+// MARK: - Inline Terminal Content (portrait mode)
+
+struct InlineTerminalContent: View {
+    let content: String
+    let screenshot: String?
+    let windowName: String
+    let windowColor: Color
+    var onRefresh: () -> Void
+    var onSendAction: (String) -> Void
+    @Environment(\.quipColors) private var colors
+    private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(windowColor)
+                    .frame(width: 8, height: 8)
+                Text(windowName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.8))
+                Spacer()
+                Button { onRefresh() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.06))
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if let screenshot, let imageData = Data(base64Encoded: screenshot),
+                       let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .id("bottom")
+                    } else if !content.isEmpty {
+                        Text(content)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .id("bottom")
+                    } else {
+                        Text("Loading…")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .frame(maxWidth: .infinity)
+                            .padding(16)
+                            .id("bottom")
+                    }
+                }
+                .onChange(of: content) { _, _ in
+                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            HStack(spacing: 5) {
+                keyButton("Return", icon: "return") { onSendAction("press_return") }
+                keyButton("Ctrl+C", icon: "xmark.octagon") { onSendAction("press_ctrl_c") }
+                keyButton("Ctrl+D", icon: "eject") { onSendAction("press_ctrl_d") }
+                keyButton("Esc", icon: "escape") { onSendAction("press_escape") }
+                keyButton("Tab", icon: "arrow.right.to.line") { onSendAction("press_tab") }
+                keyButton("Y", icon: nil) { onSendAction("press_y") }
+                keyButton("N", icon: nil) { onSendAction("press_n") }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.06))
+        }
+        .background(colors.overlayContainer)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .onAppear { onRefresh() }
+        .onReceive(refreshTimer) { _ in onRefresh() }
+    }
+
+    private func keyButton(_ label: String, icon: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 9))
+                }
+                Text(label)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+            }
+            .foregroundStyle(.white.opacity(0.7))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
     }
 }
