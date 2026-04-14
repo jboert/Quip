@@ -90,53 +90,58 @@ final class KeystrokeInjector {
 
     // MARK: - Send Keystroke
 
-    /// Send a special keystroke (e.g., Ctrl+C, Return) to a terminal window.
+    /// Send a special keystroke (e.g., Ctrl+C, Return) to a specific terminal window.
     /// - Parameters:
     ///   - key: Key descriptor: "return", "ctrl+c", "ctrl+d", "escape", "tab"
-    ///   - windowId: Quip window identifier
+    ///   - windowId: Quip window identifier (used for logging)
     ///   - terminalApp: Which terminal emulator to target
-    ///   - windowIndex: 1-based window index (default: 1)
+    ///   - cgWindowNumber: The CGWindowID of the target window. For iTerm2, this is
+    ///     used to explicitly select the matching window before injecting the
+    ///     keystroke, preventing the keystroke from landing in the wrong window
+    ///     when multiple iTerm2 windows are open. Pass 0 to fall back to
+    ///     frontmost-window behavior.
+    ///   - windowIndex: 1-based window index (legacy fallback, default: 1)
     /// - Returns: Result indicating success or failure
     @discardableResult
-    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, windowIndex: Int = 1) -> InjectionResult {
+    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1) -> InjectionResult {
         let script: String
 
         switch key.lowercased() {
         case "return", "enter":
             script = keystrokeScript(
                 key: "return", using: "",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "ctrl+c":
             script = keystrokeScript(
                 key: "c", using: "control down",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "ctrl+d":
             script = keystrokeScript(
                 key: "d", using: "control down",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "escape", "esc":
             script = keystrokeScript(
                 key: "escape", using: "",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "tab":
             script = keystrokeScript(
                 key: "tab", using: "",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         default:
             return InjectionResult(success: false, error: "Unknown key: \(key)")
         }
 
-        return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId)")
+        return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
     }
 
     // MARK: - Spawn Terminal
@@ -237,8 +242,21 @@ final class KeystrokeInjector {
 
     // MARK: - Helpers
 
-    /// Build a System Events keystroke AppleScript targeting the correct terminal
-    private func keystrokeScript(key: String, using modifiers: String, terminalApp: TerminalApp, windowIndex: Int) -> String {
+    /// Build a System Events keystroke AppleScript targeting the correct terminal window.
+    ///
+    /// For iTerm2 with a non-zero `cgWindowNumber`, emits a `repeat with w in windows`
+    /// loop that selects the window whose id matches the CGWindowID before sending
+    /// the System Events keystroke. This mirrors the same window-targeting pattern
+    /// `sendText` already uses for iTerm2 (see the `.iterm2` branch of `sendText`)
+    /// and prevents keystrokes from landing in the wrong iTerm2 window when
+    /// multiple are open.
+    ///
+    /// For Terminal.app, or for iTerm2 with `cgWindowNumber == 0`, falls back to
+    /// bare `activate` on the app, which targets whichever window is currently
+    /// frontmost within that process. Terminal.app window targeting is tracked
+    /// as a separate wishlist item because Terminal.app's AppleScript window
+    /// model doesn't expose CGWindowID directly.
+    private func keystrokeScript(key: String, using modifiers: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID, windowIndex: Int) -> String {
         let appName = terminalApp.rawValue
         let isSpecialKey = ["return", "escape", "tab"].contains(key.lowercased())
 
@@ -257,8 +275,27 @@ final class KeystrokeInjector {
             }
         }
 
+        let windowSelection: String
+        if terminalApp == .iterm2 && cgWindowNumber != 0 {
+            windowSelection = """
+            tell application "iTerm2"
+                activate
+                try
+                    repeat with w in windows
+                        if id of w is \(cgWindowNumber) then
+                            select w
+                            exit repeat
+                        end if
+                    end repeat
+                end try
+            end tell
+            """
+        } else {
+            windowSelection = "tell application \"\(appName)\" to activate"
+        }
+
         return """
-        tell application "\(appName)" to activate
+        \(windowSelection)
         delay 0.1
         tell application "System Events"
             tell process "\(appName)"
