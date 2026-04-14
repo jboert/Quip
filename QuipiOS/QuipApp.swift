@@ -884,13 +884,18 @@ struct MainiOSView: View {
                     .foregroundStyle(colors.textSecondary)
             }
             Spacer()
-            // Version marker — reads CFBundleShortVersionString so whatever
-            // `project.yml` sets (e.g. "1.0-eb-branch") shows up here, giving
-            // the user visual confirmation of which build is running.
-            Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(colors.textTertiary)
-                .padding(.trailing, 8)
+            // Version marker — only shown on tagged dev builds whose version
+            // string contains a hyphen (e.g. "1.0-eb-branch"). Clean release
+            // versions from main like "1.0" don't show the footer, keeping
+            // production chrome uncluttered. When eb-branch merges back into
+            // main and the version drops to "1.0", the footer auto-hides.
+            if let rawVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+               rawVersion.contains("-") {
+                Text("v\(rawVersion)")
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundStyle(colors.textTertiary)
+                    .padding(.trailing, 8)
+            }
             if client.isAuthenticated {
                 Button {
                     if speech.isSpeaking {
