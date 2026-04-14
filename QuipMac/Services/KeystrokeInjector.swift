@@ -276,6 +276,12 @@ final class KeystrokeInjector {
         }
 
         let windowSelection: String
+        // Skip the post-activate delay when we're using the iTerm2 explicit
+        // window-selection path — `select w` is synchronous inside AppleScript
+        // so the keystroke can fire immediately after. The fallback path still
+        // needs the delay because `tell app to activate` is async and the
+        // window may not actually be frontmost by the time System Events runs.
+        let postActivateDelay: String
         if terminalApp == .iterm2 && cgWindowNumber != 0 {
             windowSelection = """
             tell application "iTerm2"
@@ -290,13 +296,15 @@ final class KeystrokeInjector {
                 end try
             end tell
             """
+            postActivateDelay = ""
         } else {
             windowSelection = "tell application \"\(appName)\" to activate"
+            postActivateDelay = "delay 0.1"
         }
 
         return """
         \(windowSelection)
-        delay 0.1
+        \(postActivateDelay)
         tell application "System Events"
             tell process "\(appName)"
                 \(keystrokeCmd)
