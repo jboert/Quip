@@ -14,9 +14,20 @@ docs/specs/
 # Claude local settings
 .claude/settings.local.json
 
-# Machine-local scripts (carry signing / device IDs)
+# Machine-local scripts and build configs (carry signing / device IDs)
 *.local.sh
 *.local.md
+*.local.xcconfig
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Swift Package Manager
+.build/
+.swiftpm/
 
 # Ralph
 scripts/ralph/

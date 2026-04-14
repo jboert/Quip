@@ -1,0 +1,14 @@
+// Signing.xcconfig — committed stub.
+//
+// This file is intentionally empty. Real signing identity (team ID, bundle ID)
+// lives in Signing.local.xcconfig, which is gitignored so personal / org
+// signing details never land in a commit.
+//
+// To build the iOS target locally, create QuipiOS/Signing.local.xcconfig with:
+//     DEVELOPMENT_TEAM = <your 10-char Apple Developer team ID>
+//     PRODUCT_BUNDLE_IDENTIFIER = <your bundle ID, e.g. com.example.quip>
+//
+// The `?` on #include means "include if present" — missing local file is not
+// an error here; it will surface at codesign time with a clearer message.
+
+#include? "Signing.local.xcconfig"
