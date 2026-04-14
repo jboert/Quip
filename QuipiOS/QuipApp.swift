@@ -1327,6 +1327,17 @@ struct InlineTerminalContent: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer()
+                // Copy All — writes the current terminal buffer to the
+                // iPhone's system clipboard so it can be pasted into Messages,
+                // Mail, Notes, etc. Disabled when there's nothing to copy.
+                Button {
+                    UIPasteboard.general.string = content
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(content.isEmpty ? 0.2 : 0.5))
+                }
+                .disabled(content.isEmpty)
                 Button { onRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13))
@@ -1352,6 +1363,7 @@ struct InlineTerminalContent: View {
                             .foregroundStyle(.white.opacity(0.85))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(8)
+                            .textSelection(.enabled)
                             .id("bottom")
                     } else {
                         Text("Loading…")
