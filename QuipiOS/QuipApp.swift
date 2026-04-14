@@ -852,6 +852,21 @@ struct MainiOSView: View {
                 }
                 .disabled(selectedWindowId == nil)
 
+                Button {
+                    if let wid = selectedWindowId {
+                        client.send(QuickActionMessage(windowId: wid, action: "press_backspace"))
+                    }
+                } label: {
+                    Image(systemName: "delete.left")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .disabled(selectedWindowId == nil)
+
                 Spacer()
             }
             .padding(.horizontal, 8)
