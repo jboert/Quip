@@ -166,7 +166,29 @@ As a quick-win, commit `(TBD)` added `print` statements to the `send_text` and `
 
 ---
 
-### 13. Keyboard-input `onSubmit` + `pressReturn: true` double-Return bug
+### 13. Multi-iTerm2-window keystroke targeting (real fix)
+
+**Status:** Wishlist — partial fix attempted, had to be reverted
+**Context:** When the user has multiple iTerm2 windows open and selects one on the iPhone, `sendKeystroke` (for Return, Ctrl+C, Tab, Escape, backspace, etc.) currently fires the keystroke at whatever iTerm2 window is **already frontmost**, not necessarily the one the user selected on the phone. This is because:
+
+- `sendKeystroke` injects via System Events (`key code N`), which targets the OS-level focused window — not a specific AppleScript-addressable window.
+- Commit `4006db4` tried to fix this by having the AppleScript iterate iTerm2's windows and `select` the one whose `id` matched the CGWindowID. **That never worked** — iTerm2's AppleScript `id of window` returns iTerm2's own internal window identifier (small integers like `447`, `1159`, `1154`), not a CGWindowID (typically >10000). The repeat loop silently never matched.
+- Commit `465d5b5` reverted that attempt and restored the original behavior: rely on `windowManager.focusWindow(wid)` (AX-based raise) + a hard 100ms delay + System Events keystroke. This lands the keystroke in whatever window `focusWindow` managed to raise — which is usually correct for the simple one-window case but can race when windows are stacked at near-identical positions.
+
+**Fix options to explore:**
+- **(a) Match by iTerm2 `unique id` of session.** Each iTerm2 session has a stable unique ID accessible via AppleScript (`tell current session of window N to get unique id`). If Quip's `WindowManager` could read and cache session unique IDs at registration time, the keystroke script could select by session ID instead of window ID. Requires one-time lookup per session and storage in `ManagedWindow`.
+- **(b) Bypass System Events entirely via AX APIs.** Use `AXUIElementCreateApplication` + iterate AX windows + find the one whose `kAXDocumentAttribute` or `kAXTitleAttribute` matches, then post keystrokes via `CGEventPost` with a target PID. This is how `ydotool` works on Linux, and there's a macOS equivalent using `CGEventCreateKeyboardEvent` + `CGEventPostToPSN`.
+- **(c) Use iTerm2's `write text` verb for all injection.** iTerm2's AppleScript `write text` targets a specific session by address and doesn't depend on window focus. The trick is that `write text` only handles text — for special keys (Return, Ctrl+C, Tab, backspace, etc.) we'd need to send escape sequences. Return is `write text "" newline yes`. Ctrl+C is `write text (ASCII character 3)`. Backspace is `write text (ASCII character 8)` or `(ASCII character 127)`. This would be a huge rewrite of `sendKeystroke` to detect whether the target is iTerm2 and use native verbs instead of System Events.
+
+**Recommendation:** (c) long-term, (a) as an interim fix. (b) is the most robust but requires significant C-level code and is the largest change.
+
+**Reproduce:** Open two iTerm2 windows, select one from the iPhone, tap Return. Often the Return lands in the OTHER window.
+
+**Current workaround:** Only have one iTerm2 window with Claude Code running at a time. Suboptimal but makes the issue invisible.
+
+---
+
+### 14. Keyboard-input `onSubmit` + `pressReturn: true` double-Return bug
 
 **Status:** Wishlist — suspected bug, not yet reproduced
 **Context:** In `QuipiOS/QuipApp.swift` around line 916, the on-screen text-input `TextField` has `.onSubmit { sendTextInput() }`, and `sendTextInput` calls `client.send(SendTextMessage(..., pressReturn: true))`. When the user hits the iPhone's on-screen Return key while the TextField is focused, `onSubmit` fires the send handler, and the handler explicitly passes `pressReturn: true`. The net effect should be a single Return on the Mac side (the `pressReturn` flag tells the Mac to append one newline after the text), but it's worth double-checking that SwiftUI's Return key isn't *also* being propagated to the TextField's text buffer and arriving as an embedded `\n`. Needs verification and, if confirmed, fix.
