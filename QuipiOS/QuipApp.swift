@@ -831,6 +831,23 @@ struct MainiOSView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .disabled(selectedWindowId == nil)
+
+                // /plan shortcut — types "/plan " without pressing Return so the
+                // cursor stays on the line for the user to continue typing or
+                // dictating the rest of their prompt.
+                Button {
+                    if let wid = selectedWindowId {
+                        client.send(SendTextMessage(windowId: wid, text: "/plan ", pressReturn: false))
+                    }
+                } label: {
+                    Text("/plan")
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 56, height: 56)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(selectedWindowId == nil)
             }
         }
         .padding(.vertical, 8)
