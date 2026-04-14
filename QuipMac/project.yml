@@ -42,6 +42,7 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Quip
+        CFBundleShortVersionString: 1.0-eb-branch
         NSAppleEventsUsageDescription: Quip needs to control Terminal and iTerm2 to manage Claude Code sessions.
         NSAccessibilityUsageDescription: Quip needs Accessibility access to arrange and manage windows on your screen.
         NSBonjourServices:
