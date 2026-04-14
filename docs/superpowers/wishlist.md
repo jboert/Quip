@@ -85,7 +85,21 @@ Known risk: without mode detection, blind Shift+Tab presses can land in the wron
 
 ---
 
-### 8. Keyboard-input `onSubmit` + `pressReturn: true` double-Return bug
+### 8. Number shortcut buttons (1 / 2 / 3) for multiple-choice answers
+
+**Status:** Wishlist
+**Context:** Claude Code occasionally asks multiple-choice questions with two or three lettered/numbered options. Quip already has `press_y` and `press_n` quick actions (see `QuipMac/QuipMacApp.swift` `handleQuickAction` cases around lines 524–531) that iPhone buttons fire to answer yes/no prompts. User wants three additional buttons — `1`, `2`, and `3` — to answer three-option prompts the same way. Each button would:
+- Send a `QuickActionMessage(action: "press_1")` (etc.) from the iPhone.
+- The Mac's `handleQuickAction` would add three new cases that call `keystrokeInjector.sendText("1", to: wid, pressReturn: true, ...)` / `"2"` / `"3"`.
+- On the iPhone, three new buttons in the shortcut area — either in `portraitControls` as a dedicated row, or tucked into the existing long-press context menu on window cards (which is where Y/N currently live per `WindowRectangle.swift:109–150`).
+
+UX placement is TBD — needs a brainstorming pass to decide whether these go in the main control row (always visible but consumes space) or a sub-panel (hidden but one extra tap to reach).
+
+Dependencies: whichever window-targeting bug fix lands first — because these will use the same injection path as the Return button and should benefit from the fix automatically.
+
+---
+
+### 9. Keyboard-input `onSubmit` + `pressReturn: true` double-Return bug
 
 **Status:** Wishlist — suspected bug, not yet reproduced
 **Context:** In `QuipiOS/QuipApp.swift` around line 916, the on-screen text-input `TextField` has `.onSubmit { sendTextInput() }`, and `sendTextInput` calls `client.send(SendTextMessage(..., pressReturn: true))`. When the user hits the iPhone's on-screen Return key while the TextField is focused, `onSubmit` fires the send handler, and the handler explicitly passes `pressReturn: true`. The net effect should be a single Return on the Mac side (the `pressReturn` flag tells the Mac to append one newline after the text), but it's worth double-checking that SwiftUI's Return key isn't *also* being propagated to the TextField's text buffer and arriving as an embedded `\n`. Needs verification and, if confirmed, fix.
