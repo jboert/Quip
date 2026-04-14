@@ -20,15 +20,18 @@ targets:
           - "project.yml"
           - "*.xcodeproj/**"
           - "Tests/**"
+          - "Signing.xcconfig"
+          - "Signing.local.xcconfig"
       - path: ../Shared
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.citrine505.salmon5945
         PRODUCT_NAME: Quip
         INFOPLIST_FILE: Info.plist
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "L35T4H6XMC"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
