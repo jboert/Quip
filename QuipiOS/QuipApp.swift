@@ -1332,17 +1332,6 @@ struct InlineTerminalContent: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer()
-                // Copy All — writes the current terminal buffer to the
-                // iPhone's system clipboard so it can be pasted into Messages,
-                // Mail, Notes, etc. Disabled when there's nothing to copy.
-                Button {
-                    UIPasteboard.general.string = content
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.white.opacity(content.isEmpty ? 0.2 : 0.5))
-                }
-                .disabled(content.isEmpty)
                 // Expand / collapse — hides the window-picker card above to
                 // give the terminal more vertical real estate. Tap again to
                 // bring the picker back. Compact: single icon button, reuses
