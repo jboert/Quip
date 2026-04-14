@@ -390,7 +390,10 @@ struct QuipMacApp: App {
 
     @MainActor
     private func handleIncomingMessage(_ data: Data) {
-        guard let type = MessageCoder.messageType(from: data) else { return }
+        guard let type = MessageCoder.messageType(from: data) else {
+            print("[Quip] handleIncomingMessage: unparseable message, size=\(data.count)")
+            return
+        }
 
         switch type {
         case "select_window":
@@ -416,14 +419,21 @@ struct QuipMacApp: App {
                     DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
                         self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
                     }
+                } else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] send_text DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
                 }
             }
         case "quick_action":
             if let msg = MessageCoder.decode(QuickActionMessage.self, from: data) {
                 AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
+                print("[Quip] quick_action: action=\(msg.action) windowId=\(msg.windowId)")
                 thinkingWindows.insert(msg.windowId)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     handleQuickAction(msg.action, for: window)
+                } else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] quick_action DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
                 }
             }
         case "stt_started":
