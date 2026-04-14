@@ -831,24 +831,30 @@ struct MainiOSView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .disabled(selectedWindowId == nil)
+            }
 
-                // /plan shortcut — types "/plan " without pressing Return so the
-                // cursor stays on the line for the user to continue typing or
-                // dictating the rest of their prompt.
+            // Secondary command-shortcut row — compact monospaced buttons
+            // styled like the keyButton helper used in the output overlay.
+            // Lives under the main shortcut row.
+            HStack(spacing: 5) {
                 Button {
                     if let wid = selectedWindowId {
                         client.send(SendTextMessage(windowId: wid, text: "/plan ", pressReturn: false))
                     }
                 } label: {
                     Text("/plan")
-                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 56, height: 56)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .disabled(selectedWindowId == nil)
+
+                Spacer()
             }
+            .padding(.horizontal, 8)
         }
         .padding(.vertical, 8)
     }
