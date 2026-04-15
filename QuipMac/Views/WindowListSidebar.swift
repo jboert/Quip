@@ -302,6 +302,12 @@ private struct WindowRow: View {
             .onChange(of: isEnabled) { _, newValue in
                 onToggle(newValue)
             }
+            // Local @State init only fires once per row instance, so external
+            // flips of window.isEnabled (e.g. duplicate-window auto-enable)
+            // never reach the checkbox without this sync.
+            .onChange(of: window.isEnabled) { _, newValue in
+                if isEnabled != newValue { isEnabled = newValue }
+            }
 
             Text("\(index).")
                 .font(.caption.monospacedDigit())
