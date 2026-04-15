@@ -35,6 +35,11 @@ struct QuipMacApp: App {
     /// repeated triggers where the raw terminal content changed slightly
     /// (cursor, prompt line) but the actual response is the same.
     @State private var lastSpokenMarker: [String: String] = [:]
+    /// Per-window TTS session id. Persists across delta chunks within a single
+    /// response turn so the phone queues them instead of cancelling earlier
+    /// chunks. Cleared on new user input so the next response gets a fresh id,
+    /// which does interrupt any leftover audio from the prior response.
+    @State private var ttsSessionIds: [String: String] = [:]
     private let kokoroTTS = KokoroTTS()
 
     var body: some Scene {
@@ -332,7 +337,13 @@ struct QuipMacApp: App {
 
             let wid = windowId
             let wname = name
-            let sessionId = UUID().uuidString
+            let sessionId: String
+            if let existing = ttsSessionIds[windowId] {
+                sessionId = existing
+            } else {
+                sessionId = UUID().uuidString
+                ttsSessionIds[windowId] = sessionId
+            }
             var sequence = 0
 
             let checkStale: @Sendable () -> Bool = {
@@ -443,6 +454,11 @@ struct QuipMacApp: App {
                 clientSelectedWindowId = msg.windowId
                 pendingInputForWindow.insert(msg.windowId)
                 thinkingWindows.insert(msg.windowId)
+                // New user input → next response is a new turn, so rotate the
+                // TTS session id. That interrupts any lingering audio from the
+                // prior answer on the phone.
+                ttsSessionIds.removeValue(forKey: msg.windowId)
+                lastSpokenMarker.removeValue(forKey: msg.windowId)
 
                 let wid = msg.windowId
                 terminalStateDetector.setSTTActive(for: wid)
@@ -660,6 +676,7 @@ struct QuipMacApp: App {
         sttBaselineContent = sttBaselineContent.filter { allCurrentIds.contains($0.key) }
         lastContentRequestTime = lastContentRequestTime.filter { allCurrentIds.contains($0.key) }
         ttsGeneration = ttsGeneration.filter { allCurrentIds.contains($0.key) }
+        ttsSessionIds = ttsSessionIds.filter { allCurrentIds.contains($0.key) }
         pendingInputForWindow = pendingInputForWindow.intersection(allCurrentIds)
         thinkingWindows = thinkingWindows.intersection(allCurrentIds)
         if let selected = clientSelectedWindowId, !allCurrentIds.contains(selected) {

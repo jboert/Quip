@@ -49,8 +49,8 @@ struct QuipApp: App {
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
                 screenAspect: screenAspect,
-                onStartRecording: { startRecording() },
-                onStopRecording: { stopRecording() },
+                onStartRecording: { DispatchQueue.main.async { startRecording() } },
+                onStopRecording: { DispatchQueue.main.async { stopRecording() } },
                 onRequestContent: { windowId in
                     client.send(RequestContentMessage(windowId: windowId))
                 }
@@ -206,8 +206,11 @@ struct QuipApp: App {
             generator.impactOccurred(intensity: 1.0)
         }
         // Grab the live transcription (already visible on screen) and send immediately.
-        // Then stop the recognizer — the text we saw is what we send.
-        let text = speech.stopRecording()
+        // Then stop the recognizer — the text we saw is what we send. Trim whitespace
+        // and newlines: stray trailing \n characters get typed into the terminal as
+        // literal line-breaks inside Claude Code's input box, which then swallows the
+        // pressReturn keystroke as "add another newline" instead of "submit".
+        let text = speech.stopRecording().trimmingCharacters(in: .whitespacesAndNewlines)
         let windowId = selectedWindowId
         NSLog("[Quip] stopRecording: windowId=%@, text='%@' (length=%d)", windowId ?? "nil", text, text.count)
         if let windowId {
