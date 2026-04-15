@@ -542,8 +542,12 @@ struct QuipMacApp: App {
                     }
                     let termApp = terminalAppForWindow(source)
                     let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                    let knownIds = Set(windowManager.windows.map(\.id))
                     keystrokeInjector.spawnWindow(in: dir, command: cmd, terminalApp: termApp)
                     // WindowManager's auto-refresh (~1 second) picks up the new window.
+                    // When it does, switch the phone's selection to the new window so
+                    // the user sees what they just spawned instead of the old card.
+                    selectNewWindowAfterSpawn(knownIds: knownIds, attempt: 0)
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] duplicate_window DROPPED: unknown source windowId=\(msg.sourceWindowId). Known: \(known)")
@@ -565,6 +569,28 @@ struct QuipMacApp: App {
 
         default:
             break
+        }
+    }
+
+    /// After spawning a window via duplicate_window, poll WindowManager for the
+    /// newly-detected window id and tell the phone to switch its selection to
+    /// it. Polls every 250ms for up to 3 seconds. WindowManager's own scan runs
+    /// roughly every second, so the new window typically shows up within 1-2
+    /// polls. Gives up silently if nothing new appears in the time budget.
+    @MainActor
+    private func selectNewWindowAfterSpawn(knownIds: Set<String>, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
+            let currentIds = Set(windowManager.windows.map(\.id))
+            if let newId = currentIds.subtracting(knownIds).first {
+                print("[Quip] duplicate_window: new window detected \(newId), switching selection")
+                clientSelectedWindowId = newId
+                windowManager.focusWindow(newId)
+                webSocketServer.broadcast(SelectWindowMessage(windowId: newId))
+            } else if attempt < 12 {
+                selectNewWindowAfterSpawn(knownIds: knownIds, attempt: attempt + 1)
+            } else {
+                print("[Quip] duplicate_window: no new window detected after 3s, skipping auto-select")
+            }
         }
     }
 
