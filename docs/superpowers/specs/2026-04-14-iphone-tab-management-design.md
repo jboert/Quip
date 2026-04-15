@@ -59,49 +59,138 @@ struct CloseWindowMessage: Codable, Sendable {
 
 ## iPhone Changes
 
-Single file: `QuipiOS/Views/WindowRectangle.swift`. The existing `.contextMenu` block (lines 109–150 per earlier exploration) is extended with two new items and one alert modifier.
+**Architecture note**: `WindowRectangle` is a self-contained reusable view that takes `onAction: ((WindowAction) -> Void)?` as a callback. It does NOT hold a reference to `WebSocketClient`. The `.contextMenu` items all call `triggerAction(.someCase)`, which runs `onSelect()` (to force the selection to match the long-pressed window, preventing a known bug from commit `1ae6c54`) and then forwards the action to the parent via `onAction`. The parent (`MainiOSView`) maps enum cases to actual websocket messages in `sendAction(windowId:action:)`. The feature adds new cases to the existing enum-based dispatch rather than reaching into `client.send(...)` directly from the context menu.
+
+### Files changed (iPhone side)
+
+1. `QuipiOS/Views/WindowRectangle.swift` — two new `WindowAction` enum cases, two new context-menu items, one local confirmation-alert state.
+2. `QuipiOS/QuipApp.swift` — two new branches in `sendAction(windowId:action:)` dispatching to the new message types.
+
+### `WindowAction` enum additions
+
+The enum currently has: `pressReturn, cancel, viewOutput, clearTerminal, restartClaude, toggleEnabled`. Add two cases:
+
+```swift
+enum WindowAction {
+    case pressReturn
+    case cancel
+    case viewOutput
+    case clearTerminal
+    case restartClaude
+    case toggleEnabled
+    case duplicate     // NEW — spawn a new iTerm2 window in the same dir
+    case closeWindow   // NEW — destructive close of the terminal window
+}
+```
+
+The name `closeWindow` (rather than `closeTerminal`) matches the protocol message type and avoids confusion with the existing `clearTerminal` case which clears Claude's context, not the window.
 
 ### Context menu additions
 
-**At the top of the menu** (primary affordance, visually distinct with an SF Symbol icon):
+Inside the existing `.contextMenu` block at `WindowRectangle.swift:117-158`. Insert the new items at logical positions — Duplicate goes at the **top** (above "Press Return") as the primary new affordance, and Close goes **below the existing Divider**, right before `Disable/Enable Window`, as a destructive terminal operation:
 
 ```swift
-Button {
-    client.send(DuplicateWindowMessage(sourceWindowId: window.id))
-} label: {
-    Label("Duplicate in new window", systemImage: "rectangle.on.rectangle")
+.contextMenu {
+    // NEW — inserted at the top of the menu
+    Button {
+        triggerAction(.duplicate)
+    } label: {
+        Label("Duplicate in new window", systemImage: "rectangle.on.rectangle")
+    }
+
+    Button {
+        triggerAction(.pressReturn)
+    } label: {
+        Label("Press Return", systemImage: "return")
+    }
+
+    // ... (existing cancel, viewOutput, clearTerminal, restartClaude entries unchanged)
+
+    Divider()
+
+    // NEW — inserted between Divider and Disable/Enable Window
+    Button(role: .destructive) {
+        showCloseConfirmation = true
+    } label: {
+        Label("Close terminal…", systemImage: "xmark.square")
+    }
+
+    Button {
+        triggerAction(.toggleEnabled)
+    } label: {
+        Label(
+            window.enabled ? "Disable Window" : "Enable Window",
+            systemImage: window.enabled ? "eye.slash" : "eye"
+        )
+    }
 }
 ```
 
-**At the bottom of the menu**, separated by a `Divider()` and marked destructive:
+Notes:
+- The Close button does NOT call `triggerAction(.closeWindow)` directly — it sets `showCloseConfirmation = true` instead. The actual dispatch happens inside the alert's Close button below, so the confirmation is local to `WindowRectangle`, keeping the destructive-intent logic colocated with the UI that presents it.
+- The ellipsis (`…`) and `role: .destructive` (red text) signal "dangerous action, confirmation required."
+- Duplicate does NOT get a confirmation — it's cheap and reversible.
+
+### Confirmation alert state and modifier
+
+Add a new `@State` property to `WindowRectangle`:
 
 ```swift
-Divider()
-Button(role: .destructive) {
-    showCloseConfirmation = true
-} label: {
-    Label("Close terminal…", systemImage: "xmark.square")
-}
+@State private var showCloseConfirmation = false
 ```
 
-The ellipsis (`…`) and `role: .destructive` (red text) signal "dangerous action, confirmation required."
-
-### Confirmation alert
-
-New `@State private var showCloseConfirmation = false` on `WindowRectangle`. Attached via `.alert` modifier:
+Attach a `.alert` modifier next to the existing `.contextMenu` in the view body:
 
 ```swift
 .alert("Close terminal?", isPresented: $showCloseConfirmation) {
     Button("Cancel", role: .cancel) {}
     Button("Close", role: .destructive) {
-        client.send(CloseWindowMessage(windowId: window.id))
+        triggerAction(.closeWindow)
     }
 } message: {
     Text("This will close \(window.name) and kill any running command. You can't undo this.")
 }
 ```
 
-The alert message names the specific window by its title so the user knows exactly what they're about to kill.
+Only the Close button calls `triggerAction(.closeWindow)`. Cancel does nothing. The alert message names the specific window by its title so the user knows exactly what they're about to kill.
+
+### Parent-side dispatch in `sendAction`
+
+In `QuipApp.swift`, the existing `sendAction(windowId:action:)` at line 1180 handles all `WindowAction` cases by mapping to a `QuickActionMessage` action string. The new cases need different handling because they send different message types:
+
+```swift
+private func sendAction(windowId: String, action: WindowAction) {
+    if action == .viewOutput {
+        onRequestContent(windowId)
+        return
+    }
+
+    // NEW — duplicate and close send different message types, not QuickActionMessage
+    if action == .duplicate {
+        client.send(DuplicateWindowMessage(sourceWindowId: windowId))
+        return
+    }
+    if action == .closeWindow {
+        client.send(CloseWindowMessage(windowId: windowId))
+        return
+    }
+
+    let str: String
+    switch action {
+    case .pressReturn: str = "press_return"
+    case .cancel: str = "press_ctrl_c"
+    case .clearTerminal: str = "clear_terminal"
+    case .restartClaude: str = "restart_claude"
+    case .toggleEnabled: str = "toggle_enabled"
+    case .viewOutput: return // handled above
+    case .duplicate: return  // handled above
+    case .closeWindow: return // handled above
+    }
+    client.send(QuickActionMessage(windowId: windowId, action: str))
+}
+```
+
+Early-return branches for the new cases keep the switch statement compiling cleanly — Swift's exhaustiveness checker will flag the new enum cases if they're missing, and early return is cheaper than adding dead branches.
 
 ### Explicit non-goals on the iPhone side
 
@@ -293,7 +382,7 @@ Split into five cherry-pickable commits so jboert can review and pull each layer
 
 **Commit 4** — `QuipMac/Views/SettingsView.swift`. The `spawnCommand` text field in the Settings UI. Independent from the spawn logic (the default `"claude"` is already baked into commit 3's fallback), so this commit is purely a UI addition.
 
-**Commit 5** — `QuipiOS/Views/WindowRectangle.swift`. Two new context-menu items and the confirmation alert. Feature lights up end-to-end after this commit.
+**Commit 5** — `QuipiOS/Views/WindowRectangle.swift` + `QuipiOS/QuipApp.swift`. Two new `WindowAction` enum cases, two new context-menu items, the confirmation alert, and the two new branches in `sendAction`. These two files must ship together because the enum cases introduced in `WindowRectangle.swift` must match the switch statement in `QuipApp.swift::sendAction` — Swift's exhaustiveness checker will reject the build if they're split. Feature lights up end-to-end after this commit.
 
 Five commits, cherry-pick order: 1 → 2 → 3 → 4 → 5.
 
