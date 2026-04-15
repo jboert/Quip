@@ -7,6 +7,7 @@ struct WindowRectangle: View {
     var onAction: ((WindowAction) -> Void)? = nil
 
     @State private var spinAngle: Double = 0
+    @State private var showCloseConfirmation = false
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
@@ -116,6 +117,12 @@ struct WindowRectangle: View {
         }
         .contextMenu {
             Button {
+                triggerAction(.duplicate)
+            } label: {
+                Label("Duplicate in new window", systemImage: "rectangle.on.rectangle")
+            }
+
+            Button {
                 triggerAction(.pressReturn)
             } label: {
                 Label("Press Return", systemImage: "return")
@@ -147,6 +154,12 @@ struct WindowRectangle: View {
 
             Divider()
 
+            Button(role: .destructive) {
+                showCloseConfirmation = true
+            } label: {
+                Label("Close terminal\u{2026}", systemImage: "xmark.square")
+            }
+
             Button {
                 triggerAction(.toggleEnabled)
             } label: {
@@ -155,6 +168,14 @@ struct WindowRectangle: View {
                     systemImage: window.enabled ? "eye.slash" : "eye"
                 )
             }
+        }
+        .alert("Close terminal?", isPresented: $showCloseConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Close", role: .destructive) {
+                triggerAction(.closeWindow)
+            }
+        } message: {
+            Text("This will close \(window.name) and kill any running command. You can't undo this.")
         }
         .onAppear {
             if window.isThinking {
@@ -194,6 +215,8 @@ enum WindowAction {
     case clearTerminal
     case restartClaude
     case toggleEnabled
+    case duplicate
+    case closeWindow
 }
 
 #Preview {
