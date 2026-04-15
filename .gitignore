@@ -25,6 +25,10 @@ xcuserdata/
 DerivedData/
 build/
 
+# xcodegen-generated Info.plist — regenerated from <project>/project.yml, see README
+QuipMac/Info.plist
+QuipiOS/Info.plist
+
 # Swift Package Manager
 .build/
 .swiftpm/
