@@ -106,6 +106,15 @@ struct QuipApp: App {
             }
         }
 
+        client.onSelectWindow = { windowId in
+            DispatchQueue.main.async {
+                // Mac is asking us to switch — set local selection without echoing
+                // a select_window back, which would loop.
+                guard windows.contains(where: { $0.id == windowId }) else { return }
+                selectedWindowId = windowId
+            }
+        }
+
         client.onStateChange = { windowId, newState in
             DispatchQueue.main.async {
                 if let i = windows.firstIndex(where: { $0.id == windowId }) {
