@@ -405,6 +405,11 @@ struct MainiOSView: View {
                         if let wid = terminalContentWindowId {
                             client.send(QuickActionMessage(windowId: wid, action: action))
                         }
+                    },
+                    onSendText: { text in
+                        if let wid = terminalContentWindowId {
+                            client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
+                        }
                     }
                 )
             }
