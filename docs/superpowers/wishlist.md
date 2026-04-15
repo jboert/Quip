@@ -140,7 +140,7 @@ Resolved. Keep this entry to remember the original request and to make it findab
 
 **Recommendation:** option (b) as v1 — cheapest fix, most user-friendly. Requires one new message handler on the iPhone and one reconnect-time check.
 
-**Related:** #10 (session persistence) — if implemented, might subsume this item by persisting the window identity in a stable form.
+**Related:** #10 (session persistence) — if implemented, might subsume this item by persisting the window identity in a stable form. #20 (WebSocket heartbeat) — the heartbeat's reconnect handler is the natural trigger point for option (b)'s "iPhone re-validates on reconnect" check.
 
 ---
 
@@ -157,6 +157,8 @@ As a quick-win, commit `(TBD)` added `print` statements to the `send_text` and `
 - **(c) Client-side pre-flight check.** Before sending a message, the iPhone verifies the selected windowId is still in the window list it last received. If not, disable the button visually. This prevents the bug from happening in the first place.
 
 **Recommendation:** (a) for completeness + (c) as a belt-and-suspenders measure.
+
+**Related:** #20 (WebSocket heartbeat / dead-peer detection) — same underlying concern from a different angle. #20 surfaces dead *connections*; this entry surfaces dropped *messages* on a connection that's still live. Both are needed to fully eliminate "I tapped the button and nothing happened" as a possible state.
 
 ---
 
@@ -179,6 +181,8 @@ As a quick-win, commit `(TBD)` added `print` statements to the `send_text` and `
 **Reproduce:** Open two iTerm2 windows, select one from the iPhone, tap Return. Often the Return lands in the OTHER window.
 
 **Current workaround:** Only have one iTerm2 window with Claude Code running at a time. Suboptimal but makes the issue invisible.
+
+**Related:** #25 (iTerm2-version smoke test — would have caught the verb-shape mismatch in `4006db4` that motivated this entry's tech debt in seconds, instead of after the fact).
 
 ---
 
@@ -280,6 +284,164 @@ The defining source file for `/btw` wasn't findable during this session — chec
 **Note for whoever graduates this to a spec:** with both `/plan` and `/btw` planned as standalone shortcut buttons, the canonical "two hardcoded buttons is becoming a pattern" smell is visible. Worth flagging in brainstorm whether the right v2 shape is "configurable list of slash-command shortcuts the user can edit in Settings" rather than another hardcoded button. Don't restructure #1 or #19 preemptively — let the brainstorm decide. But the option exists and shouldn't get lost.
 
 **Related:** #1 (`/plan` button — direct sibling), #4 (cross-platform parity — once `/btw` lands on iOS, mirror to QuipLinux/QuipAndroid same as `/plan`).
+
+---
+
+### 20. WebSocket heartbeat / dead-peer detection
+
+**Status:** Wishlist — high-priority reliability infrastructure
+**Context:** When QuipMac crashes, the Mac sleeps, Tailscale drops the route, or any other "the other end is gone" event happens, the iPhone's WebSocket state still reports "connected" until the next outgoing send fails. Until then, every button tap appears to succeed (the message gets queued / sent without error) but nothing happens on the Mac. This is the root cause of the largest class of "Quip just stops working" reports — the connection looks alive, the app has no signal that it isn't, the user has no signal that it isn't, and the only recovery path is force-quit-and-relaunch on the iPhone.
+
+**Fix:** implement a bidirectional heartbeat at the WebSocket layer. Both the iPhone and the Mac send a ping frame every ~5 seconds; if either side doesn't receive a pong within ~15 seconds, the connection is considered dead. The detecting side immediately surfaces a visible "disconnected" UI state (red banner on the iPhone, status bar update on the Mac), tears down the dead WebSocket, and enters a reconnect loop with exponential backoff (1s, 2s, 4s, 8s, 16s, cap 30s). On successful reconnect, the iPhone re-requests the current window list to resync.
+
+**Design questions to resolve in brainstorming:**
+- **Built-in WebSocket PING/PONG frames or custom application-layer message?** Built-in is cleaner — `URLSessionWebSocketTask` has `sendPing(pongReceiveHandler:)` natively, no `MessageProtocol.swift` changes required. Custom would let you piggyback diagnostic info (last-known window list version, etc.) but is more code for the same liveness outcome. Default to built-in.
+- **Heartbeat cadence and timeout.** 5s/15s is the defensible default — fast enough to surface disconnects within a single button-press iteration, slow enough not to false-positive on slow Tailscale renegotiations or brief network blips. Worth tuning after seeing real data, but don't go below 3s/9s without measurement (battery + radio cost on the iPhone gets meaningful below that).
+- **Background behavior on iOS.** When QuipiOS is backgrounded, iOS suspends the WebSocket within ~30 seconds regardless of what the app wants. Two options: (a) keep heartbeats running via a `beginBackgroundTask` assertion — responsive but burns the iOS background-execution budget and drains battery; (b) accept that "backgrounded for >30s ≈ disconnect on resume" and just reconnect aggressively on foregrounding — simpler, lower battery, mildly worse UX. Probably (b) for v1.
+- **Visible failure UI.** A red banner on the iPhone with the message "Quip Mac unreachable — reconnecting…" plus a one-time haptic the moment the disconnect first happens. The banner is the entire point of the feature — never let "nothing happens" be a valid state. The Mac side gets a quieter status-bar update since the user isn't usually staring at QuipMac when it dies.
+- **Server-side liveness on QuipMac.** The Mac side's heartbeat detector should also drive cleanup of stale per-client state in `WindowManager` so a re-pairing iPhone gets a clean slate. Probably out of scope for v1 unless multi-iPhone usage lands on the roadmap, but worth noting in the spec.
+
+**Why this is the highest-leverage reliability fix on the entire wishlist:**
+- Surfaces the root cause of the largest single class of "Quip stopped working" bugs — silent connection death — that today only gets noticed when the user happens to look at the phone and realizes their last few taps did nothing.
+- Unlocks safe client-side retry policies (you cannot safely retry a message if you don't know whether the connection is alive — and dedupe-on-the-Mac would be a separate follow-up wishlist item).
+- Makes every other reliability bug on the wishlist easier to triage, because "is the connection alive?" stops being an ambiguous variable in the debugging tree.
+- Cheap to implement: ~50 lines of Swift on each side plus a SwiftUI overlay banner. The expensive part is the manual testing matrix (kill QuipMac, sleep the Mac, drop Tailscale, lock the iPhone screen, background QuipiOS, etc.) — but each of those is a 30-second test once you have the heartbeat in place.
+
+**Related:** #11 (window ID stability — the heartbeat's reconnect handler is the natural trigger point for option (b)'s "iPhone re-validates window list on reconnect" check), #12 (silent failure diagnostics — heartbeats are one half of "make failures visible"; error broadcast on dropped messages is the other half), #27 (idempotent message IDs — the structural follow-up that turns "detect dead connections" into "safely retry on reconnect").
+
+---
+
+### 21. Automated test suite — start with `MessageProtocol.swift` round-trip tests
+
+**Status:** Wishlist — tech debt
+**Context:** Every commit in this repo to date has been "build, install on physical device, manually verify by tapping buttons." That works for solo development but compounds: every new message type added to `Shared/MessageProtocol.swift` is an opportunity to ship the iPhone side without the matching Mac side (or vice versa) and silently drop messages until a feature breaks. Swift's exhaustive-switch checker catches some cases at compile time but not all — a JSON encoding/decoding round-trip mismatch (forgot a `CodingKey`, used non-standard naming) won't fail the build, only fail at runtime.
+
+**Cheapest entry point:** unit tests that round-trip every message struct in `MessageProtocol.swift`. Encode an instance, decode it, assert structural equality. Roughly 30 minutes of work; catches an entire class of "I added a message on one side and forgot the other" bugs forever. Run on every Mac and iPhone build.
+
+**Where to grow from there:**
+- **Handler-level tests** with a fake `KeystrokeInjector` and fake `WindowManager`. Verifies `handleIncomingMessage(...)` dispatches correctly without iTerm or AppleScript or a physical iPhone. Catches every silent failure where a new message type was added to the protocol but the dispatch switch wasn't extended.
+- **iPhone-side ViewModel tests** for `QuipApp.swift::sendAction`. Same shape — fake the WebSocket client, assert the right message type goes out for each `WindowAction`.
+- **Integration tests stay manual.** Anything that touches AppleScript, Accessibility, or a real iPhone is hostile to CI and probably not worth automating until the codebase is much larger.
+
+**Why this is structurally hard despite being the largest gap:** the interesting bugs in this codebase are at process boundaries (Mac ↔ iPhone, Quip ↔ iTerm, Quip ↔ macOS Accessibility), and unit tests of pure functions don't catch them. The pragmatic move is to test what you *can* test cheaply (protocol, handlers, view models) and accept that seam tests stay manual — but get a runbook (#26).
+
+**Related:** #26 (diagnostic capture — same "make manual tests cheap to repeat / cheap to capture" theme).
+
+---
+
+### 22. Startup self-test for required macOS permissions
+
+**Status:** Wishlist — high-priority reliability infrastructure
+**Context:** QuipMac requires three macOS permissions: **Accessibility** (for `KeystrokeInjector`'s System Events keystroke injection), **Automation/AppleScript** (for `tell application "iTerm2"` window control), and **Local Network** (for the WebSocket discovery mechanism). macOS can revoke any of these at any time — after a system update, after a privacy panel reset, after a beta install, after Quip is rebuilt with a new bundle ID — and the app gets *no notification*. From the user's perspective, "everything was working yesterday" suddenly turns into silently dropped commands.
+
+**Fix:** at QuipMac launch (and again after waking from sleep), probe each permission with a cheap dry-run:
+- Accessibility: `AXIsProcessTrustedWithOptions([:])` returns false if not granted.
+- Automation: try a no-op AppleScript like `tell application "iTerm2" to count windows` and catch `errAEEventNotPermitted (-1743)`.
+- Local Network: try a 1-byte UDP send and catch `EPERM` if the entitlement was revoked.
+
+If any probe fails, surface a **red status bar item** with the message "Quip can't reach <permission> — fix in System Settings → Privacy & Security" and a button that opens the relevant pane directly via `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` (and equivalents).
+
+**Why this is high-leverage:** the failure mode it eliminates is the most demoralizing class of Quip bug — "it was working, now it isn't, no error, no log, no signal" — because the failure isn't in Quip's code at all, it's in OS-level permissions Quip depends on. Every other reliability fix on the wishlist assumes permissions are intact. Currently nothing checks.
+
+**Related:** #12 (silent failure diagnostics — same "make failures visible" theme), #20 (WebSocket heartbeat — both detect external-state failures Quip itself can't fix, and both surface them visibly).
+
+---
+
+### 23. Race conditions in the just-shipped duplicate/close feature
+
+**Status:** Wishlist — surfaced from review of recently-merged code
+**Context:** The duplicate/close feature shipped in commits `44033ee → e37a9e9 → 564af08 → d9de9a6 → 75c2b95` (Tasks 1–5 of the iPhone tab management plan). The `KeystrokeInjector.spawnWindow` and `closeWindow` paths involve several async steps: AppleScript to iTerm, polling for the new window's CGWindowID, registering the window in `WindowManager`, broadcasting the new window list to the iPhone. Several plausible race conditions exist:
+
+- **Spawn-then-immediately-close.** User taps Duplicate, then before the spawn AppleScript has finished running `claude` in the new window, taps Close on the *original*. The close runs, but `WindowManager` doesn't yet know about the (still-spawning) new window. The new window finishes spawning a moment later and shows up in the next broadcast. Probably benign but worth verifying that no zombie iTerm process is left behind.
+- **Duplicate the same source three times in 2 seconds.** Each spawn races for a CGWindowID on the same iTerm2 process. iTerm2's window enumeration order isn't guaranteed under fast spawns — possible that one of the three new windows is missed entirely until the next refresh, or that two get confusingly similar identities briefly.
+- **Close a window during a `pressReturn` keystroke that's targeting it.** If a quick action and Close fire in the same long-press flow, the keystroke could land in the wrong window because by the time `KeystrokeInjector` looks up the target, it's gone. Currently the lookup should silently no-op, but verify.
+
+**Fix approach:** a stress-test pass with a manual matrix (three rapid duplicates, spawn-then-close, close mid-keystroke) before this code matures past two weeks old. If any of the races show real symptoms, capture them in their own wishlist items.
+
+**Out of scope:** building automated tests for these races — see #21 about why integration tests stay manual.
+
+**Related:** #13 (multi-iTerm2-window keystroke targeting — same "AppleScript window addressing is fragile under concurrency" theme).
+
+---
+
+### 24. Crash recovery for QuipMac via launchd LaunchAgent
+
+**Status:** Wishlist
+**Context:** If QuipMac crashes — and it does occasionally, per the ten-gigabyte memory leak fixed in commit `6599f02` — the iPhone has no recovery path. The user has to notice the phone has gone silent, walk to the Mac, manually relaunch Quip, and re-pair. There's no auto-restart.
+
+**Fix:** ship a `~/Library/LaunchAgents/com.quip.QuipMac.plist` LaunchAgent with `KeepAlive=true` and `RunAtLoad=true`. macOS launchd will restart QuipMac within seconds of any crash, and it'll start automatically at login. The plist can be installed by Quip itself on first run (with a one-time user permission dialog) so it doesn't require manual setup.
+
+**Design questions to resolve in brainstorming:**
+- **Crash-loop guard.** If QuipMac is crashing immediately on launch (corrupted state, broken update, etc.), `KeepAlive=true` will respawn it forever and burn CPU. Use `KeepAlive={"SuccessfulExit":false,"Crashed":true}` plus `ThrottleInterval=30` so a crash-looping process gets a 30-second cooldown between attempts.
+- **Opt-in vs default.** Some users won't want a background process auto-launched on every login. Make this an opt-in toggle in Settings ("Restart Quip if it crashes"), default off.
+- **Signal-aware shutdown.** If the user explicitly quits QuipMac via Cmd+Q, launchd shouldn't restart it. The LaunchAgent's `KeepAlive` setting can distinguish clean exits from crashes via the `SuccessfulExit:false` discriminator.
+
+**Related:** #20 (WebSocket heartbeat — together they form "if the Mac dies, the phone notices within 15s and the Mac restarts within 30s, total recovery time well under a minute without user intervention").
+
+---
+
+### 25. iTerm2-version smoke test against AppleScript verbs Quip depends on
+
+**Status:** Wishlist — fragility check
+**Context:** Most of QuipMac's interop with iTerm2 is via AppleScript verbs (`tell application "iTerm2"`, `current session`, `write text`, window IDs, session unique IDs). Any iTerm2 update can rename a verb, change a return type, shift session ID semantics, or remove a property — and Quip's calls will start failing silently. This is exactly the failure mode that bit commit `4006db4`'s window-by-CGWindowID matching attempt: iTerm2's `id of window` returns iTerm2's own internal integer, not a CGWindowID, and the assumption was wrong from the start.
+
+**Fix:** ship a smoke-test target (separate Xcode scheme, runs in seconds) that exercises every AppleScript verb Quip depends on against the currently-installed iTerm2 and asserts the return shapes:
+- `count windows of application "iTerm2"` returns an integer
+- `get id of first window of application "iTerm2"` returns an integer (not a string, not a record)
+- `get name of current session of first window of application "iTerm2"` returns a string
+- `get unique id of current session of first window of application "iTerm2"` returns a string-formatted UUID
+- ...and so on for every verb in `KeystrokeInjector.spawnWindow`, `closeWindow`, the keystroke path, and the window enumeration path.
+
+Run this smoke test before every release of QuipMac, and (eventually) gate releases on it passing. The cost is one Xcode scheme and ~50 lines of test harness; the benefit is that every iTerm2 update gets caught in seconds instead of weeks of silent breakage.
+
+**Why this matters more than it sounds:** iTerm2 is updated frequently (multiple beta releases per month), and the verbs QuipMac relies on aren't part of any "stable AppleScript API contract" — they're whatever the iTerm2 author shipped this version. The codebase has already lost time to one verb-shape mismatch (`4006db4`). A 50-line smoke test would have caught that in seconds.
+
+**Related:** #13 (multi-iTerm2-window keystroke targeting — same brittleness root cause; the smoke test would catch the kind of shape mismatch that broke `4006db4`).
+
+---
+
+### 26. Diagnostic-capture ("share state") gesture on the iPhone
+
+**Status:** Wishlist — observability infrastructure
+**Context:** Today, when something doesn't work in Quip, the user notices on the phone but the relevant logs and state are on the Mac. By the time the user walks to the Mac, opens Console.app, filters by `process:Quip`, and finds the moment the failure happened, the state has often already changed. There's no way to capture "what Quip looked like at the moment the bug happened" as a single artifact.
+
+**Fix:** add a **diagnostic-capture gesture** to the iPhone (probably three-finger long-press on the window list, or a hidden tap sequence in the Settings drawer) that snapshots:
+- Last 200 lines of the iPhone's local log buffer
+- Current WebSocket connection state (alive / dead / reconnecting, last successful message time)
+- Current view of the Mac's window list (as the iPhone last saw it)
+- Selected window ID
+- Permission status the iPhone thinks the Mac has (from the last connection handshake)
+- Quip iOS version, Mac version
+- Timestamp
+
+Bundle into a single JSON blob, save to `Documents/diagnostics/`, present a share sheet to AirDrop the file to the Mac. Optionally also fire a `RequestMacDiagnosticMessage` over the WebSocket so the Mac dumps its own state into the same bundle.
+
+**Why this is force-multiplier infrastructure:** turns every bug report from "it didn't work" into "it didn't work and here's exactly what the system looked like." Direct enabler for #12 (silent failure diagnostics — the user can capture the moment of failure even when no error message was shown). Also unlocks the "send me a Quip diagnostic dump" loop with the repo owner during cross-machine debugging.
+
+**Related:** #12 (silent failure diagnostics — this is the user-facing capture half; #12's recommendations are the developer-facing observability half), #21 (automated tests — diagnostic captures from real bug reports become test fixtures).
+
+---
+
+### 27. Idempotent message IDs + Mac-side dedupe table for safe retries
+
+**Status:** Wishlist
+**Depends on:** #20 (WebSocket heartbeat / dead-peer detection)
+**Context:** Today, every message the iPhone sends to the Mac is fire-and-forget. There's no message ID, no acknowledgement, no dedupe. If the user double-taps a button (or if a network blip causes the iPhone to retry a send), the Mac will execute the action twice — duplicate spawns two iTerm windows, close fires two close commands, quick actions fire keystrokes twice. Today this is hidden because the iPhone never *intentionally* retries, but as soon as #20 (heartbeats) lands and retry-on-reconnect becomes possible, this becomes a real bug.
+
+**Fix:** introduce a `messageId: UUID` field on every iPhone-originated message in `MessageProtocol.swift`. The Mac maintains a **dedupe table** of the last 100 message IDs (TTL 30 seconds). When a message arrives:
+- New ID → process the message, add to table.
+- Duplicate ID → ack with the original result, do nothing.
+
+The table is in-memory only (lost on QuipMac restart, which is fine — by then the iPhone's retry window has long since passed).
+
+**Design questions to resolve in brainstorming:**
+- **Ack-required vs ack-optional.** Strict: every Mac-side handler returns an `AckMessage(messageId, result)` and the iPhone matches retries against pending messages it hasn't acked yet — the most correct version, unlocks at-least-once retry semantics. Lighter: just ID + dedupe, no ack — works for "user double-tapped" but doesn't unlock automatic retry-on-reconnect.
+- **Table size and TTL.** 100 messages / 30 seconds is enough to cover any plausible "network blip caused a retry" window without bloating memory.
+- **Backwards compatibility.** Old iPhone clients that don't send `messageId` should still work — treat missing-ID messages as "always process, never dedupe."
+
+**Why this is required for #20 to be safely useful:** as soon as the iPhone has a heartbeat-driven reconnect loop, the natural next step is "if a send fails because the connection just died, queue it and retry on reconnect." But you can't safely retry a `duplicate_window` without the dedupe table — the message might have actually reached the Mac before the connection died, and the retry would create a second window. So #27 is the structural prerequisite that turns #20 from "detect dead connections" into "actually recover gracefully from them."
+
+**Related:** #20 (WebSocket heartbeat — strict prerequisite; #27 has no value without #20).
 
 ---
 
