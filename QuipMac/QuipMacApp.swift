@@ -390,7 +390,10 @@ struct QuipMacApp: App {
 
     @MainActor
     private func handleIncomingMessage(_ data: Data) {
-        guard let type = MessageCoder.messageType(from: data) else { return }
+        guard let type = MessageCoder.messageType(from: data) else {
+            print("[Quip] handleIncomingMessage: unparseable message, size=\(data.count)")
+            return
+        }
 
         switch type {
         case "select_window":
@@ -408,17 +411,29 @@ struct QuipMacApp: App {
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    // Skip the scheduling hop entirely for iTerm2 since sendText's
+                    // iTerm2 branch selects the target window by id inside its
+                    // AppleScript. Terminal.app still gets a tiny delay for the
+                    // AX raise from focusWindow to propagate.
+                    let injectionDelay: TimeInterval = (termApp == .iterm2) ? 0 : 0.05
+                    DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
                         self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
                     }
+                } else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] send_text DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
                 }
             }
         case "quick_action":
             if let msg = MessageCoder.decode(QuickActionMessage.self, from: data) {
                 AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
+                print("[Quip] quick_action: action=\(msg.action) windowId=\(msg.windowId)")
                 thinkingWindows.insert(msg.windowId)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     handleQuickAction(msg.action, for: window)
+                } else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] quick_action DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
                 }
             }
         case "stt_started":
@@ -496,48 +511,60 @@ struct QuipMacApp: App {
     private func handleQuickAction(_ action: String, for window: ManagedWindow) {
         let termApp = terminalAppForWindow(window)
         let wid = window.id
+        let wn = window.windowNumber
+        let wname = window.name
         // Focus the target window first so keystrokes land in the right place
         if action != "toggle_enabled" {
             windowManager.focusWindow(wid)
         }
+        // iTerm2 paths get zero scheduled delay — the new keystroke AppleScript
+        // selects the target window by id inside the script itself, so there's
+        // no focus race to wait out. Terminal.app still needs a short delay for
+        // windowManager.focusWindow's AX raise to propagate before the keystroke
+        // fires. Cuts ~200ms off every button tap on iTerm2.
+        let injectionDelay: TimeInterval = (termApp == .iterm2) ? 0 : 0.1
         switch action {
         case "press_return":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("return", to: wid, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("return", to: wid, terminalApp: termApp, cgWindowNumber: wn)
             }
         case "press_ctrl_c":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn)
             }
         case "press_ctrl_d":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp, cgWindowNumber: wn)
             }
         case "press_escape":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp, cgWindowNumber: wn)
             }
         case "press_tab":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            }
+        case "press_backspace":
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn)
             }
         case "press_y":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
             }
         case "press_n":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
             }
         case "clear_terminal":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
             }
         case "restart_claude":
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp)
+                    keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
                 }
             }
         case "toggle_enabled": windowManager.toggleWindow(window.id, enabled: !window.isEnabled)

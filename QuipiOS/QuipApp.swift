@@ -832,6 +832,44 @@ struct MainiOSView: View {
                 }
                 .disabled(selectedWindowId == nil)
             }
+
+            // Secondary command-shortcut row — compact monospaced buttons
+            // styled like the keyButton helper used in the output overlay.
+            // Lives under the main shortcut row.
+            HStack(spacing: 5) {
+                Button {
+                    if let wid = selectedWindowId {
+                        client.send(SendTextMessage(windowId: wid, text: "/plan ", pressReturn: false))
+                    }
+                } label: {
+                    Text("/plan")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .disabled(selectedWindowId == nil)
+
+                Button {
+                    if let wid = selectedWindowId {
+                        client.send(QuickActionMessage(windowId: wid, action: "press_backspace"))
+                    }
+                } label: {
+                    Image(systemName: "delete.left")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .disabled(selectedWindowId == nil)
+
+                Spacer()
+            }
+            .padding(.horizontal, 8)
         }
         .padding(.vertical, 8)
     }
@@ -851,16 +889,19 @@ struct MainiOSView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            if let sel = windows.first(where: { $0.id == selectedWindowId }) {
-                Circle().fill(Color(hex: sel.color)).frame(width: 6, height: 6)
-                Text(" \(sel.app)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(colors.textPrimary.opacity(0.9))
-                Text(" \(sel.name)")
-                    .font(.system(size: 9))
-                    .foregroundStyle(colors.textSecondary)
-            }
             Spacer()
+            // Version marker — only shown on tagged dev builds whose version
+            // string contains a hyphen (e.g. "1.0-eb-branch"). Clean release
+            // versions from main like "1.0" don't show the footer, keeping
+            // production chrome uncluttered. When eb-branch merges back into
+            // main and the version drops to "1.0", the footer auto-hides.
+            if let rawVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+               rawVersion.contains("-") {
+                Text("v\(rawVersion)")
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundStyle(colors.textTertiary)
+                    .padding(.trailing, 8)
+            }
             if client.isAuthenticated {
                 Button {
                     if speech.isSpeaking {

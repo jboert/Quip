@@ -20,21 +20,25 @@ targets:
           - "project.yml"
           - "*.xcodeproj/**"
           - "Tests/**"
+          - "Signing.xcconfig"
+          - "Signing.local.xcconfig"
       - path: ../Shared
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.citrine505.salmon5945
         PRODUCT_NAME: Quip
         INFOPLIST_FILE: Info.plist
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: "L35T4H6XMC"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: Quip
+        CFBundleShortVersionString: 1.0-eb-branch
         UILaunchScreen:
           UIColorName: ""
         NSSpeechRecognitionUsageDescription: Quip uses speech recognition to transcribe your voice commands for Claude Code.
@@ -53,7 +57,12 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
+          # NSAllowsLocalNetworking intentionally NOT set — when it's true
+          # alongside NSAllowsArbitraryLoads, iOS interprets it as "only local
+          # networking is allowed," which blocks Tailscale addresses (they look
+          # like the public internet to iOS). Commit f7bb347 originally removed
+          # this flag from Info.plist directly but forgot to update project.yml,
+          # so every xcodegen regeneration silently re-added it.
           NSAllowsArbitraryLoads: true
   QuipiOSTests:
     type: bundle.unit-test
