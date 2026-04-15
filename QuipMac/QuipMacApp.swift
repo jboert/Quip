@@ -411,12 +411,13 @@ struct QuipMacApp: App {
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    // Skip the scheduling hop entirely for iTerm2 since sendText's
-                    // iTerm2 branch selects the target window by id inside its
-                    // AppleScript. Terminal.app still gets a tiny delay for the
-                    // AX raise from focusWindow to propagate.
-                    let injectionDelay: TimeInterval = (termApp == .iterm2) ? 0 : 0.05
-                    DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                    // 80ms lets windowManager.focusWindow's AX raise propagate
+                    // before sendText's AppleScript talks to iTerm2/Terminal.app.
+                    // Earlier attempt zeroed this for iTerm2 based on an
+                    // AppleScript-side window picker that got reverted (465d5b5);
+                    // without the delay, keystrokes race the focus and Return
+                    // misses the intended window.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                         self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
                     }
                 } else {
@@ -517,16 +518,22 @@ struct QuipMacApp: App {
         if action != "toggle_enabled" {
             windowManager.focusWindow(wid)
         }
-        // iTerm2 paths get zero scheduled delay — the new keystroke AppleScript
-        // selects the target window by id inside the script itself, so there's
-        // no focus race to wait out. Terminal.app still needs a short delay for
-        // windowManager.focusWindow's AX raise to propagate before the keystroke
-        // fires. Cuts ~200ms off every button tap on iTerm2.
-        let injectionDelay: TimeInterval = (termApp == .iterm2) ? 0 : 0.1
+        // 200ms lets windowManager.focusWindow's AX raise propagate before the
+        // keystroke AppleScript fires. An earlier attempt zeroed this for iTerm2
+        // on the assumption a new AppleScript-side window picker would pin the
+        // target window, but that picker got reverted (465d5b5) and never worked
+        // because iTerm2's `id of window` isn't the CGWindowID. Without this
+        // delay, Return and other shortcut keystrokes race the AX raise and
+        // either land in the wrong iTerm2 window or get dropped entirely.
+        let injectionDelay: TimeInterval = 0.2
         switch action {
         case "press_return":
+            // Use sendText's direct iTerm2/Terminal AppleScript path (empty text
+            // + newline) rather than System Events keystroke. Volume-PTT uses the
+            // same path reliably; the System Events path races the AX raise and
+            // drops Return on iTerm2 when multiple windows are open.
             DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendKeystroke("return", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+                keystrokeInjector.sendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
             }
         case "press_ctrl_c":
             DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
