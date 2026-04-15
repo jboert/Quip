@@ -87,32 +87,22 @@ Known risk: without mode detection, blind Shift+Tab presses can land in the wron
 
 ### 8. Number shortcut buttons (1 / 2 / 3) for multiple-choice answers
 
-**Status:** Wishlist
-**Context:** Claude Code occasionally asks multiple-choice questions with two or three lettered/numbered options. Quip already has `press_y` and `press_n` quick actions (see `QuipMac/QuipMacApp.swift` `handleQuickAction` cases around lines 524–531) that iPhone buttons fire to answer yes/no prompts. User wants three additional buttons — `1`, `2`, and `3` — to answer three-option prompts the same way. Each button would:
-- Send a `QuickActionMessage(action: "press_1")` (etc.) from the iPhone.
-- The Mac's `handleQuickAction` would add three new cases that call `keystrokeInjector.sendText("1", to: wid, pressReturn: true, ...)` / `"2"` / `"3"`.
-- On the iPhone, three new buttons in the shortcut area — either in `portraitControls` as a dedicated row, or tucked into the existing long-press context menu on window cards (which is where Y/N currently live per `WindowRectangle.swift:109–150`).
+**Status:** ✅ Done (upstream) — shipped by jboert in commit `4e774e6` as part of the settings drawer and configurable quick-buttons picker. The buttons now live in the second shortcut row, toggled on/off via a gear-icon drawer.
 
-UX placement is TBD — needs a brainstorming pass to decide whether these go in the main control row (always visible but consumes space) or a sub-panel (hidden but one extra tap to reach).
+**Original context** (kept for historical reference):
+Claude Code occasionally asks multiple-choice questions with two or three lettered/numbered options. Quip already has `press_y` and `press_n` quick actions that iPhone buttons fire to answer yes/no prompts. User wanted three additional buttons — `1`, `2`, and `3` — to answer three-option prompts the same way.
 
-Dependencies: whichever window-targeting bug fix lands first — because these will use the same injection path as the Return button and should benefit from the fix automatically.
+Resolved. Keep this entry to remember the original request and to make it findable when auditing "what did the settings drawer add."
 
 ---
 
 ### 9. Window list organized/filtered by application, iTerm2 at the top by default
 
-**Status:** Wishlist
-**Context:** The iPhone currently shows a flat list of all detected terminal windows in whatever order `WindowManager` delivers them. User wants the window list to be:
-- **Grouped by application** — all iTerm2 windows together, all Terminal.app windows together, etc. Probably as section headers in the SwiftUI list.
-- **Filterable** — ability to hide windows from apps the user doesn't care about, or show only one app at a time. Could be a segmented picker at the top of the list, or a context-menu toggle per app.
-- **Defaulted to iTerm2 at the top** — since iTerm2 is the user's primary terminal, its section should appear first without them having to change anything. Other terminal apps appear below in whatever order makes sense.
+**Status:** ✅ Partially done (upstream) — shipped by jboert in commit `23f1032`. Terminal windows are now automatically herded to the top of the Mac's window list and on the phone so Claude sessions aren't buried under browser windows. The folder name is now in bold colored text on both the phone tiles and the Mac sidebar, with the terminal app name tucked underneath.
 
-Implementation touches:
-- `QuipiOS/QuipApp.swift` — window list rendering, add sectioning / filtering UI.
-- Possibly `QuipMac/Services/WindowManager.swift` — if the Mac should send pre-sorted or pre-grouped windows rather than having the iPhone sort them client-side. Client-side is probably simpler (keeps the protocol flat).
-- Decide whether the sort order is configurable in Settings or hardcoded to "iTerm2 first." Start hardcoded for v1; add a setting later if other users complain.
+**Still wishlist:** Explicit grouping by application (section headers on the phone) and per-app filtering (hide apps you don't care about). Those are UX refinements on top of the prioritization work that jboert already did.
 
-No dependencies. Can be built any time after the current round of shortcut-button bug fixes lands.
+**Related:** #16 (alternative window list arrangements) — grouping + filtering + layout are all "how the list is rendered" concerns and should be designed together in a future pass.
 
 ---
 
