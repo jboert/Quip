@@ -121,6 +121,12 @@ final class TailscaleService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cli)
         process.arguments = ["status", "--json"]
+        // The Tailscale.app binary only enters CLI mode when it detects a terminal-ish env.
+        // LaunchServices-spawned apps don't inherit TERM, so without this it tries to
+        // relaunch as a GUI and prints a non-JSON error — parse fails downstream.
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "dumb"
+        process.environment = env
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
