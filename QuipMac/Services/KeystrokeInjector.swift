@@ -90,53 +90,64 @@ final class KeystrokeInjector {
 
     // MARK: - Send Keystroke
 
-    /// Send a special keystroke (e.g., Ctrl+C, Return) to a terminal window.
+    /// Send a special keystroke (e.g., Ctrl+C, Return) to a specific terminal window.
     /// - Parameters:
     ///   - key: Key descriptor: "return", "ctrl+c", "ctrl+d", "escape", "tab"
-    ///   - windowId: Quip window identifier
+    ///   - windowId: Quip window identifier (used for logging)
     ///   - terminalApp: Which terminal emulator to target
-    ///   - windowIndex: 1-based window index (default: 1)
+    ///   - cgWindowNumber: The CGWindowID of the target window. For iTerm2, this is
+    ///     used to explicitly select the matching window before injecting the
+    ///     keystroke, preventing the keystroke from landing in the wrong window
+    ///     when multiple iTerm2 windows are open. Pass 0 to fall back to
+    ///     frontmost-window behavior.
+    ///   - windowIndex: 1-based window index (legacy fallback, default: 1)
     /// - Returns: Result indicating success or failure
     @discardableResult
-    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, windowIndex: Int = 1) -> InjectionResult {
+    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1) -> InjectionResult {
         let script: String
 
         switch key.lowercased() {
         case "return", "enter":
             script = keystrokeScript(
                 key: "return", using: "",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "ctrl+c":
             script = keystrokeScript(
                 key: "c", using: "control down",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "ctrl+d":
             script = keystrokeScript(
                 key: "d", using: "control down",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "escape", "esc":
             script = keystrokeScript(
                 key: "escape", using: "",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         case "tab":
             script = keystrokeScript(
                 key: "tab", using: "",
-                terminalApp: terminalApp, windowIndex: windowIndex
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
+            )
+
+        case "backspace", "delete":
+            script = keystrokeScript(
+                key: "delete", using: "",
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
         default:
             return InjectionResult(success: false, error: "Unknown key: \(key)")
         }
 
-        return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId)")
+        return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
     }
 
     // MARK: - Spawn Terminal
@@ -237,10 +248,23 @@ final class KeystrokeInjector {
 
     // MARK: - Helpers
 
-    /// Build a System Events keystroke AppleScript targeting the correct terminal
-    private func keystrokeScript(key: String, using modifiers: String, terminalApp: TerminalApp, windowIndex: Int) -> String {
+    /// Build a System Events keystroke AppleScript targeting the correct terminal window.
+    ///
+    /// For iTerm2 with a non-zero `cgWindowNumber`, emits a `repeat with w in windows`
+    /// loop that selects the window whose id matches the CGWindowID before sending
+    /// the System Events keystroke. This mirrors the same window-targeting pattern
+    /// `sendText` already uses for iTerm2 (see the `.iterm2` branch of `sendText`)
+    /// and prevents keystrokes from landing in the wrong iTerm2 window when
+    /// multiple are open.
+    ///
+    /// For Terminal.app, or for iTerm2 with `cgWindowNumber == 0`, falls back to
+    /// bare `activate` on the app, which targets whichever window is currently
+    /// frontmost within that process. Terminal.app window targeting is tracked
+    /// as a separate wishlist item because Terminal.app's AppleScript window
+    /// model doesn't expose CGWindowID directly.
+    private func keystrokeScript(key: String, using modifiers: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID, windowIndex: Int) -> String {
         let appName = terminalApp.rawValue
-        let isSpecialKey = ["return", "escape", "tab"].contains(key.lowercased())
+        let isSpecialKey = ["return", "escape", "tab", "delete"].contains(key.lowercased())
 
         let keystrokeCmd: String
         if isSpecialKey {
@@ -257,6 +281,21 @@ final class KeystrokeInjector {
             }
         }
 
+        // NOTE on window targeting: an earlier version of this function tried
+        // to iterate iTerm2's windows and `select` one whose `id` matched the
+        // CGWindowID, so the keystroke would land in a specific window even
+        // when multiple iTerm2 windows were open. That DIDN'T WORK — iTerm2's
+        // AppleScript `id of window` returns iTerm2's internal window
+        // identifier, NOT a CGWindowID, so the repeat loop silently never
+        // matched. Combined with a removed `delay 0.1`, keystrokes were
+        // firing before iTerm2 was even frontmost.
+        //
+        // For now, we rely on `windowManager.focusWindow(windowId)` (called
+        // from the caller) to AX-raise the target window, and `delay 0.1`
+        // here to give that raise time to propagate. Multi-iTerm2-window
+        // targeting is a wishlist item — it needs a different identifier
+        // like iTerm2 session unique id, or a lower-level AX-based keystroke
+        // injection that bypasses System Events entirely.
         return """
         tell application "\(appName)" to activate
         delay 0.1
