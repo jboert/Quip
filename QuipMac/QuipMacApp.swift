@@ -384,7 +384,8 @@ struct QuipMacApp: App {
                 isThinking: thinkingWindows.contains(window.id)
             )
         }
-        let update = LayoutUpdate(monitor: display?.name ?? "Display 1", windows: states)
+        let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
+        let update = LayoutUpdate(monitor: display?.name ?? "Display 1", screenAspect: aspect, windows: states)
         webSocketServer.broadcast(update)
     }
 

@@ -29,8 +29,18 @@ final class WebSocketServer {
         var isAuthenticated: Bool = false
         var messageCount: Int = 0
         var windowStart: Date = Date()
+        /// Bytes currently in flight (queued for send, completion not yet fired).
+        /// When this exceeds `maxPendingBytes`, we stop queueing broadcasts to this
+        /// client so a dead/slow socket can't balloon the NWConnection send buffer
+        /// into GB-scale memory while TCP keepalive waits to reap it.
+        var pendingBytes: Int = 0
 
         static let maxMessagesPerSecond = 10
+        /// Drop broadcasts once a single client has this much buffered. Chosen to
+        /// be a couple of TTS audio chunks (~500KB each) worth — enough headroom
+        /// for normal bursty traffic, small enough to bound the leak if a phone
+        /// silently goes dark.
+        static let maxPendingBytes = 2_000_000
 
         /// Returns true if the message should be allowed, false if rate-limited.
         mutating func allowMessage() -> Bool {
@@ -218,20 +228,30 @@ final class WebSocketServer {
         }
 
         // Send to authenticated direct WebSocket clients
-        let authenticatedClients = clients.filter(\.isAuthenticated)
-        if !authenticatedClients.isEmpty {
-            let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-            let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
-
-            for client in authenticatedClients {
-                client.connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ [weak self] error in
-                    if error != nil {
-                        DispatchQueue.main.async {
-                            self?.removeConnection(client.connection)
-                        }
-                    }
-                }))
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
+        let payloadSize = data.count
+        for i in clients.indices {
+            guard clients[i].isAuthenticated else { continue }
+            // Backpressure: skip this client if its NWConnection is already sitting
+            // on a large backlog — a phone that backgrounded and hasn't been TCP-
+            // reaped yet must not soak up layout updates, TTS chunks, and screenshots.
+            if clients[i].pendingBytes + payloadSize > ClientConnection.maxPendingBytes {
+                continue
             }
+            clients[i].pendingBytes += payloadSize
+            let conn = clients[i].connection
+            conn.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed({ [weak self] error in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if let idx = self.clients.firstIndex(where: { $0.connection === conn }) {
+                        self.clients[idx].pendingBytes = max(0, self.clients[idx].pendingBytes - payloadSize)
+                    }
+                    if error != nil {
+                        self.removeConnection(conn)
+                    }
+                }
+            }))
         }
 
         // Send to authenticated tunnel clients
@@ -287,6 +307,12 @@ final class WebSocketServer {
     private func removeConnection(_ connection: NWConnection) {
         clients.removeAll(where: { $0.connection === connection })
         connectedClientCount = clients.count
+        // Force the NWConnection to tear down immediately. Without this the
+        // socket's send buffer can sit on queued bytes (layout updates, TTS
+        // chunks) until the kernel notices — which on a dead Wi-Fi link can
+        // take the full TCP keepalive window (~30s). Repeated over a night,
+        // that's how you grow to tens of GB of resident memory.
+        connection.cancel()
         print("[WebSocketServer] Connection removed. \(clients.count) remaining.")
     }
 

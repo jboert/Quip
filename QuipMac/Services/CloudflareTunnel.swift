@@ -265,8 +265,10 @@ final class CloudflareTunnel {
         return Data(hash).base64EncodedString()
     }
 
-    /// Send a WebSocket text frame (opcode 0x81)
-    private nonisolated func sendWSFrame(text: String, on conn: NWConnection) {
+    /// Send a WebSocket text frame (opcode 0x81). `tracked` indicates whether this
+    /// send counts against the per-connection pending-bytes cap (broadcasts are
+    /// tracked; handshake/auth/pong frames are not — they're small and control-path).
+    private nonisolated func sendWSFrame(text: String, on conn: NWConnection, tracked: Bool = false) {
         let payload = Data(text.utf8)
         var frame = Data()
         frame.append(0x81) // FIN + text opcode
@@ -283,10 +285,18 @@ final class CloudflareTunnel {
             }
         }
         frame.append(payload)
+        let frameSize = frame.count
         conn.send(content: frame, completion: .contentProcessed({ [weak self] error in
+            if tracked, let self {
+                self.tunnelPendingLock.lock()
+                if var current = self.tunnelPendingBytes[ObjectIdentifier(conn)] {
+                    current = max(0, current - frameSize)
+                    self.tunnelPendingBytes[ObjectIdentifier(conn)] = current
+                }
+                self.tunnelPendingLock.unlock()
+            }
             if error != nil {
                 self?.cleanupTunnelConnection(conn)
-                conn.cancel()
             }
         }))
     }
@@ -379,12 +389,33 @@ final class CloudflareTunnel {
     private nonisolated func cleanupTunnelConnection(_ conn: NWConnection) {
         tunnelAuthenticated.removeValue(forKey: ObjectIdentifier(conn))
         cachedServer?.unregisterTunnelClient(conn)
+        tunnelPendingLock.lock()
+        tunnelPendingBytes.removeValue(forKey: ObjectIdentifier(conn))
+        tunnelPendingLock.unlock()
+        // Force-tear the connection so its send buffer can't hold queued bytes
+        // until the kernel's TCP keepalive finally reaps the socket.
+        conn.cancel()
     }
 
     /// Whether this tunnel connection has been authenticated.
     /// Accessed only from the proxyQueue so no synchronization needed.
     @ObservationIgnored
     private nonisolated(unsafe) var tunnelAuthenticated: [ObjectIdentifier: Bool] = [:]
+
+    /// Bytes queued-but-not-yet-acked per tunnel connection. Guarded by
+    /// `tunnelPendingLock` because sender callbacks can fire on multiple queues.
+    @ObservationIgnored
+    private nonisolated(unsafe) var tunnelPendingBytes: [ObjectIdentifier: Int] = [:]
+    @ObservationIgnored
+    private let tunnelPendingLock = NSLock()
+
+    /// Drop broadcasts to a tunnel client once it's sitting on this much buffered
+    /// data. Bounds the leak if cloudflared or the phone goes silent without a
+    /// clean close. 2MB ≈ four TTS audio chunks.
+    /// `nonisolated` so the sender closure (which runs on the proxy queue) can
+    /// reference it — the enclosing class is `@MainActor`, which would otherwise
+    /// isolate this constant too.
+    nonisolated private static let maxTunnelPendingBytes = 2_000_000
 
     private nonisolated func handleTunnelMessage(_ data: Data, on conn: NWConnection) {
         let messageType = MessageCoder.messageType(from: data)
@@ -399,11 +430,22 @@ final class CloudflareTunnel {
                     response = AuthResultMessage(success: true, error: nil)
                     self.tunnelAuthenticated[ObjectIdentifier(conn)] = true
                     print("[TunnelProxy] Client authenticated")
-                    // Register for broadcasts immediately — registerTunnelClient is thread-safe
+                    // Register for broadcasts immediately — registerTunnelClient is thread-safe.
+                    // The sender enforces per-connection backpressure: if the NWConnection
+                    // is already sitting on too much un-acked data, drop this broadcast
+                    // rather than let a silently-dead tunnel accumulate GB of TTS/layout frames.
                     self.cachedServer?.registerTunnelClient(conn) { [weak self] (data: Data) in
-                        if let json = String(data: data, encoding: .utf8) {
-                            self?.sendWSFrame(text: json, on: conn)
+                        guard let self, let json = String(data: data, encoding: .utf8) else { return }
+                        let frameSize = data.count + 16 // payload + worst-case WS frame header
+                        self.tunnelPendingLock.lock()
+                        let current = self.tunnelPendingBytes[ObjectIdentifier(conn)] ?? 0
+                        if current + frameSize > Self.maxTunnelPendingBytes {
+                            self.tunnelPendingLock.unlock()
+                            return // drop — connection is backed up
                         }
+                        self.tunnelPendingBytes[ObjectIdentifier(conn)] = current + frameSize
+                        self.tunnelPendingLock.unlock()
+                        self.sendWSFrame(text: json, on: conn, tracked: true)
                     }
                 } else {
                     response = AuthResultMessage(success: false, error: pin.isEmpty ? "Server PIN not configured" : "Incorrect PIN")
