@@ -96,7 +96,7 @@ Claude Code occasionally asks multiple-choice questions with two or three letter
 
 Resolved. Keep this entry to remember the original request and to make it findable when auditing "what did the settings drawer add."
 
-**Related:** #18 (context-aware variant — auto-appear only when Claude shows a numbered prompt).
+**Related:** #18 (context-aware variant — auto-appear only when Claude shows a numbered prompt), #28 (larger / higher-contrast option for these buttons in night mode).
 
 ---
 
@@ -266,7 +266,7 @@ Detection lives in the same terminal-content-parsing pipeline as #7 — once Qui
 - **Lettered prompts (a/b/c).** Out of scope for v1 — separate follow-up if it's worth it.
 - **Interaction with the static buttons from #8.** If the user has already enabled the static 1/2/3 in the settings drawer, do the auto-buttons replace them while a prompt is active, or do they double up? Probably the static buttons stay put and the auto-buttons add a distinct visual treatment (highlighted, larger, animated in) so the user knows "this is the answer to right now."
 
-**Related:** #7 (terminal content parsing — strict prerequisite), #8 (the static 1/2/3 buttons that already exist).
+**Related:** #7 (terminal content parsing — strict prerequisite), #8 (the static 1/2/3 buttons that already exist), #28 (the auto-appearing buttons should pick up the user's size / contrast preference from #28's Settings option, not get re-styled separately).
 
 ---
 
@@ -442,6 +442,32 @@ The table is in-memory only (lost on QuipMac restart, which is fine — by then 
 **Why this is required for #20 to be safely useful:** as soon as the iPhone has a heartbeat-driven reconnect loop, the natural next step is "if a send fails because the connection just died, queue it and retry on reconnect." But you can't safely retry a `duplicate_window` without the dedupe table — the message might have actually reached the Mac before the connection died, and the retry would create a second window. So #27 is the structural prerequisite that turns #20 from "detect dead connections" into "actually recover gracefully from them."
 
 **Related:** #20 (WebSocket heartbeat — strict prerequisite; #27 has no value without #20).
+
+---
+
+### 28. Larger / higher-contrast option for the shortcut row buttons (esp. night mode)
+
+**Status:** Wishlist — accessibility / readability
+**Context:** The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked under #8) are reported to be too small to see comfortably, **particularly in night mode**. The user wants a way to make them larger — but without violating the compact UI rule that the rest of the layout follows by default. The night-mode angle is the most acute: in the dark UI scheme the buttons have lower visual contrast against the background, so even the tap target being correctly sized doesn't help if you can't see where to tap in dim ambient light.
+
+**Two related but distinct fixes worth keeping on the table in brainstorming, because they address different real problems:**
+
+1. **A button size option in Settings.** A toggle or three-way picker (Small / Medium / Large) in the existing Settings drawer (the one from commit `4e774e6`) that resizes the configurable shortcut row buttons. Default stays Small to honor the existing compact UI rule. Users opt in to larger buttons when they need them. This addresses the "I can't tap accurately" version of the problem — fat fingers, bumpy car ride, gloves on, one-handed reach.
+
+2. **Higher contrast button styling in night mode.** The night-mode visibility issue is most likely driven by *contrast* more than *size*. iOS's dark mode tends to use subtle borders and low-saturation backgrounds, which makes small UI elements visually fade into the chrome around them. A higher-contrast button style specific to dark mode (brighter background, thicker border, more luminous glyph) would address the visibility complaint without resizing anything — and respect compact UI as a side effect. This addresses the "I can't see where to tap" version of the problem — low light, aging eyes, blue-light-filter-on, sunglasses.
+
+**Why both belong in the same entry but ship as separate options:** size and contrast solve different accessibility needs and shouldn't be conflated. A user who has trouble seeing in dim light isn't necessarily helped by larger buttons (they still have low contrast, just bigger). A user who needs bigger tap targets isn't necessarily helped by higher contrast (they can see fine, they just need more area to hit). v1 should ship at least the contrast fix (cheapest, fixes the immediate complaint, doesn't disturb layout); the size picker is a follow-up that's more intrusive and needs more design.
+
+**Design questions to resolve in brainstorming:**
+- **Scope.** Does this apply to just the 1/2/3 row, or to the entire shortcut row jboert added in `4e774e6`, or to *every* button in the iPhone UI? The user reported it about the 1/2/3 specifically but the same problem likely applies to other small icon buttons (the chevrons, the keyboard toggle, the gear icon).
+- **Setting placement.** New row in the existing Settings drawer, or a new "Accessibility" tab? Probably a row for v1 — don't introduce a new tab until there are multiple accessibility settings to put in it (Dynamic Type support, VoiceOver labels, reduce-motion, etc., would be the trigger).
+- **Persistence.** `@AppStorage` same as `spawnCommand` from commit `d9de9a6`.
+- **Light vs dark mode interaction.** Does the size picker apply to both modes equally, or should "Large" only auto-engage in dark mode? Auto-adapt is more delightful but more surprising — the user might not understand why their button suddenly got bigger when they walked into a dark room.
+- **Dynamic Type.** iOS has a system-wide font size accessibility slider. Should Quip respect it (so the user configures size in one place — the system Settings — instead of duplicating the control inside Quip)? This is the most iOS-native option but requires the buttons to use scalable text/icon sizes today, which may not be the case. Worth investigating at spec time.
+
+**Compatible with the existing compact UI rule:** the *default* behavior stays tight (small buttons, current layout). This entry adds an opt-in escape valve for users who need larger or higher-contrast buttons — it doesn't override the default. Worth flagging in the spec so future readers don't read this entry as overturning the compact UI preference.
+
+**Related:** #8 (the 1/2/3 buttons in question — same row this would resize / restyle), #18 (context-aware 1/2/3 buttons — if those auto-show during a Claude prompt, they should also pick up the user's size + contrast preference automatically, not get re-styled separately).
 
 ---
 
