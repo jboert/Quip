@@ -93,9 +93,108 @@ struct TTSNotificationOverlay: View {
         )
     }
 
+    /// If text looks like a Claude Code tool-permission prompt, return a
+    /// first-person plain-language announcement matching what TTS will speak.
+    /// Mirrors _describe_tool_permission() in kokoro_tts.py.
+    private func describeToolPermission(_ text: String) -> String? {
+        let low = text.lowercased()
+        let signatures = ["do you want to proceed",
+                          "don't ask again",
+                          "don\u{2019}t ask again",
+                          "tell claude what to do"]
+        guard signatures.contains(where: { low.contains($0) }) else { return nil }
+
+        // Flatten box-drawing characters so tool-call regex can span wrapped lines.
+        let flat = String(String.UnicodeScalarView(text.unicodeScalars.map {
+            ($0.value >= 0x2500 && $0.value <= 0x259F) ? Unicode.Scalar(0x20)! : $0
+        }))
+
+        let pattern = #"\b([A-Z][A-Za-z]+)\(([\s\S]*?)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: flat, range: NSRange(flat.startIndex..., in: flat)),
+              let toolRange = Range(match.range(at: 1), in: flat),
+              let argsRange = Range(match.range(at: 2), in: flat) else {
+            return "I want to use a tool. Approve, deny, or always allow?"
+        }
+
+        let tool = String(flat[toolRange])
+        let argsRaw = String(flat[argsRange])
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+
+        let quoteChars = CharacterSet(charactersIn: "`'\"")
+
+        func stripKw(_ s: String) -> String {
+            let t = s.trimmingCharacters(in: .whitespaces)
+            let p = #"^[a-z_]+\s*[:=]\s*([\s\S]*)$"#
+            guard let re = try? NSRegularExpression(pattern: p),
+                  let m = re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                  let r = Range(m.range(at: 1), in: t) else { return t }
+            return String(t[r]).trimmingCharacters(in: .whitespaces)
+        }
+
+        func basenameOf(_ s: String) -> String {
+            let stripped = stripKw(s).trimmingCharacters(in: quoteChars)
+            if stripped.isEmpty { return "" }
+            return stripped.split(separator: "/").last.map(String.init) ?? stripped
+        }
+
+        let firstArg = argsRaw.split(separator: ",", maxSplits: 1).first.map(String.init) ?? argsRaw
+
+        if tool == "Bash" {
+            let cmd = stripKw(argsRaw).trimmingCharacters(in: quoteChars)
+            let tokens = cmd.split(separator: " ").map(String.init)
+            guard let first0 = tokens.first else {
+                return "I want to run a shell command. Approve, deny, or always allow?"
+            }
+            let first = first0.split(separator: "/").last.map(String.init) ?? first0
+            guard first.range(of: #"^[a-zA-Z][a-zA-Z0-9_.-]*$"#, options: .regularExpression) != nil else {
+                return "I want to run a shell command. Approve, deny, or always allow?"
+            }
+            var second: String? = nil
+            if tokens.count > 1 {
+                let t = tokens[1].trimmingCharacters(in: quoteChars)
+                if t.range(of: #"^[a-z][a-z0-9_-]{0,20}$"#, options: .regularExpression) != nil {
+                    second = t
+                }
+            }
+            if let s = second {
+                return "I want to run \(first) \(s). Approve, deny, or always allow?"
+            }
+            return "I want to run a \(first) command. Approve, deny, or always allow?"
+        }
+        if tool == "Edit" || tool == "MultiEdit" {
+            let f = basenameOf(firstArg)
+            return f.isEmpty ? "I want to edit a file. Approve, deny, or always allow?"
+                             : "I want to edit \(f). Approve, deny, or always allow?"
+        }
+        if tool == "Write" {
+            let f = basenameOf(firstArg)
+            return f.isEmpty ? "I want to write a file. Approve, deny, or always allow?"
+                             : "I want to write to \(f). Approve, deny, or always allow?"
+        }
+        if tool == "Read" {
+            let f = basenameOf(firstArg)
+            return f.isEmpty ? "I want to read a file. Approve, deny, or always allow?"
+                             : "I want to read \(f). Approve, deny, or always allow?"
+        }
+        if tool == "Glob" { return "I want to find files by pattern. Approve, deny, or always allow?" }
+        if tool == "Grep" { return "I want to search through code. Approve, deny, or always allow?" }
+        if tool == "WebFetch" { return "I want to fetch a web page. Approve, deny, or always allow?" }
+        if tool == "WebSearch" { return "I want to search the web. Approve, deny, or always allow?" }
+
+        var spoken = ""
+        for (i, c) in tool.enumerated() {
+            if i > 0 && c.isUppercase { spoken.append(" ") }
+            spoken.append(contentsOf: c.lowercased())
+        }
+        return "I want to use the \(spoken) tool. Approve, deny, or always allow?"
+    }
+
     /// Strip terminal UI chrome to show clean prose matching TTS output.
     /// Mirrors the Python filter_text() logic in kokoro_tts.py.
     private func cleanForDisplay(_ text: String) -> String {
+        if let perm = describeToolPermission(text) { return perm }
         let decorSymbols = CharacterSet(charactersIn: "⏺●✻✳✢✔✓✗⚡⚠◆◇◈◉○◎◐◑◒◓⏵⏴▶◀►◄▲▼▸▹▾▿⟦⟧⌁⌂⌃⌄⌇✦✧✩✪✫✶✴✷✸✹✺✻★☆")
         let dropSymbols = CharacterSet(charactersIn: "⎿⊢⊣⊤⊥")
         let toolVerbs: Set<String> = ["searched", "read", "edited", "wrote", "created", "deleted",

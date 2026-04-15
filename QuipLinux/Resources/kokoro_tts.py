@@ -43,11 +43,98 @@ DEFAULT_LANG = "en-us"
 DEFAULT_SPEED = 0.95
 
 
+_PERMISSION_SIGNATURES = (
+    "do you want to proceed",
+    "don't ask again",
+    "don\u2019t ask again",
+    "tell claude what to do",
+)
+
+
+def _describe_tool_permission(text):
+    """If text looks like a Claude Code tool-permission prompt, return a
+    first-person plain-language announcement suitable for TTS. Else None.
+
+    The prompt box renders the tool call (e.g. "Bash(git status)") plus a
+    numbered options list. We replace the whole thing with one sentence so the
+    user hears what they're approving in natural speech instead of raw syntax.
+    """
+    low = text.lower()
+    if not any(s in low for s in _PERMISSION_SIGNATURES):
+        return None
+
+    # Flatten box-drawing so the tool-call regex can span wrapped lines.
+    flat = re.sub(r"[\u2500-\u259F]+", " ", text)
+    m = re.search(r"\b([A-Z][A-Za-z]+)\((.*?)\)", flat, flags=re.DOTALL)
+    if not m:
+        return "I want to use a tool. Approve, deny, or always allow?"
+
+    tool = m.group(1)
+    args_raw = re.sub(r"\s+", " ", m.group(2)).strip()
+
+    def strip_kw(s: str) -> str:
+        s = s.strip()
+        kw = re.match(r"^([a-z_]+)\s*[:=]\s*(.*)$", s, flags=re.DOTALL)
+        return kw.group(2).strip() if kw else s
+
+    def basename_of(s: str) -> str:
+        s = strip_kw(s).strip("`'\"")
+        return s.rsplit("/", 1)[-1] if s else ""
+
+    first_arg = args_raw.split(",", 1)[0]
+
+    if tool == "Bash":
+        cmd = strip_kw(args_raw).strip("`'\"")
+        tokens = cmd.split()
+        if not tokens:
+            return "I want to run a shell command. Approve, deny, or always allow?"
+        first = tokens[0].rsplit("/", 1)[-1]
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9_.-]*$", first):
+            return "I want to run a shell command. Approve, deny, or always allow?"
+        second = None
+        if len(tokens) > 1:
+            t = tokens[1].strip("`'\"")
+            if re.match(r"^[a-z][a-z0-9_-]{0,20}$", t):
+                second = t
+        if second:
+            return f"I want to run {first} {second}. Approve, deny, or always allow?"
+        return f"I want to run a {first} command. Approve, deny, or always allow?"
+
+    if tool in ("Edit", "MultiEdit"):
+        f = basename_of(first_arg)
+        return (f"I want to edit {f}. Approve, deny, or always allow?"
+                if f else "I want to edit a file. Approve, deny, or always allow?")
+    if tool == "Write":
+        f = basename_of(first_arg)
+        return (f"I want to write to {f}. Approve, deny, or always allow?"
+                if f else "I want to write a file. Approve, deny, or always allow?")
+    if tool == "Read":
+        f = basename_of(first_arg)
+        return (f"I want to read {f}. Approve, deny, or always allow?"
+                if f else "I want to read a file. Approve, deny, or always allow?")
+    if tool == "Glob":
+        return "I want to find files by pattern. Approve, deny, or always allow?"
+    if tool == "Grep":
+        return "I want to search through code. Approve, deny, or always allow?"
+    if tool == "WebFetch":
+        return "I want to fetch a web page. Approve, deny, or always allow?"
+    if tool == "WebSearch":
+        return "I want to search the web. Approve, deny, or always allow?"
+
+    spoken = re.sub(r"([a-z])([A-Z])", r"\1 \2", tool).lower()
+    return f"I want to use the {spoken} tool. Approve, deny, or always allow?"
+
+
 def filter_text(text: str) -> str:
     """Strip Claude Code TUI chrome, code, diffs, prompts, markdown. Keep prose."""
     # ANSI escape codes
     text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
     text = re.sub(r"\x1b\][^\x07]*\x07", "", text)
+
+    # Tool-permission prompts get replaced wholesale with a spoken description.
+    perm = _describe_tool_permission(text)
+    if perm is not None:
+        return perm
 
     # Find Claude's last response: locate the LAST "⏺ <prose>" line that's actual
     # response text (not a tool call or tool summary). Take content from there onward.
