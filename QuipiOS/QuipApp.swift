@@ -889,15 +889,6 @@ struct MainiOSView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            if let sel = windows.first(where: { $0.id == selectedWindowId }) {
-                Circle().fill(Color(hex: sel.color)).frame(width: 6, height: 6)
-                Text(" \(sel.app)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(colors.textPrimary.opacity(0.9))
-                Text(" \(sel.name)")
-                    .font(.system(size: 9))
-                    .foregroundStyle(colors.textSecondary)
-            }
             Spacer()
             // Version marker — only shown on tagged dev builds whose version
             // string contains a hyphen (e.g. "1.0-eb-branch"). Clean release
