@@ -26,10 +26,10 @@ struct ContextMenuView: View {
                     .frame(width: 10, height: 10)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(window.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(colors.textPrimary)
-                    Text(window.app)
+                    Text(window.folder?.isEmpty == false ? window.folder! : window.app)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(accentColor)
+                    Text(window.folder?.isEmpty == false ? window.app : window.name)
                         .font(.caption2)
                         .foregroundStyle(colors.textTertiary)
                 }

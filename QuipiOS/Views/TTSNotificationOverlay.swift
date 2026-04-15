@@ -60,7 +60,7 @@ struct TTSNotificationOverlay: View {
                     Image(systemName: "speaker.wave.2.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(windowColor.opacity(0.9))
-                    Text(window.app)
+                    Text(window.folder?.isEmpty == false ? window.folder! : window.app)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.7))
                     Spacer()

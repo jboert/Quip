@@ -39,12 +39,12 @@ struct LayoutPreview: View {
                             RoundedRectangle(cornerRadius: 8)
                                 .strokeBorder(isTarget ? Color.white : color, lineWidth: isTarget ? 3 : 2)
                             VStack(spacing: 2) {
-                                Text(window.name)
-                                    .font(.caption.weight(.semibold))
+                                Text(window.subtitle.isEmpty ? window.app : window.subtitle)
+                                    .font(.caption.weight(.bold))
                                     .foregroundStyle(color)
                                     .lineLimit(1)
                                 if rect.height > 50 {
-                                    Text(window.subtitle.isEmpty ? window.app : window.subtitle)
+                                    Text(window.subtitle.isEmpty ? window.name : window.app)
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)

@@ -111,7 +111,7 @@ struct QuipApp: App {
                 if let i = windows.firstIndex(where: { $0.id == windowId }) {
                     let w = windows[i]
                     windows[i] = WindowState(
-                        id: w.id, name: w.name, app: w.app, enabled: w.enabled,
+                        id: w.id, name: w.name, app: w.app, folder: w.folder, enabled: w.enabled,
                         frame: w.frame, state: newState, color: w.color,
                         isThinking: w.isThinking
                     )
