@@ -898,13 +898,7 @@ struct MainiOSView: View {
     private var bottomBar: some View {
         HStack(spacing: 0) {
             Spacer()
-            // Version marker — only shown on tagged dev builds whose version
-            // string contains a hyphen (e.g. "1.0-eb-branch"). Clean release
-            // versions from main like "1.0" don't show the footer, keeping
-            // production chrome uncluttered. When eb-branch merges back into
-            // main and the version drops to "1.0", the footer auto-hides.
-            if let rawVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-               rawVersion.contains("-") {
+            if let rawVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
                 Text("v\(rawVersion)")
                     .font(.system(size: 9, weight: .regular, design: .monospaced))
                     .foregroundStyle(colors.textTertiary)
