@@ -92,20 +92,53 @@ final class KeystrokeInjector {
 
     /// Send a special keystroke (e.g., Ctrl+C, Return) to a specific terminal window.
     /// - Parameters:
-    ///   - key: Key descriptor: "return", "ctrl+c", "ctrl+d", "escape", "tab"
+    ///   - key: Key descriptor: "return", "ctrl+c", "ctrl+d", "escape", "tab", "backspace"
     ///   - windowId: Quip window identifier (used for logging)
     ///   - terminalApp: Which terminal emulator to target
-    ///   - cgWindowNumber: The CGWindowID of the target window. For iTerm2, this is
-    ///     used to explicitly select the matching window before injecting the
-    ///     keystroke, preventing the keystroke from landing in the wrong window
-    ///     when multiple iTerm2 windows are open. Pass 0 to fall back to
-    ///     frontmost-window behavior.
+    ///   - cgWindowNumber: The CGWindowID of the target window.
     ///   - windowIndex: 1-based window index (legacy fallback, default: 1)
     /// - Returns: Result indicating success or failure
+    ///
+    /// iTerm2 path: uses iTerm2's native `write text (character id N)` AppleScript
+    /// verb, which addresses a specific session directly and does NOT depend on
+    /// OS-level keyboard focus. This is the same transport `sendText` uses for
+    /// Y/N and other text injection, so it has the same proven reliability.
+    ///
+    /// Terminal.app path: uses System Events keystroke injection (the legacy
+    /// approach), which relies on `windowManager.focusWindow(windowId)` having
+    /// raised the correct window before the AppleScript runs.
     @discardableResult
     func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1) -> InjectionResult {
-        let script: String
+        // iTerm2: use native write-text-with-character-id. Byte-identical to
+        // what typing the key into an iTerm2 session does, reliable because
+        // write text targets a session by object address rather than by
+        // keyboard focus.
+        if terminalApp == .iterm2 {
+            guard let charId = iTerm2CharIdFor(key) else {
+                return InjectionResult(success: false, error: "No iTerm2 char id for key: \(key)")
+            }
+            let script = """
+            tell application "iTerm2"
+                try
+                    repeat with w in windows
+                        if id of w is \(cgWindowNumber) then
+                            tell current session of w
+                                write text (character id \(charId))
+                            end tell
+                            return
+                        end if
+                    end repeat
+                end try
+                tell current session of front window
+                    write text (character id \(charId))
+                end tell
+            end tell
+            """
+            return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, charId=\(charId)]")
+        }
 
+        // Terminal.app: legacy System Events keystroke path.
+        let script: String
         switch key.lowercased() {
         case "return", "enter":
             script = keystrokeScript(
@@ -148,6 +181,21 @@ final class KeystrokeInjector {
         }
 
         return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
+    }
+
+    /// Map a key descriptor to the ASCII/Unicode codepoint that iTerm2's
+    /// `write text (character id N)` will send into a session. Returns nil for
+    /// unknown keys.
+    private func iTerm2CharIdFor(_ key: String) -> Int? {
+        switch key.lowercased() {
+        case "return", "enter":      return 13   // CR
+        case "escape", "esc":        return 27   // ESC
+        case "tab":                  return 9    // HT
+        case "backspace", "delete":  return 127  // DEL
+        case "ctrl+c":               return 3    // ETX / SIGINT
+        case "ctrl+d":               return 4    // EOT / EOF
+        default:                     return nil
+        }
     }
 
     // MARK: - Spawn Terminal
