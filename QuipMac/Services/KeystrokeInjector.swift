@@ -28,7 +28,13 @@ final class KeystrokeInjector {
     @discardableResult
     func sendText(_ text: String, to windowId: String, pressReturn: Bool, terminalApp: TerminalApp, windowName: String? = nil, cgWindowNumber: CGWindowID = 0) -> InjectionResult {
         let escapedText = escapeForAppleScript(text)
-        let textToSend = pressReturn ? escapedText + "\\n" : escapedText
+        let textToSend = escapedText
+
+        // iTerm2's `newline yes` emits LF (0x0A). Claude Code's TUI only fires
+        // submit on CR (0x0D / key code 13) — the key the user's Return button
+        // presses. So when pressReturn is true, we always write the text with
+        // `newline no` and then send a CR via `write text (character id 13)`.
+        let returnSuffix = pressReturn ? "\n                                write text (character id 13)" : ""
 
         let script: String
         switch terminalApp {
@@ -71,7 +77,7 @@ final class KeystrokeInjector {
                     repeat with w in windows
                         if id of w is \(cgWindowNumber) then
                             tell current session of w
-                                write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+                                write text "\(textToSend)" newline no\(returnSuffix)
                             end tell
                             return
                         end if
@@ -79,7 +85,7 @@ final class KeystrokeInjector {
                 end try
                 -- Fallback: use front window (should be focused by AX already)
                 tell current session of front window
-                    write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+                    write text "\(textToSend)" newline no\(returnSuffix)
                 end tell
             end tell
             """
