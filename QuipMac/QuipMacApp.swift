@@ -520,6 +520,49 @@ struct QuipMacApp: App {
                     }
                 }
             }
+
+        case "duplicate_window":
+            if let msg = MessageCoder.decode(DuplicateWindowMessage.self, from: data) {
+                print("[Quip] duplicate_window: sourceWindowId=\(msg.sourceWindowId)")
+                if let source = windowManager.windows.first(where: { $0.id == msg.sourceWindowId }) {
+                    // subtitle is documented as "Directory path or secondary info" in
+                    // WindowManager.swift — so it might be empty, or it might be
+                    // non-path text like "idle". Only treat it as a directory if it
+                    // looks like one. Fall back to $HOME otherwise.
+                    let rawSubtitle = source.subtitle
+                    let looksLikePath = rawSubtitle.hasPrefix("/") || rawSubtitle.hasPrefix("~")
+                    let dir: String
+                    if looksLikePath {
+                        dir = rawSubtitle
+                    } else {
+                        dir = NSHomeDirectory()
+                        if !rawSubtitle.isEmpty {
+                            print("[Quip] duplicate_window: subtitle \"\(rawSubtitle)\" is not a path, falling back to $HOME")
+                        }
+                    }
+                    let termApp = terminalAppForWindow(source)
+                    let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                    keystrokeInjector.spawnWindow(in: dir, command: cmd, terminalApp: termApp)
+                    // WindowManager's auto-refresh (~1 second) picks up the new window.
+                } else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] duplicate_window DROPPED: unknown source windowId=\(msg.sourceWindowId). Known: \(known)")
+                }
+            }
+
+        case "close_window":
+            if let msg = MessageCoder.decode(CloseWindowMessage.self, from: data) {
+                print("[Quip] close_window: windowId=\(msg.windowId)")
+                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
+                    let termApp = terminalAppForWindow(window)
+                    keystrokeInjector.closeWindow(windowName: window.name, terminalApp: termApp)
+                    // WindowManager's auto-refresh removes the closed window from the list.
+                } else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] close_window DROPPED: unknown windowId=\(msg.windowId). Known: \(known)")
+                }
+            }
+
         default:
             break
         }
