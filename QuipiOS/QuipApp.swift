@@ -1182,6 +1182,16 @@ struct MainiOSView: View {
             onRequestContent(windowId)
             return
         }
+        // Duplicate and closeWindow send different message types than
+        // QuickActionMessage, so they're early-return branches.
+        if action == .duplicate {
+            client.send(DuplicateWindowMessage(sourceWindowId: windowId))
+            return
+        }
+        if action == .closeWindow {
+            client.send(CloseWindowMessage(windowId: windowId))
+            return
+        }
         let str: String
         switch action {
         case .pressReturn: str = "press_return"
@@ -1190,6 +1200,8 @@ struct MainiOSView: View {
         case .restartClaude: str = "restart_claude"
         case .toggleEnabled: str = "toggle_enabled"
         case .viewOutput: return // handled above
+        case .duplicate: return  // handled above
+        case .closeWindow: return // handled above
         }
         client.send(QuickActionMessage(windowId: windowId, action: str))
     }
