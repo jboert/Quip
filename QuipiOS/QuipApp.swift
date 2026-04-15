@@ -257,6 +257,9 @@ struct MainiOSView: View {
     @State private var textInputValue = ""
     @State private var showURLWarning = false
     @State private var pendingUnsafeURL: URL?
+    // When true, the window-picker layout card collapses and InlineTerminalContent
+    // expands to fill its space — gives the terminal more vertical room for reading.
+    @State private var isTerminalExpanded = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
@@ -282,12 +285,12 @@ struct MainiOSView: View {
                         .padding(.top, 2)
                 }
 
-                if isPortrait {
+                if isPortrait && !isTerminalExpanded {
                     windowLayout
                         .aspectRatio(CGFloat(screenAspect) / 1.45, contentMode: .fit)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
-                } else {
+                } else if !isPortrait {
                     windowLayout
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
@@ -303,6 +306,7 @@ struct MainiOSView: View {
                         screenshot: terminalContentScreenshot,
                         windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
                         windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
+                        isExpanded: $isTerminalExpanded,
                         onRefresh: {
                             if let wid = selectedWindowId { onRequestContent(wid) }
                         },
@@ -405,6 +409,11 @@ struct MainiOSView: View {
                     onSendAction: { action in
                         if let wid = terminalContentWindowId {
                             client.send(QuickActionMessage(windowId: wid, action: action))
+                        }
+                    },
+                    onSendText: { text in
+                        if let wid = terminalContentWindowId {
+                            client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
                         }
                     }
                 )
@@ -1324,6 +1333,7 @@ struct InlineTerminalContent: View {
     let screenshot: String?
     let windowName: String
     let windowColor: Color
+    @Binding var isExpanded: Bool
     var onRefresh: () -> Void
     var onSendAction: (String) -> Void
     @Environment(\.quipColors) private var colors
@@ -1339,6 +1349,21 @@ struct InlineTerminalContent: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer()
+                // Expand / collapse — hides the window-picker card above to
+                // give the terminal more vertical real estate. Tap again to
+                // bring the picker back. Compact: single icon button, reuses
+                // the same row, reversible state.
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: isExpanded
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
                 Button { onRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13))
@@ -1364,6 +1389,7 @@ struct InlineTerminalContent: View {
                             .foregroundStyle(.white.opacity(0.85))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(8)
+                            .textSelection(.enabled)
                             .id("bottom")
                     } else {
                         Text("Loading…")
