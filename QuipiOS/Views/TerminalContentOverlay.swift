@@ -68,6 +68,7 @@ struct TerminalContentOverlay: View {
                 // Keyboard action buttons
                 HStack(spacing: 6) {
                     keyButton("Return", icon: "return") { onSendAction("press_return") }
+                    keyButton("⌫", icon: "delete.left") { onSendAction("press_backspace") }
                     keyButton("Ctrl+C", icon: "xmark.octagon") { onSendAction("press_ctrl_c") }
                     keyButton("Ctrl+D", icon: "eject") { onSendAction("press_ctrl_d") }
                     keyButton("Esc", icon: "escape") { onSendAction("press_escape") }
