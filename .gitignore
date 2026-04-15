@@ -29,6 +29,6 @@ build/
 .build/
 .swiftpm/
 
-# Ralph
-scripts/ralph/
+# Machine-local / planning scripts — not for the public repo
+scripts/
 tasks/
