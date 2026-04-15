@@ -56,6 +56,7 @@ struct TerminalContentOverlay: View {
                                 .foregroundStyle(.white.opacity(0.85))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(10)
+                                .textSelection(.enabled)
                                 .id("bottom")
                         }
                     }
