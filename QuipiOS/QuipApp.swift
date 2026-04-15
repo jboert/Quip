@@ -244,6 +244,8 @@ struct MainiOSView: View {
     @AppStorage("lastURL") private var urlText: String = ""
     @AppStorage("recentConnectionsData") private var recentConnectionsData: Data = Data()
     @AppStorage("ttsEnabled") private var ttsEnabled = false
+    @AppStorage("enabledQuickButtons") private var enabledQuickButtonsRaw: String = "plan,backspace"
+    @State private var showSettings = false
     @State private var showQRScanner = false
     @State private var recentConnections: [SavedConnection] = []
     @State private var editingConnection: SavedConnection?
@@ -456,6 +458,9 @@ struct MainiOSView: View {
                 doConnect()
             }
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+        }
         .alert("Unrecognized Server", isPresented: $showURLWarning) {
             Button("Connect Anyway", role: .destructive) {
                 if let url = pendingUnsafeURL {
@@ -661,6 +666,14 @@ struct MainiOSView: View {
             }
             Spacer()
             Button {
+                showSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12))
+                    .foregroundStyle(colors.textTertiary)
+            }
+            .padding(.trailing, 6)
+            Button {
                 client.disconnect()
             } label: {
                 Image(systemName: "xmark.circle")
@@ -833,43 +846,17 @@ struct MainiOSView: View {
                 .disabled(selectedWindowId == nil)
             }
 
-            // Secondary command-shortcut row — compact monospaced buttons
-            // styled like the keyButton helper used in the output overlay.
-            // Lives under the main shortcut row.
-            HStack(spacing: 5) {
-                Button {
-                    if let wid = selectedWindowId {
-                        client.send(SendTextMessage(windowId: wid, text: "/plan ", pressReturn: false))
+            // Secondary command-shortcut row — user-configurable via Settings.
+            let enabled = QuickButton.decode(enabledQuickButtonsRaw)
+            if !enabled.isEmpty {
+                HStack(spacing: 5) {
+                    ForEach(enabled) { button in
+                        quickActionButton(button)
                     }
-                } label: {
-                    Text("/plan")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 5)
-                        .background(Color.white.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    Spacer()
                 }
-                .disabled(selectedWindowId == nil)
-
-                Button {
-                    if let wid = selectedWindowId {
-                        client.send(QuickActionMessage(windowId: wid, action: "press_backspace"))
-                    }
-                } label: {
-                    Image(systemName: "delete.left")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 5)
-                        .background(Color.white.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                }
-                .disabled(selectedWindowId == nil)
-
-                Spacer()
+                .padding(.horizontal, 8)
             }
-            .padding(.horizontal, 8)
         }
         .padding(.vertical, 8)
     }
@@ -1194,6 +1181,37 @@ struct MainiOSView: View {
         }
         client.send(QuickActionMessage(windowId: windowId, action: str))
     }
+
+    // MARK: - Configurable Quick Buttons
+
+    @ViewBuilder
+    private func quickActionButton(_ button: QuickButton) -> some View {
+        Button {
+            guard let wid = selectedWindowId else { return }
+            switch button.action {
+            case .sendText(let text, let pressReturn):
+                client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
+            case .quickAction(let action):
+                client.send(QuickActionMessage(windowId: wid, action: action))
+            }
+        } label: {
+            Group {
+                if let symbol = button.systemImage {
+                    Image(systemName: symbol)
+                        .font(.system(size: 11, weight: .medium))
+                } else {
+                    Text(button.label)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                }
+            }
+            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .disabled(selectedWindowId == nil)
+    }
 }
 
 // MARK: - QR Scanner
@@ -1394,5 +1412,112 @@ struct InlineTerminalContent: View {
             .background(Color.white.opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
+    }
+}
+
+// MARK: - Quick Button Config
+
+enum QuickButton: String, CaseIterable, Identifiable {
+    case plan, backspace, clearContext, one, two, three
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .plan: return "/plan"
+        case .backspace: return "Backspace"
+        case .clearContext: return "Clear context (/clear)"
+        case .one: return "1"
+        case .two: return "2"
+        case .three: return "3"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .plan: return "/plan"
+        case .backspace: return ""
+        case .clearContext: return "/clear"
+        case .one: return "1"
+        case .two: return "2"
+        case .three: return "3"
+        }
+    }
+
+    var systemImage: String? {
+        self == .backspace ? "delete.left" : nil
+    }
+
+    enum Action {
+        case sendText(String, pressReturn: Bool)
+        case quickAction(String)
+    }
+
+    var action: Action {
+        switch self {
+        case .plan: return .sendText("/plan ", pressReturn: false)
+        case .backspace: return .quickAction("press_backspace")
+        case .clearContext: return .sendText("/clear", pressReturn: true)
+        case .one: return .sendText("1", pressReturn: true)
+        case .two: return .sendText("2", pressReturn: true)
+        case .three: return .sendText("3", pressReturn: true)
+        }
+    }
+
+    static func decode(_ raw: String) -> [QuickButton] {
+        raw.split(separator: ",").compactMap { QuickButton(rawValue: String($0)) }
+    }
+
+    static func encode(_ buttons: [QuickButton]) -> String {
+        buttons.map(\.rawValue).joined(separator: ",")
+    }
+}
+
+// MARK: - Settings Sheet
+
+struct SettingsSheet: View {
+    @Binding var enabledQuickButtonsRaw: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    ForEach(QuickButton.allCases) { button in
+                        Toggle(button.displayName, isOn: binding(for: button))
+                    }
+                } header: {
+                    Text("Quick Buttons")
+                } footer: {
+                    Text("Shown in the compact row under the main shortcuts. Order matches the list above.")
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func binding(for button: QuickButton) -> Binding<Bool> {
+        Binding(
+            get: { QuickButton.decode(enabledQuickButtonsRaw).contains(button) },
+            set: { isOn in
+                var current = QuickButton.decode(enabledQuickButtonsRaw)
+                if isOn {
+                    if !current.contains(button) {
+                        // Insert in canonical order (matches allCases) so the row
+                        // stays stable regardless of toggle sequence.
+                        current = QuickButton.allCases.filter { current.contains($0) || $0 == button }
+                    }
+                } else {
+                    current.removeAll { $0 == button }
+                }
+                enabledQuickButtonsRaw = QuickButton.encode(current)
+            }
+        )
     }
 }
