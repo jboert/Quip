@@ -234,6 +234,101 @@ final class KeystrokeInjector {
         return executeAppleScript(script, context: "spawnTerminal in \(directory)")
     }
 
+    /// Open a new iTerm2 window (not tab), `cd` to the given directory, and
+    /// run the given command. Like `spawnTerminal(in:terminalApp:)` but with
+    /// a configurable command instead of hardcoded `claude`. Pass an empty
+    /// string as `command` to land in a bare shell with no follow-on command.
+    ///
+    /// Terminal.app is not supported in this method — call `spawnTerminal` for
+    /// that path, or wait for the Terminal.app branch to be added later (see
+    /// wishlist).
+    ///
+    /// - Parameters:
+    ///   - directory: Absolute path to `cd` to in the new window.
+    ///   - command: Shell command to run after `cd`. Empty string means no command.
+    ///   - terminalApp: Must be `.iterm2` — returns an error for `.terminal`.
+    /// - Returns: Result indicating success or failure.
+    @discardableResult
+    func spawnWindow(in directory: String, command: String, terminalApp: TerminalApp) -> InjectionResult {
+        guard terminalApp == .iterm2 else {
+            return InjectionResult(
+                success: false,
+                error: "spawnWindow only supports iTerm2 in v1; use spawnTerminal for Terminal.app"
+            )
+        }
+
+        // Build the shell command: `cd "<dir>"` optionally followed by ` && <command>`.
+        // Escape the directory and command for shell, then the whole composed string
+        // gets escaped again for AppleScript string-literal safety.
+        let shellDir = escapeForShell(directory)
+        let shellCmd = escapeForShell(command)
+        let composed: String
+        if command.isEmpty {
+            composed = "cd \"\(shellDir)\""
+        } else {
+            composed = "cd \"\(shellDir)\" && \(shellCmd)"
+        }
+        let scriptSafeComposed = escapeForAppleScript(composed)
+
+        let script = """
+        tell application "iTerm2"
+            activate
+            create window with default profile
+            tell current session of current window
+                write text "\(scriptSafeComposed)"
+            end tell
+        end tell
+        """
+
+        return executeAppleScript(script, context: "spawnWindow in \(directory), cmd=\(command)")
+    }
+
+    /// Destructively close an iTerm2 window whose title matches `windowName`.
+    /// Iterates iTerm2's window list and closes the FIRST match — if two
+    /// windows share a title, only one is closed (the one iTerm2 returns
+    /// first, implementation-defined order). This limitation is documented
+    /// on the wishlist for a proper AX-handle-based fix.
+    ///
+    /// Terminal.app is not supported in v1 — returns an error.
+    ///
+    /// Note on matching: iTerm2's AppleScript `id of window` returns iTerm2's
+    /// own internal window identifier, NOT a `CGWindowID`, as proven
+    /// empirically in commit `24e820f`. So we match by `name` (window title)
+    /// instead, which IS a real string comparison.
+    ///
+    /// - Parameters:
+    ///   - windowName: The window title to match. Passed through
+    ///     `escapeForAppleScript` only — no shell escaping, because the
+    ///     value is used as an AppleScript string literal, not a shell
+    ///     fragment.
+    ///   - terminalApp: Must be `.iterm2` — returns an error for `.terminal`.
+    /// - Returns: Result indicating success or failure.
+    @discardableResult
+    func closeWindow(windowName: String, terminalApp: TerminalApp) -> InjectionResult {
+        guard terminalApp == .iterm2 else {
+            return InjectionResult(
+                success: false,
+                error: "closeWindow only supports iTerm2 in v1"
+            )
+        }
+
+        let escapedName = escapeForAppleScript(windowName)
+        let script = """
+        tell application "iTerm2"
+            try
+                repeat with w in windows
+                    if name of w is "\(escapedName)" then
+                        close w
+                        return
+                    end if
+                end repeat
+            end try
+        end tell
+        """
+
+        return executeAppleScript(script, context: "closeWindow \(windowName)")
+    }
+
     // MARK: - Read Terminal Content
 
     /// Read the visible/recent text content from a terminal window via AppleScript.
@@ -372,6 +467,23 @@ final class KeystrokeInjector {
         text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// Escape a string for safe interpolation into a shell command that's
+    /// itself embedded in an AppleScript `write text` or `do script` call.
+    /// Handles backslashes, double-quotes, dollar signs, and backticks —
+    /// the characters that would otherwise let a shell expansion or command
+    /// substitution leak into what should be a literal.
+    ///
+    /// Apply this BEFORE `escapeForAppleScript` — the shell safety happens
+    /// at the shell level, and then the whole resulting string gets escaped
+    /// again for the AppleScript string literal.
+    private func escapeForShell(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`")
     }
 
     /// Execute an AppleScript and return the result

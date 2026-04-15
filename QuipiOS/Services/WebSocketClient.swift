@@ -114,6 +114,9 @@ final class WebSocketClient {
     var onOutputDelta: ((String, String, String, Bool) -> Void)?  // (windowId, windowName, text, isFinal)
     // (windowId, windowName, sessionId, sequence, isFinal, wavData)
     var onTTSAudio: ((String, String, String, Int, Bool, Data) -> Void)?
+    /// Mac asks the phone to switch its selected window — fired when the Mac just
+    /// spawned a new window (e.g. duplicate) and wants the phone to follow along.
+    var onSelectWindow: ((String) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
 
@@ -427,6 +430,11 @@ final class WebSocketClient {
                 // Empty audioBase64 can happen on the final marker message
                 let wavData = Data(base64Encoded: msg.audioBase64) ?? Data()
                 onTTSAudio?(msg.windowId, msg.windowName, msg.sessionId, msg.sequence, msg.isFinal, wavData)
+            }
+        case "select_window":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(SelectWindowMessage.self, from: data) {
+                onSelectWindow?(msg.windowId)
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)

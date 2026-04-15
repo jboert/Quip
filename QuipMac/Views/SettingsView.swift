@@ -304,6 +304,7 @@ private struct ConnectionTab: View {
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
     @AppStorage("tailscaleHostnameOverride") private var tailscaleOverride: String = ""
     @AppStorage("requirePINForLocal") private var requirePINForLocal = false
+    @AppStorage("spawnCommand") private var spawnCommand: String = "claude"
     @State private var logEntries: [String] = []
 
     private var networkMode: NetworkMode {
@@ -403,6 +404,14 @@ private struct ConnectionTab: View {
                     .onChange(of: requirePINForLocal) { _, newValue in
                         webSocketServer.requireAuth = newValue
                     }
+            }
+
+            Section("New Window Spawning") {
+                TextField("Command to run on new window", text: $spawnCommand)
+                    .textFieldStyle(.roundedBorder)
+                Text("Runs after `cd <dir>` when the phone asks for a duplicate window. Leave empty for a bare shell.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Connection Log") {

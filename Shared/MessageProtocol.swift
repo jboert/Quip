@@ -142,6 +142,30 @@ struct STTStateMessage: Codable, Sendable {
     }
 }
 
+/// iPhone → Mac. Asks the Mac to spawn a new iTerm2 window in the same
+/// working directory as the source window, running the configured command.
+struct DuplicateWindowMessage: Codable, Sendable {
+    let type: String
+    let sourceWindowId: String
+
+    init(sourceWindowId: String) {
+        self.type = "duplicate_window"
+        self.sourceWindowId = sourceWindowId
+    }
+}
+
+/// iPhone → Mac. Asks the Mac to actually close a specific iTerm2 window
+/// (destructive — kills any running command in that session).
+struct CloseWindowMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+
+    init(windowId: String) {
+        self.type = "close_window"
+        self.windowId = windowId
+    }
+}
+
 struct RequestContentMessage: Codable, Sendable {
     let type: String
     let windowId: String
