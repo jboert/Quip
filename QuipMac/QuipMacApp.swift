@@ -582,9 +582,13 @@ struct QuipMacApp: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
             let currentIds = Set(windowManager.windows.map(\.id))
             if let newId = currentIds.subtracting(knownIds).first {
-                print("[Quip] duplicate_window: new window detected \(newId), switching selection")
+                print("[Quip] duplicate_window: new window detected \(newId), enabling and switching selection")
+                // Newly-detected windows arrive disabled — enable so it shows up
+                // in broadcastLayout and reaches the phone at all.
+                windowManager.toggleWindow(newId, enabled: true)
                 clientSelectedWindowId = newId
                 windowManager.focusWindow(newId)
+                broadcastLayout()
                 webSocketServer.broadcast(SelectWindowMessage(windowId: newId))
             } else if attempt < 12 {
                 selectNewWindowAfterSpawn(knownIds: knownIds, attempt: attempt + 1)
