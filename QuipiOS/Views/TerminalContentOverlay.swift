@@ -7,6 +7,10 @@ struct TerminalContentOverlay: View {
     var onDismiss: () -> Void
     var onRefresh: () -> Void
     var onSendAction: (String) -> Void
+    // Sends literal text (e.g. "/plan ") to the target window via SendTextMessage
+    // on the parent side. Used by buttons that type characters rather than fire a
+    // named quick-action keystroke.
+    var onSendText: (String) -> Void
     @Environment(\.quipColors) private var colors
 
     let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -73,6 +77,7 @@ struct TerminalContentOverlay: View {
                     keyButton("Ctrl+D", icon: "eject") { onSendAction("press_ctrl_d") }
                     keyButton("Esc", icon: "escape") { onSendAction("press_escape") }
                     keyButton("Tab", icon: "arrow.right.to.line") { onSendAction("press_tab") }
+                    keyButton("/plan", icon: nil) { onSendText("/plan ") }
                     keyButton("Y", icon: nil) { onSendAction("press_y") }
                     keyButton("N", icon: nil) { onSendAction("press_n") }
                 }
