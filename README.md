@@ -50,6 +50,8 @@ xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
   -destination 'generic/platform=iOS' build
 ```
 
+**Note:** `QuipMac/Info.plist` and `QuipiOS/Info.plist` are gitignored — they're regenerated from `project.yml` by `xcodegen generate`. Edit `project.yml`, not the `Info.plist`. (`.xcodeproj` files stay tracked so fresh clones open in Xcode without `xcodegen` first, but `Info.plist` is small enough to fall into "I'll just edit it directly" traps — hence the asymmetry.)
+
 ### Android
 
 Requires Android SDK 34 and Java 17.
