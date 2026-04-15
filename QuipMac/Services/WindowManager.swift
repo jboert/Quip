@@ -87,6 +87,19 @@ final class WindowManager {
     // Next color index for assignment
     private var colorIndex: Int = 0
 
+    // Set of window IDs the user had enabled. Persisted to UserDefaults so
+    // that restarting Quip while iTerm2 keeps running restores the same
+    // sidebar selection. If iTerm2 restarts too, CGWindowIDs change and
+    // entries won't match — stale IDs are harmless but accumulate slowly.
+    private static let persistedEnabledKey = "quip.enabledWindowIds"
+    private var persistedEnabledIds: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: WindowManager.persistedEnabledKey) ?? []
+    )
+
+    private func savePersistedEnabled() {
+        UserDefaults.standard.set(Array(persistedEnabledIds), forKey: Self.persistedEnabledKey)
+    }
+
     // MARK: - Display Info
 
     struct DisplayInfo: Identifiable, Sendable, Equatable, Hashable {
@@ -177,7 +190,8 @@ final class WindowManager {
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
                     subtitle: "", bundleId: info.bundleId, icon: icon,
-                    isEnabled: false, assignedColor: assignColor(),
+                    isEnabled: persistedEnabledIds.contains(info.id),
+                    assignedColor: assignColor(),
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds
                 ))
             }
@@ -360,6 +374,12 @@ final class WindowManager {
     func toggleWindow(_ windowId: String, enabled: Bool) {
         guard let index = windows.firstIndex(where: { $0.id == windowId }) else { return }
         windows[index].isEnabled = enabled
+        if enabled {
+            persistedEnabledIds.insert(windowId)
+        } else {
+            persistedEnabledIds.remove(windowId)
+        }
+        savePersistedEnabled()
     }
 
     // MARK: - Color Assignment
