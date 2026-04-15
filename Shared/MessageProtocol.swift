@@ -27,6 +27,10 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     let id: String
     let name: String
     let app: String
+    /// Project/folder name — shown as the primary (colored, bold) label above the
+    /// app name. Optional for backward compat with older Mac builds that don't
+    /// populate it; clients should fall back to `app` when absent or empty.
+    let folder: String?
     let enabled: Bool
     let frame: WindowFrame
     let state: String
@@ -37,9 +41,10 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     // Synthesized Equatable compares ALL fields including frame
 
     /// Backward-compat: default isThinking to false if missing from JSON
-    init(id: String, name: String, app: String, enabled: Bool,
+    init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false) {
-        self.id = id; self.name = name; self.app = app; self.enabled = enabled
+        self.id = id; self.name = name; self.app = app; self.folder = folder
+        self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
         self.isThinking = isThinking
     }
@@ -49,6 +54,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         id = try c.decode(String.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
         app = try c.decode(String.self, forKey: .app)
+        folder = try? c.decode(String.self, forKey: .folder)
         enabled = try c.decode(Bool.self, forKey: .enabled)
         frame = try c.decode(WindowFrame.self, forKey: .frame)
         state = try c.decode(String.self, forKey: .state)
@@ -57,7 +63,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, app, enabled, frame, state, color, isThinking
+        case id, name, app, folder, enabled, frame, state, color, isThinking
     }
 }
 

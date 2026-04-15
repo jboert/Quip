@@ -23,6 +23,13 @@ struct ManagedWindow: Identifiable, Sendable {
     let windowNumber: CGWindowID  // CG window number
     var bounds: CGRect            // Current window frame
 
+    /// Whether this window is hosted by a terminal emulator Quip supports
+    /// (Terminal.app or iTerm2). Used for auto-grouping in the sidebar.
+    var isTerminal: Bool {
+        bundleId == TerminalApp.terminal.bundleIdentifier
+            || bundleId == TerminalApp.iterm2.bundleIdentifier
+    }
+
     /// Convert to shared WindowState for protocol messages.
     /// Frame is normalized to 0-1 relative to the given screen bounds.
     func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false) -> WindowState {
@@ -45,7 +52,8 @@ struct ManagedWindow: Identifiable, Sendable {
         return WindowState(
             id: id,
             name: name,
-            app: subtitle.isEmpty ? app : subtitle,
+            app: app,
+            folder: subtitle.isEmpty ? nil : subtitle,
             enabled: isEnabled,
             frame: frame,
             state: state,

@@ -72,7 +72,11 @@ struct WindowListSidebar: View {
             }
         }
 
-        return ordered
+        // Group terminal windows (Terminal.app / iTerm2) at the top. Within each
+        // group the user's manual ordering from windowOrder is preserved.
+        let terminals = ordered.filter { $0.isTerminal }
+        let others = ordered.filter { !$0.isTerminal }
+        return terminals + others
     }
 
     /// Sync windowOrder binding with current window list — called outside of body evaluation
@@ -315,12 +319,19 @@ private struct WindowRow: View {
             }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(window.name)
-                    .font(.body)
+                // Primary label: folder/project when known, else app name.
+                // Rendered in the window's palette color and bold so it's
+                // visually distinctive and consistent with the iOS tile.
+                Text(window.subtitle.isEmpty ? window.app : window.subtitle)
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(Color(hex: window.assignedColor))
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                Text(window.subtitle.isEmpty ? window.app : window.subtitle)
+                // Secondary label: app name when a folder sits above it;
+                // otherwise the window title so non-terminal windows still
+                // show something descriptive.
+                Text(window.subtitle.isEmpty ? window.name : window.app)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

@@ -63,13 +63,21 @@ struct WindowRectangle: View {
             // truncate to make room for the spinning star on narrow windows.
             HStack(alignment: .top, spacing: 4) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(window.app)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(colors.textPrimary.opacity(0.9))
+                    // Primary label is the folder/project when known, else the app
+                    // name. Rendered in the window's palette color and bold so it
+                    // doubles as the visual identifier of the selection.
+                    let primary = (window.folder?.isEmpty == false ? window.folder! : window.app)
+                    Text(primary)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(windowColor)
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    Text(window.name)
+                    // Secondary label is the app name when we have a distinct
+                    // folder above it; otherwise the window title. Keeping the
+                    // app name visible when a folder is shown lets users tell
+                    // Terminal.app from iTerm2 at a glance.
+                    Text(window.folder?.isEmpty == false ? window.app : window.name)
                         .font(.caption2)
                         .foregroundStyle(colors.textSecondary.opacity(0.7))
                         .lineLimit(1)
