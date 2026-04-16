@@ -547,31 +547,59 @@ final class WindowManager {
     /// Attach each iTerm2 session UUID to the tracked window whose bounds best
     /// match its AppleScript-reported bounds. Matching by bounds (not by title)
     /// is required because iTerm2 windows routinely share titles — same
-    /// command, same cwd. A generous 32 pt tolerance absorbs minor drift
-    /// between CG window bounds and AppleScript window bounds (title bar,
-    /// shadows). Windows with no nearby session are left with a nil UUID —
-    /// they'll fall back to the "front window" AppleScript path, which is
-    /// still wrong, but at least we don't misattach a random UUID.
+    /// command, same cwd.
+    ///
+    /// Why 4D distance (midX, midY, width, height) instead of just midpoint:
+    /// a dev who works with several iTerm windows stacked at near-identical
+    /// positions — e.g. a column of three 600-wide panes that start at the
+    /// same x — has midpoints clumped within a few points of each other, so
+    /// 2D midpoint matching hands the wrong UUIDs out. Width and height are
+    /// what actually distinguish the windows, and folding them into the
+    /// distance metric gets the right pair out of a clump.
+    ///
+    /// Why greedy-unique assignment: without it, two different CG windows
+    /// could both nominate the same AppleScript session as their "best match"
+    /// and we'd silently hand the same UUID to both — one of them then reads
+    /// or types into its neighbor's pane. Claiming each UUID once prevents
+    /// that collision; any window that can't find an unclaimed match within
+    /// tolerance is left with a nil UUID, and the phone's read/write paths
+    /// refuse to touch it until the next refresh.
     func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo]) {
         let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
-        let matchToleranceSquared: CGFloat = 32 * 32
+        // Tolerance is per-dimension (midX/Y/width/height each). Summed as
+        // squared distance, the effective threshold is 4 * tol^2 in 4D.
+        let perDimTolerance: CGFloat = 40
+        let matchToleranceSquared: CGFloat = 4 * perDimTolerance * perDimTolerance
+
+        var claimedUUIDs: Set<String> = []
+
+        // Build (CG-window-index, best-session-index, dist²) triples, then
+        // assign in ascending-distance order so the *most confident* matches
+        // claim their UUIDs first. Shakier matches either fall back to the
+        // next-best unclaimed session or end up nil.
+        struct Candidate { let windowIndex: Int; let sessionIndex: Int; let distSq: CGFloat }
+        var candidates: [Candidate] = []
         for i in windows.indices where windows[i].bundleId == iterm2BundleId {
-            let target = CGPoint(x: windows[i].bounds.midX, y: windows[i].bounds.midY)
-            var bestUUID: String?
-            var bestDistSq: CGFloat = .infinity
-            for session in sessions {
-                let mid = CGPoint(x: session.bounds.midX, y: session.bounds.midY)
-                let dx = mid.x - target.x
-                let dy = mid.y - target.y
-                let distSq = dx * dx + dy * dy
-                if distSq < bestDistSq {
-                    bestDistSq = distSq
-                    bestUUID = session.uuid
-                }
+            let target = windows[i].bounds
+            for (sIdx, session) in sessions.enumerated() {
+                let dx = session.bounds.midX - target.midX
+                let dy = session.bounds.midY - target.midY
+                let dw = session.bounds.width - target.width
+                let dh = session.bounds.height - target.height
+                let distSq = dx * dx + dy * dy + dw * dw + dh * dh
+                candidates.append(Candidate(windowIndex: i, sessionIndex: sIdx, distSq: distSq))
             }
-            if let uuid = bestUUID, bestDistSq <= matchToleranceSquared {
-                windows[i].iterm2SessionId = uuid
-            }
+            // Clear any stale assignment before re-matching on this pass.
+            windows[i].iterm2SessionId = nil
+        }
+        candidates.sort { $0.distSq < $1.distSq }
+
+        for c in candidates where c.distSq <= matchToleranceSquared {
+            let uuid = sessions[c.sessionIndex].uuid
+            if claimedUUIDs.contains(uuid) { continue }
+            if windows[c.windowIndex].iterm2SessionId != nil { continue }
+            windows[c.windowIndex].iterm2SessionId = uuid
+            claimedUUIDs.insert(uuid)
         }
     }
 }
