@@ -26,7 +26,7 @@ final class KeystrokeInjector {
     ///   - windowIndex: 1-based window index in the terminal app (default: 1)
     /// - Returns: Result indicating success or failure
     @discardableResult
-    func sendText(_ text: String, to windowId: String, pressReturn: Bool, terminalApp: TerminalApp, windowName: String? = nil, cgWindowNumber: CGWindowID = 0) -> InjectionResult {
+    func sendText(_ text: String, to windowId: String, pressReturn: Bool, terminalApp: TerminalApp, windowName: String? = nil, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> InjectionResult {
         let escapedText = escapeForAppleScript(text)
         let textToSend = pressReturn ? escapedText + "\\n" : escapedText
 
@@ -63,26 +63,36 @@ final class KeystrokeInjector {
             """
 
         case .iterm2:
-            // Try matching by window ID first, then by name, then fallback to front window
-            script = """
-            tell application "iTerm2"
-                -- Try by window id (matches CG window number)
-                try
-                    repeat with w in windows
-                        if id of w is \(cgWindowNumber) then
-                            tell current session of w
-                                write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
-                            end tell
-                            return
-                        end if
-                    end repeat
-                end try
-                -- Fallback: use front window (should be focused by AX already)
-                tell current session of front window
-                    write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+            if let sessionId = iterm2SessionId {
+                let escapedId = escapeForAppleScript(sessionId)
+                script = """
+                tell application "iTerm2"
+                    try
+                        repeat with w in windows
+                            repeat with s in sessions of w
+                                if unique id of s is "\(escapedId)" then
+                                    tell s
+                                        write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+                                    end tell
+                                    return
+                                end if
+                            end repeat
+                        end repeat
+                    end try
+                    tell current session of front window
+                        write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+                    end tell
                 end tell
-            end tell
-            """
+                """
+            } else {
+                script = """
+                tell application "iTerm2"
+                    tell current session of front window
+                        write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+                    end tell
+                end tell
+                """
+            }
         }
 
         return executeAppleScript(script, context: "sendText to \(windowId)")
@@ -108,7 +118,7 @@ final class KeystrokeInjector {
     /// approach), which relies on `windowManager.focusWindow(windowId)` having
     /// raised the correct window before the AppleScript runs.
     @discardableResult
-    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1) -> InjectionResult {
+    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1, iterm2SessionId: String? = nil) -> InjectionResult {
         // iTerm2: use native write-text-with-character-id. Byte-identical to
         // what typing the key into an iTerm2 session does, reliable because
         // write text targets a session by object address rather than by
@@ -117,23 +127,37 @@ final class KeystrokeInjector {
             guard let charId = iTerm2CharIdFor(key) else {
                 return InjectionResult(success: false, error: "No iTerm2 char id for key: \(key)")
             }
-            let script = """
-            tell application "iTerm2"
-                try
-                    repeat with w in windows
-                        if id of w is \(cgWindowNumber) then
-                            tell current session of w
-                                write text (character id \(charId))
-                            end tell
-                            return
-                        end if
-                    end repeat
-                end try
-                tell current session of front window
-                    write text (character id \(charId))
+            let script: String
+            if let sessionId = iterm2SessionId {
+                let escapedId = escapeForAppleScript(sessionId)
+                script = """
+                tell application "iTerm2"
+                    try
+                        repeat with w in windows
+                            repeat with s in sessions of w
+                                if unique id of s is "\(escapedId)" then
+                                    tell s
+                                        write text (character id \(charId))
+                                    end tell
+                                    return
+                                end if
+                            end repeat
+                        end repeat
+                    end try
+                    tell current session of front window
+                        write text (character id \(charId))
+                    end tell
                 end tell
-            end tell
-            """
+                """
+            } else {
+                script = """
+                tell application "iTerm2"
+                    tell current session of front window
+                        write text (character id \(charId))
+                    end tell
+                end tell
+                """
+            }
             return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, charId=\(charId)]")
         }
 
@@ -332,7 +356,7 @@ final class KeystrokeInjector {
     // MARK: - Read Terminal Content
 
     /// Read the visible/recent text content from a terminal window via AppleScript.
-    nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0) -> String? {
+    nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> String? {
         let script: String
         switch terminalApp {
         case .terminal:
@@ -342,22 +366,37 @@ final class KeystrokeInjector {
             end tell
             """
         case .iterm2:
-            script = """
-            tell application "iTerm2"
-                try
-                    repeat with w in windows
-                        if id of w is \(cgWindowNumber) then
-                            tell current session of w
-                                return contents
-                            end tell
-                        end if
-                    end repeat
-                end try
-                tell current session of front window
-                    return contents
+            if let sessionId = iterm2SessionId {
+                let escapedId = sessionId
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
+                script = """
+                tell application "iTerm2"
+                    try
+                        repeat with w in windows
+                            repeat with s in sessions of w
+                                if unique id of s is "\(escapedId)" then
+                                    tell s
+                                        return contents
+                                    end tell
+                                end if
+                            end repeat
+                        end repeat
+                    end try
+                    tell current session of front window
+                        return contents
+                    end tell
                 end tell
-            end tell
-            """
+                """
+            } else {
+                script = """
+                tell application "iTerm2"
+                    tell current session of front window
+                        return contents
+                    end tell
+                end tell
+                """
+            }
         }
 
         guard let appleScript = NSAppleScript(source: script) else { return nil }
