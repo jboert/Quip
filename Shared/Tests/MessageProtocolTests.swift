@@ -221,6 +221,10 @@ final class MessageProtocolTests: XCTestCase {
             (#"{"type":"request_content","windowId":"w1"}"#, "request_content"),
             (#"{"type":"auth","pin":"123456"}"#, "auth"),
             (#"{"type":"auth_result","success":true,"error":null}"#, "auth_result"),
+            (#"{"type":"duplicate_window","sourceWindowId":"s1"}"#, "duplicate_window"),
+            (#"{"type":"close_window","windowId":"w1"}"#, "close_window"),
+            (#"{"type":"output_delta","windowId":"w1","windowName":"n","text":"x","isFinal":true}"#, "output_delta"),
+            (#"{"type":"tts_audio","windowId":"w1","windowName":"n","sessionId":"s","sequence":0,"isFinal":true,"audioBase64":"","format":"wav"}"#, "tts_audio"),
         ]
 
         for (json, expectedType) in cases {
@@ -261,6 +265,95 @@ final class MessageProtocolTests: XCTestCase {
         let restored = try XCTUnwrap(MessageCoder.decode(QuickActionMessage.self, from: data))
         XCTAssertEqual(original.windowId, restored.windowId)
         XCTAssertEqual(original.action, restored.action)
+    }
+
+    func testDuplicateWindowMessageEncoding() throws {
+        let msg = DuplicateWindowMessage(sourceWindowId: "src-1")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "duplicate_window")
+        XCTAssertEqual(dict["sourceWindowId"] as? String, "src-1")
+    }
+
+    func testDuplicateWindowRoundTrip() throws {
+        let original = DuplicateWindowMessage(sourceWindowId: "src-rt")
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(DuplicateWindowMessage.self, from: data))
+        XCTAssertEqual(original.sourceWindowId, restored.sourceWindowId)
+        XCTAssertEqual(original.type, restored.type)
+    }
+
+    func testCloseWindowMessageEncoding() throws {
+        let msg = CloseWindowMessage(windowId: "w-kill")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "close_window")
+        XCTAssertEqual(dict["windowId"] as? String, "w-kill")
+    }
+
+    func testCloseWindowRoundTrip() throws {
+        let original = CloseWindowMessage(windowId: "w-rt")
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(CloseWindowMessage.self, from: data))
+        XCTAssertEqual(original.windowId, restored.windowId)
+        XCTAssertEqual(original.type, restored.type)
+    }
+
+    func testOutputDeltaMessageRoundTrip() throws {
+        let original = OutputDeltaMessage(
+            windowId: "w-od-1",
+            windowName: "claude",
+            text: "Hello from Claude\n",
+            isFinal: true
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(OutputDeltaMessage.self, from: data))
+        XCTAssertEqual(original.type, restored.type)
+        XCTAssertEqual(original.windowId, restored.windowId)
+        XCTAssertEqual(original.windowName, restored.windowName)
+        XCTAssertEqual(original.text, restored.text)
+        XCTAssertEqual(original.isFinal, restored.isFinal)
+    }
+
+    func testOutputDeltaMessageDefaultIsFinal() throws {
+        let msg = OutputDeltaMessage(windowId: "w1", windowName: "n", text: "t")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["isFinal"] as? Bool, true)
+    }
+
+    func testTTSAudioMessageRoundTrip() throws {
+        let original = TTSAudioMessage(
+            windowId: "w-tts-1",
+            windowName: "claude",
+            sessionId: "sess-abc",
+            sequence: 3,
+            isFinal: false,
+            audioBase64: "AAAAAA==",
+            format: "wav"
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(TTSAudioMessage.self, from: data))
+        XCTAssertEqual(original.type, restored.type)
+        XCTAssertEqual(original.windowId, restored.windowId)
+        XCTAssertEqual(original.windowName, restored.windowName)
+        XCTAssertEqual(original.sessionId, restored.sessionId)
+        XCTAssertEqual(original.sequence, restored.sequence)
+        XCTAssertEqual(original.isFinal, restored.isFinal)
+        XCTAssertEqual(original.audioBase64, restored.audioBase64)
+        XCTAssertEqual(original.format, restored.format)
+    }
+
+    func testTTSAudioMessageFormatDefaultsToWav() throws {
+        let msg = TTSAudioMessage(
+            windowId: "w1", windowName: "n", sessionId: "s", sequence: 0,
+            isFinal: true, audioBase64: ""
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["format"] as? String, "wav")
     }
 
     func testLayoutUpdateRoundTrip() throws {
@@ -320,6 +413,63 @@ final class MessageProtocolTests: XCTestCase {
         let restored = try JSONDecoder().decode(WindowFrame.self, from: data)
         XCTAssertEqual(frame.x, restored.x, accuracy: 1e-10)
         XCTAssertEqual(frame.y, restored.y, accuracy: 1e-10)
+    }
+
+    func testWindowStateBackwardCompatWithoutIsThinking() throws {
+        // Old Mac builds don't populate `isThinking` or `folder` — verify the
+        // custom init(from decoder:) defaults them correctly.
+        let json = """
+        {
+          "id": "w1",
+          "name": "Terminal",
+          "app": "Terminal",
+          "enabled": true,
+          "frame": { "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 },
+          "state": "neutral",
+          "color": "#FFFFFF"
+        }
+        """.data(using: .utf8)!
+
+        let state = try XCTUnwrap(MessageCoder.decode(WindowState.self, from: json))
+        XCTAssertFalse(state.isThinking, "isThinking should default to false when absent from JSON")
+        XCTAssertNil(state.folder, "folder should default to nil when absent from JSON")
+    }
+
+    func testWindowStateRoundTripWithFolderAndIsThinking() throws {
+        let original = WindowState(
+            id: "w2", name: "zsh", app: "iTerm2", folder: "Quip",
+            enabled: true,
+            frame: WindowFrame(x: 0, y: 0, width: 1, height: 1),
+            state: "busy", color: "#FF0000", isThinking: true
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(WindowState.self, from: data))
+        XCTAssertEqual(restored.folder, "Quip")
+        XCTAssertTrue(restored.isThinking)
+        XCTAssertEqual(original, restored)
+    }
+
+    func testLayoutUpdateRoundTripWithScreenAspect() throws {
+        let original = LayoutUpdate(
+            monitor: "Built-in",
+            screenAspect: 1.777,
+            windows: []
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(LayoutUpdate.self, from: data))
+        let restoredAspect = try XCTUnwrap(restored.screenAspect)
+        XCTAssertEqual(restoredAspect, 1.777, accuracy: 0.001)
+    }
+
+    func testTerminalContentMessageRoundTripWithScreenshot() throws {
+        let original = TerminalContentMessage(
+            windowId: "w1",
+            content: "$ ls\n",
+            screenshot: "iVBORw0KGgoAAAANSUhEUg=="
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(TerminalContentMessage.self, from: data))
+        XCTAssertEqual(restored.screenshot, "iVBORw0KGgoAAAANSUhEUg==")
     }
 
     // MARK: - Cross-platform JSON key compatibility
