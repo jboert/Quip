@@ -48,7 +48,7 @@ struct SettingsView: View {
 // MARK: - General Tab
 
 private struct GeneralTab: View {
-    @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.terminal.rawValue
+    @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.iterm2.rawValue
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("showInMenuBar") private var showInMenuBar = true
     @AppStorage("showInDock") private var showInDock = true
