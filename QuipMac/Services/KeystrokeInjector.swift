@@ -93,19 +93,32 @@ final class KeystrokeInjector {
                 return InjectionResult(success: false, error: err)
             }
             let escapedId = escapeForAppleScript(sessionId)
+            // iTerm2's AppleScript hierarchy is window → tab → session. The
+            // shorthand `sessions of w` the old code used silently errors
+            // ("Can't get every session of item 1 of every window") and the
+            // old fallback happened to mask it by writing to front window —
+            // which is how every keystroke quietly landed in the wrong pane
+            // for months. Walk the tabs explicitly.
             script = """
             tell application "iTerm2"
                 set quipFound to false
-                repeat with w in windows
-                    repeat with s in sessions of w
-                        if unique id of s is "\(escapedId)" then
-                            tell s
-                                write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+                repeat with aWindow in windows
+                    tell aWindow
+                        repeat with aTab in tabs
+                            tell aTab
+                                repeat with aSession in sessions
+                                    if unique id of aSession is "\(escapedId)" then
+                                        tell aSession
+                                            write text "\(textToSend)" newline \(pressReturn ? "yes" : "no")
+                                        end tell
+                                        set quipFound to true
+                                        exit repeat
+                                    end if
+                                end repeat
                             end tell
-                            set quipFound to true
-                            exit repeat
-                        end if
-                    end repeat
+                            if quipFound then exit repeat
+                        end repeat
+                    end tell
                     if quipFound then exit repeat
                 end repeat
                 if not quipFound then
@@ -156,19 +169,28 @@ final class KeystrokeInjector {
                 return InjectionResult(success: false, error: err)
             }
             let escapedId = escapeForAppleScript(sessionId)
+            // Walks window → tab → session (same reason as sendText: iTerm2's
+            // AppleScript rejects the `sessions of w` shortcut).
             let script = """
             tell application "iTerm2"
                 set quipFound to false
-                repeat with w in windows
-                    repeat with s in sessions of w
-                        if unique id of s is "\(escapedId)" then
-                            tell s
-                                write text (character id \(charId))
+                repeat with aWindow in windows
+                    tell aWindow
+                        repeat with aTab in tabs
+                            tell aTab
+                                repeat with aSession in sessions
+                                    if unique id of aSession is "\(escapedId)" then
+                                        tell aSession
+                                            write text (character id \(charId))
+                                        end tell
+                                        set quipFound to true
+                                        exit repeat
+                                    end if
+                                end repeat
                             end tell
-                            set quipFound to true
-                            exit repeat
-                        end if
-                    end repeat
+                            if quipFound then exit repeat
+                        end repeat
+                    end tell
                     if quipFound then exit repeat
                 end repeat
                 if not quipFound then
@@ -393,16 +415,24 @@ final class KeystrokeInjector {
             let escapedId = sessionId
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
+            // window → tab → session — see sendText for why the shortcut
+            // `sessions of w` can't be used here.
             script = """
             tell application "iTerm2"
-                repeat with w in windows
-                    repeat with s in sessions of w
-                        if unique id of s is "\(escapedId)" then
-                            tell s
-                                return contents
+                repeat with aWindow in windows
+                    tell aWindow
+                        repeat with aTab in tabs
+                            tell aTab
+                                repeat with aSession in sessions
+                                    if unique id of aSession is "\(escapedId)" then
+                                        tell aSession
+                                            return contents
+                                        end tell
+                                    end if
+                                end repeat
                             end tell
-                        end if
-                    end repeat
+                        end repeat
+                    end tell
                 end repeat
                 return ""
             end tell
