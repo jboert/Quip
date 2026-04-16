@@ -406,6 +406,20 @@ final class WindowManager {
         applyIterm2SessionIds(sessions)
     }
 
+    /// Filter the window list for LayoutUpdate broadcasts. When
+    /// `mirrorDesktop` is off (default): only windows the user has explicitly
+    /// enabled are broadcast — Quip is an allowlist. When on: every terminal
+    /// window also goes out, so the phone can see the full desktop at a
+    /// glance and tap-to-activate the one it wants to drive. Enabled
+    /// non-terminals still ride along in mirror mode so a user who manually
+    /// turned on (say) a browser window doesn't lose it when the toggle flips.
+    nonisolated static func windowsForBroadcast(_ all: [ManagedWindow], mirrorDesktop: Bool) -> [ManagedWindow] {
+        if mirrorDesktop {
+            return all.filter { ($0.isTerminal && $0.isOnVisibleScreen) || $0.isEnabled }
+        }
+        return all.filter(\.isEnabled)
+    }
+
     /// True when any tracked iTerm2 window is missing its session UUID — the
     /// snapshot timer checks this to fetch session IDs immediately on the next
     /// tick instead of waiting for the subtitle cycle. Without this, a newly

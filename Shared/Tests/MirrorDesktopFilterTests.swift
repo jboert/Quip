@@ -70,5 +70,18 @@ final class MirrorDesktopFilterTests: XCTestCase {
         let ids = WindowManager.windowsForBroadcast(all, mirrorDesktop: true).map(\.id)
         XCTAssertEqual(ids, ["x"])
     }
+
+    func testMirrorOnDropsOffScreenDisabledTerminals() {
+        let all = [
+            mw(id: "a", bundleId: iterm2, enabled: true, onVisibleScreen: true),
+            mw(id: "b", bundleId: iterm2, enabled: false, onVisibleScreen: true),
+            mw(id: "c", bundleId: terminal, enabled: false, onVisibleScreen: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(all, mirrorDesktop: true).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["a", "b"]),
+                       "On: off-screen disabled terminals (other Space, disconnected monitor) are filtered out; on-screen terminals still appear.")
+        XCTAssertFalse(ids.contains("c"),
+                       "Disabled terminal with isOnVisibleScreen=false must not leak — that's the whole point of the visibility filter.")
+    }
 }
 #endif
