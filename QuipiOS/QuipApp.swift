@@ -297,10 +297,10 @@ struct MainiOSView: View {
     @State private var recentConnections: [SavedConnection] = []
     @State private var editingConnection: SavedConnection?
     @State private var renameText: String = ""
-    @State private var showTextInput = false
-    @State private var textInputValue = ""
     @State private var showURLWarning = false
     @State private var pendingUnsafeURL: URL?
+    @State private var testState: ConnectionTestState = .idle
+    @State private var testResultAutoDismiss: Task<Void, Never>?
     /// Which layout the next tap on the arrange button will send. The icon
     /// shown on the button reflects this so the user can predict the outcome.
     @State private var nextArrangeLayout: String = "horizontal"
@@ -622,12 +622,56 @@ struct MainiOSView: View {
                         .frame(width: 36, height: 36)
                 }
 
+                // Test-connection probe. Fires a one-off WebSocket handshake
+                // against whatever URL is typed and reports reachable/not, so
+                // the user can tell "wrong URL" apart from "Mac offline" apart
+                // from "firewall blocking" without having to commit to a full
+                // connect + auth flow first.
+                Button { runConnectionTest() } label: {
+                    ZStack {
+                        switch testState {
+                        case .testing:
+                            ProgressView().controlSize(.small)
+                        case .success:
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(.green)
+                        case .failed:
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(.red)
+                        case .idle:
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.system(size: 18))
+                                .foregroundStyle(colors.textSecondary)
+                        }
+                    }
+                    .frame(width: 36, height: 36)
+                }
+                .disabled(urlText.isEmpty || testState.isTesting)
+
                 Button { doConnect() } label: {
                     Image(systemName: "arrow.right.circle.fill")
                         .font(.system(size: 22))
                         .foregroundStyle(urlText.isEmpty ? colors.buttonDisabled : colors.buttonPrimary)
                 }
                 .disabled(urlText.isEmpty)
+            }
+
+            if let msg = testState.resultMessage {
+                Text(msg)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(testState.isSuccess ? Color.green : Color.red)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        (testState.isSuccess ? Color.green : Color.red)
+                            .opacity(0.12)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
             }
 
             // Discovered on local network
@@ -1181,6 +1225,96 @@ struct MainiOSView: View {
         )
     }
 
+    // MARK: - Connection Test
+
+    /// Fires a short-lived WebSocket handshake against the typed URL and
+    /// reports reachable / not-reachable / handshake-error. Kept deliberately
+    /// separate from the real `doConnect` — this one never touches `client`,
+    /// never saves the URL, never prompts for PIN. It's a network probe.
+    private func runConnectionTest() {
+        let typed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return }
+        let urlStr = normalizeConnectURL(typed)
+        guard let url = URL(string: urlStr) else {
+            setTestResult(.failed("Bad URL: \(urlStr)"))
+            return
+        }
+        testResultAutoDismiss?.cancel()
+        testState = .testing
+        Task {
+            let errMsg: String?
+            do {
+                try await probeWebSocket(url: url, timeout: 5)
+                errMsg = nil
+            } catch let err as ConnectionProbeError {
+                switch err {
+                case .timeout(let secs):
+                    errMsg = "Timeout after \(Int(secs))s"
+                }
+            } catch {
+                errMsg = error.localizedDescription
+            }
+            await MainActor.run {
+                if let msg = errMsg {
+                    setTestResult(.failed("\(urlStr) — \(msg)"))
+                } else {
+                    setTestResult(.success("Reachable: \(urlStr)"))
+                }
+            }
+        }
+    }
+
+    private func setTestResult(_ newState: ConnectionTestState) {
+        testState = newState
+        // Auto-dismiss the inline status pill after 12s so it doesn't pile up
+        // next to the URL field forever. The user can re-test to see again.
+        testResultAutoDismiss?.cancel()
+        testResultAutoDismiss = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            if !Task.isCancelled {
+                testState = .idle
+            }
+        }
+    }
+
+    private func normalizeConnectURL(_ typed: String) -> String {
+        if typed.hasPrefix("wss://") || typed.hasPrefix("ws://") {
+            return typed
+        } else if typed.contains("trycloudflare.com") {
+            return "wss://\(typed)"
+        } else if typed.hasSuffix(".ts.net") || typed.contains(".ts.net:") {
+            return "ws://\(typed)"
+        } else if looksLikeTailscaleCGNAT(typed) {
+            return "ws://\(typed)"
+        } else if typed.contains(":") {
+            return "ws://\(typed)"
+        }
+        return "wss://\(typed)"
+    }
+
+    /// Open a WebSocket task, wait up to `timeout` seconds for the first
+    /// frame from the server (Quip's auth-required signal), then tear it
+    /// down. Any error along the way counts as failure. Does not save or
+    /// send any app-level messages.
+    private nonisolated func probeWebSocket(url: URL, timeout: TimeInterval) async throws {
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.webSocketTask(with: url)
+        task.resume()
+        defer { task.cancel(with: .normalClosure, reason: nil) }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                _ = try await task.receive()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                throw ConnectionProbeError.timeout(timeout)
+            }
+            try await group.next()
+            group.cancelAll()
+        }
+    }
+
     // MARK: - Actions
 
     private func doConnect() {
@@ -1703,4 +1837,36 @@ struct SettingsSheet: View {
             }
         )
     }
+}
+
+/// State for the inline connection-test probe that sits next to the URL field.
+/// Kept separate from `client.isConnected` so we can offer a "just reach out
+/// and see" button that doesn't disturb an active session.
+enum ConnectionTestState: Equatable {
+    case idle
+    case testing
+    case success(String)
+    case failed(String)
+
+    var isTesting: Bool {
+        if case .testing = self { return true }
+        return false
+    }
+
+    var isSuccess: Bool {
+        if case .success = self { return true }
+        return false
+    }
+
+    /// One-line status to show inline under the URL field. `nil` hides the pill.
+    var resultMessage: String? {
+        switch self {
+        case .idle, .testing: return nil
+        case .success(let msg), .failed(let msg): return msg
+        }
+    }
+}
+
+private enum ConnectionProbeError: Error {
+    case timeout(TimeInterval)
 }
