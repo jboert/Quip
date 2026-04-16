@@ -9,7 +9,7 @@ struct WindowListSidebar: View {
     @Binding var windowOrder: [String]
 
     @State private var showingAddPopover = false
-    @State private var newTerminalApp: TerminalApp = .terminal
+    @State private var newTerminalApp: TerminalApp = .iterm2
     @State private var newProjectDirectory: String = ""
 
     var body: some View {

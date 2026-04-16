@@ -3,8 +3,8 @@ import AppKit
 // MARK: - Terminal App Selection
 
 enum TerminalApp: String, Codable, CaseIterable, Identifiable, Sendable {
-    case terminal = "Terminal"
     case iterm2 = "iTerm2"
+    case terminal = "Terminal"
 
     var id: String { rawValue }
 
