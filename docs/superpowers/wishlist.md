@@ -20,13 +20,12 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ### 1. `/plan` shortcut button on iPhone
 
-**Status:** Planned (implementation paused behind keyboard-button bug fixes)
-**Context:** A one-tap button on the iPhone remote that types `/plan ` into the currently selected terminal window on the Mac. Leaves the cursor on the same line so the user can continue typing or dictating. Explicitly v1: no voice auto-start, no Claude Code mode switching, no landscape mirror, no cross-platform parity.
-**Spec:** `docs/superpowers/specs/2026-04-14-plan-shortcut-button-design.md`
-**Plan:** `docs/superpowers/plans/2026-04-14-plan-shortcut-button.md`
-**Blocked on:** Keyboard/shortcut button bug-fix work — the user wants those vetted before new buttons land.
+**Status:** ✅ Done (upstream) — shipped by jboert across commits `68fdb04`, `87f6e16`, `aa3ab2e`, `5fd0bf6` on `main`. The `/plan` button lives in the configurable `QuickButton` enum, appears in both portrait and landscape controls, and sends `/plan ` via `SendTextMessage` with `pressReturn: false`.
 
-**Related:** #19 (`/btw` shortcut button — same pattern, different command literal; once #1 lands, #19 should be one commit by reusing the same button component).
+**Original context** (kept for historical reference):
+A one-tap button on the iPhone remote that types `/plan ` into the currently selected terminal window on the Mac. Leaves the cursor on the same line so the user can continue typing or dictating.
+
+**Related:** #19 (`/btw` shortcut button — shipped same session as the #13 fix).
 
 ---
 
@@ -166,25 +165,10 @@ As a quick-win, commit `(TBD)` added `print` statements to the `send_text` and `
 
 ### 13. Multi-iTerm2-window keystroke targeting (real fix)
 
-**Status:** Wishlist — partial fix attempted, had to be reverted
-**Context:** When the user has multiple iTerm2 windows open and selects one on the iPhone, `sendKeystroke` (for Return, Ctrl+C, Tab, Escape, backspace, etc.) currently fires the keystroke at whatever iTerm2 window is **already frontmost**, not necessarily the one the user selected on the phone. This is because:
+**Status:** ✅ Done — shipped in commit `2ec1ed0` on `eb-branch` (2026-04-15). Used option (a) from the original design: each iTerm2 session's stable `unique id` (UUID) is cached on `ManagedWindow.iterm2SessionId` at registration time via an AppleScript probe. All three injection functions (`sendText`, `sendKeystroke`, `readContent`) now select by `unique id of s` when a session id is supplied, falling back to `current session of front window` when nil. All ~18 call sites in `QuipMacApp.swift` thread the cached session id through. 40 Mac tests + 51 iOS tests pass. The broken `id of w is <cgWindowNumber>` pattern (which never matched because iTerm2's `id of window` is its own internal integer, not a CGWindowID) is fully replaced.
 
-- `sendKeystroke` injects via System Events (`key code N`), which targets the OS-level focused window — not a specific AppleScript-addressable window.
-- Commit `4006db4` tried to fix this by having the AppleScript iterate iTerm2's windows and `select` the one whose `id` matched the CGWindowID. **That never worked** — iTerm2's AppleScript `id of window` returns iTerm2's own internal window identifier (small integers like `447`, `1159`, `1154`), not a CGWindowID (typically >10000). The repeat loop silently never matched.
-- Commit `465d5b5` reverted that attempt and restored the original behavior: rely on `windowManager.focusWindow(wid)` (AX-based raise) + a hard 100ms delay + System Events keystroke. This lands the keystroke in whatever window `focusWindow` managed to raise — which is usually correct for the simple one-window case but can race when windows are stacked at near-identical positions.
-
-**Fix options to explore:**
-- **(a) Match by iTerm2 `unique id` of session.** Each iTerm2 session has a stable unique ID accessible via AppleScript (`tell current session of window N to get unique id`). If Quip's `WindowManager` could read and cache session unique IDs at registration time, the keystroke script could select by session ID instead of window ID. Requires one-time lookup per session and storage in `ManagedWindow`.
-- **(b) Bypass System Events entirely via AX APIs.** Use `AXUIElementCreateApplication` + iterate AX windows + find the one whose `kAXDocumentAttribute` or `kAXTitleAttribute` matches, then post keystrokes via `CGEventPost` with a target PID. This is how `ydotool` works on Linux, and there's a macOS equivalent using `CGEventCreateKeyboardEvent` + `CGEventPostToPSN`.
-- **(c) Use iTerm2's `write text` verb for all injection.** iTerm2's AppleScript `write text` targets a specific session by address and doesn't depend on window focus. The trick is that `write text` only handles text — for special keys (Return, Ctrl+C, Tab, backspace, etc.) we'd need to send escape sequences. Return is `write text "" newline yes`. Ctrl+C is `write text (ASCII character 3)`. Backspace is `write text (ASCII character 8)` or `(ASCII character 127)`. This would be a huge rewrite of `sendKeystroke` to detect whether the target is iTerm2 and use native verbs instead of System Events.
-
-**Recommendation:** (c) long-term, (a) as an interim fix. (b) is the most robust but requires significant C-level code and is the largest change.
-
-**Reproduce:** Open two iTerm2 windows, select one from the iPhone, tap Return. Often the Return lands in the OTHER window.
-
-**Current workaround:** Only have one iTerm2 window with Claude Code running at a time. Suboptimal but makes the issue invisible.
-
-**Related:** #25 (iTerm2-version smoke test — would have caught the verb-shape mismatch in `4006db4` that motivated this entry's tech debt in seconds, instead of after the fact).
+**Spec:** `docs/superpowers/specs/2026-04-15-iterm2-session-id-targeting-design.md`
+**Plan:** `docs/superpowers/plans/2026-04-15-iterm2-session-id-targeting.md`
 
 ---
 
@@ -270,18 +254,10 @@ Detection lives in the same terminal-content-parsing pipeline as #7 — once Qui
 
 ### 19. `/btw` shortcut button on iPhone
 
-**Status:** Wishlist
-**Depends on:** #1 (the `/plan` button — same pattern, same code paths)
-**Blocked on:** Same as #1 — keyboard/shortcut button bug-fix work the user wants vetted before new buttons land.
-**Context:** A one-tap button on the iPhone remote that types `/btw ` into the currently selected terminal window on the Mac, leaving the cursor on the same line so the user can continue typing or dictating. Mirrors the `/plan` button (#1) exactly — same `SendTextMessage` plumbing, same "no auto-dictate / no landscape / no cross-platform parity" v1 scope. Different command literal, otherwise identical.
+**Status:** ✅ Done — shipped in commit `c3d8b78` on `eb-branch` (2026-04-15). Added `btw` case to the `QuickButton` enum with `.sendText("/btw ", pressReturn: false)` action. Also added to the landscape `TerminalContentOverlay` button row. One commit, 5 lines changed.
 
-`/btw` is a registered Claude Code slash command — confirmed from the in-app autocomplete dropdown, which lists it with the description **"Ask a quick side question without interrupting the main conversation."** The user uses it heavily across multiple projects: subagent log files named `agent-aside_question-*.jsonl` appear under `~/.claude/projects/` for at least 8 different projects (Quip, drive-ins, fintechadventures, msu, national-parks, DesertDiaryAZ, hub, credit-unions). Strong inference: `/btw` dispatches a subagent named `aside_question` that handles the side question on an isolated context, leaving the main conversation unpolluted by tangential tokens.
-
-The defining source file for `/btw` wasn't findable during this session — checked `~/.claude/commands/` (didn't exist), `<project>/.claude/commands/`, and every `commands/` directory under `~/.claude/plugins/marketplaces/` and `~/.claude/plugins/cache/`, plus full-text grep for the description string. Whoever graduates this to a spec should track down the source location (most likely candidates: a plugin in a non-obvious path, an MCP server providing custom commands, or a Claude Code feature shipped after April 2026 that registers commands programmatically). Knowing where `/btw` lives matters less for the button itself — the button just types the literal characters and lets Claude Code on the other end resolve the command however it normally does — and more for understanding what the side-question subagent has access to (tools, context, etc.) when designing the v2 dictation flow.
-
-**Note for whoever graduates this to a spec:** with both `/plan` and `/btw` planned as standalone shortcut buttons, the canonical "two hardcoded buttons is becoming a pattern" smell is visible. Worth flagging in brainstorm whether the right v2 shape is "configurable list of slash-command shortcuts the user can edit in Settings" rather than another hardcoded button. Don't restructure #1 or #19 preemptively — let the brainstorm decide. But the option exists and shouldn't get lost.
-
-**Related:** #1 (`/plan` button — direct sibling), #4 (cross-platform parity — once `/btw` lands on iOS, mirror to QuipLinux/QuipAndroid same as `/plan`).
+**Original context** (kept for historical reference):
+A one-tap button on the iPhone remote that types `/btw ` into the currently selected terminal window. `/btw` is a Claude Code slash command that dispatches a subagent for side questions without polluting the main conversation context.
 
 ---
 
@@ -495,9 +471,9 @@ The table is in-memory only (lost on QuipMac restart, which is fine — by then 
 
 ---
 
-### 29. Launch iTerm2 profile from iPhone — project picker without a pre-existing window
+### 29. Launch iTerm2 window from iPhone — project directory picker
 
-**Status:** Wishlist
+**Status:** ✅ Done — shipped across commits `5b35c71`, `24fee2d`, `2320170` on `eb-branch` (2026-04-15). Implemented as a project-directory-based picker (simpler than the originally-specced iTerm2 profile approach). Mac broadcasts subdirectories of configured project roots to the iPhone via `ProjectDirectoriesMessage`. iPhone shows a "+" button (40pt, between chevrons and Push to Talk) that opens a sheet listing projects by folder name. Tapping one sends `SpawnWindowMessage`; Mac spawns iTerm in that dir with the configured spawn command, auto-enables the new window, broadcasts the updated layout, and auto-selects it on the phone.
 **Depends on:** Partial plumbing exists from the recently-shipped Duplicate feature (commits `44033ee → 75c2b95` + jboert's `5e8a9db`), which already knows how to `spawn new iTerm2 window in a directory running <configurable command>`.
 **Related:** #2 (add / close terminal tabs from the iPhone remote) — this entry sharpens #2 from *"open a new session"* to *"open a new session **in a specific project**"*. Could ship as a concrete implementation of #2's open-a-tab half, with #2 narrowing to just the close-a-tab half afterward.
 
