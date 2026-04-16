@@ -2,6 +2,7 @@
 // QuipMac — macOS Settings window with tabbed configuration panels
 
 import SwiftUI
+import Darwin
 
 struct SettingsView: View {
     @Environment(WindowManager.self) private var windowManager
@@ -306,6 +307,8 @@ private struct ConnectionTab: View {
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(TailscaleService.self) private var tailscale
+    @Environment(CloudflareTunnel.self) private var tunnel
+    @Environment(ConnectionLog.self) private var connectionLog
 
     @AppStorage("wsPort") private var port: Int = 8765
     @AppStorage("bonjourServiceName") private var serviceName: String = "Quip"
@@ -313,7 +316,6 @@ private struct ConnectionTab: View {
     @AppStorage("tailscaleHostnameOverride") private var tailscaleOverride: String = ""
     @AppStorage("requirePINForLocal") private var requirePINForLocal = false
     @AppStorage("spawnCommand") private var spawnCommand: String = "claude"
-    @State private var logEntries: [String] = []
 
     private var networkMode: NetworkMode {
         NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
@@ -422,9 +424,24 @@ private struct ConnectionTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Connection Log") {
-                if logEntries.isEmpty {
-                    Text("No recent activity")
+            Section("Diagnostics — Connection URLs") {
+                // Show every URL the phone could reasonably try right now —
+                // LAN, Tailscale, Cloudflare tunnel — each with a one-click
+                // copy. Debugging "nothing's loading on the phone" used to
+                // mean guessing which URL it had saved; now it's literally
+                // "copy this into the app's URL field."
+                urlRow(label: "LAN", url: Self.lanWSURL(port: port))
+                if let tsURL = tailscaleWSURL {
+                    urlRow(label: "Tailscale", url: tsURL)
+                }
+                if !tunnel.webSocketURL.isEmpty {
+                    urlRow(label: "Cloudflare", url: tunnel.webSocketURL)
+                }
+            }
+
+            Section("Diagnostics — Recent Connections") {
+                if connectionLog.events.isEmpty {
+                    Text("No connection attempts recorded yet.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -432,19 +449,134 @@ private struct ConnectionTab: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
-                            ForEach(logEntries, id: \.self) { entry in
-                                Text(entry)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                            ForEach(connectionLog.events) { event in
+                                connectionLogRow(event)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(height: 100)
+                    .frame(height: 140)
+
+                    Button {
+                        connectionLog.clear()
+                    } label: {
+                        Label("Clear Log", systemImage: "trash")
+                    }
+                    .controlSize(.small)
                 }
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func urlRow(label: String, url: String) -> some View {
+        LabeledContent(label) {
+            HStack(spacing: 6) {
+                Text(url)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy \(url)")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectionLogRow(_ event: ConnectionEvent) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(Self.timeFormatter.string(from: event.timestamp))
+                .font(.caption.monospaced())
+                .foregroundStyle(.tertiary)
+                .frame(width: 70, alignment: .leading)
+
+            Text(Self.eventLabel(event.kind))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Self.eventColor(event.kind))
+                .frame(width: 90, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.remote)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail = event.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var tailscaleWSURL: String? {
+        let url = tailscale.webSocketURL
+        return url.isEmpty ? nil : url
+    }
+
+    /// The LAN URL helper in `MainWindow.swift` uses the same getifaddrs loop —
+    /// we duplicate it here rather than reach across views for a private field.
+    /// Cheap enough; runs only on Settings render.
+    private static func lanWSURL(port: Int) -> String {
+        var address = "localhost"
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&ifaddr) == 0 {
+            var ptr = ifaddr
+            while let ifa = ptr {
+                let sa = ifa.pointee.ifa_addr.pointee
+                if sa.sa_family == UInt8(AF_INET) {
+                    let name = String(cString: ifa.pointee.ifa_name)
+                    if name.hasPrefix("en") {
+                        let addr = ifa.pointee.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                        let ip = String(cString: inet_ntoa(addr.sin_addr))
+                        if ip != "127.0.0.1" {
+                            address = ip
+                            break
+                        }
+                    }
+                }
+                ptr = ifa.pointee.ifa_next
+            }
+            freeifaddrs(ifaddr)
+        }
+        return "ws://\(address):\(port)"
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    private static func eventLabel(_ kind: ConnectionEvent.Kind) -> String {
+        switch kind {
+        case .connected: return "Connected"
+        case .disconnected: return "Disconnected"
+        case .authSucceeded: return "Auth ✓"
+        case .authFailed: return "Auth ✗"
+        case .failed: return "Failed"
+        }
+    }
+
+    private static func eventColor(_ kind: ConnectionEvent.Kind) -> Color {
+        switch kind {
+        case .connected, .authSucceeded: return .green
+        case .disconnected: return .secondary
+        case .authFailed, .failed: return .red
+        }
     }
 }
 
