@@ -22,6 +22,7 @@ targets:
           - "Tests/**"
           - "Signing.xcconfig"
           - "Signing.local.xcconfig"
+          - "build/**"
       - path: ../Shared
         excludes:
           - "Tests/**"

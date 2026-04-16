@@ -301,6 +301,9 @@ struct MainiOSView: View {
     @State private var textInputValue = ""
     @State private var showURLWarning = false
     @State private var pendingUnsafeURL: URL?
+    /// Which layout the next tap on the arrange button will send. The icon
+    /// shown on the button reflects this so the user can predict the outcome.
+    @State private var nextArrangeLayout: String = "horizontal"
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.
     @State private var isTerminalExpanded = false
@@ -530,6 +533,40 @@ struct MainiOSView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+        }
+        .sheet(isPresented: $showSpawnPicker) {
+            // Sheet lives on the outer body (not portraitControls) because the
+            // "New Window" button on the empty-state view is reachable even
+            // when windows are empty — at which point portraitControls is
+            // hidden and a sheet scoped there can't present.
+            NavigationStack {
+                Group {
+                    if projectDirectories.isEmpty {
+                        ContentUnavailableView(
+                            "No Project Directories",
+                            systemImage: "folder.badge.plus",
+                            description: Text("Add directories in Quip Mac Settings → Directories tab")
+                        )
+                    } else {
+                        List(projectDirectories, id: \.self) { dir in
+                            Button {
+                                client.send(SpawnWindowMessage(directory: dir))
+                                showSpawnPicker = false
+                            } label: {
+                                Label((dir as NSString).lastPathComponent, systemImage: "folder")
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("New Window")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showSpawnPicker = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
         }
         .alert("Unrecognized Server", isPresented: $showURLWarning) {
             Button("Connect Anyway", role: .destructive) {
@@ -876,6 +913,25 @@ struct MainiOSView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
+                // Arrange enabled windows horizontally or vertically. Icon
+                // shows what the next tap will do — after a tap it flips to
+                // the other layout. Needs 2+ enabled windows to do anything.
+                Button {
+                    client.send(ArrangeWindowsMessage(layout: nextArrangeLayout))
+                    nextArrangeLayout = (nextArrangeLayout == "horizontal") ? "vertical" : "horizontal"
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } label: {
+                    Image(systemName: nextArrangeLayout == "horizontal"
+                          ? "rectangle.split.3x1"
+                          : "rectangle.split.1x3")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(windows.filter(\.enabled).count >= 2 ? colors.textPrimary : colors.textFaint)
+                        .frame(width: 40, height: 56)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(windows.filter(\.enabled).count < 2)
+
                 // Push to talk
                 Button {
                     if isRecording {
@@ -941,36 +997,6 @@ struct MainiOSView: View {
             }
         }
         .padding(.vertical, 8)
-        .sheet(isPresented: $showSpawnPicker) {
-            NavigationStack {
-                Group {
-                    if projectDirectories.isEmpty {
-                        ContentUnavailableView(
-                            "No Project Directories",
-                            systemImage: "folder.badge.plus",
-                            description: Text("Add directories in Quip Mac Settings → Directories tab")
-                        )
-                    } else {
-                        List(projectDirectories, id: \.self) { dir in
-                            Button {
-                                client.send(SpawnWindowMessage(directory: dir))
-                                showSpawnPicker = false
-                            } label: {
-                                Label((dir as NSString).lastPathComponent, systemImage: "folder")
-                            }
-                        }
-                    }
-                }
-                .navigationTitle("New Window")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { showSpawnPicker = false }
-                    }
-                }
-            }
-            .presentationDetents([.medium])
-        }
     }
 
     private func cycleWindow(direction: Int) {

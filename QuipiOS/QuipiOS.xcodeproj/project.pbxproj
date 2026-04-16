@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		261C1C66A5F75E185F591DD1 /* KeystrokeFocusDelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A76C509CF77201B2EB8B5677 /* KeystrokeFocusDelayTests.swift */; };
 		2E3F0351CC5E90C934E0F0B2 /* HardwareButtonHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A7D08ECBB0B1EFA3F77328 /* HardwareButtonHandler.swift */; };
 		2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */; };
 		2FE851D3B7E5A263C2E1A06F /* SilentModeDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */; };
@@ -26,6 +27,7 @@
 		A977CCC72BA863A04F17FB77 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 07BAAAC4E0E8051B6FF2664E /* Assets.xcassets */; };
 		B74D4BBBD664959095BE58DE /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */; };
 		B86CDE99611F63E70CB7C7A3 /* RemoteLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */; };
+		BC0AAA34114426CFF2BEEB74 /* ArrangeLayoutMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEE82AF4A4EEBCF4A0DED50 /* ArrangeLayoutMappingTests.swift */; };
 		C10D61840E80EDAD704827A9 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 310DDC8B5BA9B05DA4632BF5 /* Color+Hex.swift */; };
 		D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */; };
 		FD026502AE44AEC997D48C0B /* ContextMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1FAB05086E60FFC302C3E6 /* ContextMenuView.swift */; };
@@ -57,11 +59,13 @@
 		8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
 		959643D7FC10BD21E0FDE409 /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
 		9EB84DC38B2B261AB78D9B78 /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
+		A76C509CF77201B2EB8B5677 /* KeystrokeFocusDelayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeFocusDelayTests.swift; sourceTree = "<group>"; };
 		A8B6A494C62E7118541A81C1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AB1FAB05086E60FFC302C3E6 /* ContextMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuView.swift; sourceTree = "<group>"; };
 		B3398B602525378B861B9218 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
 		BE693F49CD672CFD1507FDC6 /* QuipTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipTheme.swift; sourceTree = "<group>"; };
+		CDEE82AF4A4EEBCF4A0DED50 /* ArrangeLayoutMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeLayoutMappingTests.swift; sourceTree = "<group>"; };
 		D1BB453F0473949D38101D3F /* PTTWindowTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTWindowTrackerTests.swift; sourceTree = "<group>"; };
 		DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilentModeDetector.swift; sourceTree = "<group>"; };
 		F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
@@ -96,6 +100,8 @@
 		08A9474D6D5321029019D972 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				CDEE82AF4A4EEBCF4A0DED50 /* ArrangeLayoutMappingTests.swift */,
+				A76C509CF77201B2EB8B5677 /* KeystrokeFocusDelayTests.swift */,
 				343D7EF269316EB5B3DCC796 /* MessageProtocolTests.swift */,
 				D1BB453F0473949D38101D3F /* PTTWindowTrackerTests.swift */,
 				764505DC63C7C214558A63CC /* WindowManagerSessionIdTests.swift */,
@@ -268,6 +274,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BC0AAA34114426CFF2BEEB74 /* ArrangeLayoutMappingTests.swift in Sources */,
+				261C1C66A5F75E185F591DD1 /* KeystrokeFocusDelayTests.swift in Sources */,
 				6D05492F589AA379C4DB67BA /* MessageProtocolTests.swift in Sources */,
 				D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */,
 				689A5ACEE675BEBE7608C903 /* PTTWindowTrackerTests.swift in Sources */,

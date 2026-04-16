@@ -627,9 +627,44 @@ struct QuipMacApp: App {
                 selectNewWindowAfterSpawn(knownIds: knownIds, attempt: 0)
             }
 
+        case "arrange_windows":
+            if let msg = MessageCoder.decode(ArrangeWindowsMessage.self, from: data) {
+                print("[Quip] arrange_windows: layout=\(msg.layout)")
+                handleArrangeWindows(layout: msg.layout)
+            }
+
         default:
             break
         }
+    }
+
+    /// Drives the "arrange horizontally/vertically" command coming from the
+    /// phone. Mirrors MenuBarView's local "Arrange Windows" path: filter to
+    /// enabled windows, pick the main display, hand over to LayoutCalculator
+    /// + WindowManager.arrangeWindows. Invalid layout strings are rejected
+    /// with an error toast the phone can show.
+    @MainActor
+    private func handleArrangeWindows(layout: String) {
+        guard let mode = LayoutMode.fromArrangeLayout(layout) else {
+            webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement: \(layout)"))
+            return
+        }
+        let enabled = windowManager.windows.filter(\.isEnabled)
+        guard !enabled.isEmpty else {
+            webSocketServer.broadcast(ErrorMessage(reason: "No enabled windows to arrange"))
+            return
+        }
+        guard let display = windowManager.displays.first(where: { $0.isMain })
+                ?? windowManager.displays.first else {
+            webSocketServer.broadcast(ErrorMessage(reason: "No display available"))
+            return
+        }
+        let frames = LayoutCalculator.calculate(mode: mode, windowCount: enabled.count)
+        var targetFrames: [String: CGRect] = [:]
+        for (index, window) in enabled.enumerated() where index < frames.count {
+            targetFrames[window.id] = frames[index].toCGRect(in: display.frame)
+        }
+        windowManager.arrangeWindows(frames: targetFrames)
     }
 
     /// After spawning a window via duplicate_window, poll WindowManager for the

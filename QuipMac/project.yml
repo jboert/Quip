@@ -22,6 +22,7 @@ targets:
           - "*.entitlements"
           - "*.xcodeproj/**"
           - "Resources/cloudflared"
+          - "build/**"
       - path: ../Shared
         excludes:
           - "Tests/**"
