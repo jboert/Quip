@@ -161,6 +161,15 @@ struct MenuBarView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
+            if let version = Self.appVersionString {
+                Text("·")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text("v\(version)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
             Spacer()
 
             Button("Quit") {
@@ -171,6 +180,11 @@ struct MenuBarView: View {
             .foregroundStyle(.secondary)
         }
         .padding(12)
+    }
+
+    /// CFBundleShortVersionString from Info.plist (e.g. "1.0-eb-branch").
+    private static var appVersionString: String? {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     }
 
     // MARK: - Bindings
