@@ -44,9 +44,7 @@ User asked for this explicitly as a separate feature from `/plan`.
 
 ### 3. Landscape layout for `/plan` shortcut button
 
-**Status:** Wishlist
-**Depends on:** #1
-**Context:** The `/plan` v1 spec explicitly excluded landscape orientation. Follow-up commit to mirror the button into `landscapeControls` once the portrait version is shipping cleanly.
+**Status:** ✅ Done — `/plan` was already in the landscape `TerminalContentOverlay.swift` button row (shipped upstream by jboert in `5fd0bf6`). `/btw` was added alongside it in `c3d8b78` on `eb-branch` (2026-04-15).
 
 ---
 
@@ -228,8 +226,7 @@ As a quick-win, commit `(TBD)` added `print` statements to the `send_text` and `
 
 ### 17. Keyboard-input `onSubmit` + `pressReturn: true` double-Return bug
 
-**Status:** Wishlist — suspected bug, not yet reproduced
-**Context:** In `QuipiOS/QuipApp.swift` around line 916, the on-screen text-input `TextField` has `.onSubmit { sendTextInput() }`, and `sendTextInput` calls `client.send(SendTextMessage(..., pressReturn: true))`. When the user hits the iPhone's on-screen Return key while the TextField is focused, `onSubmit` fires the send handler, and the handler explicitly passes `pressReturn: true`. The net effect should be a single Return on the Mac side (the `pressReturn` flag tells the Mac to append one newline after the text), but it's worth double-checking that SwiftUI's Return key isn't *also* being propagated to the TextField's text buffer and arriving as an embedded `\n`. Needs verification and, if confirmed, fix.
+**Status:** ✅ Not a bug — investigated 2026-04-15. SwiftUI's `onSubmit` consumes the Return key event before it enters the text buffer, and `sendTextInput()` trims whitespace/newlines before sending. The text arrives clean at the Mac, and the single `pressReturn: true` flag appends exactly one newline. No double-Return occurs.
 
 ---
 
@@ -447,8 +444,10 @@ The table is in-memory only (lost on QuipMac restart, which is fine — by then 
 
 ### 28. Larger / higher-contrast option for the shortcut row buttons (esp. night mode)
 
-**Status:** Wishlist — accessibility / readability
-**Context:** The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked under #8) are reported to be too small to see comfortably, **particularly in night mode**. The user wants a way to make them larger — but without violating the compact UI rule that the rest of the layout follows by default. The night-mode angle is the most acute: in the dark UI scheme the buttons have lower visual contrast against the background, so even the tap target being correctly sized doesn't help if you can't see where to tap in dim ambient light.
+**Status:** ✅ Partially done — contrast fix shipped in `eb-branch` (2026-04-15). Bumped the shortcut row button font from 9pt to 11pt (icons 11→13pt), weight from `.medium` to `.semibold`, text opacity from 0.7→0.9, background opacity from 0.1→0.15, and padding from 7×5→9×7. Much more visible in dark mode now. The full Settings-based size picker (Small/Medium/Large) is still wishlist for a future pass.
+
+**Original context:**
+The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked under #8) are reported to be too small to see comfortably, **particularly in night mode**. The user wants a way to make them larger — but without violating the compact UI rule that the rest of the layout follows by default. The night-mode angle is the most acute: in the dark UI scheme the buttons have lower visual contrast against the background, so even the tap target being correctly sized doesn't help if you can't see where to tap in dim ambient light.
 
 **Two related but distinct fixes worth keeping on the table in brainstorming, because they address different real problems:**
 
