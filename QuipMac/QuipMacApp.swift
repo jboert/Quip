@@ -405,9 +405,25 @@ struct QuipMacApp: App {
 
     private func broadcastProjectDirectories() {
         let data = UserDefaults.standard.data(forKey: "projectDirectories") ?? Data()
-        let dirs = (try? JSONDecoder().decode([String].self, from: data)) ?? []
-        guard !dirs.isEmpty else { return }
-        webSocketServer.broadcast(ProjectDirectoriesMessage(directories: dirs))
+        let roots = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+        guard !roots.isEmpty else { return }
+        // Expand each configured root to its immediate subdirectories so the
+        // phone shows individual projects, not just the parent folder.
+        var projects: [String] = []
+        let fm = FileManager.default
+        for root in roots {
+            if let children = try? fm.contentsOfDirectory(atPath: root) {
+                for child in children.sorted() where !child.hasPrefix(".") {
+                    let full = (root as NSString).appendingPathComponent(child)
+                    var isDir: ObjCBool = false
+                    if fm.fileExists(atPath: full, isDirectory: &isDir), isDir.boolValue {
+                        projects.append(full)
+                    }
+                }
+            }
+        }
+        guard !projects.isEmpty else { return }
+        webSocketServer.broadcast(ProjectDirectoriesMessage(directories: projects))
     }
 
     @MainActor
@@ -600,9 +616,11 @@ struct QuipMacApp: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
             let currentIds = Set(windowManager.windows.map(\.id))
             if let newId = currentIds.subtracting(knownIds).first {
-                print("[Quip] duplicate_window: new window detected \(newId), switching selection")
+                print("[Quip] spawn: new window detected \(newId), enabling + switching selection")
+                windowManager.toggleWindow(newId, enabled: true)
                 clientSelectedWindowId = newId
                 windowManager.focusWindow(newId)
+                broadcastLayout()
                 webSocketServer.broadcast(SelectWindowMessage(windowId: newId))
             } else if attempt < 12 {
                 selectNewWindowAfterSpawn(knownIds: knownIds, attempt: attempt + 1)
