@@ -22,6 +22,7 @@ struct ManagedWindow: Identifiable, Sendable {
     let pid: pid_t                // Process ID
     let windowNumber: CGWindowID  // CG window number
     var bounds: CGRect            // Current window frame
+    var iterm2SessionId: String?
 
     /// Whether this window is hosted by a terminal emulator Quip supports
     /// (Terminal.app or iTerm2). Used for auto-grouping in the sidebar.
@@ -171,14 +172,16 @@ final class WindowManager {
                     id: info.id, name: info.name, app: info.app,
                     subtitle: existing.subtitle, bundleId: info.bundleId, icon: icon,
                     isEnabled: existing.isEnabled, assignedColor: existing.assignedColor,
-                    pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds
+                    pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
+                    iterm2SessionId: existing.iterm2SessionId
                 ))
             } else {
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
                     subtitle: "", bundleId: info.bundleId, icon: icon,
                     isEnabled: false, assignedColor: assignColor(),
-                    pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds
+                    pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
+                    iterm2SessionId: nil
                 ))
             }
         }
@@ -378,6 +381,12 @@ final class WindowManager {
         applySubtitles(subs)
     }
 
+    /// Query iTerm2 for current session UUIDs and update `iterm2SessionId` on matching windows.
+    func refreshIterm2SessionIds() {
+        let sessionIds = Self.fetchIterm2SessionIds()
+        applyIterm2SessionIds(sessionIds)
+    }
+
     /// Fetch subtitles off main — runs AppleScript that can block for 1-3 seconds.
     /// Returns a dictionary of CGWindowID → subtitle string.
     nonisolated static func fetchSubtitles() -> [CGWindowID: String] {
@@ -418,6 +427,39 @@ final class WindowManager {
         return result
     }
 
+    nonisolated static func fetchIterm2SessionIds() -> [String: String] {
+        var result: [String: String] = [:]
+        let script = """
+        set output to ""
+        tell application "iTerm2"
+            repeat with w in windows
+                set winName to name of w
+                tell current session of w
+                    set uid to unique id
+                end tell
+                set output to output & winName & "\\t" & uid & linefeed
+            end repeat
+        end tell
+        return output
+        """
+
+        guard let appleScript = NSAppleScript(source: script) else { return result }
+        var error: NSDictionary?
+        let asResult = appleScript.executeAndReturnError(&error)
+        guard error == nil, let output = asResult.stringValue else { return result }
+
+        for line in output.components(separatedBy: "\n") where !line.isEmpty {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count == 2 else { continue }
+            let name = parts[0]
+            let uuid = parts[1]
+            if result[name] == nil {
+                result[name] = uuid
+            }
+        }
+        return result
+    }
+
     /// Apply pre-fetched subtitles to windows. Call on main.
     func applySubtitles(_ subtitles: [CGWindowID: String]) {
         for (wid, folder) in subtitles {
@@ -434,6 +476,14 @@ final class WindowManager {
                     let pathPart = parts[1]
                     windows[i].subtitle = (pathPart as NSString).lastPathComponent
                 }
+            }
+        }
+    }
+
+    func applyIterm2SessionIds(_ sessionIds: [String: String]) {
+        for i in windows.indices where windows[i].bundleId == TerminalApp.iterm2.bundleIdentifier {
+            if let uuid = sessionIds[windows[i].name] {
+                windows[i].iterm2SessionId = uuid
             }
         }
     }
