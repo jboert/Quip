@@ -1275,17 +1275,17 @@ struct MainiOSView: View {
             Group {
                 if let symbol = button.systemImage {
                     Image(systemName: symbol)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 13, weight: .semibold))
                 } else {
                     Text(button.label)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 }
             }
-            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.7 : 0.3))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 5)
-            .background(Color.white.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(Color.white.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .disabled(selectedWindowId == nil)
     }
