@@ -69,7 +69,6 @@ targets:
     platform: iOS
     sources:
       - path: Tests
-      - path: ../Shared
     dependencies:
       - target: QuipiOS
     settings:
