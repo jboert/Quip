@@ -461,6 +461,7 @@ struct QuipMacApp: App {
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] send_text DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
             }
         case "quick_action":
@@ -473,6 +474,7 @@ struct QuipMacApp: App {
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] quick_action DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
             }
         case "stt_started":
@@ -577,6 +579,7 @@ struct QuipMacApp: App {
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] duplicate_window DROPPED: unknown source windowId=\(msg.sourceWindowId). Known: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Source window no longer exists"))
                 }
             }
 
@@ -590,6 +593,7 @@ struct QuipMacApp: App {
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] close_window DROPPED: unknown windowId=\(msg.windowId). Known: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
             }
 

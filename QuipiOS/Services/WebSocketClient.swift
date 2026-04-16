@@ -118,6 +118,7 @@ final class WebSocketClient {
     /// spawned a new window (e.g. duplicate) and wants the phone to follow along.
     var onSelectWindow: ((String) -> Void)?
     var onProjectDirectories: (([String]) -> Void)?
+    var onError: ((String) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
 
@@ -442,17 +443,24 @@ final class WebSocketClient {
             if let msg = try? decoder.decode(ProjectDirectoriesMessage.self, from: data) {
                 onProjectDirectories?(msg.directories)
             }
+        case "error":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ErrorMessage.self, from: data) {
+                onError?(msg.reason)
+            }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)
         }
     }
 
-    /// Ping the server every 30 seconds. If a ping fails, tear down and reconnect.
+    /// Ping the server every 10 seconds. If a ping fails, tear down and reconnect.
+    /// The tighter interval (vs the old 30s) surfaces dead connections within ~10-15s
+    /// so the phone shows "disconnected" quickly instead of silently swallowing taps.
     private func startKeepalive() {
         keepaliveTask?.cancel()
         keepaliveTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
                 guard !Task.isCancelled, let self, let task = self.webSocketTask else { return }
                 task.sendPing { error in
                     DispatchQueue.main.async {
