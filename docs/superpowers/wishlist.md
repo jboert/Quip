@@ -129,7 +129,7 @@ When Quip (QuipMac, and probably also QuipiOS) closes and relaunches, the list o
 
 ### 11. Window ID stability across QuipMac restarts
 
-**Status:** Wishlist — tech debt surfaced during debugging session
+**Status:** ✅ Partially done — shipped in commit `30be68c` on `eb-branch` (2026-04-15). When the phone receives a layout update and its `selectedWindowId` is no longer in the window list (Mac restarted, window closed), it auto-selects the first available window instead of going to nil. Full stable-UUID-based window identity is still wishlist but the silent-dead-selection problem is fixed.
 **Context:** Every time QuipMac is killed and relaunched, `WindowManager` re-registers all terminal windows and assigns them fresh internal IDs. The iPhone, meanwhile, still holds a `selectedWindowId` from the previous session in its local state. When the iPhone sends a `QuickActionMessage` or `SendTextMessage` with the old ID, the Mac's handler fails to find a matching window and **silently drops the message** — from the user's perspective, the button "stops working" with zero feedback.
 
 **Fix options:**
@@ -145,7 +145,7 @@ When Quip (QuipMac, and probably also QuipiOS) closes and relaunches, the list o
 
 ### 12. Silent failure diagnostics — add audible errors or UI feedback when messages are dropped
 
-**Status:** Wishlist — tech debt surfaced during debugging session
+**Status:** ✅ Done — shipped in commit `30be68c` on `eb-branch` (2026-04-15). Added `ErrorMessage` to the protocol. All 4 Mac-side handlers that drop messages (`send_text`, `quick_action`, `duplicate_window`, `close_window`) now broadcast an `ErrorMessage` back to the phone. The phone shows a red capsule toast at the top that auto-dismisses after 3 seconds.
 **Context:** Several handlers in `QuipMac/QuipMacApp.swift` use the `if let window = windowManager.windows.first(where: { $0.id == msg.windowId })` pattern and silently return when the lookup fails. This makes debugging hard: a button that "doesn't do anything" could be dropped at any of half a dozen stages, and without instrumentation there's no signal.
 
 As a quick-win, commit `(TBD)` added `print` statements to the `send_text` and `quick_action` handlers so dropped messages show up in Xcode console / Console.app. But that's just observability for *developers* — the user still sees "button didn't work."
@@ -260,8 +260,10 @@ A one-tap button on the iPhone remote that types `/btw ` into the currently sele
 
 ### 20. WebSocket heartbeat / dead-peer detection
 
-**Status:** Wishlist — high-priority reliability infrastructure
-**Context:** When QuipMac crashes, the Mac sleeps, Tailscale drops the route, or any other "the other end is gone" event happens, the iPhone's WebSocket state still reports "connected" until the next outgoing send fails. Until then, every button tap appears to succeed (the message gets queued / sent without error) but nothing happens on the Mac. This is the root cause of the largest class of "Quip just stops working" reports — the connection looks alive, the app has no signal that it isn't, the user has no signal that it isn't, and the only recovery path is force-quit-and-relaunch on the iPhone.
+**Status:** ✅ Partially done — shipped in commit `30be68c` on `eb-branch` (2026-04-15). Client keepalive tightened from 30s→10s ping interval; failed pings immediately trigger disconnect + reconnect with exponential backoff. Server already had TCP keepalives at 15s/5s/3-probe (~30s). Combined: dead connections surface within ~10-15s on the phone (down from ~30-60s). The UI already had a connect bar that shows when disconnected. Full bidirectional heartbeat with server-initiated pings is still wishlist but the main "silent dead connection" problem is dramatically reduced.
+
+**Original context:**
+When QuipMac crashes, the Mac sleeps, Tailscale drops the route, or any other "the other end is gone" event happens, the iPhone's WebSocket state still reports "connected" until the next outgoing send fails. Until then, every button tap appears to succeed (the message gets queued / sent without error) but nothing happens on the Mac. This is the root cause of the largest class of "Quip just stops working" reports — the connection looks alive, the app has no signal that it isn't, the user has no signal that it isn't, and the only recovery path is force-quit-and-relaunch on the iPhone.
 
 **Fix:** implement a bidirectional heartbeat at the WebSocket layer. Both the iPhone and the Mac send a ping frame every ~5 seconds; if either side doesn't receive a pong within ~15 seconds, the connection is considered dead. The detecting side immediately surfaces a visible "disconnected" UI state (red banner on the iPhone, status bar update on the Mac), tears down the dead WebSocket, and enters a reconnect loop with exponential backoff (1s, 2s, 4s, 8s, 16s, cap 30s). On successful reconnect, the iPhone re-requests the current window list to resync.
 
