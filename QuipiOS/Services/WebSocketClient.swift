@@ -441,6 +441,7 @@ final class WebSocketClient {
         case "project_directories":
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(ProjectDirectoriesMessage.self, from: data) {
+                NSLog("[WebSocketClient] Received %d project directories", msg.directories.count)
                 onProjectDirectories?(msg.directories)
             }
         case "error":
