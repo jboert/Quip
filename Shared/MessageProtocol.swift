@@ -178,6 +178,21 @@ struct SpawnWindowMessage: Codable, Sendable {
     }
 }
 
+/// iPhone → Mac. Asks the Mac to evenly arrange all enabled windows on the
+/// main display, either side-by-side (`layout == "horizontal"`) or stacked
+/// top-to-bottom (`layout == "vertical"`). Any other value is rejected on
+/// the Mac side. Mac uses the existing LayoutCalculator + arrangeWindows
+/// path — same one the menu-bar "Arrange Windows" button triggers.
+struct ArrangeWindowsMessage: Codable, Sendable {
+    let type: String
+    let layout: String  // "horizontal" or "vertical"
+
+    init(layout: String) {
+        self.type = "arrange_windows"
+        self.layout = layout
+    }
+}
+
 /// Mac → iPhone. Sends the list of project directories configured in
 /// Mac Settings so the iPhone can offer a "new window" picker.
 struct ProjectDirectoriesMessage: Codable, Sendable {

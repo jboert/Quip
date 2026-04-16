@@ -74,6 +74,32 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(dict["windowId"] as? String, "win-3")
     }
 
+    func testArrangeWindowsMessageHorizontalEncoding() throws {
+        let msg = ArrangeWindowsMessage(layout: "horizontal")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "arrange_windows")
+        XCTAssertEqual(dict["layout"] as? String, "horizontal")
+    }
+
+    func testArrangeWindowsMessageVerticalEncoding() throws {
+        let msg = ArrangeWindowsMessage(layout: "vertical")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["layout"] as? String, "vertical")
+    }
+
+    func testArrangeWindowsRoundTrip() throws {
+        let original = ArrangeWindowsMessage(layout: "horizontal")
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let decoded = try XCTUnwrap(MessageCoder.decode(ArrangeWindowsMessage.self, from: data))
+
+        XCTAssertEqual(decoded.type, "arrange_windows")
+        XCTAssertEqual(decoded.layout, "horizontal")
+    }
+
     // MARK: - Authentication messages
 
     func testAuthMessageEncoding() throws {
