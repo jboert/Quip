@@ -406,13 +406,18 @@ final class WindowManager {
         applyIterm2SessionIds(sessions)
     }
 
-    /// Filter the window list for LayoutUpdate broadcasts. When
-    /// `mirrorDesktop` is off (default): only windows the user has explicitly
-    /// enabled are broadcast — Quip is an allowlist. When on: every terminal
-    /// window also goes out, so the phone can see the full desktop at a
-    /// glance and tap-to-activate the one it wants to drive. Enabled
-    /// non-terminals still ride along in mirror mode so a user who manually
-    /// turned on (say) a browser window doesn't lose it when the toggle flips.
+    /// Filter the window list for LayoutUpdate broadcasts.
+    ///
+    /// Mirror OFF (default): only windows the user has explicitly enabled —
+    /// Quip is an allowlist.
+    ///
+    /// Mirror ON: every terminal currently drawn on a connected screen goes
+    /// out, so the phone shows the *visible* desktop at a glance. Off-screen
+    /// terminals (inactive Space, disconnected monitor) are filtered out —
+    /// CG's `.optionOnScreenOnly` isn't reliable here, so we re-check in
+    /// `applyWindowSnapshot`. Enabled windows always ride along regardless
+    /// of visibility, so a browser the user turned on, or a terminal that
+    /// later slipped off-screen, doesn't disappear from the phone.
     nonisolated static func windowsForBroadcast(_ all: [ManagedWindow], mirrorDesktop: Bool) -> [ManagedWindow] {
         if mirrorDesktop {
             return all.filter { ($0.isTerminal && $0.isOnVisibleScreen) || $0.isEnabled }
