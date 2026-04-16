@@ -798,15 +798,15 @@ struct MainiOSView: View {
 
         return VStack(spacing: 8) {
             // Control buttons
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
                 // Previous window
                 Button {
                     cycleWindow(direction: -1)
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 56, height: 56)
+                        .frame(width: 40, height: 56)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -817,9 +817,9 @@ struct MainiOSView: View {
                     cycleWindow(direction: 1)
                 } label: {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 56, height: 56)
+                        .frame(width: 40, height: 56)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -831,9 +831,9 @@ struct MainiOSView: View {
                         showSpawnPicker = true
                     } label: {
                         Image(systemName: "plus")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(colors.textPrimary)
-                            .frame(width: 56, height: 56)
+                            .frame(width: 40, height: 56)
                             .background(colors.surface)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
