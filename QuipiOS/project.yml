@@ -23,6 +23,8 @@ targets:
           - "Signing.xcconfig"
           - "Signing.local.xcconfig"
       - path: ../Shared
+        excludes:
+          - "Tests/**"
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
@@ -69,6 +71,7 @@ targets:
     platform: iOS
     sources:
       - path: Tests
+      - path: ../Shared/Tests
     dependencies:
       - target: QuipiOS
     settings:
