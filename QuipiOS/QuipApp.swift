@@ -1468,13 +1468,14 @@ struct InlineTerminalContent: View {
 // MARK: - Quick Button Config
 
 enum QuickButton: String, CaseIterable, Identifiable {
-    case plan, backspace, clearContext, one, two, three
+    case plan, btw, backspace, clearContext, one, two, three
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .plan: return "/plan"
+        case .btw: return "/btw"
         case .backspace: return "Backspace"
         case .clearContext: return "Clear context (/clear)"
         case .one: return "1"
@@ -1486,6 +1487,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .plan: return "/plan"
+        case .btw: return "/btw"
         case .backspace: return ""
         case .clearContext: return "/clear"
         case .one: return "1"
@@ -1506,6 +1508,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
     var action: Action {
         switch self {
         case .plan: return .sendText("/plan ", pressReturn: false)
+        case .btw: return .sendText("/btw ", pressReturn: false)
         case .backspace: return .quickAction("press_backspace")
         case .clearContext: return .sendText("/clear", pressReturn: true)
         case .one: return .sendText("1", pressReturn: true)
