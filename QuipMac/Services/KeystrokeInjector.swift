@@ -15,6 +15,25 @@ final class KeystrokeInjector {
         let error: String?
     }
 
+    /// Which injection path the delay is being computed for. `.sendText`
+    /// historically needed 80ms; `.quickAction` needed 200ms because the
+    /// System Events keystroke path races the AX window raise harder.
+    enum KeystrokePath: Sendable { case sendText, quickAction }
+
+    /// Returns the delay QuipMac should wait after calling `focusWindow`
+    /// before firing the AppleScript keystroke. When iTerm2 session-write
+    /// targets a session directly by UUID, it does NOT require the window
+    /// to be frontmost — the delay is pure latency and must be zero.
+    nonisolated static func focusDelay(path: KeystrokePath,
+                                       terminalApp: TerminalApp,
+                                       iterm2SessionId: String?) -> TimeInterval {
+        if terminalApp == .iterm2 && iterm2SessionId != nil { return 0 }
+        switch path {
+        case .sendText:    return 0.08
+        case .quickAction: return 0.2
+        }
+    }
+
     // MARK: - Send Text
 
     /// Send text to a specific terminal window, optionally pressing Return after.

@@ -23,6 +23,7 @@ struct QuipApp: App {
     @State private var monitorName: String = "Mac"
     @State private var screenAspect: Double = 16.0 / 10.0
     @State private var isRecording = false
+    @State private var pttTracker = PTTWindowTracker()
     @State private var terminalContentText: String?
     @State private var terminalContentScreenshot: String?
     @State private var terminalContentWindowId: String?
@@ -220,6 +221,10 @@ struct QuipApp: App {
     @MainActor
     private func startRecording() {
         guard let windowId = selectedWindowId else { return }
+        // Pin the windowId for this recording — stopRecording must not re-read
+        // selectedWindowId, because a mid-recording select_window push or a
+        // layout-update reassignment can change it underneath us.
+        pttTracker.begin(windowId: windowId)
         speech.startRecording()
         isRecording = true
         // Haptic: heavy impact for recording start
@@ -247,7 +252,7 @@ struct QuipApp: App {
         // literal line-breaks inside Claude Code's input box, which then swallows the
         // pressReturn keystroke as "add another newline" instead of "submit".
         let text = speech.stopRecording().trimmingCharacters(in: .whitespacesAndNewlines)
-        let windowId = selectedWindowId
+        let windowId = pttTracker.end()
         NSLog("[Quip] stopRecording: windowId=%@, text='%@' (length=%d)", windowId ?? "nil", text, text.count)
         if let windowId {
             client.send(STTStateMessage.ended(windowId: windowId))
@@ -860,17 +865,15 @@ struct MainiOSView: View {
                 .disabled(windows.count <= 1)
 
                 // Spawn new window from project directory
-                if !projectDirectories.isEmpty {
-                    Button {
-                        showSpawnPicker = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(colors.textPrimary)
-                            .frame(width: 40, height: 56)
-                            .background(colors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
+                Button {
+                    showSpawnPicker = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(colors.textPrimary)
+                        .frame(width: 40, height: 56)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
                 // Push to talk
@@ -940,12 +943,22 @@ struct MainiOSView: View {
         .padding(.vertical, 8)
         .sheet(isPresented: $showSpawnPicker) {
             NavigationStack {
-                List(projectDirectories, id: \.self) { dir in
-                    Button {
-                        client.send(SpawnWindowMessage(directory: dir))
-                        showSpawnPicker = false
-                    } label: {
-                        Label((dir as NSString).lastPathComponent, systemImage: "folder")
+                Group {
+                    if projectDirectories.isEmpty {
+                        ContentUnavailableView(
+                            "No Project Directories",
+                            systemImage: "folder.badge.plus",
+                            description: Text("Add directories in Quip Mac Settings → Directories tab")
+                        )
+                    } else {
+                        List(projectDirectories, id: \.self) { dir in
+                            Button {
+                                client.send(SpawnWindowMessage(directory: dir))
+                                showSpawnPicker = false
+                            } label: {
+                                Label((dir as NSString).lastPathComponent, systemImage: "folder")
+                            }
+                        }
                     }
                 }
                 .navigationTitle("New Window")
@@ -1073,7 +1086,7 @@ struct MainiOSView: View {
                             Text(client.isAuthenticated ? "No windows" : client.isConnected ? "Enter PIN" : "Enter tunnel URL")
                                 .font(.system(size: 10))
                                 .foregroundStyle(colors.textFaint)
-                            if client.isAuthenticated && !projectDirectories.isEmpty {
+                            if client.isAuthenticated {
                                 Button {
                                     showSpawnPicker = true
                                 } label: {

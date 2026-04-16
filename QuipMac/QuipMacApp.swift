@@ -170,8 +170,9 @@ struct QuipMacApp: App {
 
         var subtitleCounter = 0
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            // All heavy work (CG queries, AppleScript) runs off main so it
-            // can't block tunnel message delivery or other main-queue work.
+            // Read on main so we can use @MainActor state; the expensive
+            // AppleScript/CG calls run off-main below.
+            let forceSessionFetch = windowManager.needsIterm2SessionIdRefresh
             DispatchQueue.global(qos: .utility).async {
                 let snapshot = WindowManager.fetchWindowList()
                 subtitleCounter += 1
@@ -182,11 +183,16 @@ struct QuipMacApp: App {
                 } else {
                     subtitles = nil
                 }
-                let sessionIds = subtitles != nil ? WindowManager.fetchIterm2SessionIds() : nil
+                // Fetch session IDs on the subtitle cycle OR whenever the Mac
+                // side has any iTerm2 window still missing a UUID. Without the
+                // latter, a new window can route keystrokes to the wrong pane
+                // for up to the full 10s subtitle-cycle gap.
+                let shouldFetchSessions = subtitles != nil || forceSessionFetch
+                let sessions = shouldFetchSessions ? WindowManager.fetchIterm2SessionIds() : nil
                 DispatchQueue.main.async {
                     windowManager.applyWindowSnapshot(snapshot)
                     if let subtitles { windowManager.applySubtitles(subtitles) }
-                    if let sessionIds { windowManager.applyIterm2SessionIds(sessionIds) }
+                    if let sessions { windowManager.applyIterm2SessionIds(sessions) }
                     self.syncTrackedWindows()
                     broadcastLayout()
                 }
@@ -456,14 +462,22 @@ struct QuipMacApp: App {
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    // 80ms lets windowManager.focusWindow's AX raise propagate
-                    // before sendText's AppleScript talks to iTerm2/Terminal.app.
-                    // Earlier attempt zeroed this for iTerm2 based on an
-                    // AppleScript-side window picker that got reverted (465d5b5);
-                    // without the delay, keystrokes race the focus and Return
-                    // misses the intended window.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    // When iTerm2 session-write can target the session by UUID,
+                    // the AX raise doesn't need to finish before AppleScript fires
+                    // — `write text` bypasses focus. `focusDelay` returns 0 in
+                    // that case. Otherwise we fall back to the old 80ms delay
+                    // that the System Events/front-window path needs.
+                    let delay = KeystrokeInjector.focusDelay(
+                        path: .sendText, terminalApp: termApp,
+                        iterm2SessionId: window.iterm2SessionId
+                    )
+                    let inject = {
                         self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                    }
+                    if delay == 0 {
+                        inject()
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { inject() }
                     }
                 } else {
                     let known = windowManager.windows.map { $0.id }
@@ -661,56 +675,62 @@ struct QuipMacApp: App {
             windowManager.focusWindow(wid)
         }
         // 200ms lets windowManager.focusWindow's AX raise propagate before the
-        // keystroke AppleScript fires. An earlier attempt zeroed this for iTerm2
-        // on the assumption a new AppleScript-side window picker would pin the
-        // target window, but that picker got reverted (465d5b5) and never worked
-        // because iTerm2's `id of window` isn't the CGWindowID. Without this
-        // delay, Return and other shortcut keystrokes race the AX raise and
-        // either land in the wrong iTerm2 window or get dropped entirely.
-        let injectionDelay: TimeInterval = 0.2
+        // keystroke AppleScript fires — but only when we're falling back to
+        // the front-window/System-Events path. When iTerm2 session-write has
+        // a real session UUID, the keystroke targets the session directly and
+        // can fire immediately. Skipping the 200ms there is the single biggest
+        // button-latency win.
+        let injectionDelay = KeystrokeInjector.focusDelay(
+            path: .quickAction, terminalApp: termApp,
+            iterm2SessionId: window.iterm2SessionId
+        )
+        let runAfterDelay: (@escaping () -> Void) -> Void = { work in
+            if injectionDelay == 0 { work() }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) { work() } }
+        }
         switch action {
         case "press_return":
             // Use sendText's direct iTerm2/Terminal AppleScript path (empty text
             // + newline) rather than System Events keystroke. Volume-PTT uses the
             // same path reliably; the System Events path races the AX raise and
             // drops Return on iTerm2 when multiple windows are open.
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_ctrl_c":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_ctrl_d":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_escape":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_tab":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_backspace":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_y":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_n":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "clear_terminal":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "restart_claude":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+            runAfterDelay {
                 keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)

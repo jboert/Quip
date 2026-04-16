@@ -383,8 +383,28 @@ final class WindowManager {
 
     /// Query iTerm2 for current session UUIDs and update `iterm2SessionId` on matching windows.
     func refreshIterm2SessionIds() {
-        let sessionIds = Self.fetchIterm2SessionIds()
-        applyIterm2SessionIds(sessionIds)
+        let sessions = Self.fetchIterm2SessionIds()
+        applyIterm2SessionIds(sessions)
+    }
+
+    /// True when any tracked iTerm2 window is missing its session UUID — the
+    /// snapshot timer checks this to fetch session IDs immediately on the next
+    /// tick instead of waiting for the subtitle cycle. Without this, a newly
+    /// spawned iTerm2 window can spend up to ~10s routing its text/keystrokes
+    /// to whichever iTerm2 window happens to be frontmost on the Mac, because
+    /// the AppleScript fallback path targets `current session of front window`.
+    var needsIterm2SessionIdRefresh: Bool {
+        let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
+        return windows.contains { $0.bundleId == iterm2BundleId && $0.iterm2SessionId == nil }
+    }
+
+    /// One iTerm2 window's session mapping: the window's screen bounds and the
+    /// UUID of its current session. Keyed by bounds (not by title) because
+    /// iTerm2 window titles are frequently duplicated across windows — same
+    /// process, same cwd → same title → collision.
+    struct Iterm2SessionInfo: Sendable {
+        let bounds: CGRect
+        let uuid: String
     }
 
     /// Fetch subtitles off main — runs AppleScript that can block for 1-3 seconds.
@@ -427,17 +447,21 @@ final class WindowManager {
         return result
     }
 
-    nonisolated static func fetchIterm2SessionIds() -> [String: String] {
-        var result: [String: String] = [:]
+    nonisolated static func fetchIterm2SessionIds() -> [Iterm2SessionInfo] {
+        var result: [Iterm2SessionInfo] = []
+        // bounds of w returns {left, top, right, bottom} in screen coordinates
+        // with top-left origin — same as CGWindowList. We join the four with
+        // commas and use TAB to separate from the UUID so titles (or UUIDs
+        // containing punctuation) can't confuse the parser.
         let script = """
         set output to ""
         tell application "iTerm2"
             repeat with w in windows
-                set winName to name of w
+                set {l, t, r, b} to bounds of w
                 tell current session of w
                     set uid to unique id
                 end tell
-                set output to output & winName & "\\t" & uid & linefeed
+                set output to output & l & "," & t & "," & r & "," & b & "\\t" & uid & linefeed
             end repeat
         end tell
         return output
@@ -451,11 +475,13 @@ final class WindowManager {
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")
             guard parts.count == 2 else { continue }
-            let name = parts[0]
+            let coords = parts[0].components(separatedBy: ",")
+            guard coords.count == 4,
+                  let l = Double(coords[0]), let t = Double(coords[1]),
+                  let r = Double(coords[2]), let b = Double(coords[3]) else { continue }
+            let bounds = CGRect(x: l, y: t, width: r - l, height: b - t)
             let uuid = parts[1]
-            if result[name] == nil {
-                result[name] = uuid
-            }
+            result.append(Iterm2SessionInfo(bounds: bounds, uuid: uuid))
         }
         return result
     }
@@ -480,9 +506,32 @@ final class WindowManager {
         }
     }
 
-    func applyIterm2SessionIds(_ sessionIds: [String: String]) {
-        for i in windows.indices where windows[i].bundleId == TerminalApp.iterm2.bundleIdentifier {
-            if let uuid = sessionIds[windows[i].name] {
+    /// Attach each iTerm2 session UUID to the tracked window whose bounds best
+    /// match its AppleScript-reported bounds. Matching by bounds (not by title)
+    /// is required because iTerm2 windows routinely share titles — same
+    /// command, same cwd. A generous 32 pt tolerance absorbs minor drift
+    /// between CG window bounds and AppleScript window bounds (title bar,
+    /// shadows). Windows with no nearby session are left with a nil UUID —
+    /// they'll fall back to the "front window" AppleScript path, which is
+    /// still wrong, but at least we don't misattach a random UUID.
+    func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo]) {
+        let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
+        let matchToleranceSquared: CGFloat = 32 * 32
+        for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+            let target = CGPoint(x: windows[i].bounds.midX, y: windows[i].bounds.midY)
+            var bestUUID: String?
+            var bestDistSq: CGFloat = .infinity
+            for session in sessions {
+                let mid = CGPoint(x: session.bounds.midX, y: session.bounds.midY)
+                let dx = mid.x - target.x
+                let dy = mid.y - target.y
+                let distSq = dx * dx + dy * dy
+                if distSq < bestDistSq {
+                    bestDistSq = distSq
+                    bestUUID = session.uuid
+                }
+            }
+            if let uuid = bestUUID, bestDistSq <= matchToleranceSquared {
                 windows[i].iterm2SessionId = uuid
             }
         }
