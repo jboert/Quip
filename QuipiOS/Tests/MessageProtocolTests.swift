@@ -1,5 +1,5 @@
 import XCTest
-@testable import QuipiOS
+@testable import Quip
 
 /// Unit tests for MessageProtocol encoding/decoding.
 /// Verifies that all message types produce the expected JSON structure
