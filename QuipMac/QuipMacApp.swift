@@ -11,6 +11,7 @@ struct QuipMacApp: App {
     @State private var tunnel = CloudflareTunnel()
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
+    @State private var connectionLog = ConnectionLog()
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
     private var networkMode: NetworkMode {
@@ -80,6 +81,7 @@ struct QuipMacApp: App {
                 .environment(tunnel)
                 .environment(tailscale)
                 .environment(pinManager)
+                .environment(connectionLog)
         }
     }
 
@@ -99,6 +101,7 @@ struct QuipMacApp: App {
         _ = migrateNetworkModeIfNeeded()
 
         webSocketServer.pinManager = pinManager
+        webSocketServer.connectionLog = connectionLog
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
         webSocketServer.requireAuth = requirePIN
         webSocketServer.start()

@@ -15,6 +15,10 @@ final class WebSocketServer {
     var onMessageReceived: ((Data) -> Void)?
     var onClientAuthenticated: (() -> Void)?
     var pinManager: PINManager?
+    /// Diagnostics log — optional so nothing breaks if the app hasn't wired
+    /// it in yet. The server feeds events (connect/disconnect/auth), the
+    /// Settings panel reads them.
+    var connectionLog: ConnectionLog?
     /// Read from the network queue during connection handshake, so it can't live
     /// on the MainActor. It's a plain Bool — atomic reads/writes are fine.
     @ObservationIgnored
@@ -133,20 +137,31 @@ final class WebSocketServer {
                     Self.wslog("Sent auth signal, starting receiveMessage")
                     // State mutation hops to main (this can be slow under load,
                     // but the socket handshake no longer cares).
+                    let remoteStr = String(describing: connection.endpoint)
                     DispatchQueue.main.async {
                         var client = ClientConnection(connection: connection)
                         client.isAuthenticated = !requireAuthNow
                         self.clients.append(client)
                         self.connectedClientCount = self.clients.count
+                        self.connectionLog?.record(
+                            .connected,
+                            remote: remoteStr,
+                            detail: requireAuthNow ? "awaiting PIN" : "no PIN required"
+                        )
                     }
                 case .failed(let error):
                     Self.wslog("Connection FAILED: \(error)")
                     KokoroTTSDebug.log("WS connection FAILED: \(error)")
+                    let remoteStr = String(describing: connection.endpoint)
+                    let errStr = String(describing: error)
                     DispatchQueue.main.async {
+                        self.connectionLog?.record(.failed, remote: remoteStr, detail: errStr)
                         self.removeConnection(connection)
                     }
                 case .cancelled:
+                    let remoteStr = String(describing: connection.endpoint)
                     DispatchQueue.main.async {
+                        self.connectionLog?.record(.disconnected, remote: remoteStr, detail: nil)
                         self.removeConnection(connection)
                     }
                 default:
@@ -341,16 +356,19 @@ final class WebSocketServer {
             return
         }
 
+        let remoteStr = String(describing: connection.endpoint)
         if authMsg.pin == expectedPIN {
             KokoroTTSDebug.log("auth: PIN matched, sending success")
             setAuthenticated(connection)
             send(AuthResultMessage(success: true, error: nil), to: connection)
             print("[WebSocketServer] Client authenticated successfully")
+            connectionLog?.record(.authSucceeded, remote: remoteStr, detail: nil)
             onClientAuthenticated?()
         } else {
             KokoroTTSDebug.log("auth: PIN mismatch (got '\(authMsg.pin)', expected '\(expectedPIN)')")
             send(AuthResultMessage(success: false, error: "Incorrect PIN"), to: connection)
             print("[WebSocketServer] Authentication failed: incorrect PIN")
+            connectionLog?.record(.authFailed, remote: remoteStr, detail: "incorrect PIN")
         }
     }
 
