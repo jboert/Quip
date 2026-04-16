@@ -559,7 +559,14 @@ struct QuipMacApp: App {
                     // can't block send_text, auth, or other time-sensitive messages.
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer] in
                         let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
-                        let lines = content.components(separatedBy: "\n")
+                        var lines = content.components(separatedBy: "\n")
+                        // iTerm's buffer includes the whitespace cells Claude Code
+                        // pads below its prompt box to wipe stale text. Shipped
+                        // raw those blank rows land at the bottom of the phone's
+                        // scroll view and shove the prompt out of sight.
+                        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+                            lines.removeLast()
+                        }
                         let trimmed = lines.suffix(200).joined(separator: "\n")
                         let redacted = SecretRedactor.redact(trimmed)
                         let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
