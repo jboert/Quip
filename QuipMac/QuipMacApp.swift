@@ -135,6 +135,12 @@ struct QuipMacApp: App {
             }
         }
 
+        webSocketServer.onClientAuthenticated = { [self] in
+            DispatchQueue.main.async {
+                self.broadcastLayout()
+            }
+        }
+
         terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
             webSocketServer.broadcast(StateChangeMessage(windowId: windowId, state: newState.rawValue))
 
@@ -423,6 +429,7 @@ struct QuipMacApp: App {
             }
         }
         guard !projects.isEmpty else { return }
+        print("[Quip] Broadcasting \(projects.count) project directories to phone")
         webSocketServer.broadcast(ProjectDirectoriesMessage(directories: projects))
     }
 
@@ -599,6 +606,7 @@ struct QuipMacApp: App {
 
         case "spawn_window":
             if let msg = MessageCoder.decode(SpawnWindowMessage.self, from: data) {
+                print("[Quip] spawn_window: directory=\(msg.directory)")
                 let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
                 let knownIds = Set(windowManager.windows.map(\.id))
                 keystrokeInjector.spawnWindow(in: msg.directory, command: cmd, terminalApp: .iterm2)

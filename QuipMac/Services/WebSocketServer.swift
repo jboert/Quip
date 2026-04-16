@@ -13,6 +13,7 @@ final class WebSocketServer {
     var isRunning: Bool = false
     var connectedClientCount: Int = 0
     var onMessageReceived: ((Data) -> Void)?
+    var onClientAuthenticated: (() -> Void)?
     var pinManager: PINManager?
     /// Read from the network queue during connection handshake, so it can't live
     /// on the MainActor. It's a plain Bool — atomic reads/writes are fine.
@@ -345,6 +346,7 @@ final class WebSocketServer {
             setAuthenticated(connection)
             send(AuthResultMessage(success: true, error: nil), to: connection)
             print("[WebSocketServer] Client authenticated successfully")
+            onClientAuthenticated?()
         } else {
             KokoroTTSDebug.log("auth: PIN mismatch (got '\(authMsg.pin)', expected '\(expectedPIN)')")
             send(AuthResultMessage(success: false, error: "Incorrect PIN"), to: connection)
