@@ -1066,13 +1066,26 @@ struct MainiOSView: View {
                         )
 
                     if windows.isEmpty {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 10) {
                             Image(systemName: "macwindow.on.rectangle")
                                 .font(.system(size: 24, weight: .light))
                                 .foregroundStyle(colors.textFaint)
                             Text(client.isAuthenticated ? "No windows" : client.isConnected ? "Enter PIN" : "Enter tunnel URL")
                                 .font(.system(size: 10))
                                 .foregroundStyle(colors.textFaint)
+                            if client.isAuthenticated && !projectDirectories.isEmpty {
+                                Button {
+                                    showSpawnPicker = true
+                                } label: {
+                                    Label("New Window", systemImage: "plus")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 8)
+                                        .background(Color.blue.opacity(0.7))
+                                        .clipShape(Capsule())
+                                }
+                            }
                         }
                     } else {
                         ForEach(windows) { window in
