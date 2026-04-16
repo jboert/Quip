@@ -112,8 +112,10 @@ Resolved. Keep this entry to remember the original request and to make it findab
 
 ### 10. Persist last session — remember which windows were open on close/reopen
 
-**Status:** Wishlist
-**Context:** When Quip (QuipMac, and probably also QuipiOS) closes and relaunches, the list of registered/enabled terminal windows starts fresh — the user loses their previously-curated set and has to re-enable each one. User wants "save the last session" behavior: on close, persist enough state that on relaunch the same windows are automatically recognized and enabled.
+**Status:** ✅ Done (upstream) — shipped by jboert on `main` in commit `9f1b531` ("Fix push-to-talk not submitting, and persist enabled windows across Mac restarts"). QuipMac now persists the set of enabled windows across restarts. Landed in local `main` on 2026-04-15 when this eb-branch session pulled the latest upstream.
+
+**Original context** (kept for historical reference):
+When Quip (QuipMac, and probably also QuipiOS) closes and relaunches, the list of registered/enabled terminal windows starts fresh — the user loses their previously-curated set and has to re-enable each one. User wants "save the last session" behavior: on close, persist enough state that on relaunch the same windows are automatically recognized and enabled.
 
 **Core questions to resolve during brainstorming:**
 - **What gets persisted?** Minimum: the set of enabled window identities (app bundle ID + window title + maybe initial working directory). Maximum: full window state (enabled, color assignment, pinned status, layout slot, last-known PID/CGWindowID).
@@ -309,8 +311,34 @@ The defining source file for `/btw` wasn't findable during this session — chec
 
 ### 21. Automated test suite — start with `MessageProtocol.swift` round-trip tests
 
-**Status:** Wishlist — tech debt
-**Context:** Every commit in this repo to date has been "build, install on physical device, manually verify by tapping buttons." That works for solo development but compounds: every new message type added to `Shared/MessageProtocol.swift` is an opportunity to ship the iPhone side without the matching Mac side (or vice versa) and silently drop messages until a feature breaks. Swift's exhaustive-switch checker catches some cases at compile time but not all — a JSON encoding/decoding round-trip mismatch (forgot a `CodingKey`, used non-standard naming) won't fail the build, only fail at runtime.
+**Status:** ✅ Done — shipped on `eb-branch` across 4 commits on 2026-04-15: `a0f69a9` (test target infrastructure fix), `fca32f9` (duplicate compilation removal), `9f09851` (move to Shared/Tests + QuipMacTests target), `97cff43` (new test coverage).
+
+**Spec:** `docs/superpowers/specs/2026-04-15-protocol-round-trip-tests-design.md`
+**Plan:** `docs/superpowers/plans/2026-04-15-protocol-round-trip-tests.md`
+
+**Final state:**
+- Tests now run on **both** platforms: `QuipiOSTests` (51 tests: 40 MessageProtocol + 11 PTTStress) and the brand-new `QuipMacTests` (40 MessageProtocol tests).
+- Shared test file at `Shared/Tests/MessageProtocolTests.swift` with 40 test methods total (28 existing + 12 new).
+- New coverage: `DuplicateWindowMessage`, `CloseWindowMessage`, `OutputDeltaMessage`, `TTSAudioMessage` (each with encoding + round-trip tests), `WindowState` backward-compat (`isThinking` and `folder` default cases), `LayoutUpdate.screenAspect` round-trip, `TerminalContentMessage.screenshot` round-trip, and four new cases in `testMessageTypeExtraction`.
+
+**Side-quest: two pre-existing latent bugs closed as a side effect of #21.** During execution we discovered the existing 28 `MessageProtocolTests` + 11 `PTTStressTests` methods had *never* been runnable via `xcodebuild test` in the current Xcode 26.4 environment, because of two bugs hiding behind each other in a fail-fast chain:
+
+1. **`QuipiOSTests` target was missing `GENERATE_INFOPLIST_FILE: YES`**, so the test bundle had no Info.plist and `codesign` refused it. This stopped the build before Swift compilation even started — which masked the second bug.
+2. **The `@testable import QuipiOS` in both test files was wrong** — the iOS app target's Swift module is `Quip`, not `QuipiOS`, because `project.yml` sets `PRODUCT_NAME: Quip`. Should have been `@testable import Quip` from day one.
+
+Both fixes landed in `a0f69a9`. The tests were compiled and committed but had been silent-dead — nobody ran them via the command line, and when Xcode GUI ran them it used a different code-signing path that hid the Info.plist issue. This confirms the wishlist entry's own original observation that Quip has always been "manually verify by tapping buttons."
+
+**Also fixed during #21 execution:** the `QuipiOS` and `QuipMac` application targets were sourcing everything under `Shared/`, which post-#21 would have picked up `Shared/Tests/MessageProtocolTests.swift` and tried to compile it into the main app (which doesn't have XCTest). Added `excludes: ["Tests/**"]` to both app targets' `../Shared` source path. Landed in `9f09851`.
+
+**Not yet done (follow-ups on the original "where to grow from there" section):**
+- Handler-level tests with fake `KeystrokeInjector` and fake `WindowManager`
+- iPhone-side ViewModel tests for `QuipApp.swift::sendAction`
+- Cross-platform JSON key compatibility checks (currently only `testSortedKeysEncoding` covers a subset)
+
+These should become their own wishlist items if/when they become priority. Leaving the original follow-up text below for reference.
+
+**Original context** (kept for historical reference):
+Every commit in this repo to date has been "build, install on physical device, manually verify by tapping buttons." That works for solo development but compounds: every new message type added to `Shared/MessageProtocol.swift` is an opportunity to ship the iPhone side without the matching Mac side (or vice versa) and silently drop messages until a feature breaks. Swift's exhaustive-switch checker catches some cases at compile time but not all — a JSON encoding/decoding round-trip mismatch (forgot a `CodingKey`, used non-standard naming) won't fail the build, only fail at runtime.
 
 **Cheapest entry point:** unit tests that round-trip every message struct in `MessageProtocol.swift`. Encode an instance, decode it, assert structural equality. Roughly 30 minutes of work; catches an entire class of "I added a message on one side and forgot the other" bugs forever. Run on every Mac and iPhone build.
 
