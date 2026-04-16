@@ -613,9 +613,17 @@ struct QuipMacApp: App {
     /// polls. Gives up silently if nothing new appears in the time budget.
     @MainActor
     private func selectNewWindowAfterSpawn(knownIds: Set<String>, attempt: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
+            // Force a window list refresh so we don't wait for the 2-second timer
+            windowManager.refreshWindowList()
             let currentIds = Set(windowManager.windows.map(\.id))
-            if let newId = currentIds.subtracting(knownIds).first {
+            let newIds = currentIds.subtracting(knownIds)
+            // Prefer a terminal window (the one we just spawned) over any random
+            // app window that happened to appear in the same refresh cycle.
+            let newTerminalId = newIds.first(where: { id in
+                windowManager.windows.first(where: { $0.id == id })?.isTerminal == true
+            })
+            if let newId = newTerminalId ?? newIds.first {
                 print("[Quip] spawn: new window detected \(newId), enabling + switching selection")
                 windowManager.toggleWindow(newId, enabled: true)
                 clientSelectedWindowId = newId
