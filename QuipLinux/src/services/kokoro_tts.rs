@@ -40,11 +40,14 @@ fn script_path() -> Option<PathBuf> {
     let dir = exe.parent()?;
     // Check several locations relative to binary
     let candidates = [
+        // AppImage / installed: next to the binary
         dir.join("kokoro_tts.py"),
+        // Packaged: /usr/share/quip/kokoro_tts.py when bin is /usr/bin
         dir.join("../share/quip/kokoro_tts.py"),
+        // Development build: QuipLinux/target/debug|release/.. -> QuipLinux/Resources
+        dir.join("../../Resources/kokoro_tts.py"),
+        // Workspace-style (repo-root/target/...): repo-root/QuipLinux/Resources
         dir.join("../../QuipLinux/Resources/kokoro_tts.py"),
-        // Development: look in the source tree
-        dir.join("../../../QuipLinux/Resources/kokoro_tts.py"),
     ];
     for c in &candidates {
         if c.exists() {

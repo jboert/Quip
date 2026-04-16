@@ -34,10 +34,11 @@ impl ManagedWindow {
         WindowState {
             id: self.id.clone(),
             name: self.name.clone(),
-            app: if self.subtitle.is_empty() {
-                self.app.clone()
+            app: self.app.clone(),
+            folder: if self.subtitle.is_empty() {
+                None
             } else {
-                self.subtitle.clone()
+                Some(self.subtitle.clone())
             },
             enabled: self.is_enabled,
             frame,
