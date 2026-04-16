@@ -1,6 +1,6 @@
 use crate::protocol::messages::{
-    message_type, QuickActionMessage, RequestContentMessage, SelectWindowMessage, SendTextMessage,
-    SttStateMessage,
+    message_type, CloseWindowMessage, DuplicateWindowMessage, QuickActionMessage,
+    RequestContentMessage, SelectWindowMessage, SendTextMessage, SttStateMessage,
 };
 use tracing::warn;
 
@@ -20,6 +20,8 @@ pub enum IncomingAction {
     SttStarted(String),
     SttEnded(String),
     RequestContent(String),
+    DuplicateWindow(String),
+    CloseWindow(String),
 }
 
 /// Parse a JSON message from a client into a typed action.
@@ -57,6 +59,14 @@ pub fn parse_incoming(json: &str) -> Option<IncomingAction> {
         "request_content" => {
             let msg: RequestContentMessage = serde_json::from_str(json).ok()?;
             Some(IncomingAction::RequestContent(msg.window_id))
+        }
+        "duplicate_window" => {
+            let msg: DuplicateWindowMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::DuplicateWindow(msg.source_window_id))
+        }
+        "close_window" => {
+            let msg: CloseWindowMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::CloseWindow(msg.window_id))
         }
         other => {
             warn!("Unknown message type: {other}");

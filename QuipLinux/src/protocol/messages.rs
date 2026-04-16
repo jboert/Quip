@@ -12,14 +12,19 @@ pub struct LayoutUpdate {
     #[serde(rename = "type")]
     pub type_: String,
     pub monitor: String,
+    /// width / height of the host display — lets clients render correctly
+    /// proportioned thumbnails on phones with different aspect ratios.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "screenAspect")]
+    pub screen_aspect: Option<f64>,
     pub windows: Vec<WindowState>,
 }
 
 impl LayoutUpdate {
-    pub fn new(monitor: String, windows: Vec<WindowState>) -> Self {
+    pub fn new(monitor: String, screen_aspect: Option<f64>, windows: Vec<WindowState>) -> Self {
         Self {
             type_: "layout_update".into(),
             monitor,
+            screen_aspect,
             windows,
         }
     }
@@ -31,6 +36,10 @@ pub struct WindowState {
     pub id: String,
     pub name: String,
     pub app: String,
+    /// Project/folder name — shown as the primary bold label above the app
+    /// name on the phone. Optional for backward compat with older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     pub enabled: bool,
     pub frame: WindowFrame,
     pub state: String,
@@ -102,6 +111,23 @@ pub struct SttStateMessage {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RequestContentMessage {
+    #[serde(rename = "windowId")]
+    pub window_id: String,
+}
+
+/// iPhone -> host. Asks the host to spawn a new terminal in the same folder
+/// as the source window. Linux can't currently duplicate arbitrary terminals
+/// so this is logged and ignored, but the message must still be parsed
+/// cleanly so it doesn't get flagged as "unknown message type".
+#[derive(Debug, Clone, Deserialize)]
+pub struct DuplicateWindowMessage {
+    #[serde(rename = "sourceWindowId")]
+    pub source_window_id: String,
+}
+
+/// iPhone -> host. Asks the host to close a specific terminal window.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CloseWindowMessage {
     #[serde(rename = "windowId")]
     pub window_id: String,
 }

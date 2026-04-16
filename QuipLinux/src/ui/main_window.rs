@@ -160,6 +160,10 @@ pub fn build_ui(app: &adw::Application) {
     let client_selected_window: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     // Windows that need to see Claude go busy before TTS fires (prevents stale-response readback)
     let pending_input: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
+    // Per-window TTS session id. Persists across delta chunks within a single
+    // response turn so the phone queues them instead of cancelling earlier
+    // chunks. Rotated on stt_started so the next response gets a fresh id.
+    let tts_session_ids: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
 
     // Start Kokoro TTS daemon if available
     let kokoro_tts: Rc<Option<crate::services::KokoroTTS>> = Rc::new(
@@ -177,7 +181,7 @@ pub fn build_ui(app: &adw::Application) {
     // --- Start background services ---
     let (broadcast_tx, runtime_cmd_tx) = start_services(
         shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone(),
-        client_selected_window.clone(), pending_input.clone(),
+        client_selected_window.clone(), pending_input.clone(), tts_session_ids.clone(),
     );
 
     // Wire the settings button now that we have the runtime command channel
@@ -200,6 +204,7 @@ pub fn build_ui(app: &adw::Application) {
     let output_high_water: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
     let output_hw_timer = output_high_water.clone();
     let pi_timer = pending_input.clone();
+    let tts_sid_timer = tts_session_ids.clone();
     let kokoro_timer = kokoro_tts.clone();
     glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
         let changes = {
@@ -210,6 +215,9 @@ pub fn build_ui(app: &adw::Application) {
         };
 
         // Broadcast state changes and output deltas
+        if !changes.is_empty() {
+            tracing::info!("state_detector changes: {:?}", changes);
+        }
         for (window_id, new_state) in &changes {
             let state_str = match new_state {
                 crate::protocol::types::TerminalState::WaitingForInput => "waiting_for_input",
@@ -240,6 +248,7 @@ pub fn build_ui(app: &adw::Application) {
                     tracing::info!("TTS suppressed: {} still pending input response", window_id);
                     continue;
                 }
+                tracing::info!("TTS path entered for {}", window_id);
 
                 let state = ss_timer.read().unwrap();
                 if let Some(w) = state.windows.iter().find(|w| w.id == *window_id) {
@@ -249,7 +258,13 @@ pub fn build_ui(app: &adw::Application) {
                     let title = w.name.clone();
                     let app_class = w.app_class.clone();
                     drop(state);
-                    if let Ok(content) = ib_timer.read_content_with_hints(wid, pid, &title, &app_class) {
+                    tracing::info!("TTS: reading content for window {}", window_id);
+                    let read_result = ib_timer.read_content_with_hints(wid, pid, &title, &app_class);
+                    if let Err(ref e) = read_result {
+                        tracing::warn!("TTS: read_content failed for {}: {}", window_id, e);
+                    }
+                    if let Ok(content) = read_result {
+                        tracing::info!("TTS: got {} bytes of content for {}", content.len(), window_id);
                         let mut hw = output_hw_timer.borrow_mut();
 
                         // Compute delta: first call seeds the mark, returns empty
@@ -270,6 +285,7 @@ pub fn build_ui(app: &adw::Application) {
                             }
                         };
 
+                        tracing::info!("TTS: delta is {} bytes for {}", delta.len(), window_id);
                         if !delta.is_empty() {
                             // Broadcast output_delta
                             let msg = crate::protocol::messages::OutputDeltaMessage::new(
@@ -281,7 +297,18 @@ pub fn build_ui(app: &adw::Application) {
 
                             // Trigger TTS synthesis for any window with new output
                             if let Some(tts) = kokoro_timer.as_ref() {
-                                let session_id = uuid::Uuid::new_v4().to_string();
+                                tracing::info!("TTS: calling synthesize for {}", window_id);
+                                // Reuse the existing session id for this window if one
+                                // is active — the phone queues chunks with the same
+                                // session id instead of cancelling earlier ones.
+                                // Rotated to a fresh id on stt_started so a new user
+                                // turn gets a clean break.
+                                let session_id = {
+                                    let mut map = tts_sid_timer.borrow_mut();
+                                    map.entry(window_id.clone())
+                                        .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                                        .clone()
+                                };
                                 let wid_tts = window_id.clone();
                                 let wname_tts = window_name.clone();
                                 let btx = broadcast_tx_timer.clone();
@@ -486,6 +513,7 @@ fn start_services(
     pin_manager: crate::services::pin_manager::PINManager,
     client_selected_window: Rc<RefCell<Option<String>>>,
     pending_input: Rc<RefCell<HashSet<String>>>,
+    tts_session_ids: Rc<RefCell<HashMap<String, String>>>,
 ) -> (async_channel::Sender<String>, async_channel::Sender<RuntimeCommand>) {
     let port = {
         let state = shared_state.read().unwrap();
@@ -678,35 +706,40 @@ fn start_services(
         });
     });
 
-    // Handle incoming messages on GTK thread
+    // Handle incoming messages on GTK thread.
+    // Responses go through broadcast_tx (async_channel) → tokio, NOT through
+    // ws_server.broadcast() directly, because the tokio WebSocket sink can't
+    // be driven from the glib event loop — that would deadlock.
     let ss_handler = shared_state.clone();
     let ib_handler = input_backend.clone();
     let wb_handler = window_backend.clone();
-    let ws_handler = ws_server.clone();
+    let btx_handler = broadcast_tx.clone();
     let al_handler = audit_logger.clone();
     let csw_handler = client_selected_window;
     let pi_handler = pending_input;
+    let tts_handler = tts_session_ids;
     glib::spawn_future_local(async move {
         while let Ok(json) = gtk_rx.recv().await {
             handle_incoming_message(
-                &json, &ss_handler, &*wb_handler, &*ib_handler, &ws_handler, &al_handler,
-                &csw_handler, &pi_handler,
-            ).await;
+                &json, &ss_handler, &*wb_handler, &*ib_handler, &btx_handler, &al_handler,
+                &csw_handler, &pi_handler, &tts_handler,
+            );
         }
     });
 
     (broadcast_tx, runtime_cmd_tx)
 }
 
-async fn handle_incoming_message(
+fn handle_incoming_message(
     json: &str,
     shared_state: &SharedState,
     window_backend: &dyn platform::traits::WindowBackend,
     input_backend: &dyn platform::traits::InputBackend,
-    ws_server: &crate::services::ws_server::WsServer,
+    broadcast_tx: &async_channel::Sender<String>,
     audit_logger: &crate::services::audit_logger::AuditLogger,
     client_selected_window: &Rc<RefCell<Option<String>>>,
     pending_input: &Rc<RefCell<HashSet<String>>>,
+    tts_session_ids: &Rc<RefCell<HashMap<String, String>>>,
 ) {
     use message_router::IncomingAction;
 
@@ -729,8 +762,13 @@ async fn handle_incoming_message(
 
         match action {
             IncomingAction::SelectWindow(window_id) => {
-                *client_selected_window.borrow_mut() = Some(window_id.clone());
-                state.focus_window(&window_id, window_backend);
+                // Phone-side selection is just a view choice — do NOT pull
+                // host focus. Host user may be working in a different window;
+                // focus only moves when input is actually being delivered
+                // (and even then only on the OS-input path, where the input
+                // backend focuses internally — the Konsole D-Bus path leaves
+                // focus alone entirely).
+                *client_selected_window.borrow_mut() = Some(window_id);
                 None
             }
             IncomingAction::SendText { window_id, text, press_return } => {
@@ -741,7 +779,10 @@ async fn handle_incoming_message(
                 });
                 if let Some((wid, pid, title, app_class)) = hint {
                     tracing::info!("Found window, target wid={wid} pid={pid} class={app_class}");
-                    state.focus_window(&window_id, window_backend);
+                    // Don't pre-focus here. The input backend focuses itself
+                    // on the OS-input path (ydotool/wtype need the window
+                    // active), and skips focus entirely on the Konsole D-Bus
+                    // path. That keeps host focus steady for the common case.
                     if let Err(e) = input_backend.send_text_with_hints(
                         wid, &text, press_return, pid, &title, &app_class,
                     ) {
@@ -760,12 +801,18 @@ async fn handle_incoming_message(
                     (w.window_id, w.pid, w.name.clone(), w.app_class.clone(), w.is_enabled)
                 });
                 if let Some((wid, pid, title, app_class, enabled)) = hint {
-                    state.focus_window(&window_id, window_backend);
+                    // Same reasoning as SendText — let the input backend
+                    // decide whether it needs focus, so the D-Bus path stays
+                    // focus-free.
                     let key = |k: &str| {
-                        let _ = input_backend.send_keystroke_with_hints(wid, k, pid, &title, &app_class);
+                        if let Err(e) = input_backend.send_keystroke_with_hints(wid, k, pid, &title, &app_class) {
+                            tracing::warn!("send_keystroke '{k}' failed for window {wid}: {e}");
+                        }
                     };
                     let txt = |t: &str, ret: bool| {
-                        let _ = input_backend.send_text_with_hints(wid, t, ret, pid, &title, &app_class);
+                        if let Err(e) = input_backend.send_text_with_hints(wid, t, ret, pid, &title, &app_class) {
+                            tracing::warn!("send_text failed for window {wid}: {e}");
+                        }
                     };
                     match action.as_str() {
                         "press_return" => key("return"),
@@ -773,6 +820,7 @@ async fn handle_incoming_message(
                         "press_ctrl_d" => key("ctrl+d"),
                         "press_escape" => key("escape"),
                         "press_tab" => key("tab"),
+                        "press_backspace" => key("backspace"),
                         "press_y" => key("y"),
                         "press_n" => key("n"),
                         "clear_terminal" => txt("/clear", true),
@@ -792,6 +840,10 @@ async fn handle_incoming_message(
             IncomingAction::SttStarted(window_id) => {
                 *client_selected_window.borrow_mut() = Some(window_id.clone());
                 pending_input.borrow_mut().insert(window_id.clone());
+                // New user input → next response is a new turn, so rotate the
+                // TTS session id. That interrupts any lingering audio from the
+                // prior answer on the phone.
+                tts_session_ids.borrow_mut().remove(&window_id);
                 state.state_detector.set_stt_active(&window_id);
                 if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
                     crate::services::terminal_color::set_background_color(
@@ -818,6 +870,18 @@ async fn handle_incoming_message(
                     "neutral".into(),
                 );
                 encode_message(&msg)
+            }
+            IncomingAction::DuplicateWindow(source_window_id) => {
+                tracing::info!(
+                    "duplicate_window requested for {source_window_id} — not implemented on Linux yet"
+                );
+                None
+            }
+            IncomingAction::CloseWindow(window_id) => {
+                tracing::info!(
+                    "close_window requested for {window_id} — not implemented on Linux yet"
+                );
+                None
             }
             IncomingAction::RequestContent(window_id) => {
                 if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
@@ -858,6 +922,6 @@ async fn handle_incoming_message(
     }; // state lock dropped here
 
     if let Some(json) = broadcast_json {
-        ws_server.broadcast(&json).await;
+        let _ = broadcast_tx.try_send(json);
     }
 }
