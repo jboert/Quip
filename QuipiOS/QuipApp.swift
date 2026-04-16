@@ -28,6 +28,7 @@ struct QuipApp: App {
     @State private var terminalContentWindowId: String?
     @State private var showPINEntry = false
     @State private var pinText = ""
+    @State private var projectDirectories: [String] = []
     @AppStorage("ttsEnabled") private var ttsEnabled = false
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
@@ -46,6 +47,7 @@ struct QuipApp: App {
                 terminalContentWindowId: $terminalContentWindowId,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
+                projectDirectories: projectDirectories,
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
                 screenAspect: screenAspect,
@@ -112,6 +114,12 @@ struct QuipApp: App {
                 // a select_window back, which would loop.
                 guard windows.contains(where: { $0.id == windowId }) else { return }
                 selectedWindowId = windowId
+            }
+        }
+
+        client.onProjectDirectories = { dirs in
+            DispatchQueue.main.async {
+                projectDirectories = dirs
             }
         }
 
@@ -246,6 +254,7 @@ struct MainiOSView: View {
     @Binding var terminalContentWindowId: String?
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
+    var projectDirectories: [String]
     var ttsOverlayTexts: [String: String]
     var monitorName: String
     var screenAspect: Double
@@ -259,6 +268,7 @@ struct MainiOSView: View {
     @AppStorage("enabledQuickButtons") private var enabledQuickButtonsRaw: String = "plan,backspace"
     @State private var showSettings = false
     @State private var showQRScanner = false
+    @State private var showSpawnPicker = false
     @State private var recentConnections: [SavedConnection] = []
     @State private var editingConnection: SavedConnection?
     @State private var renameText: String = ""
@@ -815,6 +825,20 @@ struct MainiOSView: View {
                 }
                 .disabled(windows.count <= 1)
 
+                // Spawn new window from project directory
+                if !projectDirectories.isEmpty {
+                    Button {
+                        showSpawnPicker = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(colors.textPrimary)
+                            .frame(width: 56, height: 56)
+                            .background(colors.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+
                 // Push to talk
                 Button {
                     if isRecording {
@@ -880,6 +904,26 @@ struct MainiOSView: View {
             }
         }
         .padding(.vertical, 8)
+        .sheet(isPresented: $showSpawnPicker) {
+            NavigationStack {
+                List(projectDirectories, id: \.self) { dir in
+                    Button {
+                        client.send(SpawnWindowMessage(directory: dir))
+                        showSpawnPicker = false
+                    } label: {
+                        Label((dir as NSString).lastPathComponent, systemImage: "folder")
+                    }
+                }
+                .navigationTitle("New Window")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showSpawnPicker = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
     }
 
     private func cycleWindow(direction: Int) {
