@@ -78,6 +78,7 @@ struct TerminalContentOverlay: View {
                     keyButton("Esc", icon: "escape") { onSendAction("press_escape") }
                     keyButton("Tab", icon: "arrow.right.to.line") { onSendAction("press_tab") }
                     keyButton("/plan", icon: nil) { onSendText("/plan ") }
+                    keyButton("/btw", icon: nil) { onSendText("/btw ") }
                     keyButton("Y", icon: nil) { onSendAction("press_y") }
                     keyButton("N", icon: nil) { onSendAction("press_n") }
                 }
