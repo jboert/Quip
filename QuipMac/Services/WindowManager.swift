@@ -23,6 +23,11 @@ struct ManagedWindow: Identifiable, Sendable {
     let windowNumber: CGWindowID  // CG window number
     var bounds: CGRect            // Current window frame
     var iterm2SessionId: String?
+    /// True when the window's bounds center falls inside some currently-
+    /// connected NSScreen. Populated fresh on every snapshot refresh —
+    /// CG's `.optionOnScreenOnly` is not reliable for windows parked on
+    /// inactive Spaces or disconnected monitors, so we re-check here.
+    var isOnVisibleScreen: Bool = true
 
     /// Whether this window is hosted by a terminal emulator Quip supports
     /// (Terminal.app or iTerm2). Used for auto-grouping in the sidebar.
@@ -164,8 +169,20 @@ final class WindowManager {
 
     /// Apply pre-fetched window data on main. Merges with existing state, resolves icons.
     func applyWindowSnapshot(_ raw: [RawWindowInfo]) {
+        // Precompute once per snapshot. Accessing NSScreen.screens is MainActor-safe
+        // and we're already on main here.
+        let screens = NSScreen.screens
+        let totalHeight = screens.map { $0.frame.maxY }.max() ?? 0
+
         var refreshed: [ManagedWindow] = []
         for info in raw {
+            // CG bounds use top-left origin; NSScreen frames use bottom-left.
+            // Flip the Y to compare against screen frames. Same technique as
+            // `windows(for display:)` below.
+            let flippedY = totalHeight - info.bounds.midY
+            let center = CGPoint(x: info.bounds.midX, y: flippedY)
+            let onScreen = screens.contains { $0.frame.contains(center) }
+
             let icon = NSRunningApplication(processIdentifier: info.pid)?.icon
             if let existing = windows.first(where: { $0.id == info.id }) {
                 refreshed.append(ManagedWindow(
@@ -173,7 +190,8 @@ final class WindowManager {
                     subtitle: existing.subtitle, bundleId: info.bundleId, icon: icon,
                     isEnabled: existing.isEnabled, assignedColor: existing.assignedColor,
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
-                    iterm2SessionId: existing.iterm2SessionId
+                    iterm2SessionId: existing.iterm2SessionId,
+                    isOnVisibleScreen: onScreen
                 ))
             } else {
                 refreshed.append(ManagedWindow(
@@ -181,7 +199,8 @@ final class WindowManager {
                     subtitle: "", bundleId: info.bundleId, icon: icon,
                     isEnabled: false, assignedColor: assignColor(),
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
-                    iterm2SessionId: nil
+                    iterm2SessionId: nil,
+                    isOnVisibleScreen: onScreen
                 ))
             }
         }
