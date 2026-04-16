@@ -166,6 +166,30 @@ struct CloseWindowMessage: Codable, Sendable {
     }
 }
 
+/// iPhone → Mac. Asks the Mac to spawn a new iTerm2 window in the given
+/// directory, running the configured spawn command.
+struct SpawnWindowMessage: Codable, Sendable {
+    let type: String
+    let directory: String
+
+    init(directory: String) {
+        self.type = "spawn_window"
+        self.directory = directory
+    }
+}
+
+/// Mac → iPhone. Sends the list of project directories configured in
+/// Mac Settings so the iPhone can offer a "new window" picker.
+struct ProjectDirectoriesMessage: Codable, Sendable {
+    let type: String
+    let directories: [String]
+
+    init(directories: [String]) {
+        self.type = "project_directories"
+        self.directories = directories
+    }
+}
+
 struct RequestContentMessage: Codable, Sendable {
     let type: String
     let windowId: String

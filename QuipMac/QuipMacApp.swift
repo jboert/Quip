@@ -400,6 +400,14 @@ struct QuipMacApp: App {
         let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
         let update = LayoutUpdate(monitor: display?.name ?? "Display 1", screenAspect: aspect, windows: states)
         webSocketServer.broadcast(update)
+        broadcastProjectDirectories()
+    }
+
+    private func broadcastProjectDirectories() {
+        let data = UserDefaults.standard.data(forKey: "projectDirectories") ?? Data()
+        let dirs = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+        guard !dirs.isEmpty else { return }
+        webSocketServer.broadcast(ProjectDirectoriesMessage(directories: dirs))
     }
 
     @MainActor
@@ -567,6 +575,14 @@ struct QuipMacApp: App {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] close_window DROPPED: unknown windowId=\(msg.windowId). Known: \(known)")
                 }
+            }
+
+        case "spawn_window":
+            if let msg = MessageCoder.decode(SpawnWindowMessage.self, from: data) {
+                let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                let knownIds = Set(windowManager.windows.map(\.id))
+                keystrokeInjector.spawnWindow(in: msg.directory, command: cmd, terminalApp: .iterm2)
+                selectNewWindowAfterSpawn(knownIds: knownIds, attempt: 0)
             }
 
         default:
