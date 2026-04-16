@@ -29,6 +29,7 @@ struct QuipApp: App {
     @State private var showPINEntry = false
     @State private var pinText = ""
     @State private var projectDirectories: [String] = []
+    @State private var errorToast: String?
     @AppStorage("ttsEnabled") private var ttsEnabled = false
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
@@ -48,6 +49,7 @@ struct QuipApp: App {
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
+                errorToast: $errorToast,
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
                 screenAspect: screenAspect,
@@ -99,9 +101,16 @@ struct QuipApp: App {
                     }
                     UIViewController.attemptRotationToDeviceOrientation()
                 }
+                // If the selected window vanished (Mac restarted, window closed),
+                // auto-select the first available window so buttons don't go dead.
+                if let wid = selectedWindowId, !update.windows.contains(where: { $0.id == wid }) {
+                    selectedWindowId = update.windows.first?.id
+                    if let newId = selectedWindowId {
+                        client.send(SelectWindowMessage(windowId: newId))
+                    }
+                }
                 // Tell the Mac which window we currently have selected — but only
                 // if this is the first layout update after connection (wasEmpty = true).
-                // Subsequent selection changes are sent from the selection change handlers.
                 if wasEmpty, let wid = selectedWindowId, update.windows.contains(where: { $0.id == wid }) {
                     client.send(SelectWindowMessage(windowId: wid))
                 }
@@ -120,6 +129,16 @@ struct QuipApp: App {
         client.onProjectDirectories = { dirs in
             DispatchQueue.main.async {
                 projectDirectories = dirs
+            }
+        }
+
+        client.onError = { reason in
+            DispatchQueue.main.async {
+                errorToast = reason
+                // Auto-dismiss after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if errorToast == reason { errorToast = nil }
+                }
             }
         }
 
@@ -255,6 +274,7 @@ struct MainiOSView: View {
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
     var projectDirectories: [String]
+    @Binding var errorToast: String?
     var ttsOverlayTexts: [String: String]
     var monitorName: String
     var screenAspect: Double
@@ -458,6 +478,20 @@ struct MainiOSView: View {
         }
         .allowsHitTesting(true)
         .overlay { HiddenVolumeView().frame(width: 1, height: 1) }
+        .overlay(alignment: .top) {
+            if let toast = errorToast {
+                Text(toast)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.85))
+                    .clipShape(Capsule())
+                    .padding(.top, 50)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.3), value: errorToast)
+            }
+        }
         .environment(\.quipColors, colors)
         .onAppear { updateOrientation() }
         .onChange(of: client.isConnected) { _, connected in

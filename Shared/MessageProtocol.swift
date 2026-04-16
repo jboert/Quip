@@ -257,6 +257,19 @@ struct TTSAudioMessage: Codable, Sendable {
     }
 }
 
+/// Mac → iPhone. Sent when the Mac drops a message (unknown window, throttled,
+/// decode failure, etc.) so the phone can show feedback instead of silently
+/// swallowing the tap.
+struct ErrorMessage: Codable, Sendable {
+    let type: String
+    let reason: String
+
+    init(reason: String) {
+        self.type = "error"
+        self.reason = reason
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {
