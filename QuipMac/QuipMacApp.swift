@@ -456,6 +456,11 @@ struct QuipMacApp: App {
 
     @MainActor
     private func handleIncomingMessage(_ data: Data) {
+        // Diagnostic: log every incoming WebSocket payload size so we can see
+        // whether large image_upload frames are arriving at all.
+        if data.count > 1024 {
+            print("[Quip] incoming frame: size=\(data.count) bytes")
+        }
         guard let type = MessageCoder.messageType(from: data) else {
             print("[Quip] handleIncomingMessage: unparseable message, size=\(data.count)")
             return

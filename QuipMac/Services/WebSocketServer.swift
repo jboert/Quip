@@ -78,6 +78,11 @@ final class WebSocketServer {
         let parameters = NWParameters(tls: nil, tcp: tcpOptions)
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.autoReplyPing = true
+        // Default max message size is ~1 MiB, which rejects image uploads
+        // (base64 of a full-resolution phone photo is ~7-10 MB). Match the
+        // iOS client's 16 MiB ceiling so large images don't trigger the
+        // connection reset we were seeing after ~30s of "receiving."
+        wsOptions.maximumMessageSize = 16 * 1024 * 1024
         parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
         // Bind to IPv4 localhost only
@@ -388,8 +393,13 @@ final class WebSocketServer {
             }
 
             if let data = content, !data.isEmpty {
-                // Drop oversized messages (64KB limit)
-                if data.count > 65_536 {
+                // Application-layer drop: 16 MiB matches the WebSocket protocol's
+                // maximumMessageSize above. Image uploads from the phone are
+                // commonly 1-10 MiB (base64-encoded JPEG/PNG). The previous 64KB
+                // cap silently murdered every image_upload, leaving the phone's
+                // spinner hanging forever. TTS audio chunks run 300-700 KB so
+                // they comfortably fit under the new ceiling.
+                if data.count > 16 * 1024 * 1024 {
                     KokoroTTSDebug.log("WS: dropping oversized msg \(data.count) bytes")
                     print("[WebSocketServer] Dropping oversized message (\(data.count) bytes)")
                     self.receiveMessage(on: connection)
