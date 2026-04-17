@@ -1627,6 +1627,7 @@ struct InlineTerminalContent: View {
     var onRefresh: () -> Void
     var onSendAction: (String) -> Void
     @Environment(\.quipColors) private var colors
+    @AppStorage("tintContentBorder") private var tintContentBorder = true
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -1707,10 +1708,14 @@ struct InlineTerminalContent: View {
         // Tinted border in the selected window's palette color so the
         // content panel visually ties back to the rectangle above it — easy
         // to tell at a glance which window you're driving, especially when
-        // more than one window is on the picker.
+        // more than one window is on the picker. Controlled by a Settings
+        // toggle; `.clear` hides it without shifting any layout.
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(windowColor.opacity(0.7), lineWidth: 1.5)
+                .strokeBorder(
+                    tintContentBorder ? windowColor.opacity(0.7) : Color.clear,
+                    lineWidth: 1.5
+                )
         )
         .onAppear { onRefresh() }
         .onReceive(refreshTimer) { _ in onRefresh() }
@@ -1800,11 +1805,20 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
 struct SettingsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
+    @AppStorage("tintContentBorder") private var tintContentBorder = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Tint content panel border", isOn: $tintContentBorder)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("Colors the border around the terminal content panel to match the selected window's palette — quick visual cue for which window you're driving.")
+                }
+
                 Section {
                     ForEach(QuickButton.allCases) { button in
                         Toggle(button.displayName, isOn: binding(for: button))
