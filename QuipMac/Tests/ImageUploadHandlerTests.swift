@@ -28,7 +28,8 @@ final class ImageUploadHandlerTests: XCTestCase {
 
         let savedURL = try handler.save(message: msg)
 
-        XCTAssertTrue(savedURL.path.hasPrefix(root.path))
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath().path
+        XCTAssertTrue(savedURL.path.hasPrefix(resolvedRoot + "/"))
         XCTAssertTrue(savedURL.lastPathComponent.contains("abc-123"))
         XCTAssertTrue(savedURL.lastPathComponent.hasSuffix("tiny.png"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: savedURL.path))
@@ -67,6 +68,61 @@ final class ImageUploadHandlerTests: XCTestCase {
         )
 
         let savedURL = try handler.save(message: msg)
-        XCTAssertTrue(savedURL.path.hasPrefix(root.path), "Saved path escaped the uploads root: \(savedURL.path)")
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let resolvedSaved = savedURL.standardizedFileURL.resolvingSymlinksInPath().path
+        XCTAssertTrue(
+            resolvedSaved.hasPrefix(resolvedRoot + "/"),
+            "Saved path escaped the uploads root: resolved=\(resolvedSaved) root=\(resolvedRoot)"
+        )
+    }
+
+    func test_save_sanitizesImageIdToPreventPathTraversal() throws {
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let handler = ImageUploadHandler(uploadsDirectory: root)
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let msg = ImageUploadMessage(
+            imageId: "../../../../tmp/quip-escape",
+            windowId: "w1",
+            filename: "evil.png",
+            mimeType: "image/png",
+            data: pngBase64
+        )
+
+        let savedURL = try handler.save(message: msg)
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let resolvedSaved = savedURL.standardizedFileURL.resolvingSymlinksInPath().path
+        XCTAssertTrue(
+            resolvedSaved.hasPrefix(resolvedRoot + "/"),
+            "imageId escape succeeded: resolved=\(resolvedSaved) root=\(resolvedRoot)"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: "/tmp/quip-escape-evil.png"),
+            "A file escaped the sandbox and was written outside the uploads root"
+        )
+    }
+
+    func test_save_dotDotInFilenameActuallyGetsReplaced() throws {
+        // Guards against the `NSString.lastPathComponent`-strips-everything-first
+        // false-negative in the existing traversal test.
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let handler = ImageUploadHandler(uploadsDirectory: root)
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let msg = ImageUploadMessage(
+            imageId: "x",
+            windowId: "w1",
+            filename: "foo..bar..png",  // no leading `../` — survives lastPathComponent
+            mimeType: "image/png",
+            data: pngBase64
+        )
+
+        let savedURL = try handler.save(message: msg)
+        XCTAssertFalse(
+            savedURL.lastPathComponent.contains(".."),
+            "sanitize() failed to strip `..` tokens: \(savedURL.lastPathComponent)"
+        )
     }
 }

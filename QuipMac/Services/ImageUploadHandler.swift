@@ -2,11 +2,14 @@ import Foundation
 
 enum ImageUploadHandlerError: Error {
     case invalidBase64
+    case invalidPath
     case writeFailed(underlying: Error)
 }
 
 /// Decodes an ImageUploadMessage and writes it to disk in a sandboxed uploads directory.
-/// Filename is sanitized so a malicious phone can't write outside the uploads directory.
+/// Both `imageId` and `filename` from the wire are sanitized and the resolved target
+/// path is verified to be inside the uploads directory — a malicious phone cannot
+/// escape the uploads root via path traversal in either field.
 struct ImageUploadHandler {
 
     /// Directory into which uploaded images are written. In production this is
@@ -21,7 +24,7 @@ struct ImageUploadHandler {
     }
 
     /// Decode the base64 payload, write it to disk, and return the absolute URL.
-    /// Filename in the returned URL has the form `<imageId>-<sanitizedFilename>`.
+    /// Filename in the returned URL has the form `<sanitizedImageId>-<sanitizedFilename>`.
     func save(message: ImageUploadMessage) throws -> URL {
         guard let bytes = Data(base64Encoded: message.data) else {
             throw ImageUploadHandlerError.invalidBase64
@@ -29,23 +32,40 @@ struct ImageUploadHandler {
 
         try FileManager.default.createDirectory(at: uploadsDirectory, withIntermediateDirectories: true)
 
-        let safeName = sanitize(filename: message.filename)
-        let target = uploadsDirectory.appendingPathComponent("\(message.imageId)-\(safeName)")
+        // Sanitize BOTH imageId and filename — either can carry `../` injection.
+        let safeId = sanitize(component: message.imageId)
+        let safeName = sanitize(component: message.filename)
+        let target = uploadsDirectory.appendingPathComponent("\(safeId)-\(safeName)")
+
+        // Defense in depth: verify the resolved target actually lies inside the
+        // uploads root. `appendingPathComponent` does NOT canonicalize `..`, so a
+        // prefix check on the un-resolved path is insufficient.
+        let resolvedTarget = target.standardizedFileURL.resolvingSymlinksInPath()
+        let resolvedRoot = uploadsDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        guard resolvedTarget.path.hasPrefix(resolvedRoot.path + "/") else {
+            throw ImageUploadHandlerError.invalidPath
+        }
 
         do {
-            try bytes.write(to: target, options: .atomic)
+            try bytes.write(to: resolvedTarget, options: .atomic)
         } catch {
             throw ImageUploadHandlerError.writeFailed(underlying: error)
         }
-        return target
+        return resolvedTarget
     }
 
-    /// Strip path separators and parent-directory tokens. Keep it simple and strict.
-    private func sanitize(filename: String) -> String {
-        let lastComponent = (filename as NSString).lastPathComponent
-        let filtered = lastComponent.replacingOccurrences(of: "/", with: "_")
+    /// Reduce an arbitrary wire string to a safe single filename component.
+    /// Strip path separators and parent-directory tokens; fall back to "file" if
+    /// the result is empty.
+    private func sanitize(component: String) -> String {
+        let lastComponent = (component as NSString).lastPathComponent
+        var filtered = lastComponent.replacingOccurrences(of: "/", with: "_")
                                     .replacingOccurrences(of: "\\", with: "_")
-                                    .replacingOccurrences(of: "..", with: "_")
-        return filtered.isEmpty ? "image" : filtered
+        // Collapse any remaining `..` tokens (including ones that re-emerge after
+        // `/` replacement like `..foo..`). Loop until stable.
+        while filtered.contains("..") {
+            filtered = filtered.replacingOccurrences(of: "..", with: "_")
+        }
+        return filtered.isEmpty ? "file" : filtered
     }
 }
