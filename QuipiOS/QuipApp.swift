@@ -65,6 +65,11 @@ struct QuipApp: App {
     @State private var iTermScanResults: [ITermWindowInfo]? = nil
     @State private var errorToast: String?
     @AppStorage("ttsEnabled") private var ttsEnabled = false
+    /// Master toggle for the Dynamic Island / Lock Screen Live Activity.
+    /// Default on — if the user's already wired up push they almost
+    /// certainly want the island card too. Flipping it off tears down
+    /// any in-flight activity (see `.onChange` below).
+    @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
     /// Pending image attachment — hoisted to QuipApp (from MainiOSView) so
@@ -142,6 +147,15 @@ struct QuipApp: App {
                 // selection path: tap, Mac echo, deep-link tap, etc.
                 if let newId { attentionCenter.clearAttention(for: newId) }
             }
+            .onChange(of: liveActivitiesEnabled) { _, enabled in
+                // Flipping Live Activities off in Settings should drop any
+                // in-flight island card immediately. Without this, the toggle
+                // would stop NEW activities from starting but whatever's
+                // already on screen (thinking/waiting) would linger until
+                // the Mac sent another state change — so the setting looks
+                // like it didn't take.
+                if !enabled { liveActivity.endAll() }
+            }
             .onOpenURL { url in
                 // Deep link from the Live Activity island / lock screen:
                 // quip://window/<windowId> → select that window + open input.
@@ -172,6 +186,14 @@ struct QuipApp: App {
                 // Buy ~30s of background execution so a quick app switch doesn't
                 // suspend the network stack and stale the WebSocket.
                 client.suspendForBackground()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                // Stop listening for volume changes — our KVO observer is on the
+                // shared system outputVolume and would otherwise fight other apps
+                // for control of the user's volume. Use didEnterBackground (not
+                // willResignActive) so transient interruptions like Control Center
+                // don't tear down the observer.
+                volumeHandler.pauseForBackground()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Probe the socket on return; force-reconnect with reset backoff
@@ -259,7 +281,7 @@ struct QuipApp: App {
                     // currently-selected window. PRD scope: only the selected
                     // window gets an island; every other thinking window is
                     // tracked by the Mac but doesn't pop its own activity.
-                    if windowId == selectedWindowId {
+                    if windowId == selectedWindowId, liveActivitiesEnabled {
                         switch newState {
                         case "thinking":
                             liveActivity.startOrUpdate(windowId: windowId, windowName: w.name, state: "thinking")
@@ -2674,6 +2696,10 @@ struct SettingsSheet: View {
     @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
     @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
     @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
+    // Device-local only — Live Activities don't flow through the Mac's
+    // APNs prefs, so no sendPrefs() wiring. The main app reads this
+    // @AppStorage key too and gates its liveActivity.startOrUpdate calls.
+    @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -2689,6 +2715,7 @@ struct SettingsSheet: View {
                     Toggle("Pause All", isOn: $pushPaused)
                     Toggle("Sound", isOn: $pushSound)
                     Toggle("Banner When App Open", isOn: $pushForegroundBanner)
+                    Toggle("Live Activities", isOn: $liveActivitiesEnabled)
                     Toggle("Quiet Hours", isOn: $quietHoursEnabled)
                     if quietHoursEnabled {
                         Stepper(value: $quietHoursStart, in: 0...23) {
