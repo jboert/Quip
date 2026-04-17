@@ -11,7 +11,12 @@ struct TerminalContentOverlay: View {
     // on the parent side. Used by buttons that type characters rather than fire a
     // named quick-action keystroke.
     var onSendText: (String) -> Void
+    // Tells the parent to open the image-source picker (camera / library).
+    var onAttachImage: () -> Void = {}
     @Environment(\.quipColors) private var colors
+    /// Shared pending-image state injected by the parent so the landscape
+    /// preview strip reflects the same image as the portrait row.
+    @EnvironmentObject private var pendingImage: PendingImageState
     /// Shares the same @AppStorage key as InlineTerminalContent so the
     /// text-size preference carries between orientations.
     @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
@@ -97,6 +102,9 @@ struct TerminalContentOverlay: View {
                     }
                 }
 
+                // Pending image thumbnail — only appears when an image is staged.
+                PendingImagePreviewStrip(state: pendingImage)
+
                 // Text-input bar — shown when the keyboard button in the
                 // keys row is tapped. Sends with pressReturn: false so the
                 // text lands in Claude's prompt line rather than submitting.
@@ -147,6 +155,21 @@ struct TerminalContentOverlay: View {
                             .background(showTextInput ? Color.blue.opacity(0.7) : Color.white.opacity(0.18))
                             .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
+
+                    // Attach image — mirrors the portrait button; triggers the
+                    // shared picker sheet via the parent callback.
+                    Button {
+                        onAttachImage()
+                    } label: {
+                        Image(systemName: pendingImage.hasPendingImage ? "photo.fill" : "photo")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(pendingImage.hasPendingImage ? Color.blue : Color.white.opacity(0.85))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.18))
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                    }
+                    .accessibilityLabel("Attach image")
                     let quickButtons = QuickButton.decode(enabledQuickButtonsRaw)
                     ForEach(Array(quickButtons.enumerated()), id: \.element.id) { index, button in
                         if index > 0, quickButtons[index - 1].isSlashCommand != button.isSlashCommand {
