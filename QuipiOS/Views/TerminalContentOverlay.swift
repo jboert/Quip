@@ -79,14 +79,18 @@ struct TerminalContentOverlay: View {
                             // the screenshot's text renders comparably to
                             // portrait at the same zoom level.
                             let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
+                            // Subtract a 48pt inset each side from the available
+                            // width before applying the zoom fraction + landscape
+                            // shrink. Keeps the screenshot off the edges at fill.
+                            let horizontalInset: CGFloat = 48
                             let landscapeShrink: CGFloat = 0.58
-                            let maxW = UIScreen.main.bounds.width * zoom.widthFraction * landscapeShrink
+                            let availableW = UIScreen.main.bounds.width - horizontalInset * 2
+                            let maxW = availableW * zoom.widthFraction * landscapeShrink
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFit()
                                 .frame(maxWidth: maxW)
                                 .frame(maxWidth: .infinity)
-                                .padding(.horizontal, 48)
                                 .id("bottom")
                         } else {
                             Text(content)
@@ -229,7 +233,8 @@ struct TerminalContentOverlay: View {
 
     private func sendTypedText() {
         let text = textInputValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        // Let an image-only submit through; the parent's onSendText handles the image.
+        guard !text.isEmpty || pendingImage.hasPendingImage else { return }
         onSendText(text)
         textInputValue = ""
     }
