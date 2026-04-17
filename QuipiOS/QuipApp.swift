@@ -1296,8 +1296,8 @@ struct MainiOSView: View {
         let btnH: CGFloat = isPortrait ? 56 : 40
         let btnW: CGFloat = isPortrait ? 56 : 44
         let pttW: CGFloat = isPortrait ? 72 : 56
-        let navW: CGFloat = isPortrait ? 30 : 26
-        let navH: CGFloat = isPortrait ? 40 : 32
+        let navW: CGFloat = isPortrait ? 26 : 22
+        let navH: CGFloat = isPortrait ? 36 : 28
         let auxW: CGFloat = isPortrait ? 40 : 32
         let auxH: CGFloat = isPortrait ? 56 : 40
 
@@ -1403,28 +1403,9 @@ struct MainiOSView: View {
                 }
                 Spacer()
 
-                // Type — toggles the text input bar above the terminal
-                // content. Replaces the old "view output" icon, which became
-                // redundant once content auto-refreshes on selection change
-                // and after every quick action. The keyboard icon was also
-                // in the bottom bar but easy to miss; putting it in the main
-                // row alongside PTT/Return makes typing as reachable as
-                // talking or pressing enter.
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showTextInput.toggle()
-                        if !showTextInput { textInputValue = "" }
-                    }
-                } label: {
-                    Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(colors.textPrimary)
-                        .frame(width: btnW, height: btnH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-
-                // Attach image — tapping opens source picker (library / camera).
+                // Attach image — sits adjacent to the PTT mic since both are
+                // primary input actions (drop in media vs. speak). Tapping
+                // opens source picker (library / camera).
                 Button {
                     showingImageSourceSheet = true
                 } label: {
@@ -1436,6 +1417,23 @@ struct MainiOSView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .accessibilityLabel("Attach image")
+
+                // Type — toggles the text input bar above the terminal
+                // content. Sized down to the secondary tier (matches `+`
+                // and Arrange) since it's a mode toggle, not a send action.
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showTextInput.toggle()
+                        if !showTextInput { textInputValue = "" }
+                    }
+                } label: {
+                    Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(colors.textPrimary)
+                        .frame(width: auxW, height: auxH)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
 
                 // Press Return — flushes any pending image first AND defers the
                 // press_return until the image has actually been dispatched, so
@@ -1476,18 +1474,30 @@ struct MainiOSView: View {
                 }
             }
 
-            // Portrait-only secondary command-shortcut row.
+            // Portrait-only secondary command-shortcut row. Buttons are
+            // grouped left/center/right by category so the center group
+            // (answers — Y/N/1/2/3) lines up vertically with the mic
+            // above, which is also Spacer-pinned to the row's center.
             if isPortrait {
                 let enabled = QuickButton.decode(enabledQuickButtonsRaw)
                 if !enabled.isEmpty {
+                    let slash = enabled.filter { $0.category == .slash }
+                    let yesNo = enabled.filter { $0 == .yes || $0 == .no }
+                    let numbers = enabled.filter { $0 == .one || $0 == .two || $0 == .three }
+                    let keystroke = enabled.filter { $0.category == .keystroke }
                     HStack(spacing: 5) {
-                        ForEach(Array(enabled.enumerated()), id: \.element.id) { index, button in
-                            if index > 0, enabled[index - 1].isSlashCommand != button.isSlashCommand {
-                                Spacer().frame(width: 10)
-                            }
-                            quickActionButton(button)
+                        ForEach(slash) { quickActionButton($0) }
+                        Spacer(minLength: 8)
+                        ForEach(yesNo) { quickActionButton($0) }
+                        // Small fixed gap between Y/N (confirmations) and
+                        // 1/2/3 (numbered choices) — both are "answers" but
+                        // visually distinct sub-groups.
+                        if !yesNo.isEmpty, !numbers.isEmpty {
+                            Spacer().frame(width: 10)
                         }
-                        Spacer()
+                        ForEach(numbers) { quickActionButton($0) }
+                        Spacer(minLength: 8)
+                        ForEach(keystroke) { quickActionButton($0) }
                     }
                     .padding(.horizontal, 8)
                 }
@@ -2531,9 +2541,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
     //   Slash commands (sends "/foo"),
     //   Claude Code answers (Y/N and number choices),
     //   Terminal keystrokes (Esc, Ctrl-C, Ctrl-D, Tab, Backspace).
-    case plan, btw, compact, clearContext
+    case plan, btw, compact, clearContext, prd
     case yes, no, one, two, three
-    case esc, ctrlC, ctrlD, tab, backspace
+    case esc, ctrlC, ctrlD, tab, backspace, clearInput
 
     var id: String { rawValue }
 
@@ -2542,7 +2552,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .plan: return "/plan"
         case .btw: return "/btw"
         case .compact: return "/compact"
-        case .clearContext: return "Clear context (/clear)"
+        case .clearContext: return "/clear"
+        case .prd: return "/prd"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -2553,6 +2564,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlD: return "Ctrl+D"
         case .tab: return "Tab"
         case .backspace: return "Backspace"
+        case .clearInput: return "Clear input"
         }
     }
 
@@ -2564,6 +2576,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .btw: return "/btw"
         case .compact: return "/compact"
         case .clearContext: return "/clear"
+        case .prd: return "/prd"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -2574,6 +2587,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlD: return "Ctrl+D"
         case .tab: return "Tab"
         case .backspace: return ""
+        case .clearInput: return ""
         }
     }
 
@@ -2584,6 +2598,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlC: return "xmark.octagon"
         case .ctrlD: return "eject"
         case .tab: return "arrow.right.to.line"
+        case .clearInput: return "delete.left.fill"
         default: return nil
         }
     }
@@ -2598,6 +2613,19 @@ enum QuickButton: String, CaseIterable, Identifiable {
         return false
     }
 
+    /// Logical grouping used by the on-screen quick-button row to position
+    /// each cluster: slash commands left, answers centered (under the mic),
+    /// keystrokes right.
+    enum Category { case slash, answer, keystroke }
+
+    var category: Category {
+        switch self {
+        case .plan, .btw, .compact, .clearContext, .prd: return .slash
+        case .yes, .no, .one, .two, .three: return .answer
+        case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput: return .keystroke
+        }
+    }
+
     var action: Action {
         switch self {
         case .plan: return .sendText("/plan ", pressReturn: false)
@@ -2607,6 +2635,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
         // tells Claude "summarize the context now."
         case .compact: return .sendText("/compact", pressReturn: true)
         case .clearContext: return .sendText("/clear", pressReturn: true)
+        // /prd takes a follow-up description, so don't auto-submit — same
+        // pattern as /plan and /btw.
+        case .prd: return .sendText("/prd ", pressReturn: false)
         case .yes: return .quickAction("press_y")
         case .no: return .quickAction("press_n")
         case .one: return .sendText("1", pressReturn: true)
@@ -2617,6 +2648,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlD: return .quickAction("press_ctrl_d")
         case .tab: return .quickAction("press_tab")
         case .backspace: return .quickAction("press_backspace")
+        case .clearInput: return .quickAction("clear_input")
         }
     }
 
@@ -2720,14 +2752,13 @@ struct SettingsSheet: View {
             HStack(spacing: 4) {
                 if let icon = button.systemImage {
                     Image(systemName: icon)
-                        .font(.system(size: 10))
+                        .font(.system(size: 10, weight: .medium))
                 }
                 Text(button.displayName)
-                    .font(.system(size: 12, weight: isOn ? .semibold : .regular))
+                    .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .foregroundStyle(isOn ? .white : .secondary)
