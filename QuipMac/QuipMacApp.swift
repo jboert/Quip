@@ -13,6 +13,7 @@ struct QuipMacApp: App {
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
     @State private var connectionLog = ConnectionLog()
+    @State private var pushNotificationService = PushNotificationService()
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
     private var networkMode: NetworkMode {
@@ -735,6 +736,19 @@ struct QuipMacApp: App {
 
         case "scan_iterm_windows":
             handleScanITermWindows()
+
+        case "register_push_device":
+            if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
+                pushNotificationService.registerDevice(token: msg.deviceToken, environment: msg.environment)
+            }
+
+        case "push_preferences":
+            // v1 accepts and logs but full handling lives in US-003 — this
+            // iteration is plumbing only. Decode-and-log validates the
+            // protocol is wired correctly end-to-end.
+            if let msg = MessageCoder.decode(PushPreferencesMessage.self, from: data) {
+                print("[Quip] push_preferences: paused=\(msg.paused) sound=\(msg.sound) fgBanner=\(msg.foregroundBanner) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") device=\(msg.deviceToken.prefix(8))")
+            }
 
         case "attach_iterm_window":
             if let msg = MessageCoder.decode(AttachITermWindowMessage.self, from: data) {

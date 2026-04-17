@@ -546,6 +546,51 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(decoded.windows, infos)
     }
 
+    // MARK: - Push Notifications
+
+    func testRegisterPushDeviceMessageEncoding() throws {
+        let msg = RegisterPushDeviceMessage(deviceToken: "ABCD1234", environment: "development")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["type"] as? String, "register_push_device")
+        XCTAssertEqual(dict["deviceToken"] as? String, "ABCD1234")
+        XCTAssertEqual(dict["environment"] as? String, "development")
+    }
+
+    func testPushPreferencesMessageRoundTrip() throws {
+        let msg = PushPreferencesMessage(
+            deviceToken: "TKN",
+            paused: true,
+            quietHoursStart: 22,
+            quietHoursEnd: 7,
+            sound: false,
+            foregroundBanner: true
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(PushPreferencesMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "push_preferences")
+        XCTAssertEqual(decoded.paused, true)
+        XCTAssertEqual(decoded.quietHoursStart, 22)
+        XCTAssertEqual(decoded.quietHoursEnd, 7)
+        XCTAssertEqual(decoded.sound, false)
+        XCTAssertEqual(decoded.foregroundBanner, true)
+    }
+
+    func testPushPreferencesMessageEncodesNilQuietHoursAsAbsentOrNull() throws {
+        let msg = PushPreferencesMessage(
+            deviceToken: "TKN",
+            paused: false,
+            quietHoursStart: nil,
+            quietHoursEnd: nil,
+            sound: true,
+            foregroundBanner: false
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(PushPreferencesMessage.self, from: data))
+        XCTAssertNil(decoded.quietHoursStart)
+        XCTAssertNil(decoded.quietHoursEnd)
+    }
+
     // MARK: - Helpers
 
     private func jsonDict(from data: Data) throws -> [String: Any] {

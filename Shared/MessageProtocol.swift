@@ -391,6 +391,52 @@ struct AttachITermWindowMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Push Notifications
+
+/// iPhone → Mac. Hands over the APNs device token so the Mac can push to
+/// this device. `environment` is `"development"` or `"production"` — must
+/// match the aps-environment entitlement the iOS app was signed with,
+/// because a dev-env token won't work against prod APNs (or vice-versa).
+struct RegisterPushDeviceMessage: Codable, Sendable {
+    let type: String
+    let deviceToken: String
+    let environment: String
+
+    init(deviceToken: String, environment: String) {
+        self.type = "register_push_device"
+        self.deviceToken = deviceToken
+        self.environment = environment
+    }
+}
+
+/// iPhone → Mac. User's notification preferences. Synced on every toggle
+/// change AND on every successful reconnect so the Mac is always working
+/// with current prefs. Per-device: stored on the Mac keyed by the
+/// device token so a shared account with two phones behaves independently.
+///
+/// `quietHoursStart` / `quietHoursEnd` are hours of day (0-23) in the
+/// user's local time zone. nil = quiet hours disabled.
+struct PushPreferencesMessage: Codable, Sendable {
+    let type: String
+    let deviceToken: String
+    let paused: Bool
+    let quietHoursStart: Int?
+    let quietHoursEnd: Int?
+    let sound: Bool
+    let foregroundBanner: Bool
+
+    init(deviceToken: String, paused: Bool, quietHoursStart: Int?, quietHoursEnd: Int?,
+         sound: Bool, foregroundBanner: Bool) {
+        self.type = "push_preferences"
+        self.deviceToken = deviceToken
+        self.paused = paused
+        self.quietHoursStart = quietHoursStart
+        self.quietHoursEnd = quietHoursEnd
+        self.sound = sound
+        self.foregroundBanner = foregroundBanner
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {

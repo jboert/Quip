@@ -1,12 +1,31 @@
 import SwiftUI
 import AVFoundation
 
-// Controls orientation lock — portrait when disconnected, all orientations when connected
+// Controls orientation lock — portrait when disconnected, all orientations when connected.
+// Also owns the APNs device-token callbacks — the callbacks must land on a
+// UIApplicationDelegate, not on the SwiftUI App, so this is the right
+// home for them even though the orientation logic is unrelated.
 class AppOrientationDelegate: NSObject, UIApplicationDelegate {
     static var allowAllOrientations = false
 
+    /// Bridge between UIKit's APNs callbacks and our @Observable
+    /// PushRegistrationService. Set from QuipApp at construction time.
+    static var pushRegistration: PushRegistrationService?
+
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         Self.allowAllOrientations ? .allButUpsideDown : .portrait
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor in
+            Self.pushRegistration?.registerDeviceToken(deviceToken)
+        }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Task { @MainActor in
+            Self.pushRegistration?.registrationFailed(error)
+        }
     }
 }
 
@@ -17,6 +36,7 @@ struct QuipApp: App {
     @State private var speech = SpeechService()
     @State private var volumeHandler = HardwareButtonHandler()
     @State private var bonjourBrowser = BonjourBrowser()
+    @State private var pushRegistration = PushRegistrationService()
 
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
@@ -83,6 +103,10 @@ struct QuipApp: App {
             .onAppear {
                 setup()
                 bonjourBrowser.startBrowsing()
+                // Bridge APNs callbacks from UIKit-land to our @Observable
+                // service. Done in onAppear (not init) because @State values
+                // aren't available during the struct initializer.
+                AppOrientationDelegate.pushRegistration = pushRegistration
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
                 // Only reset the audio session if TTS isn't actively playing —
@@ -230,6 +254,19 @@ struct QuipApp: App {
                 if success {
                     showPINEntry = false
                     pinText = ""
+                    // Prompt for notification permission (if needed) and hand
+                    // the Mac our device token. Fine to call on every auth
+                    // success — prompt only shows the first time, and token
+                    // re-send is idempotent on the Mac side.
+                    Task { @MainActor in
+                        await pushRegistration.requestPermissionAndRegister()
+                        if let token = pushRegistration.deviceToken {
+                            client.send(RegisterPushDeviceMessage(
+                                deviceToken: token,
+                                environment: pushRegistration.environment
+                            ))
+                        }
+                    }
                 }
                 // On failure, PIN entry stays open — authError displayed in the UI
             }

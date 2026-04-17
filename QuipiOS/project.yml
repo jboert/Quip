@@ -35,6 +35,7 @@ targets:
         INFOPLIST_FILE: Info.plist
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: QuipiOS.entitlements
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
@@ -51,6 +52,7 @@ targets:
         NSBonjourServices:
           - _quip._tcp.
           - _quip._tcp
+        NSSupportsLiveActivities: true
         NSBluetoothAlwaysUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSBluetoothPeripheralUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSLocalNetworkUsageDescription: Quip connects to your Mac over the local network to control Claude Code sessions.
