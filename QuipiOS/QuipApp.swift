@@ -1743,7 +1743,11 @@ struct InlineTerminalContent: View {
 // MARK: - Quick Button Config
 
 enum QuickButton: String, CaseIterable, Identifiable {
-    case plan, btw, compact, backspace, clearContext, one, two, three
+    // Declaration order matters — `allCases` uses it to render the settings
+    // list and `QuickButton.allCases.filter(...)` uses it to order the
+    // enabled row on the phone. Slash commands grouped first so the whole
+    // "/plan /btw /compact /clear" strip sits together, then the rest.
+    case plan, btw, compact, clearContext, backspace, one, two, three
 
     var id: String { rawValue }
 
