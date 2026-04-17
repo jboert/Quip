@@ -987,33 +987,35 @@ struct MainiOSView: View {
                         onStartRecording()
                     }
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: isRecording ? "stop.fill" : "mic.fill")
-                            .font(.system(size: 20))
-                        Text(isRecording ? "Stop" : "Push to Talk")
-                            .font(.system(size: 16, weight: .medium))
-                    }
-                    .foregroundStyle(isRecording ? .white : colors.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-                    .background(isRecording ? Color.red.opacity(0.7) : colors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    Image(systemName: isRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(isRecording ? .white : .red)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 56)
+                        .background(isRecording ? Color.red.opacity(0.7) : colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                // View output
+                // Type — toggles the text input bar above the terminal
+                // content. Replaces the old "view output" icon, which became
+                // redundant once content auto-refreshes on selection change
+                // and after every quick action. The keyboard icon was also
+                // in the bottom bar but easy to miss; putting it in the main
+                // row alongside PTT/Return makes typing as reachable as
+                // talking or pressing enter.
                 Button {
-                    if let wid = selectedWindowId {
-                        onRequestContent(wid)
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showTextInput.toggle()
+                        if !showTextInput { textInputValue = "" }
                     }
                 } label: {
-                    Image(systemName: "text.alignleft")
+                    Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
                         .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
+                        .foregroundStyle(colors.textPrimary)
                         .frame(width: 56, height: 56)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .disabled(selectedWindowId == nil)
 
                 // Press Return
                 Button {
