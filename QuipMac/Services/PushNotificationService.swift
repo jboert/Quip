@@ -2,6 +2,27 @@ import Foundation
 import Observation
 import AppKit
 
+/// Append a timestamped line to `/tmp/quip-push.log` AND route through
+/// NSLog. print()/NSLog disappear when the .app is launched via `open`
+/// (stderr goes nowhere user-visible), so for the push pipeline — which
+/// is what users actually want to debug when "I didn't get a
+/// notification" happens — we commit to a predictable file. Safe to
+/// tail while the app is running.
+private func quipPushLog(_ message: String) {
+    NSLog("[PushNotif] %@", message)
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        let path = "/tmp/quip-push.log"
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 /// A single iOS device registered to receive pushes from this Mac.
 /// Keyed on the APNs device token (uppercase hex). `environment` matches
 /// the aps-environment entitlement the iOS app was signed with — a
@@ -121,7 +142,7 @@ final class PushNotificationService {
     func updatePreferences(forDevice token: String, prefs: DevicePushPreferences) {
         let normalized = token.uppercased()
         guard devices.contains(where: { $0.token == normalized }) else {
-            print("[PushNotificationService] ignoring prefs for unregistered token (prefix=\(normalized.prefix(8)))")
+            quipPushLog("ignoring prefs for unregistered token (prefix=\(normalized.prefix(8)))")
             return
         }
         preferences[normalized] = prefs
@@ -178,7 +199,7 @@ final class PushNotificationService {
                 environment: environment,
                 registeredAt: Date()
             ))
-            print("[PushNotificationService] registered new device (prefix=\(normalized.prefix(8)))")
+            quipPushLog("registered new device (prefix=\(normalized.prefix(8)))")
         }
         persist()
     }
@@ -191,7 +212,7 @@ final class PushNotificationService {
         let before = devices.count
         devices.removeAll { $0.token == normalized }
         if devices.count != before {
-            print("[PushNotificationService] removed device (prefix=\(normalized.prefix(8)))")
+            quipPushLog("removed device (prefix=\(normalized.prefix(8)))")
             preferences.removeValue(forKey: normalized)
             persist()
             persistPreferences()
@@ -209,14 +230,14 @@ final class PushNotificationService {
     ///
     /// Debounce: 30s per (windowId, device) pair. Global pause +
     /// quiet-hours + sound toggle honored per device.
-    func notifyWaitingForInput(windowId: String, windowName: String, attentionCount: Int) {
+    func notifyWaitingForInput(windowId: String, windowName: String, projectName: String?, attentionCount: Int) {
         guard !devices.isEmpty else { return }
 
         let keyId = UserDefaults.standard.string(forKey: "apnsKeyId") ?? ""
         let teamId = UserDefaults.standard.string(forKey: "apnsTeamId") ?? ""
         let bundleId = UserDefaults.standard.string(forKey: "apnsBundleId") ?? "com.quip.QuipiOS"
         guard !keyId.isEmpty, !teamId.isEmpty, !bundleId.isEmpty else {
-            print("[PushNotificationService] waiting_for_input skipped — APNs not configured in Settings → Notifications")
+            quipPushLog("waiting_for_input skipped — APNs not configured in Settings → Notifications")
             return
         }
 
@@ -224,7 +245,7 @@ final class PushNotificationService {
         do {
             client = try cachedClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
         } catch {
-            print("[PushNotificationService] APNsClient init failed: \(error)")
+            quipPushLog("APNsClient init failed: \(error)")
             return
         }
 
@@ -247,9 +268,18 @@ final class PushNotificationService {
             }
             lastPushTimes[debounceKey] = now
 
+            // Prefer the project (cwd basename like "Quip" or "credit-unions")
+            // in the title — that's how users mentally identify which session
+            // needs them. Fall back to "Quip" when we don't have a project.
+            let title: String
+            if let p = projectName, !p.isEmpty {
+                title = p
+            } else {
+                title = "Quip"
+            }
             var aps: [String: Any] = [
                 "alert": [
-                    "title": "Quip",
+                    "title": title,
                     "body": "\(windowName) is waiting for input"
                 ],
                 "badge": attentionCount
@@ -265,7 +295,7 @@ final class PushNotificationService {
             // Encode now (on main) so the Task below captures Sendable Data
             // instead of an [String: Any] which is not Sendable.
             guard let payloadData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
-                print("[PushNotificationService] could not encode payload for \(windowId)")
+                quipPushLog("could not encode payload for \(windowId)")
                 continue
             }
 
@@ -277,13 +307,13 @@ final class PushNotificationService {
             Task {
                 do {
                     try await capturedClient.send(payloadData: payloadData, toDevice: capturedDevice)
-                    print("[PushNotificationService] push sent to \(capturedToken.prefix(8))… for \(windowId)")
+                    quipPushLog("push sent to \(capturedToken.prefix(8))… for \(windowId)")
                 } catch APNsError.unregistered {
                     await MainActor.run {
                         self.removeDevice(token: capturedToken)
                     }
                 } catch {
-                    print("[PushNotificationService] push failed for \(capturedToken.prefix(8))…: \(error)")
+                    quipPushLog("push failed for \(capturedToken.prefix(8))…: \(error)")
                 }
             }
         }

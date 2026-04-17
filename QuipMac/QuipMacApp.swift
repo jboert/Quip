@@ -1,5 +1,23 @@
 import SwiftUI
 
+/// Append a line to `/tmp/quip-push.log`. Used to debug "I didn't get
+/// a notification" — print()/NSLog can't be seen by the user when the
+/// app is launched via `open`, but this file is trivial to `tail -f`.
+/// Mirrors the helper inside PushNotificationService.
+fileprivate func appendPushDiagnostic(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        let path = "/tmp/quip-push.log"
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -148,6 +166,7 @@ struct QuipMacApp: App {
         }
 
         terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
+            appendPushDiagnostic("state \(oldState.rawValue)→\(newState.rawValue) for \(windowId) (selected=\(clientSelectedWindowId ?? "nil"))")
             webSocketServer.broadcast(StateChangeMessage(windowId: windowId, state: newState.rawValue))
 
             // Clear the pending-input flag as soon as we see Claude actually become busy.
@@ -159,17 +178,34 @@ struct QuipMacApp: App {
             if newState == .waitingForInput {
                 thinkingWindows.remove(windowId)
 
+                // Diagnostic so we can see what's blocking pushes when
+                // the phone says "I didn't get a notification." Three
+                // common cases: (a) no window selected, (b) a different
+                // window is selected, (c) no registered devices yet.
+                let diag = "waiting_for_input for \(windowId) — clientSelectedWindowId=\(clientSelectedWindowId ?? "nil"), devices=\(pushNotificationService.devices.count)"
+                NSLog("[Quip] %@", diag)
+                appendPushDiagnostic(diag)
+
                 // Fire a push ONLY when the phone's current selection is
                 // this window — prevents a notification flood from every
                 // background Claude. Safe to call even when no devices
                 // are registered; it's a no-op in that case.
                 if windowId == clientSelectedWindowId {
-                    let windowName = windowManager.windows.first(where: { $0.id == windowId })?.name ?? "Terminal"
+                    let window = windowManager.windows.first(where: { $0.id == windowId })
+                    let windowName = window?.name ?? "Terminal"
+                    // subtitle = directory basename (e.g. "Quip", "credit-unions")
+                    // via fetchSubtitles/applySubtitles. That's the project.
+                    let project = window?.subtitle
                     pushNotificationService.notifyWaitingForInput(
                         windowId: windowId,
                         windowName: windowName,
+                        projectName: project,
                         attentionCount: 1
                     )
+                } else {
+                    let skip = "push SKIPPED — selection mismatch (selected=\(clientSelectedWindowId ?? "nil"), event=\(windowId))"
+                    NSLog("[Quip] %@", skip)
+                    appendPushDiagnostic(skip)
                 }
 
                 if pendingInputForWindow.contains(windowId) {
@@ -489,8 +525,28 @@ struct QuipMacApp: App {
         switch type {
         case "select_window":
             if let msg = MessageCoder.decode(SelectWindowMessage.self, from: data) {
+                appendPushDiagnostic("select_window: \(msg.windowId)")
+
+                // Stop watching the previously selected window — unless it's also
+                // user-enabled, in which case syncTrackedWindows owns it.
+                if let previous = clientSelectedWindowId, previous != msg.windowId {
+                    let stillEnabled = windowManager.windows.first(where: { $0.id == previous })?.isEnabled ?? false
+                    if !stillEnabled {
+                        terminalStateDetector.untrackWindow(previous)
+                    }
+                }
+
                 clientSelectedWindowId = msg.windowId
                 windowManager.focusWindow(msg.windowId)
+
+                // Start watching the new selection so waiting_for_input fires → push.
+                // Without this, the detector only polls `isEnabled` windows and
+                // never sees state changes on a phone-selected window.
+                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }),
+                   terminalStateDetector.trackedWindows[msg.windowId] == nil {
+                    let pid = shellPidForWindow(window)
+                    terminalStateDetector.trackWindow(msg.windowId, shellPid: pid)
+                }
             }
 
         case "send_text":
@@ -754,6 +810,7 @@ struct QuipMacApp: App {
 
         case "register_push_device":
             if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
+                appendPushDiagnostic("register_push_device: \(msg.deviceToken.prefix(8)) env=\(msg.environment)")
                 pushNotificationService.registerDevice(token: msg.deviceToken, environment: msg.environment)
             }
 
@@ -991,6 +1048,12 @@ struct QuipMacApp: App {
             runAfterDelay {
                 keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
+        // Ctrl+U — readline "kill to start of line." Wipes the current
+        // prompt input in one keystroke instead of holding backspace.
+        case "clear_input":
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("ctrl+u", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            }
         case "press_y":
             runAfterDelay {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
@@ -1073,7 +1136,25 @@ struct QuipMacApp: App {
         return Array(newLines.suffix(25)).joined(separator: "\n")
     }
 
+    /// Pick the PID the state detector should watch for this window.
+    /// For iTerm2 we look up the session's tty and resolve it to the
+    /// actual shell PID — iTerm2 shells reparent to launchd, so the
+    /// window's own pid (kCGWindowOwnerPID = iTerm app PID) is useless;
+    /// all iTerm windows would share the same process tree and state
+    /// transitions would conflate across every Claude session.
+    /// For Terminal.app the window pid still points into the terminal,
+    /// which is good enough — fall through.
     @MainActor
+    private func shellPidForWindow(_ window: ManagedWindow) -> pid_t {
+        if window.bundleId == TerminalApp.iterm2.bundleIdentifier,
+           let tty = window.iterm2Tty,
+           !tty.isEmpty,
+           let shellPid = TerminalStateDetector.shellPidForTTY(tty) {
+            return shellPid
+        }
+        return window.pid
+    }
+
     private func syncTrackedWindows() {
         let terminalBundleIds: Set<String> = [
             TerminalApp.terminal.bundleIdentifier,
@@ -1085,13 +1166,23 @@ struct QuipMacApp: App {
         // Track new windows
         for window in enabledTerminals {
             if terminalStateDetector.trackedWindows[window.id] == nil {
-                terminalStateDetector.trackWindow(window.id, shellPid: window.pid)
+                let pid = shellPidForWindow(window)
+                terminalStateDetector.trackWindow(window.id, shellPid: pid)
             }
         }
-        // Untrack removed/disabled windows
+        // Also ensure the phone-selected window is tracked, even if not
+        // user-enabled — otherwise the detector never polls it and
+        // waiting_for_input pushes silently drop.
+        if let selected = clientSelectedWindowId,
+           let window = windowManager.windows.first(where: { $0.id == selected }),
+           terminalStateDetector.trackedWindows[selected] == nil {
+            let pid = shellPidForWindow(window)
+            terminalStateDetector.trackWindow(selected, shellPid: pid)
+        }
+        // Untrack removed/disabled windows — but preserve the selected one.
         let enabledIds = Set(enabledTerminals.map(\.id))
         for windowId in terminalStateDetector.trackedWindows.keys {
-            if !enabledIds.contains(windowId) {
+            if !enabledIds.contains(windowId) && windowId != clientSelectedWindowId {
                 terminalStateDetector.untrackWindow(windowId)
             }
         }
