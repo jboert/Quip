@@ -1672,14 +1672,11 @@ struct InlineTerminalContent: View {
     var onSendAction: (String) -> Void
     @Environment(\.quipColors) private var colors
     @AppStorage("tintContentBorder") private var tintContentBorder = true
-    /// Zoom level for the screenshot view: 0 = fills panel edge-to-edge,
-    /// 1 = default medium (24pt margin, text renders smaller), 2 = small
-    /// (48pt margin, smallest text). Default 1 so the terminal text starts
-    /// a tad smaller than full-bleed — fit more of the window on screen
-    /// without the user having to tap anything. Cycle button toggles.
+    /// Zoom level index into `ContentZoomLevel.allCases`. Persisted so the
+    /// user's pick survives relaunch, and shared between portrait and
+    /// landscape views so cycling in one affects both.
     @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
-    private static let zoomPaddings: [CGFloat] = [0, 24, 48]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1695,7 +1692,7 @@ struct InlineTerminalContent: View {
                 // you can trade panel fill for more terminal content on
                 // screen at once. Icon's the A+/A− "text size" symbol.
                 Button {
-                    contentZoomLevel = (contentZoomLevel + 1) % Self.zoomPaddings.count
+                    contentZoomLevel = ContentZoomLevel.from(raw: contentZoomLevel).next
                 } label: {
                     Image(systemName: "textformat.size")
                         .font(.system(size: 13))
@@ -1730,15 +1727,17 @@ struct InlineTerminalContent: View {
                 ScrollView {
                     if let screenshot, let imageData = Data(base64Encoded: screenshot),
                        let uiImage = UIImage(data: imageData) {
-                        // Edge-to-edge at zoom 0 (default), progressively
-                        // narrower at higher levels so terminal text renders
-                        // smaller and more of the window is visible at once.
-                        let pad = Self.zoomPaddings[contentZoomLevel]
+                        // Percent-of-screen-width so the same zoom level
+                        // shrinks proportionally in portrait and landscape
+                        // — a fixed point margin was barely visible in
+                        // landscape where the panel is much wider.
+                        let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
+                        let maxW = UIScreen.main.bounds.width * zoom.widthFraction
                         Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFit()
+                            .frame(maxWidth: maxW)
                             .frame(maxWidth: .infinity)
-                            .padding(.horizontal, pad)
                             .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)
@@ -2028,4 +2027,33 @@ enum ConnectionTestState: Equatable {
 
 private enum ConnectionProbeError: Error {
     case timeout(TimeInterval)
+}
+
+/// Three-way zoom control for the terminal content screenshot. Shared by
+/// portrait InlineTerminalContent and landscape TerminalContentOverlay so
+/// cycling in one carries over to the other.
+///
+/// Percentage-based (of container width) rather than fixed point padding —
+/// landscape is >2x as wide as portrait, so a fixed 24pt margin in portrait
+/// is barely visible in landscape and text still renders huge.
+enum ContentZoomLevel: Int, CaseIterable {
+    case fill = 0, medium = 1, small = 2
+
+    /// Fraction of the container width the image should fill. Remaining
+    /// space becomes evenly-split horizontal margin.
+    var widthFraction: CGFloat {
+        switch self {
+        case .fill: return 1.0
+        case .medium: return 0.82
+        case .small: return 0.62
+        }
+    }
+
+    static func from(raw: Int) -> ContentZoomLevel {
+        ContentZoomLevel(rawValue: raw) ?? .medium
+    }
+
+    var next: Int {
+        (rawValue + 1) % ContentZoomLevel.allCases.count
+    }
 }
