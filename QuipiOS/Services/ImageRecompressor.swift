@@ -46,7 +46,14 @@ struct ImageRecompressor {
             longest *= downscaleStep
             let scale = longest / max(image.size.width, image.size.height)
             let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-            let renderer = UIGraphicsImageRenderer(size: newSize)
+            // Pin renderer scale to 1 so the backing bitmap matches newSize in
+            // pixels. Without this the renderer picks up the screen scale
+            // (2x/3x), silently inflating the bitmap and the downstream JPEG
+            // encode — so the "downscale" step would shrink far less than the
+            // point-size math suggests on a real device.
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
             image = renderer.image { _ in
                 image.draw(in: CGRect(origin: .zero, size: newSize))
             }
