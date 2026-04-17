@@ -518,8 +518,19 @@ struct QuipMacApp: App {
                 do {
                     savedURL = try imageUploadHandler.save(message: msg)
                 } catch {
-                    print("[Quip] image_upload write failed: \(error)")
-                    webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "write failed: \(error)"))
+                    print("[Quip] image_upload failed: \(error)")
+                    let reason: String
+                    switch error {
+                    case ImageUploadHandlerError.invalidBase64:
+                        reason = "invalid image data"
+                    case ImageUploadHandlerError.invalidPath:
+                        reason = "invalid filename"
+                    case ImageUploadHandlerError.writeFailed:
+                        reason = "could not save image"
+                    default:
+                        reason = "upload failed"
+                    }
+                    webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: reason))
                     return
                 }
 
