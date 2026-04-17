@@ -84,6 +84,7 @@ struct QuipMacApp: App {
                 .environment(tailscale)
                 .environment(pinManager)
                 .environment(connectionLog)
+                .environment(pushNotificationService)
         }
     }
 
