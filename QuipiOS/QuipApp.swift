@@ -458,6 +458,11 @@ struct MainiOSView: View {
                     },
                     onSendAction: { action in
                         if let wid = terminalContentWindowId {
+                            // press_return is the "submit" action — flush a queued image
+                            // first so landscape mirrors the portrait Return behavior.
+                            if action == "press_return" {
+                                sendPendingImageIfNeeded(windowId: wid)
+                            }
                             client.send(QuickActionMessage(windowId: wid, action: action))
                         }
                     },
@@ -1111,9 +1116,11 @@ struct MainiOSView: View {
                 }
                 .accessibilityLabel("Attach image")
 
-                // Press Return
+                // Press Return — flushes any pending image first so a pick-then-tap-Return
+                // flow actually submits the image instead of leaving the thumbnail stuck.
                 Button {
                     if let wid = selectedWindowId {
+                        sendPendingImageIfNeeded(windowId: wid)
                         client.send(QuickActionMessage(windowId: wid, action: "press_return"))
                     }
                 } label: {
@@ -1756,8 +1763,11 @@ struct MainiOSView: View {
             guard let wid = selectedWindowId else { return }
             switch button.action {
             case .sendText(let text, let pressReturn):
+                // Auto-submitting text is a "submit" — flush any pending image first.
+                if pressReturn { sendPendingImageIfNeeded(windowId: wid) }
                 client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
             case .quickAction(let action):
+                if action == "press_return" { sendPendingImageIfNeeded(windowId: wid) }
                 client.send(QuickActionMessage(windowId: wid, action: action))
             }
         } label: {
