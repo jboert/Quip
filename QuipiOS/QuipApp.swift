@@ -1182,6 +1182,13 @@ struct MainiOSView: View {
                                 window: window,
                                 isSelected: window.id == selectedWindowId,
                                 onSelect: {
+                                    // Tapping a disabled window (which the mirror-desktop
+                                    // mode surfaces) immediately enables it — that's the
+                                    // whole point of seeing dimmed cards. An enabled tap
+                                    // just selects + focuses.
+                                    if !window.enabled {
+                                        client.send(QuickActionMessage(windowId: window.id, action: "toggle_enabled"))
+                                    }
                                     withAnimation(.spring(duration: 0.2)) {
                                         selectedWindowId = window.id
                                     }
