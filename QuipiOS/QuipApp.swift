@@ -508,7 +508,17 @@ struct MainiOSView: View {
             }
         }
         .environment(\.quipColors, colors)
-        .onAppear { updateOrientation() }
+        .onAppear {
+            updateOrientation()
+            // Register image upload result callbacks. These are idempotent
+            // reassignments so re-firing onAppear is harmless.
+            client.onImageUploadAck = { [weak pendingImage] _ in
+                DispatchQueue.main.async { pendingImage?.clear() }
+            }
+            client.onImageUploadError = { [weak pendingImage] reason in
+                DispatchQueue.main.async { pendingImage?.markError(reason) }
+            }
+        }
         .onChange(of: client.isConnected) { _, connected in
             withAnimation(.easeInOut(duration: 0.5)) {
                 if !connected {
@@ -1201,8 +1211,60 @@ struct MainiOSView: View {
     private func sendTextInput() {
         let text = textInputValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let windowId = selectedWindowId else { return }
+        // Ship the image first (fire-and-forget); the Mac queues messages in order.
+        sendPendingImageIfNeeded(windowId: windowId)
         client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
         textInputValue = ""
+    }
+
+    // MARK: - Image Upload
+
+    private let imageRecompressor = ImageRecompressor(maxPayloadBytes: 7_300_000)
+
+    @MainActor
+    private func sendPendingImageIfNeeded(windowId: String) {
+        guard let image = pendingImage.image,
+              let filename = pendingImage.filename,
+              let mime = pendingImage.mimeType else { return }
+
+        pendingImage.markUploading()
+
+        // Capture value types so the closure doesn't hold a reference to self.
+        let recompressor = imageRecompressor
+        let clientRef = client
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let rawData: Data?
+            if mime == "image/png" {
+                rawData = image.pngData()
+            } else {
+                rawData = image.jpegData(compressionQuality: 0.95)
+            }
+            guard let rawData else {
+                DispatchQueue.main.async { [weak pendingImage] in
+                    pendingImage?.markError("couldn't encode image")
+                }
+                return
+            }
+            do {
+                let (data, finalMime) = try recompressor.recompress(rawData: rawData, declaredMime: mime)
+                let base64 = data.base64EncodedString()
+                let msg = ImageUploadMessage(
+                    imageId: UUID().uuidString,
+                    windowId: windowId,
+                    filename: filename,
+                    mimeType: finalMime,
+                    data: base64
+                )
+                DispatchQueue.main.async {
+                    clientRef.send(msg)
+                }
+            } catch {
+                DispatchQueue.main.async { [weak pendingImage] in
+                    pendingImage?.markError("image too large to send")
+                }
+            }
+        }
     }
 
     // MARK: - Portrait Split
