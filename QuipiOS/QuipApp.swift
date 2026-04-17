@@ -433,15 +433,13 @@ struct MainiOSView: View {
                 if isPortrait {
                     portraitContentSection
                 } else {
-                    windowLayout
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
+                    landscapeContentSection
                     if showTextInput {
                         textInputBar
                     }
                 }
 
-                if isPortrait && client.isAuthenticated && !windows.isEmpty {
+                if client.isAuthenticated && !windows.isEmpty {
                     portraitControls
                         .padding(.horizontal, 8)
                         .padding(.top, 4)
@@ -504,54 +502,6 @@ struct MainiOSView: View {
                     }
                 }
                 .allowsHitTesting(!isPortrait)
-            }
-        }
-        .overlay {
-            // In portrait the inline terminal view replaces this popup, so don't stack them.
-            if let content = terminalContentText, !isPortrait {
-                let windowName = windows.first(where: { $0.id == terminalContentWindowId })?.name ?? "Terminal"
-                TerminalContentOverlay(
-                    content: content,
-                    screenshot: terminalContentScreenshot,
-                    windowName: windowName,
-                    onDismiss: {
-                        terminalContentText = nil
-                        terminalContentScreenshot = nil
-                        terminalContentWindowId = nil
-                    },
-                    onRefresh: {
-                        if let wid = terminalContentWindowId {
-                            onRequestContent(wid)
-                        }
-                    },
-                    onSendAction: { action in
-                        if let wid = terminalContentWindowId {
-                            // press_return is the "submit" action — flush a queued image
-                            // first AND defer the Enter press until after the image has
-                            // been dispatched, so the Mac processes them in order.
-                            if action == "press_return" {
-                                sendPendingImageIfNeeded(windowId: wid) { [client] in
-                                    client.send(QuickActionMessage(windowId: wid, action: action))
-                                }
-                            } else {
-                                client.send(QuickActionMessage(windowId: wid, action: action))
-                            }
-                        }
-                    },
-                    onSendText: { text in
-                        if let wid = terminalContentWindowId {
-                            sendPendingImageIfNeeded(windowId: wid) { [client] in
-                                if !text.isEmpty {
-                                    client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
-                                }
-                            }
-                        }
-                    },
-                    onAttachImage: {
-                        showingImageSourceSheet = true
-                    }
-                )
-                .environmentObject(pendingImage)
             }
         }
         .overlay {
@@ -1059,8 +1009,17 @@ struct MainiOSView: View {
     private var portraitControls: some View {
         let selectedWindow = windows.first(where: { $0.id == selectedWindowId })
         let windowColor = selectedWindow.map { Color(hex: $0.color) } ?? colors.textSecondary
+        // Landscape is short on vertical space — tighten the button sizes so
+        // the full row of controls + quick-button row fits without crowding.
+        let btnH: CGFloat = isPortrait ? 56 : 40
+        let btnW: CGFloat = isPortrait ? 56 : 44
+        let pttW: CGFloat = isPortrait ? 72 : 56
+        let navW: CGFloat = isPortrait ? 30 : 26
+        let navH: CGFloat = isPortrait ? 40 : 32
+        let auxW: CGFloat = isPortrait ? 40 : 32
+        let auxH: CGFloat = isPortrait ? 56 : 40
 
-        return VStack(spacing: 8) {
+        return VStack(spacing: isPortrait ? 8 : 4) {
             // Pending image thumbnail — only takes space when an image is attached.
             PendingImagePreviewStrip(state: pendingImage)
 
@@ -1074,7 +1033,7 @@ struct MainiOSView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 30, height: 40)
+                        .frame(width: navW, height: navH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
@@ -1087,7 +1046,7 @@ struct MainiOSView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 30, height: 40)
+                        .frame(width: navW, height: navH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
@@ -1100,7 +1059,7 @@ struct MainiOSView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(colors.textPrimary)
-                        .frame(width: 40, height: 56)
+                        .frame(width: auxW, height: auxH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -1129,7 +1088,7 @@ struct MainiOSView: View {
                     Image(systemName: icon)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 40, height: 56)
+                        .frame(width: auxW, height: auxH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -1152,7 +1111,7 @@ struct MainiOSView: View {
                     Image(systemName: isRecording ? "stop.fill" : "mic.fill")
                         .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(Color.red.opacity(0.75))
-                        .frame(width: 72, height: 56)
+                        .frame(width: pttW, height: btnH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(
@@ -1178,7 +1137,7 @@ struct MainiOSView: View {
                     Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(colors.textPrimary)
-                        .frame(width: 56, height: 56)
+                        .frame(width: btnW, height: btnH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -1190,7 +1149,7 @@ struct MainiOSView: View {
                     Image(systemName: pendingImage.hasPendingImage ? "photo.fill" : "photo")
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(pendingImage.hasPendingImage ? colors.buttonPrimary : colors.textPrimary)
-                        .frame(width: 56, height: 56)
+                        .frame(width: btnW, height: btnH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -1211,7 +1170,7 @@ struct MainiOSView: View {
                     Image(systemName: "return")
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 56, height: 56)
+                        .frame(width: btnW, height: btnH)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -1398,6 +1357,70 @@ struct MainiOSView: View {
         min(0.9, max(0.1, terminalHeightFraction - dragFractionDelta))
     }
 
+    // Landscape horizontal split — window picker on the left, terminal on the
+    // right, draggable divider in between. Separate @AppStorage key so the
+    // ratio you pick in landscape doesn't mess with the portrait ratio.
+    @AppStorage("terminalWidthFraction") private var terminalWidthFraction: Double = 0.7
+    @GestureState private var dragWidthFractionDelta: Double = 0
+    private var resolvedTerminalWidthFraction: Double {
+        min(0.9, max(0.1, terminalWidthFraction - dragWidthFractionDelta))
+    }
+
+    @ViewBuilder
+    private var landscapeContentSection: some View {
+        let hasTerminal = client.isAuthenticated && selectedWindowId != nil
+        if hasTerminal {
+            GeometryReader { geo in
+                HStack(spacing: 0) {
+                    if !isTerminalExpanded {
+                        windowLayout
+                            .frame(width: geo.size.width * (1 - resolvedTerminalWidthFraction))
+                            .padding(.vertical, 4)
+                            .padding(.leading, 4)
+                        resizeHandleVertical(containerWidth: geo.size.width)
+                    }
+                    terminalContentView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.vertical, 4)
+                        .padding(.trailing, 8)
+                }
+            }
+        } else {
+            windowLayout
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Vertical drag handle between windowLayout (left) and terminalContentView
+    /// (right) in landscape. Mirrors `resizeHandle` but along the x-axis. Drag
+    /// right → windowLayout grows, terminal shrinks.
+    private func resizeHandleVertical(containerWidth: CGFloat) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(width: 0.5)
+                .frame(maxHeight: .infinity)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.white.opacity(0.5))
+                .frame(width: 4, height: 44)
+        }
+        .padding(.horizontal, 10)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture()
+                .updating($dragWidthFractionDelta) { value, state, _ in
+                    state = containerWidth > 0 ? Double(value.translation.width) / Double(containerWidth) : 0
+                }
+                .onEnded { value in
+                    guard containerWidth > 0 else { return }
+                    let delta = Double(value.translation.width) / Double(containerWidth)
+                    terminalWidthFraction = min(0.9, max(0.1, terminalWidthFraction - delta))
+                }
+        )
+    }
+
     @ViewBuilder
     private var portraitContentSection: some View {
         let hasTerminal = client.isAuthenticated && selectedWindowId != nil
@@ -1416,6 +1439,10 @@ struct MainiOSView: View {
                     }
                     terminalContentView
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // Horizontal inset so the tinted window-color border
+                        // on left/right is visible instead of being clipped
+                        // by the display's rounded corners.
+                        .padding(.horizontal, 12)
                         .padding(.top, 4)
                 }
             }
@@ -2078,14 +2105,20 @@ struct InlineTerminalContent: View {
                     if let screenshot, let imageData = Data(base64Encoded: screenshot),
                        let uiImage = UIImage(data: imageData) {
                         let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
-                        // Edge-to-edge fill at the default zoom; smaller zoom levels
-                        // shrink the image via widthFraction so text renders smaller.
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: UIScreen.main.bounds.width * zoom.widthFraction)
-                            .frame(maxWidth: .infinity)
-                            .id("bottom")
+                        // Use the ACTUAL container width via GeometryReader so
+                        // landscape (where this panel is ~70% of screen, not
+                        // full-screen-wide) doesn't blow the image up. Old code
+                        // used UIScreen.main.bounds.width which in landscape is
+                        // the long side — making text comically oversized.
+                        GeometryReader { panelGeo in
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: panelGeo.size.width * zoom.widthFraction)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .aspectRatio(uiImage.size, contentMode: .fit)
+                        .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)
                             .font(.system(size: 10, design: .monospaced))
