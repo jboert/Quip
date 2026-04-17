@@ -232,6 +232,7 @@ git commit -m "Added them new image-upload messages so the phone can holler at t
 **Files:**
 - Create: `QuipMac/Services/ImageUploadHandler.swift`
 - Create: `QuipMac/Tests/ImageUploadHandlerTests.swift`
+- Modify: `QuipMac/project.yml` — add `- path: Tests` to `QuipMacTests.sources`. Currently the Mac test target only sources `../Shared/Tests`; we need a Mac-only test location because `ImageUploadHandler` is Mac-only and can't compile under the iOS test target that also sources `Shared/Tests/`.
 
 - [ ] **Step 1: Write the failing test**
 
