@@ -334,6 +334,63 @@ struct ImageUploadErrorMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Attach Existing iTerm Window
+
+/// iPhone → Mac. Asks the Mac to enumerate every iTerm2 window it can see so
+/// the phone can show the user a "pick one to attach" list. Empty body beyond
+/// `type`.
+struct ScanITermWindowsMessage: Codable, Sendable {
+    let type: String
+
+    init() { self.type = "scan_iterm_windows" }
+}
+
+/// Mac → iPhone. One row in the scan result — mirrors
+/// `WindowManager.ITermWindowDescriptor` but flattened for the wire. The
+/// `isAlreadyTracked` flag lets the UI dim rows that are already in Quip's
+/// window list so the user doesn't double-attach.
+struct ITermWindowInfo: Codable, Sendable, Equatable, Hashable {
+    /// CG / iTerm window number — stable for the lifetime of the window
+    /// but reassigned across iTerm relaunches, so always pair with sessionId.
+    let windowNumber: Int
+    let title: String
+    /// iTerm2 session `unique id`. Persists across iTerm restarts for
+    /// undetached sessions — this is the primary identity.
+    let sessionId: String
+    /// Current working directory of the session's shell.
+    let cwd: String
+    /// True when the session is already promoted to a Quip-tracked window.
+    let isAlreadyTracked: Bool
+    /// iTerm window's miniaturized state at scan time. UI shows these
+    /// dimmed and tagged so the user can tell them apart.
+    let isMiniaturized: Bool
+}
+
+/// Mac → iPhone. Response to a scan request.
+struct ITermWindowListMessage: Codable, Sendable {
+    let type: String
+    let windows: [ITermWindowInfo]
+
+    init(windows: [ITermWindowInfo]) {
+        self.type = "iterm_window_list"
+        self.windows = windows
+    }
+}
+
+/// iPhone → Mac. User picked a row from the scan list — promote it to a
+/// tracked Quip window.
+struct AttachITermWindowMessage: Codable, Sendable {
+    let type: String
+    let windowNumber: Int
+    let sessionId: String
+
+    init(windowNumber: Int, sessionId: String) {
+        self.type = "attach_iterm_window"
+        self.windowNumber = windowNumber
+        self.sessionId = sessionId
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {

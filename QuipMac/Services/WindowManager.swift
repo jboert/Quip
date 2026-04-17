@@ -87,11 +87,62 @@ final class WindowManager {
     /// Custom ordering of window IDs — preserved across refreshes
     var customOrder: [String] = []
 
+    /// iTerm2 session UUIDs the user explicitly attached from the phone's
+    /// "scan existing sessions" flow. Persisted to UserDefaults so the
+    /// attachment survives Quip restarts. On every snapshot apply, any
+    /// CG window whose iterm2SessionId is in this set gets auto-enabled —
+    /// that's how "I attached this yesterday" becomes "it's back in my
+    /// picker today" without any phone round-trip.
+    private(set) var attachedSessionIds: Set<String> = []
+    private static let attachedSessionIdsKey = "attachedITermSessionIds"
+
     /// Available displays
     var displays: [DisplayInfo] = []
 
     // Next color index for assignment
     private var colorIndex: Int = 0
+
+    // MARK: - Init / Attached Session Persistence
+
+    init() {
+        loadAttachedSessionIds()
+    }
+
+    /// Load the persisted attached-session UUID list from UserDefaults.
+    /// Called once at init. Missing / corrupt data is treated as an empty
+    /// list — we never throw since a corrupt pref shouldn't brick the app.
+    private func loadAttachedSessionIds() {
+        guard let arr = UserDefaults.standard.array(forKey: Self.attachedSessionIdsKey) as? [String] else { return }
+        attachedSessionIds = Set(arr)
+        if !attachedSessionIds.isEmpty {
+            print("[WindowManager] loaded \(attachedSessionIds.count) attached iTerm session(s)")
+        }
+    }
+
+    private func persistAttachedSessionIds() {
+        UserDefaults.standard.set(Array(attachedSessionIds), forKey: Self.attachedSessionIdsKey)
+    }
+
+    /// Remember this iTerm session UUID as one the user has attached.
+    /// Idempotent — re-attaching the same session is a no-op. The actual
+    /// ManagedWindow gets enabled on the next snapshot apply (or the caller
+    /// can force a refresh; see QuipMacApp.handleAttachITermWindow).
+    func markSessionAttached(sessionId: String) {
+        guard !sessionId.isEmpty, !attachedSessionIds.contains(sessionId) else { return }
+        attachedSessionIds.insert(sessionId)
+        persistAttachedSessionIds()
+    }
+
+    /// Drop a session from the attached set and persist. Future snapshots
+    /// will stop auto-enabling the window. Currently-running windows stay
+    /// enabled for the rest of the session (the user can toggle off). MVP
+    /// has no UI for this yet, but it's here for US-006 reconciliation and
+    /// for a future "stop tracking" affordance.
+    func markSessionDetached(sessionId: String) {
+        guard attachedSessionIds.contains(sessionId) else { return }
+        attachedSessionIds.remove(sessionId)
+        persistAttachedSessionIds()
+    }
 
     // MARK: - Display Info
 
@@ -668,6 +719,37 @@ final class WindowManager {
     /// that collision; any window that can't find an unclaimed match within
     /// tolerance is left with a nil UUID, and the phone's read/write paths
     /// refuse to touch it until the next refresh.
+    /// Reconcile the persisted attached-session list against what iTerm2
+    /// currently reports. Any sessionId the user attached in a prior run
+    /// that is no longer present in iTerm (session closed, Mac rebooted,
+    /// etc.) gets dropped from the persistent set — otherwise we'd hold
+    /// onto zombie UUIDs forever. Call this after each `listAllITermWindows`
+    /// fetch in handlers where we have a fresh view of iTerm reality.
+    /// Does NOT drop sessionIds when iTerm simply isn't running yet (empty
+    /// list) — only when we have a list AND the id isn't in it.
+    func reconcileAttachedSessions(withLiveSessionIds live: Set<String>) {
+        guard !live.isEmpty else { return }
+        let stale = attachedSessionIds.subtracting(live)
+        guard !stale.isEmpty else { return }
+        for sid in stale { attachedSessionIds.remove(sid) }
+        persistAttachedSessionIds()
+        print("[WindowManager] reconciled attached sessions: dropped \(stale.count) stale UUID(s): \(stale)")
+    }
+
+    /// After iterm2SessionIds are applied, make sure every window whose
+    /// session the user previously attached is flagged enabled. Without
+    /// this, attached windows wouldn't come back enabled after a Quip
+    /// restart — they'd be in the list but invisible to the default
+    /// (non-mirror) picker. Call after `applyIterm2SessionIds`.
+    func enableAttachedWindows() {
+        guard !attachedSessionIds.isEmpty else { return }
+        for i in windows.indices {
+            if let sid = windows[i].iterm2SessionId, attachedSessionIds.contains(sid) {
+                windows[i].isEnabled = true
+            }
+        }
+    }
+
     func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo]) {
         let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
         // Tolerance is per-dimension (midX/Y/width/height each). Summed as

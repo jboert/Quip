@@ -206,6 +206,10 @@ struct QuipMacApp: App {
                     windowManager.applyWindowSnapshot(snapshot)
                     if let subtitles { windowManager.applySubtitles(subtitles) }
                     if let sessions { windowManager.applyIterm2SessionIds(sessions) }
+                    // After session IDs are matched, re-enable anything the
+                    // user attached in a prior run so the window is in the
+                    // picker again without a round-trip.
+                    windowManager.enableAttachedWindows()
                     self.syncTrackedWindows()
                     broadcastLayout()
                 }
@@ -729,8 +733,95 @@ struct QuipMacApp: App {
                 handleArrangeWindows(layout: msg.layout)
             }
 
+        case "scan_iterm_windows":
+            handleScanITermWindows()
+
+        case "attach_iterm_window":
+            if let msg = MessageCoder.decode(AttachITermWindowMessage.self, from: data) {
+                print("[Quip] attach_iterm_window: windowNumber=\(msg.windowNumber) sessionId=\(msg.sessionId)")
+                handleAttachITermWindow(windowNumber: msg.windowNumber, sessionId: msg.sessionId)
+            }
+
         default:
             break
+        }
+    }
+
+    /// Enumerate every iTerm2 window (not just Quip-tracked ones), tag each
+    /// with whether Quip is already tracking it, and broadcast the list so
+    /// the phone's "attach existing" sheet can populate.
+    @MainActor
+    private func handleScanITermWindows() {
+        // AppleScript enumeration can take 200-500ms on a busy Mac — push
+        // off-main so we don't freeze the UI, then hop back to classify.
+        Task.detached {
+            let descriptors = WindowManager.fetchAllITermWindows()
+            await MainActor.run {
+                let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
+                // Prune attached-session UUIDs that iTerm no longer knows
+                // about. Only do this when iTerm returned at least one window
+                // so a transient "iTerm not running" state doesn't wipe
+                // persistence.
+                let liveSessionIds = Set(descriptors.map(\.sessionId))
+                self.windowManager.reconcileAttachedSessions(withLiveSessionIds: liveSessionIds)
+                let trackedSessionIds: Set<String> = Set(
+                    self.windowManager.windows
+                        .filter { $0.bundleId == iterm2BundleId && $0.isEnabled }
+                        .compactMap(\.iterm2SessionId)
+                )
+                let infos: [ITermWindowInfo] = descriptors.map { d in
+                    ITermWindowInfo(
+                        windowNumber: Int(d.windowNumber),
+                        title: d.title,
+                        sessionId: d.sessionId,
+                        cwd: d.cwd,
+                        isAlreadyTracked: trackedSessionIds.contains(d.sessionId),
+                        isMiniaturized: d.isMiniaturized
+                    )
+                }
+                print("[Quip] scan_iterm_windows: returning \(infos.count) windows (\(infos.filter(\.isAlreadyTracked).count) already tracked)")
+                self.webSocketServer.broadcast(ITermWindowListMessage(windows: infos))
+            }
+        }
+    }
+
+    /// User picked a row in the scan sheet. Re-verify the window still
+    /// exists (could've closed between scan and tap), promote it to a
+    /// Quip-tracked window by enabling the matching ManagedWindow, persist
+    /// the sessionId so the attachment survives Quip restarts, and
+    /// broadcast a fresh layout so the phone's picker refreshes.
+    @MainActor
+    private func handleAttachITermWindow(windowNumber: Int, sessionId: String) {
+        Task.detached {
+            let descriptors = WindowManager.fetchAllITermWindows()
+            await MainActor.run {
+                let stillExists = descriptors.contains {
+                    Int($0.windowNumber) == windowNumber && $0.sessionId == sessionId
+                }
+                guard stillExists else {
+                    print("[Quip] attach_iterm_window DROPPED: window closed between scan and attach")
+                    self.webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
+                    return
+                }
+
+                // Persist FIRST so the enable sticks even if the CG snapshot
+                // hasn't matched this sessionId to a ManagedWindow yet.
+                self.windowManager.markSessionAttached(sessionId: sessionId)
+
+                // Force a fresh scan + session ID match so the ManagedWindow
+                // for this iTerm window is populated and flagged enabled.
+                self.windowManager.refreshWindowList()
+                self.windowManager.refreshIterm2SessionIds()
+
+                if let target = self.windowManager.windows.first(where: { $0.iterm2SessionId == sessionId }) {
+                    self.windowManager.toggleWindow(target.id, enabled: true)
+                    print("[Quip] attach_iterm_window: promoted \(target.id) (sessionId=\(sessionId))")
+                } else {
+                    // sessionId persisted — next snapshot will enable it.
+                    print("[Quip] attach_iterm_window: sessionId=\(sessionId) not yet in CG window list; will enable on next snapshot")
+                }
+                self.broadcastLayout()
+            }
         }
     }
 

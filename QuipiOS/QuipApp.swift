@@ -34,6 +34,12 @@ struct QuipApp: App {
     @State private var showPINEntry = false
     @State private var pinText = ""
     @State private var projectDirectories: [String] = []
+    /// nil = scan hasn't been requested yet or is in-flight; [] = scanned,
+    /// no windows; populated = scanned successfully. Lives on QuipApp (not
+    /// MainiOSView) because the Mac's `iterm_window_list` response is
+    /// decoded in QuipApp's `onITermWindowList` callback. Passed down as
+    /// a Binding so the sheet can clear it before re-scanning.
+    @State private var iTermScanResults: [ITermWindowInfo]? = nil
     @State private var errorToast: String?
     @AppStorage("ttsEnabled") private var ttsEnabled = false
     /// Output delta text per window — used to display TTS overlay captions
@@ -60,6 +66,7 @@ struct QuipApp: App {
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
+                iTermScanResults: $iTermScanResults,
                 errorToast: $errorToast,
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
@@ -143,6 +150,12 @@ struct QuipApp: App {
         client.onProjectDirectories = { dirs in
             DispatchQueue.main.async {
                 projectDirectories = dirs
+            }
+        }
+
+        client.onITermWindowList = { infos in
+            DispatchQueue.main.async {
+                iTermScanResults = infos
             }
         }
 
@@ -354,6 +367,7 @@ struct MainiOSView: View {
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
     var projectDirectories: [String]
+    @Binding var iTermScanResults: [ITermWindowInfo]?
     @Binding var errorToast: String?
     var ttsOverlayTexts: [String: String]
     var monitorName: String
@@ -374,6 +388,10 @@ struct MainiOSView: View {
     @State private var showSettings = false
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
+    /// Which tab the Spawn sheet is on. "new" shows project directories
+    /// (classic path), "attach" shows the list of iTerm windows currently
+    /// open on the Mac that Quip isn't already tracking.
+    @State private var spawnSheetTab: SpawnSheetTab = .new
     @State private var recentConnections: [SavedConnection] = []
     @State private var editingConnection: SavedConnection?
     @State private var renameText: String = ""
@@ -630,33 +648,54 @@ struct MainiOSView: View {
             // when windows are empty — at which point portraitControls is
             // hidden and a sheet scoped there can't present.
             NavigationStack {
-                Group {
-                    if projectDirectories.isEmpty {
-                        ContentUnavailableView(
-                            "No Project Directories",
-                            systemImage: "folder.badge.plus",
-                            description: Text("Add directories in Quip Mac Settings → Directories tab")
-                        )
-                    } else {
-                        List(projectDirectories, id: \.self) { dir in
-                            Button {
-                                client.send(SpawnWindowMessage(directory: dir))
-                                showSpawnPicker = false
-                            } label: {
-                                Label((dir as NSString).lastPathComponent, systemImage: "folder")
-                            }
+                VStack(spacing: 0) {
+                    Picker("", selection: $spawnSheetTab) {
+                        ForEach(SpawnSheetTab.allCases) { tab in
+                            Text(tab.rawValue).tag(tab)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+
+                    Group {
+                        if spawnSheetTab == .new {
+                            spawnSheetNewTab
+                        } else {
+                            spawnSheetAttachTab
                         }
                     }
                 }
-                .navigationTitle("New Window")
+                .navigationTitle(spawnSheetTab == .new ? "New Window" : "Attach Existing")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { showSpawnPicker = false }
                     }
+                    if spawnSheetTab == .attach {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button {
+                                requestITermScan()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .accessibilityLabel("Rescan")
+                        }
+                    }
                 }
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
+            .onChange(of: spawnSheetTab) { _, newValue in
+                if newValue == .attach { requestITermScan() }
+            }
+            .onChange(of: showSpawnPicker) { _, isShowing in
+                // Reset tab + scan state whenever the sheet closes so the
+                // next open starts from a clean slate.
+                if !isShowing {
+                    spawnSheetTab = .new
+                    iTermScanResults = nil
+                }
+            }
         }
         .alert("Unrecognized Server", isPresented: $showURLWarning) {
             Button("Connect Anyway", role: .destructive) {
@@ -674,6 +713,126 @@ struct MainiOSView: View {
                 Text("This URL doesn't match expected patterns (local network or Cloudflare tunnel):\n\n\(url.absoluteString)\n\nConnecting to an unknown server could expose your data.")
             }
         }
+    }
+
+    // MARK: - Spawn Sheet Tabs
+
+    @ViewBuilder
+    private var spawnSheetNewTab: some View {
+        Group {
+            if projectDirectories.isEmpty {
+                ContentUnavailableView(
+                    "No Project Directories",
+                    systemImage: "folder.badge.plus",
+                    description: Text("Add directories in Quip Mac Settings → Directories tab")
+                )
+            } else {
+                List(projectDirectories, id: \.self) { dir in
+                    Button {
+                        client.send(SpawnWindowMessage(directory: dir))
+                        showSpawnPicker = false
+                    } label: {
+                        Label((dir as NSString).lastPathComponent, systemImage: "folder")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var spawnSheetAttachTab: some View {
+        Group {
+            if let results = iTermScanResults {
+                if results.isEmpty {
+                    ContentUnavailableView(
+                        "No iTerm Windows",
+                        systemImage: "terminal",
+                        description: Text("Open an iTerm window on the Mac, then tap the refresh button above.")
+                    )
+                } else {
+                    List {
+                        ForEach(results, id: \.sessionId) { info in
+                            iTermWindowRow(info: info)
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            } else {
+                // nil = in-flight scan. Show a spinner instead of empty state.
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Scanning iTerm windows…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func iTermWindowRow(info: ITermWindowInfo) -> some View {
+        let dimmed = info.isAlreadyTracked || info.isMiniaturized
+        Button {
+            guard !info.isAlreadyTracked else { return }
+            client.send(AttachITermWindowMessage(
+                windowNumber: info.windowNumber,
+                sessionId: info.sessionId
+            ))
+            showSpawnPicker = false
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "terminal.fill")
+                    .foregroundStyle(info.isAlreadyTracked ? Color.secondary : Color.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(info.title.isEmpty ? "(untitled)" : info.title)
+                        .font(.body)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(cwdShortLabel(info.cwd))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if info.isMiniaturized {
+                            Text("minimized")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                Spacer(minLength: 8)
+                if info.isAlreadyTracked {
+                    Text("Attached")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
+                }
+            }
+            .contentShape(Rectangle())
+            .opacity(dimmed && !info.isAlreadyTracked ? 0.6 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(info.isAlreadyTracked)
+    }
+
+    /// Trim the cwd to the last two path components so the row doesn't wrap
+    /// on long absolute paths (`/Users/dev/Projects/Foo/src` → `Foo/src`).
+    private func cwdShortLabel(_ cwd: String) -> String {
+        guard !cwd.isEmpty else { return "(no cwd)" }
+        let comps = (cwd as NSString).pathComponents.filter { $0 != "/" }
+        if comps.count >= 2 { return comps.suffix(2).joined(separator: "/") }
+        return (cwd as NSString).lastPathComponent
+    }
+
+    /// Clear any prior results and ask the Mac for a fresh list. The
+    /// response arrives asynchronously via `onITermWindowList` → the View
+    /// re-renders with the list.
+    private func requestITermScan() {
+        iTermScanResults = nil
+        client.send(ScanITermWindowsMessage())
     }
 
     // MARK: - Connect Bar (disconnected)
@@ -2387,6 +2546,17 @@ struct SettingsSheet: View {
         enabledQuickButtonsRaw = QuickButton.encode(current)
     }
 
+}
+
+/// Tab selection for the Spawn Window sheet. "New" is the original path —
+/// project directories the Mac reports — and "Attach Existing" is the new
+/// flow that lets the user pick an iTerm window already open on the Mac.
+/// Keeping them in one sheet (vs two separate buttons on the main bar) keeps
+/// chrome off the main screen; both actions live behind the same "+" tap.
+enum SpawnSheetTab: String, CaseIterable, Identifiable {
+    case new = "New"
+    case attach = "Attach Existing"
+    var id: String { rawValue }
 }
 
 /// State for the inline connection-test probe that sits next to the URL field.
