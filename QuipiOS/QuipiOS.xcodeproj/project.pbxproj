@@ -22,6 +22,7 @@
 		545F466547A7823805966083 /* TerminalContentOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */; };
 		61BEA675BFFB5F8019D960F0 /* TTSNotificationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */; };
 		6441F32153F6E86CF6529571 /* QuipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 959643D7FC10BD21E0FDE409 /* QuipApp.swift */; };
+		67348F3277C90D577C7D95D3 /* PushRegistrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA867C4EE46E8D6EEA5EC8D /* PushRegistrationService.swift */; };
 		689A5ACEE675BEBE7608C903 /* PTTWindowTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1BB453F0473949D38101D3F /* PTTWindowTrackerTests.swift */; };
 		6D05492F589AA379C4DB67BA /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343D7EF269316EB5B3DCC796 /* MessageProtocolTests.swift */; };
 		6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE3FC3415A512C214E8D8D9 /* PTTWindowTracker.swift */; };
@@ -53,6 +54,7 @@
 /* Begin PBXFileReference section */
 		01EA3B9F2E651E55A79DFB40 /* QuipiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = QuipiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		07BAAAC4E0E8051B6FF2664E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		18AE69F5AEDB7F658B8657E8 /* QuipiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuipiOS.entitlements; sourceTree = "<group>"; };
 		1D6ED80C8277F668CC0B273C /* ImageRecompressor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRecompressor.swift; sourceTree = "<group>"; };
 		28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRectangle.swift; sourceTree = "<group>"; };
 		2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuipiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -74,6 +76,7 @@
 		A76C509CF77201B2EB8B5677 /* KeystrokeFocusDelayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeFocusDelayTests.swift; sourceTree = "<group>"; };
 		A8B6A494C62E7118541A81C1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AB1FAB05086E60FFC302C3E6 /* ContextMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuView.swift; sourceTree = "<group>"; };
+		ADA867C4EE46E8D6EEA5EC8D /* PushRegistrationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrationService.swift; sourceTree = "<group>"; };
 		B3398B602525378B861B9218 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
 		BE0BC3568ECDD8FC3E78B940 /* PendingImagePreviewStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingImagePreviewStrip.swift; sourceTree = "<group>"; };
@@ -131,6 +134,7 @@
 				07BAAAC4E0E8051B6FF2664E /* Assets.xcassets */,
 				A8B6A494C62E7118541A81C1 /* Info.plist */,
 				959643D7FC10BD21E0FDE409 /* QuipApp.swift */,
+				18AE69F5AEDB7F658B8657E8 /* QuipiOS.entitlements */,
 				B3398B602525378B861B9218 /* Signing.xcconfig */,
 				E96781A6729F4AC1D1B88B16 /* Models */,
 				B82A58177E51EF2234FD8D1C /* Services */,
@@ -191,6 +195,7 @@
 				63A7D08ECBB0B1EFA3F77328 /* HardwareButtonHandler.swift */,
 				1D6ED80C8277F668CC0B273C /* ImageRecompressor.swift */,
 				773DBA5F5449A8B4C8E7D1AE /* PendingImageState.swift */,
+				ADA867C4EE46E8D6EEA5EC8D /* PushRegistrationService.swift */,
 				DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */,
 				F7EED90216075AC25A1EDB70 /* SpeechService.swift */,
 				B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */,
@@ -322,6 +327,7 @@
 				6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */,
 				046BFBEA924261A691A9EA3B /* PendingImagePreviewStrip.swift in Sources */,
 				F7B32FEF1E1A176C2710D831 /* PendingImageState.swift in Sources */,
+				67348F3277C90D577C7D95D3 /* PushRegistrationService.swift in Sources */,
 				6441F32153F6E86CF6529571 /* QuipApp.swift in Sources */,
 				48F28455B8142325D6833C25 /* QuipTheme.swift in Sources */,
 				B86CDE99611F63E70CB7C7A3 /* RemoteLayoutView.swift in Sources */,
@@ -351,6 +357,7 @@
 			baseConfigurationReference = B3398B602525378B861B9218 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = QuipiOS.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				INFOPLIST_FILE = Info.plist;
@@ -370,6 +377,7 @@
 			baseConfigurationReference = B3398B602525378B861B9218 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = QuipiOS.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				INFOPLIST_FILE = Info.plist;
