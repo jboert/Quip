@@ -37,6 +37,8 @@ struct QuipApp: App {
     @State private var volumeHandler = HardwareButtonHandler()
     @State private var bonjourBrowser = BonjourBrowser()
     @State private var pushRegistration = PushRegistrationService()
+    @State private var attentionCenter = WindowAttentionCenter()
+    @State private var pushDelegate = PushNotificationCenterDelegate()
 
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
@@ -87,6 +89,8 @@ struct QuipApp: App {
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
                 iTermScanResults: $iTermScanResults,
+                pushRegistration: pushRegistration,
+                attentionCenter: attentionCenter,
                 errorToast: $errorToast,
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
@@ -107,6 +111,35 @@ struct QuipApp: App {
                 // service. Done in onAppear (not init) because @State values
                 // aren't available during the struct initializer.
                 AppOrientationDelegate.pushRegistration = pushRegistration
+
+                // Wire the UNUserNotificationCenter delegate + its hooks.
+                // The delegate itself is set once here; its closures read
+                // live @State via captures, which is fine since they're
+                // invoked on the main actor.
+                UNUserNotificationCenter.current().delegate = pushDelegate
+                pushDelegate.onWaitingForInput = { windowId in
+                    attentionCenter.markNeedsAttention(windowId)
+                }
+                pushDelegate.onNotificationTap = { windowId in
+                    selectedWindowId = windowId
+                    attentionCenter.clearAttention(for: windowId)
+                    // Surface the text input so the user can type immediately.
+                    showTextInput = true
+                    // Tell the Mac too — keeps their selection state in sync
+                    // so subsequent waiting_for_input on other windows doesn't
+                    // steal focus.
+                    client.send(SelectWindowMessage(windowId: windowId))
+                }
+                pushDelegate.currentlySelectedWindowId = { selectedWindowId }
+                pushDelegate.foregroundBannerEnabled = {
+                    UserDefaults.standard.bool(forKey: "pushForegroundBanner")
+                }
+            }
+            .onChange(of: selectedWindowId) { _, newId in
+                // User engaged with a window — clear its attention flag so
+                // the pulsing dot and badge count go quiet. Fires from every
+                // selection path: tap, Mac echo, deep-link tap, etc.
+                if let newId { attentionCenter.clearAttention(for: newId) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
                 // Only reset the audio session if TTS isn't actively playing —
@@ -265,6 +298,20 @@ struct QuipApp: App {
                                 deviceToken: token,
                                 environment: pushRegistration.environment
                             ))
+                            // Also sync prefs so the Mac honors Pause etc. right
+                            // away — avoids a window where the Mac pushes with
+                            // stale defaults before the user opens Settings.
+                            let ud = UserDefaults.standard
+                            let qhEnabled = ud.bool(forKey: "pushQuietHoursEnabled")
+                            let prefs = PushPreferencesMessage(
+                                deviceToken: token,
+                                paused: ud.bool(forKey: "pushPaused"),
+                                quietHoursStart: qhEnabled ? (ud.object(forKey: "pushQuietHoursStart") as? Int ?? 22) : nil,
+                                quietHoursEnd: qhEnabled ? (ud.object(forKey: "pushQuietHoursEnd") as? Int ?? 7) : nil,
+                                sound: ud.object(forKey: "pushSound") as? Bool ?? true,
+                                foregroundBanner: ud.bool(forKey: "pushForegroundBanner")
+                            )
+                            client.send(prefs)
                         }
                     }
                 }
@@ -405,6 +452,8 @@ struct MainiOSView: View {
     @Binding var pinText: String
     var projectDirectories: [String]
     @Binding var iTermScanResults: [ITermWindowInfo]?
+    var pushRegistration: PushRegistrationService
+    var attentionCenter: WindowAttentionCenter
     @Binding var errorToast: String?
     var ttsOverlayTexts: [String: String]
     var monitorName: String
@@ -650,7 +699,7 @@ struct MainiOSView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+            SettingsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw, client: client, pushRegistration: pushRegistration)
         }
         // Image-attach sheets — hoisted to the body so both portrait and
         // landscape views can trigger them via the shared @State bindings.
@@ -1792,6 +1841,20 @@ struct MainiOSView: View {
                             )
                             .frame(width: rect.width, height: rect.height)
                             .position(x: rect.midX, y: rect.midY)
+                            // Pulsing yellow dot overlay when this window's
+                            // waiting for user input. Drawn in the top-right
+                            // of the rect so it doesn't cover the window
+                            // name or color-dot. zIndex bump pulls the whole
+                            // card on top of overlapping neighbors — the
+                            // "auto front-load" behavior from the PRD.
+                            .overlay(alignment: .topTrailing) {
+                                if attentionCenter.windowsNeedingAttention.contains(window.id) {
+                                    AttentionPulseDot()
+                                        .frame(width: 12, height: 12)
+                                        .offset(x: -4, y: 4)
+                                }
+                            }
+                            .zIndex(attentionCenter.windowsNeedingAttention.contains(window.id) ? 10 : 0)
                         }
                     }
                 }
@@ -2255,6 +2318,28 @@ struct SavedConnection: Codable, Identifiable {
 
 // MARK: - Inline Terminal Content (portrait mode)
 
+/// Small yellow dot that pulses to draw attention to a window card.
+/// Used on the window picker when Claude is waiting for input — subtle
+/// foreground-state signal since the PRD calls for no banner here.
+struct AttentionPulseDot: View {
+    @State private var scale: CGFloat = 1.0
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.yellow.opacity(0.5))
+                .scaleEffect(scale)
+            Circle()
+                .fill(Color.yellow)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                scale = 1.8
+            }
+        }
+    }
+}
+
 struct InlineTerminalContent: View {
     let content: String
     let screenshot: String?
@@ -2506,7 +2591,15 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
 struct SettingsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
+    var client: WebSocketClient
+    var pushRegistration: PushRegistrationService
     @AppStorage("tintContentBorder") private var tintContentBorder = true
+    @AppStorage("pushPaused") private var pushPaused = false
+    @AppStorage("pushSound") private var pushSound = true
+    @AppStorage("pushForegroundBanner") private var pushForegroundBanner = false
+    @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
+    @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
+    @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -2517,6 +2610,35 @@ struct SettingsSheet: View {
                 Section("Appearance") {
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
                 }
+
+                Section {
+                    Toggle("Pause All", isOn: $pushPaused)
+                    Toggle("Sound", isOn: $pushSound)
+                    Toggle("Banner When App Open", isOn: $pushForegroundBanner)
+                    Toggle("Quiet Hours", isOn: $quietHoursEnabled)
+                    if quietHoursEnabled {
+                        Stepper(value: $quietHoursStart, in: 0...23) {
+                            Text("From \(formatHour(quietHoursStart))")
+                        }
+                        Stepper(value: $quietHoursEnd, in: 0...23) {
+                            Text("Until \(formatHour(quietHoursEnd))")
+                        }
+                    }
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    if pushRegistration.deviceToken == nil {
+                        Text("Notification permission not granted. Reconnect or check iOS Settings → Quip.")
+                    } else {
+                        Text("Token registered: \(pushRegistration.deviceToken?.prefix(8) ?? "—")…")
+                    }
+                }
+                .onChange(of: pushPaused) { _, _ in sendPrefs() }
+                .onChange(of: pushSound) { _, _ in sendPrefs() }
+                .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
+                .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
+                .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
+                .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
 
                 // Quick Buttons — multi-column grid of chip toggles instead
                 // of the one-toggle-per-row Form layout. Fits 2-3x the
@@ -2582,6 +2704,31 @@ struct SettingsSheet: View {
             current = QuickButton.allCases.filter { current.contains($0) || $0 == button }
         }
         enabledQuickButtonsRaw = QuickButton.encode(current)
+    }
+
+    /// Send the current settings state to the Mac so it can honor them
+    /// at push-send time. Fires on every toggle change and from onAppear.
+    /// No-op when we don't yet have a device token (nothing to key on
+    /// from the Mac's perspective).
+    fileprivate func sendPrefs() {
+        guard let token = pushRegistration.deviceToken else { return }
+        let msg = PushPreferencesMessage(
+            deviceToken: token,
+            paused: pushPaused,
+            quietHoursStart: quietHoursEnabled ? quietHoursStart : nil,
+            quietHoursEnd: quietHoursEnabled ? quietHoursEnd : nil,
+            sound: pushSound,
+            foregroundBanner: pushForegroundBanner
+        )
+        client.send(msg)
+    }
+
+    /// 13 → "1 PM", 0 → "12 AM", 22 → "10 PM". Plain string for Steppers.
+    fileprivate func formatHour(_ h: Int) -> String {
+        let hh = h % 24
+        let suffix = hh < 12 ? "AM" : "PM"
+        let display = hh == 0 ? 12 : (hh > 12 ? hh - 12 : hh)
+        return "\(display) \(suffix)"
     }
 
 }

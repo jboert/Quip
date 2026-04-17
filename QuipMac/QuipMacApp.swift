@@ -158,6 +158,20 @@ struct QuipMacApp: App {
 
             if newState == .waitingForInput {
                 thinkingWindows.remove(windowId)
+
+                // Fire a push ONLY when the phone's current selection is
+                // this window — prevents a notification flood from every
+                // background Claude. Safe to call even when no devices
+                // are registered; it's a no-op in that case.
+                if windowId == clientSelectedWindowId {
+                    let windowName = windowManager.windows.first(where: { $0.id == windowId })?.name ?? "Terminal"
+                    pushNotificationService.notifyWaitingForInput(
+                        windowId: windowId,
+                        windowName: windowName,
+                        attentionCount: 1
+                    )
+                }
+
                 if pendingInputForWindow.contains(windowId) {
                     KokoroTTSDebug.log("TTS suppressed: \(windowId) still pending input response")
                     return
@@ -744,11 +758,16 @@ struct QuipMacApp: App {
             }
 
         case "push_preferences":
-            // v1 accepts and logs but full handling lives in US-003 — this
-            // iteration is plumbing only. Decode-and-log validates the
-            // protocol is wired correctly end-to-end.
             if let msg = MessageCoder.decode(PushPreferencesMessage.self, from: data) {
-                print("[Quip] push_preferences: paused=\(msg.paused) sound=\(msg.sound) fgBanner=\(msg.foregroundBanner) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") device=\(msg.deviceToken.prefix(8))")
+                let prefs = DevicePushPreferences(
+                    paused: msg.paused,
+                    quietHoursStart: msg.quietHoursStart,
+                    quietHoursEnd: msg.quietHoursEnd,
+                    sound: msg.sound,
+                    foregroundBanner: msg.foregroundBanner
+                )
+                pushNotificationService.updatePreferences(forDevice: msg.deviceToken, prefs: prefs)
+                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") device=\(msg.deviceToken.prefix(8))")
             }
 
         case "attach_iterm_window":

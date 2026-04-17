@@ -182,9 +182,13 @@ private struct NotificationsTab: View {
             testStatus.append("Error creating client: \(error)")
             return
         }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            testStatus.append("Error: could not encode payload")
+            return
+        }
         for device in devicesSnapshot {
             do {
-                try await client.send(payload: payload, toDevice: device)
+                try await client.send(payloadData: body, toDevice: device)
                 testStatus.append("✓ \(device.token.prefix(8))… sent")
             } catch APNsError.unregistered {
                 testStatus.append("⚠ \(device.token.prefix(8))… dropped (unregistered)")

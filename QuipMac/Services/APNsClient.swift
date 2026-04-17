@@ -36,11 +36,11 @@ private struct CachedJWT {
 /// try await client.send(payload: [...], toDevice: device)
 /// ```
 ///
-/// The JWT is cached per-client — creating a new `APNsClient` for each
-/// send is fine but re-using one avoids extra ES256 signings. The cache
-/// is not thread-safe; wrap in an actor if we start sending from
-/// background threads. Current callers are MainActor-bound.
-final class APNsClient {
+/// Actor so the cached JWT + send pipeline can be reached from
+/// background tasks safely. Construction throws because we parse the
+/// .p8 key up-front — constructing many short-lived clients is fine
+/// (one ES256 init is cheap; the JWT sign is the only expensive op).
+actor APNsClient {
     let keyId: String
     let teamId: String
     let bundleId: String
@@ -120,19 +120,21 @@ final class APNsClient {
         return fresh
     }
 
-    /// Send an alert payload to a single device. On APNs 410 /
-    /// Unregistered / BadDeviceToken, throws `.unregistered` so the
-    /// caller can drop the device from storage. On 429/503, retries
-    /// ONCE with a 2s backoff before surfacing `.throttled`.
-    func send(payload: [String: Any], toDevice device: RegisteredPushDevice) async throws {
+    /// Send a pre-encoded JSON alert payload to a single device. On
+    /// APNs 410 / Unregistered / BadDeviceToken, throws `.unregistered`
+    /// so the caller can drop the device from storage. On 429/503,
+    /// retries ONCE with a 2s backoff before surfacing `.throttled`.
+    ///
+    /// Payload is passed as Data (not [String: Any]) so it crosses
+    /// concurrency domains cleanly — [String: Any] isn't Sendable in
+    /// Swift 6 strict mode.
+    func send(payloadData body: Data, toDevice device: RegisteredPushDevice) async throws {
         let host = device.environment == "production"
             ? "api.push.apple.com"
             : "api.sandbox.push.apple.com"
         guard let url = URL(string: "https://\(host)/3/device/\(device.token)") else {
             throw APNsError.badRequest("invalid device token format")
         }
-
-        let body = try JSONSerialization.data(withJSONObject: payload, options: [])
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -143,17 +145,17 @@ final class APNsClient {
         request.setValue("bearer \(try currentJWT())", forHTTPHeaderField: "authorization")
 
         do {
-            try await performSend(request: request, payload: payload, device: device, isRetry: false)
+            try await performSend(request: request, isRetry: false)
         } catch APNsError.throttled {
             // One retry with a small backoff. If the second attempt
             // also gets throttled, surface the error — caller decides
             // whether to show it in the UI or silently drop.
             try await Task.sleep(nanoseconds: 2_000_000_000)
-            try await performSend(request: request, payload: payload, device: device, isRetry: true)
+            try await performSend(request: request, isRetry: true)
         }
     }
 
-    private func performSend(request: URLRequest, payload _: [String: Any], device _: RegisteredPushDevice, isRetry: Bool) async throws {
+    private func performSend(request: URLRequest, isRetry: Bool) async throws {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw APNsError.unknown(-1, "non-HTTP response")
