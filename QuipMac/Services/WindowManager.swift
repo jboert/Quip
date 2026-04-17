@@ -23,6 +23,12 @@ struct ManagedWindow: Identifiable, Sendable {
     let windowNumber: CGWindowID  // CG window number
     var bounds: CGRect            // Current window frame
     var iterm2SessionId: String?
+    /// The tty device attached to this iTerm2 session, e.g. "ttys009".
+    /// Lets us find the actual shell PID for this specific window —
+    /// otherwise every iTerm2 window shares the app's PID and the
+    /// per-window process-tree walk in TerminalStateDetector sees one
+    /// conflated blob of "all Claudes" instead of this window's Claude.
+    var iterm2Tty: String?
     /// True when the window's bounds center falls inside some currently-
     /// connected NSScreen. Populated fresh on every snapshot refresh —
     /// CG's `.optionOnScreenOnly` is not reliable for windows parked on
@@ -242,6 +248,7 @@ final class WindowManager {
                     isEnabled: existing.isEnabled, assignedColor: existing.assignedColor,
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: existing.iterm2SessionId,
+                    iterm2Tty: existing.iterm2Tty,
                     isOnVisibleScreen: onScreen
                 ))
             } else {
@@ -251,6 +258,7 @@ final class WindowManager {
                     isEnabled: false, assignedColor: assignColor(),
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
+                    iterm2Tty: nil,
                     isOnVisibleScreen: onScreen
                 ))
             }
@@ -504,6 +512,10 @@ final class WindowManager {
     struct Iterm2SessionInfo: Sendable {
         let bounds: CGRect
         let uuid: String
+        /// Tty device name (e.g. "ttys009") for this session. Used to find
+        /// the per-window shell PID so state detection isn't conflated
+        /// across all iTerm windows sharing the app PID.
+        let tty: String
     }
 
     /// Fetch subtitles off main — runs AppleScript that can block for 1-3 seconds.
@@ -683,8 +695,13 @@ final class WindowManager {
                 set {l, t, r, b} to bounds of w
                 tell current session of w
                     set uid to unique id
+                    try
+                        set ttyPath to tty
+                    on error
+                        set ttyPath to ""
+                    end try
                 end tell
-                set output to output & l & "," & t & "," & r & "," & b & "\\t" & uid & linefeed
+                set output to output & l & "," & t & "," & r & "," & b & "\\t" & uid & "\\t" & ttyPath & linefeed
             end repeat
         end tell
         return output
@@ -697,14 +714,19 @@ final class WindowManager {
 
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")
-            guard parts.count == 2 else { continue }
+            // Accept 2 fields (no tty, older iTerm) or 3 (with tty).
+            guard parts.count >= 2 else { continue }
             let coords = parts[0].components(separatedBy: ",")
             guard coords.count == 4,
                   let l = Double(coords[0]), let t = Double(coords[1]),
                   let r = Double(coords[2]), let b = Double(coords[3]) else { continue }
             let bounds = CGRect(x: l, y: t, width: r - l, height: b - t)
             let uuid = parts[1]
-            result.append(Iterm2SessionInfo(bounds: bounds, uuid: uuid))
+            // iTerm returns full device path like "/dev/ttys009". Strip to just
+            // "ttys009" so it matches ps's `tt` column.
+            let rawTty = parts.count >= 3 ? parts[2] : ""
+            let tty = rawTty.hasPrefix("/dev/") ? String(rawTty.dropFirst(5)) : rawTty
+            result.append(Iterm2SessionInfo(bounds: bounds, uuid: uuid, tty: tty))
         }
         return result
     }
@@ -807,15 +829,17 @@ final class WindowManager {
             }
             // Clear any stale assignment before re-matching on this pass.
             windows[i].iterm2SessionId = nil
+            windows[i].iterm2Tty = nil
         }
         candidates.sort { $0.distSq < $1.distSq }
 
         for c in candidates where c.distSq <= matchToleranceSquared {
-            let uuid = sessions[c.sessionIndex].uuid
-            if claimedUUIDs.contains(uuid) { continue }
+            let session = sessions[c.sessionIndex]
+            if claimedUUIDs.contains(session.uuid) { continue }
             if windows[c.windowIndex].iterm2SessionId != nil { continue }
-            windows[c.windowIndex].iterm2SessionId = uuid
-            claimedUUIDs.insert(uuid)
+            windows[c.windowIndex].iterm2SessionId = session.uuid
+            windows[c.windowIndex].iterm2Tty = session.tty.isEmpty ? nil : session.tty
+            claimedUUIDs.insert(session.uuid)
         }
     }
 }
