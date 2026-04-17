@@ -45,7 +45,8 @@ targets:
         UILaunchScreen:
           UIColorName: ""
         NSSpeechRecognitionUsageDescription: Quip uses speech recognition to transcribe your voice commands for Claude Code.
-        NSCameraUsageDescription: Quip uses the camera to scan QR codes for connecting to your Mac.
+        NSCameraUsageDescription: Quip uses the camera to scan QR codes for connecting to your Mac, and to capture photos you attach to the active Claude Code terminal.
+        NSPhotoLibraryUsageDescription: Quip attaches images you pick from your library to the active Claude Code terminal on your Mac.
         NSMicrophoneUsageDescription: Quip needs microphone access for push-to-talk voice commands.
         NSBonjourServices:
           - _quip._tcp.
