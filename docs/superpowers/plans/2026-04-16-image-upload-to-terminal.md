@@ -64,29 +64,49 @@ Each task is its own commit. Commit messages follow the project's "blue-collar b
 
 - [ ] **Step 1: Write the failing test**
 
-Create `Shared/Tests/ImageUploadMessageTests.swift`:
+Create `Shared/Tests/ImageUploadMessageTests.swift`. Follow the exact same style and helpers as `Shared/Tests/MessageProtocolTests.swift` (import `Quip`, use `XCTUnwrap` because `MessageCoder.encode` returns `Data?`, use a private `jsonDict` helper at the bottom):
 
 ```swift
 import XCTest
-@testable import Shared // or whatever the existing tests import; match the pattern
+@testable import Quip
 
+/// Unit tests for ImageUploadMessage, ImageUploadAckMessage, ImageUploadErrorMessage.
+/// Mirrors the patterns used in MessageProtocolTests.swift for consistency.
 final class ImageUploadMessageTests: XCTestCase {
 
-    func test_imageUploadMessage_encodesAndDecodesRoundTrip() throws {
-        let original = ImageUploadMessage(
-            type: "image_upload",
+    // MARK: - Outgoing (iPhone → Mac)
+
+    func testImageUploadMessageEncoding() throws {
+        let msg = ImageUploadMessage(
             imageId: "550e8400-e29b-41d4-a716-446655440000",
             windowId: "window-abc-123",
             filename: "screenshot-2026-04-16.png",
             mimeType: "image/png",
             data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
         )
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
 
-        let encoded = try MessageCoder.encode(original)
-        let peeked = MessageCoder.messageType(from: encoded)
-        XCTAssertEqual(peeked, "image_upload")
+        XCTAssertEqual(dict["type"] as? String, "image_upload")
+        XCTAssertEqual(dict["imageId"] as? String, "550e8400-e29b-41d4-a716-446655440000")
+        XCTAssertEqual(dict["windowId"] as? String, "window-abc-123")
+        XCTAssertEqual(dict["filename"] as? String, "screenshot-2026-04-16.png")
+        XCTAssertEqual(dict["mimeType"] as? String, "image/png")
+        XCTAssertNotNil(dict["data"])
+    }
 
-        let decoded = try MessageCoder.decode(ImageUploadMessage.self, from: encoded)
+    func testImageUploadMessageRoundTrip() throws {
+        let original = ImageUploadMessage(
+            imageId: "abc-123",
+            windowId: "win-1",
+            filename: "tiny.png",
+            mimeType: "image/png",
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        let encoded = try XCTUnwrap(MessageCoder.encode(original))
+        XCTAssertEqual(MessageCoder.messageType(from: encoded), "image_upload")
+
+        let decoded = try XCTUnwrap(MessageCoder.decode(ImageUploadMessage.self, from: encoded))
         XCTAssertEqual(decoded.imageId, original.imageId)
         XCTAssertEqual(decoded.windowId, original.windowId)
         XCTAssertEqual(decoded.filename, original.filename)
@@ -94,78 +114,103 @@ final class ImageUploadMessageTests: XCTestCase {
         XCTAssertEqual(decoded.data, original.data)
     }
 
-    func test_imageUploadAckMessage_encodesAndDecodes() throws {
-        let original = ImageUploadAckMessage(
-            type: "image_upload_ack",
-            imageId: "550e8400-e29b-41d4-a716-446655440000",
-            savedPath: "/Users/alice/Library/Caches/Quip/uploads/550e8400-screenshot.png"
+    // MARK: - Incoming (Mac → iPhone)
+
+    func testImageUploadAckMessageEncoding() throws {
+        let msg = ImageUploadAckMessage(
+            imageId: "abc-123",
+            savedPath: "/Users/alice/Library/Caches/Quip/uploads/abc-123-screenshot.png"
         )
-        let encoded = try MessageCoder.encode(original)
-        XCTAssertEqual(MessageCoder.messageType(from: encoded), "image_upload_ack")
-        let decoded = try MessageCoder.decode(ImageUploadAckMessage.self, from: encoded)
-        XCTAssertEqual(decoded.imageId, original.imageId)
-        XCTAssertEqual(decoded.savedPath, original.savedPath)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "image_upload_ack")
+        XCTAssertEqual(dict["imageId"] as? String, "abc-123")
+        XCTAssertEqual(dict["savedPath"] as? String, "/Users/alice/Library/Caches/Quip/uploads/abc-123-screenshot.png")
     }
 
-    func test_imageUploadErrorMessage_encodesAndDecodes() throws {
-        let original = ImageUploadErrorMessage(
-            type: "image_upload_error",
-            imageId: "550e8400-e29b-41d4-a716-446655440000",
-            reason: "unknown window"
-        )
-        let encoded = try MessageCoder.encode(original)
-        XCTAssertEqual(MessageCoder.messageType(from: encoded), "image_upload_error")
-        let decoded = try MessageCoder.decode(ImageUploadErrorMessage.self, from: encoded)
-        XCTAssertEqual(decoded.reason, "unknown window")
+    func testImageUploadErrorMessageEncoding() throws {
+        let msg = ImageUploadErrorMessage(imageId: "abc-123", reason: "unknown window")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "image_upload_error")
+        XCTAssertEqual(dict["imageId"] as? String, "abc-123")
+        XCTAssertEqual(dict["reason"] as? String, "unknown window")
+    }
+
+    // MARK: - Helpers
+
+    private func jsonDict(from data: Data) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
 ```
 
-Match the import style of the existing tests in `Shared/Tests/` — open one of them (e.g. the protocol test) to see how they import and adapt if needed.
-
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run from Xcode: open the Shared tests scheme, ⌘U. Or from CLI:
+Before running, confirm which scheme hosts `Shared/Tests/` — run `xcodebuild -list -project QuipiOS/QuipiOS.xcodeproj` (and the same for `QuipMac.xcodeproj`) and find the test target. The shared tests live in a `Shared/Tests/` folder but are compiled into one of the app's test targets.
+
+Example:
 
 ```bash
-xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' -only-testing:SharedTests/ImageUploadMessageTests
+xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' -only-testing:<TestTargetName>/ImageUploadMessageTests
 ```
-
-(Use whatever the existing Shared test target is actually named — check `Shared/Tests/` and the Xcode scheme list.)
 
 Expected: **FAIL** — "Cannot find 'ImageUploadMessage' in scope."
 
 - [ ] **Step 3: Add the three message structs in `Shared/MessageProtocol.swift`**
 
-Add below the existing message structs (after `ErrorMessage` around line 286 — verify exact line):
+Add below the existing message structs (after `ErrorMessage` around line 286 — verify exact line). Follow the existing pattern in the file: `Codable, Sendable` conformance, `type` hardcoded in `init`, doc-comments on the struct body:
 
 ```swift
 // MARK: - Image Upload
 
-/// Phone → Mac. Carries a single image to be attached to a terminal.
+/// iPhone → Mac. Carries a single image to be attached to a terminal.
 /// `data` is the image bytes base64-encoded as a string (standard base64, no URL-safe variant).
 /// Post-encoding message size must be ≤ 10 MB (enforced on the sender side).
-struct ImageUploadMessage: Codable {
-    let type: String          // "image_upload"
-    let imageId: String       // UUID string, generated by the phone
-    let windowId: String      // target terminal window
-    let filename: String      // suggested filename, e.g. "screenshot-2026-04-16-143022.png"
-    let mimeType: String      // "image/png" or "image/jpeg"
-    let data: String          // base64-encoded image bytes
+struct ImageUploadMessage: Codable, Sendable {
+    let type: String
+    let imageId: String
+    let windowId: String
+    let filename: String
+    let mimeType: String
+    let data: String
+
+    init(imageId: String, windowId: String, filename: String, mimeType: String, data: String) {
+        self.type = "image_upload"
+        self.imageId = imageId
+        self.windowId = windowId
+        self.filename = filename
+        self.mimeType = mimeType
+        self.data = data
+    }
 }
 
-/// Mac → Phone. Sent after the image was written to disk and the path was pasted.
-struct ImageUploadAckMessage: Codable {
-    let type: String          // "image_upload_ack"
+/// Mac → iPhone. Sent after the image was written to disk and the path was pasted.
+struct ImageUploadAckMessage: Codable, Sendable {
+    let type: String
     let imageId: String
-    let savedPath: String     // absolute path the Mac wrote the image to
+    let savedPath: String
+
+    init(imageId: String, savedPath: String) {
+        self.type = "image_upload_ack"
+        self.imageId = imageId
+        self.savedPath = savedPath
+    }
 }
 
-/// Mac → Phone. Sent on any failure (decode error, unknown window, disk write error, etc.).
-struct ImageUploadErrorMessage: Codable {
-    let type: String          // "image_upload_error"
+/// Mac → iPhone. Sent on any failure (decode error, unknown window, disk write error, etc.).
+struct ImageUploadErrorMessage: Codable, Sendable {
+    let type: String
     let imageId: String
-    let reason: String        // human-readable, safe to surface to the user
+    let reason: String
+
+    init(imageId: String, reason: String) {
+        self.type = "image_upload_error"
+        self.imageId = imageId
+        self.reason = reason
+    }
 }
 ```
 
@@ -387,12 +432,8 @@ case "image_upload":
 
     // Resolve target window first — fail fast, don't write the file if it's gone.
     guard let window = windowManager.windows.first(where: { $0.id == msg.windowId }) else {
-        let err = ImageUploadErrorMessage(
-            type: "image_upload_error",
-            imageId: msg.imageId,
-            reason: "unknown window"
-        )
-        if let errData = try? MessageCoder.encode(err) {
+        let err = ImageUploadErrorMessage(imageId: msg.imageId, reason: "unknown window")
+        if let errData = MessageCoder.encode(err) {
             connection.send(string: String(data: errData, encoding: .utf8) ?? "")
         }
         return
@@ -404,11 +445,10 @@ case "image_upload":
         savedURL = try imageUploadHandler.save(message: msg)
     } catch {
         let err = ImageUploadErrorMessage(
-            type: "image_upload_error",
             imageId: msg.imageId,
             reason: "write failed: \(error.localizedDescription)"
         )
-        if let errData = try? MessageCoder.encode(err) {
+        if let errData = MessageCoder.encode(err) {
             connection.send(string: String(data: errData, encoding: .utf8) ?? "")
         }
         return
@@ -428,12 +468,8 @@ case "image_upload":
     )
 
     // Ack back to phone.
-    let ack = ImageUploadAckMessage(
-        type: "image_upload_ack",
-        imageId: msg.imageId,
-        savedPath: savedURL.path
-    )
-    if let ackData = try? MessageCoder.encode(ack) {
+    let ack = ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path)
+    if let ackData = MessageCoder.encode(ack) {
         connection.send(string: String(data: ackData, encoding: .utf8) ?? "")
     }
 ```
