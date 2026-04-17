@@ -1953,6 +1953,7 @@ struct InlineTerminalContent: View {
                             .scaledToFit()
                             .frame(maxWidth: maxW)
                             .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 28)
                             .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)

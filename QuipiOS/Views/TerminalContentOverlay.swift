@@ -86,6 +86,7 @@ struct TerminalContentOverlay: View {
                                 .scaledToFit()
                                 .frame(maxWidth: maxW)
                                 .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 48)
                                 .id("bottom")
                         } else {
                             Text(content)
