@@ -49,10 +49,14 @@ struct TerminalContentOverlay: View {
                     ScrollView {
                         if let screenshot, let imageData = Data(base64Encoded: screenshot),
                            let uiImage = UIImage(data: imageData) {
+                            // Landscape gets a bit more padding than portrait —
+                            // the overlay has more horizontal room, and the
+                            // screenshot renders huge without some margin.
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFit()
                                 .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 48)
                                 .id("bottom")
                         } else {
                             Text(content)
