@@ -463,7 +463,10 @@ struct MainiOSView: View {
                     },
                     onSendText: { text in
                         if let wid = terminalContentWindowId {
-                            client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
+                            sendPendingImageIfNeeded(windowId: wid)
+                            if !text.isEmpty {
+                                client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
+                            }
                         }
                     },
                     onAttachImage: {
@@ -1210,10 +1213,14 @@ struct MainiOSView: View {
 
     private func sendTextInput() {
         let text = textInputValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let windowId = selectedWindowId else { return }
+        guard let windowId = selectedWindowId else { return }
+        // An image-only submit is valid — only bail if both text AND image are empty.
+        guard !text.isEmpty || pendingImage.hasPendingImage else { return }
         // Ship the image first (fire-and-forget); the Mac queues messages in order.
         sendPendingImageIfNeeded(windowId: windowId)
-        client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
+        if !text.isEmpty {
+            client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
+        }
         textInputValue = ""
     }
 
@@ -1947,13 +1954,17 @@ struct InlineTerminalContent: View {
                         // — a fixed point margin was barely visible in
                         // landscape where the panel is much wider.
                         let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
-                        let maxW = UIScreen.main.bounds.width * zoom.widthFraction
+                        // Subtract a 28pt inset each side from the available width
+                        // before applying the zoom fraction — keeps the screenshot
+                        // off the screen edges even at fill zoom.
+                        let horizontalInset: CGFloat = 28
+                        let availableW = UIScreen.main.bounds.width - horizontalInset * 2
+                        let maxW = availableW * zoom.widthFraction
                         Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFit()
                             .frame(maxWidth: maxW)
                             .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 28)
                             .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)
