@@ -285,6 +285,55 @@ struct ErrorMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Image Upload
+
+/// iPhone → Mac. Carries a single image to be attached to a terminal.
+/// `data` is the image bytes base64-encoded as a string (standard base64, no URL-safe variant).
+/// Post-encoding message size must be ≤ 10 MB (enforced on the sender side).
+struct ImageUploadMessage: Codable, Sendable {
+    let type: String
+    let imageId: String
+    let windowId: String
+    let filename: String
+    let mimeType: String
+    let data: String
+
+    init(imageId: String, windowId: String, filename: String, mimeType: String, data: String) {
+        self.type = "image_upload"
+        self.imageId = imageId
+        self.windowId = windowId
+        self.filename = filename
+        self.mimeType = mimeType
+        self.data = data
+    }
+}
+
+/// Mac → iPhone. Sent after the image was written to disk and the path was pasted.
+struct ImageUploadAckMessage: Codable, Sendable {
+    let type: String
+    let imageId: String
+    let savedPath: String
+
+    init(imageId: String, savedPath: String) {
+        self.type = "image_upload_ack"
+        self.imageId = imageId
+        self.savedPath = savedPath
+    }
+}
+
+/// Mac → iPhone. Sent on any failure (decode error, unknown window, disk write error, etc.).
+struct ImageUploadErrorMessage: Codable, Sendable {
+    let type: String
+    let imageId: String
+    let reason: String
+
+    init(imageId: String, reason: String) {
+        self.type = "image_upload_error"
+        self.imageId = imageId
+        self.reason = reason
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {
