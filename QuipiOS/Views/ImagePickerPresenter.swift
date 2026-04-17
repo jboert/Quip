@@ -38,9 +38,13 @@ struct LibraryImagePicker: UIViewControllerRepresentable {
             // Prefer PNG when advertised (screenshots typically do).
             if provider.hasItemConformingToTypeIdentifier(UTType.png.identifier) {
                 provider.loadDataRepresentation(forTypeIdentifier: UTType.png.identifier) { data, _ in
-                    guard let data, let image = UIImage(data: data) else { return }
                     DispatchQueue.main.async {
-                        self.parent.onPicked(image, "image/png", suggestedName + ".png")
+                        if let data, let image = UIImage(data: data) {
+                            self.parent.onPicked(image, "image/png", suggestedName + ".png")
+                        } else {
+                            // Previously returned silently, leaving the sheet stuck open.
+                            self.parent.onCancel()
+                        }
                     }
                 }
                 return
@@ -48,9 +52,13 @@ struct LibraryImagePicker: UIViewControllerRepresentable {
 
             if provider.canLoadObject(ofClass: UIImage.self) {
                 provider.loadObject(ofClass: UIImage.self) { object, _ in
-                    guard let image = object as? UIImage else { return }
+                    let image = object as? UIImage
                     DispatchQueue.main.async {
-                        self.parent.onPicked(image, "image/jpeg", suggestedName + ".jpg")
+                        if let image {
+                            self.parent.onPicked(image, "image/jpeg", suggestedName + ".jpg")
+                        } else {
+                            self.parent.onCancel()
+                        }
                     }
                 }
             } else {
