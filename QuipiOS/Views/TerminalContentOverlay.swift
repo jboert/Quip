@@ -44,25 +44,20 @@ struct TerminalContentOverlay: View {
                 .padding(.vertical, 8)
                 .background(Color.white.opacity(0.06))
 
-                // Content — prefer screenshot, fall back to text
+                // Content — always text. The old "prefer screenshot" path
+                // rendered iTerm's native font which lost the monospaced
+                // readability users liked (capital A vs lowercase A at a
+                // glance) and kept re-asserting itself on every content
+                // refresh whether the user wanted it or not.
                 ScrollViewReader { proxy in
                     ScrollView {
-                        if let screenshot, let imageData = Data(base64Encoded: screenshot),
-                           let uiImage = UIImage(data: imageData) {
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: .infinity)
-                                .id("bottom")
-                        } else {
-                            Text(content)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.85))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(10)
-                                .textSelection(.enabled)
-                                .id("bottom")
-                        }
+                        Text(content)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .textSelection(.enabled)
+                            .id("bottom")
                     }
                     .onAppear {
                         proxy.scrollTo("bottom", anchor: .bottom)
