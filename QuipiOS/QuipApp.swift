@@ -306,7 +306,11 @@ struct MainiOSView: View {
     @State private var testResultAutoDismiss: Task<Void, Never>?
     /// Which layout the next tap on the arrange button will send. The icon
     /// shown on the button reflects this so the user can predict the outcome.
-    @State private var nextArrangeLayout: String = "horizontal"
+    /// Phone-only display layout for window rectangles. `nil` = show whatever
+    /// layout the Mac reports; `"horizontal"` = columns side-by-side on the
+    /// phone; `"vertical"` = rows top-to-bottom. **Does not** touch the
+    /// Mac's actual window positions — just reorganizes the preview here.
+    @State private var phoneLayoutOverride: String? = nil
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.
     @State private var isTerminalExpanded = false
@@ -960,19 +964,30 @@ struct MainiOSView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                // Arrange enabled windows horizontally or vertically. Icon
-                // shows what the next tap will do — after a tap it flips to
-                // the other layout. Needs 2+ enabled windows to do anything.
+                // Arrange — phone-only display toggle. Cycles through
+                // Mac-layout (default, shows real Mac positions), columns
+                // (side-by-side on phone), rows (stacked on phone). Does
+                // NOT move windows on the Mac; just reorganizes the preview
+                // here so overlapping/off-screen windows become distinct
+                // cards when you need 'em.
                 Button {
-                    client.send(ArrangeWindowsMessage(layout: nextArrangeLayout))
-                    nextArrangeLayout = (nextArrangeLayout == "horizontal") ? "vertical" : "horizontal"
+                    switch phoneLayoutOverride {
+                    case nil: phoneLayoutOverride = "horizontal"
+                    case "horizontal": phoneLayoutOverride = "vertical"
+                    default: phoneLayoutOverride = nil
+                    }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 } label: {
-                    Image(systemName: nextArrangeLayout == "horizontal"
-                          ? "rectangle.split.3x1"
-                          : "rectangle.split.1x3")
+                    let icon: String = {
+                        switch phoneLayoutOverride {
+                        case "horizontal": return "rectangle.split.3x1"
+                        case "vertical": return "rectangle.split.1x3"
+                        default: return "rectangle.3.group"
+                        }
+                    }()
+                    Image(systemName: icon)
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(windows.filter(\.enabled).count >= 2 ? colors.textPrimary : colors.textFaint)
+                        .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
                         .frame(width: 40, height: 56)
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1176,8 +1191,9 @@ struct MainiOSView: View {
                             }
                         }
                     } else {
-                        ForEach(windows) { window in
-                            let rect = windowRect(frame: window.frame, in: mac.size, inset: 3)
+                        ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
+                            let effectiveFrame = phoneLayoutFrame(for: window, index: index, total: windows.count) ?? window.frame
+                            let rect = windowRect(frame: effectiveFrame, in: mac.size, inset: 3)
                             WindowRectangle(
                                 window: window,
                                 isSelected: window.id == selectedWindowId,
@@ -1223,6 +1239,24 @@ struct MainiOSView: View {
             // Portrait: stretch vertically a bit so the thumbnail isn't a narrow strip.
             let h = min(size.height, (size.width / aspect) * 1.45)
             return CGRect(x: 0, y: (size.height - h) / 2, width: size.width, height: h)
+        }
+    }
+
+    /// Phone-only override frame when the user has toggled the arrange
+    /// button — lays out windows as clean columns or rows on the phone
+    /// preview without touching the Mac. Returns `nil` when the Mac's real
+    /// layout should be used.
+    private func phoneLayoutFrame(for window: WindowState, index: Int, total: Int) -> WindowFrame? {
+        guard let mode = phoneLayoutOverride, total > 0 else { return nil }
+        switch mode {
+        case "horizontal":
+            let w = 1.0 / Double(total)
+            return WindowFrame(x: Double(index) * w, y: 0, width: w, height: 1.0)
+        case "vertical":
+            let h = 1.0 / Double(total)
+            return WindowFrame(x: 0, y: Double(index) * h, width: 1.0, height: h)
+        default:
+            return nil
         }
     }
 
