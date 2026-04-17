@@ -756,6 +756,7 @@ struct MainiOSView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .refreshable { requestITermScan() }
                 }
             } else {
                 // nil = in-flight scan. Show a spinner instead of empty state.

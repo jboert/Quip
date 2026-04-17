@@ -967,7 +967,17 @@ struct QuipMacApp: App {
                     keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
                 }
             }
-        case "toggle_enabled": windowManager.toggleWindow(window.id, enabled: !window.isEnabled)
+        case "toggle_enabled":
+            let newEnabled = !window.isEnabled
+            windowManager.toggleWindow(window.id, enabled: newEnabled)
+            // If the user is turning off a window that was previously attached,
+            // also drop it from the persistent attached set — otherwise the
+            // next snapshot's `enableAttachedWindows()` will re-enable it and
+            // the toggle "doesn't stick." Turning ON doesn't add to the set;
+            // only the explicit Attach Existing flow promotes a sessionId.
+            if !newEnabled, let sid = window.iterm2SessionId {
+                windowManager.markSessionDetached(sessionId: sid)
+            }
         default: break
         }
     }
