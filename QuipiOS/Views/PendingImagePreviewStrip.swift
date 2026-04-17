@@ -1,0 +1,55 @@
+import SwiftUI
+
+/// Thin horizontal strip that appears above the terminal input row when a
+/// pending image is attached. Shows a thumbnail, a remove (✕) control, and an
+/// upload state overlay (spinner / error). Renders nothing when no image is
+/// pending, so the idle input row keeps its resting height.
+struct PendingImagePreviewStrip: View {
+
+    @ObservedObject var state: PendingImageState
+
+    var body: some View {
+        if let image = state.image {
+            HStack(spacing: 8) {
+                ZStack(alignment: .topTrailing) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 48, height: 48)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay {
+                            if state.uploadState == .uploading {
+                                Color.black.opacity(0.45)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                ProgressView()
+                                    .tint(.white)
+                            }
+                        }
+
+                    if case .idle = state.uploadState {
+                        Button {
+                            state.clear()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white, .black.opacity(0.7))
+                                .offset(x: 6, y: -6)
+                        }
+                        .accessibilityLabel("Remove pending image")
+                    }
+                }
+
+                if case .error(let reason) = state.uploadState {
+                    Text(reason)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+    }
+}
