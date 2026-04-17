@@ -19,6 +19,15 @@ docs/specs/
 *.local.md
 *.local.xcconfig
 
+# APNs auth keys — PASSWORD-EQUIVALENT SECRETS. Anyone with these can
+# push to every app on the developer account. Never commit, never upload.
+# The Mac app reads them via the Keychain (see APNsKeyStore), not from disk.
+*.p8
+AuthKey_*.p8
+**/AuthKey_*
+apns-key*
+APNs-Key*
+
 # Xcode
 xcuserdata/
 *.xcuserstate
