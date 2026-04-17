@@ -551,10 +551,13 @@ struct QuipMacApp: App {
             }
         case "request_content":
             if let msg = MessageCoder.decode(RequestContentMessage.self, from: data) {
-                // Throttle: at most once per 10 seconds per window.
+                // Throttle: at most once per 0.5s per window. Was 10s, which
+                // meant 4-out-of-5 polls got dropped and button taps sat on
+                // stale content for up to 10s. 500ms still protects the
+                // AppleScript read from getting hammered but feels instant.
                 let now = Date()
                 if let last = lastContentRequestTime[msg.windowId],
-                   now.timeIntervalSince(last) < 10.0 {
+                   now.timeIntervalSince(last) < 0.5 {
                     break
                 }
                 lastContentRequestTime[msg.windowId] = now
