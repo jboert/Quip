@@ -410,7 +410,9 @@ struct QuipMacApp: App {
         let display = windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first
         let screenBounds = display?.frame ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
 
-        let states = windowManager.windows.filter(\.isEnabled).map { window in
+        let mirrorDesktop = UserDefaults.standard.bool(forKey: "mirrorDesktop")
+        let visible = WindowManager.windowsForBroadcast(windowManager.windows, mirrorDesktop: mirrorDesktop)
+        let states = visible.map { window in
             window.toWindowState(
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
                 screenBounds: screenBounds,
