@@ -121,6 +121,10 @@ final class WebSocketClient {
     var onError: ((String) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
+    /// Mac confirms an image upload; argument is the absolute path the Mac wrote.
+    var onImageUploadAck: ((String) -> Void)?
+    /// Mac rejects an image upload; argument is a human-readable reason.
+    var onImageUploadError: ((String) -> Void)?
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -448,6 +452,16 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(ErrorMessage.self, from: data) {
                 onError?(msg.reason)
+            }
+        case "image_upload_ack":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ImageUploadAckMessage.self, from: data) {
+                onImageUploadAck?(msg.savedPath)
+            }
+        case "image_upload_error":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ImageUploadErrorMessage.self, from: data) {
+                onImageUploadError?(msg.reason)
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)
