@@ -495,6 +495,100 @@ final class WindowManager {
         return result
     }
 
+    /// One iTerm2 window as seen by a full "scan all" pass — used by the
+    /// phone's "attach to existing session" flow. Unlike the tracked
+    /// `ManagedWindow`, this is a lightweight snapshot whose only job is to
+    /// describe what's currently open so the user can pick one to promote.
+    struct ITermWindowDescriptor: Sendable, Equatable {
+        let windowNumber: CGWindowID
+        let title: String
+        let sessionId: String
+        let cwd: String
+        let isMiniaturized: Bool
+    }
+
+    /// Enumerate every iTerm2 window on the Mac, whether Quip is already
+    /// tracking it or not. Safe to call from any thread. Returns an empty
+    /// list if iTerm2 isn't running (rather than launching it).
+    nonisolated static func fetchAllITermWindows() -> [ITermWindowDescriptor] {
+        // Guard first so we don't auto-launch iTerm2 just to scan.
+        // `is running` on `application "iTerm2"` still loads the AE dictionary
+        // which can spawn the app on some systems, so we route through System
+        // Events' process list instead.
+        let runningCheck = """
+        tell application "System Events"
+            return (name of processes) contains "iTerm2"
+        end tell
+        """
+        guard let runScript = NSAppleScript(source: runningCheck) else { return [] }
+        var runErr: NSDictionary?
+        let runResult = runScript.executeAndReturnError(&runErr)
+        guard runErr == nil, runResult.booleanValue else { return [] }
+
+        // Four fields per window, TAB-separated, newline between windows.
+        // Matches the separator style of `fetchIterm2SessionIds` above so
+        // titles and paths with punctuation can't confuse the parser. "|"
+        // wouldn't be safe — cwds and titles routinely contain it.
+        let script = """
+        set output to ""
+        tell application "iTerm2"
+            repeat with w in windows
+                set wid to id of w
+                set mini to miniaturized of w
+                tell current session of w
+                    set uid to unique id
+                    set t to name
+                    try
+                        set p to variable named "path"
+                    on error
+                        set p to ""
+                    end try
+                end tell
+                set output to output & wid & "\\t" & uid & "\\t" & t & "\\t" & p & "\\t" & mini & linefeed
+            end repeat
+        end tell
+        return output
+        """
+        guard let appleScript = NSAppleScript(source: script) else { return [] }
+        var error: NSDictionary?
+        let asResult = appleScript.executeAndReturnError(&error)
+        guard error == nil, let output = asResult.stringValue else { return [] }
+        return parseITermWindowList(output)
+    }
+
+    /// Pure parser — kept separate from the AppleScript runner so we can
+    /// test it against fixture strings without needing iTerm2 on CI.
+    nonisolated static func parseITermWindowList(_ output: String) -> [ITermWindowDescriptor] {
+        var result: [ITermWindowDescriptor] = []
+        for line in output.components(separatedBy: "\n") where !line.isEmpty {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count == 5,
+                  let wid = Int(parts[0]) else { continue }
+            let uuid = parts[1]
+            let title = parts[2]
+            let cwd = parts[3]
+            // AppleScript booleans serialize as "true"/"false"; be tolerant of
+            // either word in either case just in case the locale-aware
+            // formatter ever hands us something different.
+            let miniRaw = parts[4].lowercased()
+            let mini = (miniRaw == "true")
+            result.append(ITermWindowDescriptor(
+                windowNumber: CGWindowID(wid),
+                title: title,
+                sessionId: uuid,
+                cwd: cwd,
+                isMiniaturized: mini
+            ))
+        }
+        return result
+    }
+
+    /// Instance-side convenience for callers already on the main actor
+    /// (e.g. the WebSocket scan-request handler in US-002).
+    func listAllITermWindows() -> [ITermWindowDescriptor] {
+        Self.fetchAllITermWindows()
+    }
+
     nonisolated static func fetchIterm2SessionIds() -> [Iterm2SessionInfo] {
         var result: [Iterm2SessionInfo] = []
         // bounds of w returns {left, top, right, bottom} in screen coordinates
