@@ -1704,6 +1704,14 @@ struct InlineTerminalContent: View {
         }
         .background(colors.overlayContainer)
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        // Tinted border in the selected window's palette color so the
+        // content panel visually ties back to the rectangle above it — easy
+        // to tell at a glance which window you're driving, especially when
+        // more than one window is on the picker.
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(windowColor.opacity(0.7), lineWidth: 1.5)
+        )
         .onAppear { onRefresh() }
         .onReceive(refreshTimer) { _ in onRefresh() }
     }
