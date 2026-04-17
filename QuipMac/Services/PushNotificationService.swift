@@ -304,9 +304,14 @@ final class PushNotificationService {
             let capturedClient = client
             let capturedDevice = device
             let capturedToken = capturedDevice.token
+            let collapse = "waiting-\(windowId)"
             Task {
                 do {
-                    try await capturedClient.send(payloadData: payloadData, toDevice: capturedDevice)
+                    try await capturedClient.send(
+                        payloadData: payloadData,
+                        toDevice: capturedDevice,
+                        collapseId: collapse
+                    )
                     quipPushLog("push sent to \(capturedToken.prefix(8))… for \(windowId)")
                 } catch APNsError.unregistered {
                     await MainActor.run {
