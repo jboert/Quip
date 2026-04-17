@@ -1175,24 +1175,43 @@ struct MainiOSView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .disabled(selectedWindowId == nil)
+
+                // In landscape, fold the quick-button row INTO this main row
+                // — saves a whole row of vertical space and keeps everything
+                // reachable in one thumb-sweep. Portrait keeps the 2-row
+                // layout below because there isn't width to spare.
+                if !isPortrait {
+                    let enabled = QuickButton.decode(enabledQuickButtonsRaw)
+                    if !enabled.isEmpty {
+                        Spacer().frame(width: 8)
+                        ForEach(Array(enabled.enumerated()), id: \.element.id) { index, button in
+                            if index > 0, enabled[index - 1].isSlashCommand != button.isSlashCommand {
+                                Spacer().frame(width: 6)
+                            }
+                            quickActionButton(button)
+                        }
+                    }
+                }
             }
 
-            // Secondary command-shortcut row — user-configurable via Settings.
-            let enabled = QuickButton.decode(enabledQuickButtonsRaw)
-            if !enabled.isEmpty {
-                HStack(spacing: 5) {
-                    ForEach(Array(enabled.enumerated()), id: \.element.id) { index, button in
-                        if index > 0, enabled[index - 1].isSlashCommand != button.isSlashCommand {
-                            Spacer().frame(width: 10)
+            // Portrait-only secondary command-shortcut row.
+            if isPortrait {
+                let enabled = QuickButton.decode(enabledQuickButtonsRaw)
+                if !enabled.isEmpty {
+                    HStack(spacing: 5) {
+                        ForEach(Array(enabled.enumerated()), id: \.element.id) { index, button in
+                            if index > 0, enabled[index - 1].isSlashCommand != button.isSlashCommand {
+                                Spacer().frame(width: 10)
+                            }
+                            quickActionButton(button)
                         }
-                        quickActionButton(button)
+                        Spacer()
                     }
-                    Spacer()
+                    .padding(.horizontal, 8)
                 }
-                .padding(.horizontal, 8)
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, isPortrait ? 8 : 4)
     }
 
     private func cycleWindow(direction: Int) {
