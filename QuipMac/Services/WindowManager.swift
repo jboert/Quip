@@ -278,14 +278,15 @@ final class WindowManager {
 
     /// Arrange enabled windows according to target frames.
     /// `frames` maps window IDs to their desired CGRect.
-    func arrangeWindows(frames: [String: CGRect]) {
-        // Check Accessibility permission — prompt if not granted
-        let trusted = AXIsProcessTrustedWithOptions(
-            ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        )
-        if !trusted {
-            print("[WindowManager] Accessibility permission not granted. Please enable in System Settings > Privacy & Security > Accessibility.")
-            return
+    @discardableResult
+    func arrangeWindows(frames: [String: CGRect]) -> Bool {
+        // Silent check — the prompting variant fires the Accessibility dialog
+        // EVERY call until granted, so a phone user spamming the arrange button
+        // got the dialog on every tap. The one-time prompt is done from
+        // `promptForAccessibilityIfNeeded()` at app launch.
+        guard AXIsProcessTrusted() else {
+            print("[WindowManager] Accessibility permission not granted — skipping arrange. Grant in System Settings → Privacy & Security → Accessibility.")
+            return false
         }
 
         print("[WindowManager] Arranging \(frames.count) windows")
@@ -301,6 +302,15 @@ final class WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
             self.refreshWindowList()
         }
+        return true
+    }
+
+    /// Shows the Accessibility access dialog ONCE per session if the app
+    /// doesn't already have permission. Call this early (e.g. from App init)
+    /// so the user sees one dialog at launch, not one per arrange tap.
+    func promptForAccessibilityIfNeeded() {
+        if AXIsProcessTrusted() { return }
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
     // MARK: - AXUIElement Window Control
