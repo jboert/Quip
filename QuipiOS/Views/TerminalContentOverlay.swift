@@ -12,6 +12,9 @@ struct TerminalContentOverlay: View {
     // named quick-action keystroke.
     var onSendText: (String) -> Void
     @Environment(\.quipColors) private var colors
+    /// Shares the same @AppStorage key as InlineTerminalContent so the
+    /// text-size preference carries between orientations.
+    @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
 
     let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -28,6 +31,14 @@ struct TerminalContentOverlay: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(0.7))
                     Spacer()
+                    Button {
+                        contentZoomLevel = ContentZoomLevel.from(raw: contentZoomLevel).next
+                    } label: {
+                        Image(systemName: "textformat.size")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.white.opacity(0.5))
+                    }
+                    .padding(.trailing, 8)
                     Button { onRefresh() } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 13))
@@ -49,9 +60,18 @@ struct TerminalContentOverlay: View {
                     ScrollView {
                         if let screenshot, let imageData = Data(base64Encoded: screenshot),
                            let uiImage = UIImage(data: imageData) {
+                            // Landscape is ~2x wider than portrait so the
+                            // same widthFraction (tuned for portrait) comes
+                            // out way too large. Further shrink by ~60% so
+                            // the screenshot's text renders comparably to
+                            // portrait at the same zoom level.
+                            let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
+                            let landscapeShrink: CGFloat = 0.58
+                            let maxW = UIScreen.main.bounds.width * zoom.widthFraction * landscapeShrink
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFit()
+                                .frame(maxWidth: maxW)
                                 .frame(maxWidth: .infinity)
                                 .id("bottom")
                         } else {
