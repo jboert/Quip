@@ -1628,11 +1628,12 @@ struct InlineTerminalContent: View {
     var onSendAction: (String) -> Void
     @Environment(\.quipColors) private var colors
     @AppStorage("tintContentBorder") private var tintContentBorder = true
-    /// Zoom level for the screenshot view: 0 = fills panel edge-to-edge
-    /// (default), 1 = medium (some margin), 2 = small (more margin, text
-    /// renders smaller so more of the terminal fits without scrolling).
-    /// Persists across relaunches per the user's preference.
-    @AppStorage("contentZoomLevel") private var contentZoomLevel = 0
+    /// Zoom level for the screenshot view: 0 = fills panel edge-to-edge,
+    /// 1 = default medium (24pt margin, text renders smaller), 2 = small
+    /// (48pt margin, smallest text). Default 1 so the terminal text starts
+    /// a tad smaller than full-bleed — fit more of the window on screen
+    /// without the user having to tap anything. Cycle button toggles.
+    @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     private static let zoomPaddings: [CGFloat] = [0, 24, 48]
 
