@@ -239,7 +239,7 @@ Create `QuipMac/Tests/ImageUploadHandlerTests.swift`:
 
 ```swift
 import XCTest
-@testable import QuipMac
+@testable import Quip
 
 final class ImageUploadHandlerTests: XCTestCase {
 
@@ -575,7 +575,7 @@ Create `QuipiOS/Tests/ImageRecompressorTests.swift`:
 ```swift
 import XCTest
 import UIKit
-@testable import QuipiOS
+@testable import Quip
 
 final class ImageRecompressorTests: XCTestCase {
 
