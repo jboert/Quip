@@ -877,15 +877,17 @@ struct MainiOSView: View {
                 Image(systemName: "gearshape")
                     .font(.system(size: 12))
                     .foregroundStyle(colors.textTertiary)
+                    .frame(width: 20, height: 20)
             }
-            .padding(.trailing, 6)
             Button {
                 client.disconnect()
             } label: {
                 Image(systemName: "xmark.circle")
                     .font(.system(size: 12))
                     .foregroundStyle(colors.textTertiary)
+                    .frame(width: 20, height: 20)
             }
+            .padding(.trailing, 4)
         }
     }
 
@@ -907,7 +909,9 @@ struct MainiOSView: View {
                     Image(systemName: "xmark.circle")
                         .font(.system(size: 12))
                         .foregroundStyle(colors.textTertiary)
+                        .frame(width: 20, height: 20)
                 }
+                .padding(.trailing, 4)
             }
 
             if showPINEntry {
