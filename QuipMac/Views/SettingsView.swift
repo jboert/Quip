@@ -145,6 +145,9 @@ private struct NotificationsTab: View {
                 if APNsKeyStore.set(data) {
                     hasKey = true
                     importStatus = "Imported \(url.lastPathComponent)"
+                    // New key → cached APNsClient's parsed private key
+                    // is stale. Drop it so the next send re-reads.
+                    pushService.invalidateClient()
                 } else {
                     importStatus = "Error: could not save to Keychain"
                 }
@@ -177,7 +180,7 @@ private struct NotificationsTab: View {
         let devicesSnapshot = pushService.devices
         let client: APNsClient
         do {
-            client = try APNsClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
+            client = try pushService.cachedClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
         } catch {
             testStatus.append("Error creating client: \(error)")
             return

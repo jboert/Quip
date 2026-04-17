@@ -72,6 +72,17 @@ final class PushNotificationService {
     /// Max one push per window per this interval (per device).
     private let debounceInterval: TimeInterval = 30.0
 
+    /// Shared APNs client — lifetime of the service so its JWT cache
+    /// survives across Test Push clicks + real triggers. APNs rate-
+    /// limits new provider tokens to ~1 per 20 minutes per kid; making
+    /// a fresh client per send (the old behavior) blew through that
+    /// with 2-3 quick Test Push taps → 429 TooManyProviderTokenUpdates.
+    /// `sharedClientKey` encodes the keyId+teamId+bundleId the client
+    /// was built with — any change to those inputs invalidates and
+    /// rebuilds.
+    private var sharedClient: APNsClient?
+    private var sharedClientKey: String?
+
     private static let storageKey = "registeredPushDevices"
     private static let preferencesKey = "registeredPushDevicePreferences"
 
@@ -120,6 +131,33 @@ final class PushNotificationService {
     /// Fetch prefs for a device, falling back to hardcoded defaults.
     func preferences(forDevice token: String) -> DevicePushPreferences {
         preferences[token.uppercased()] ?? .defaults
+    }
+
+    /// Return (and lazily create) the shared APNsClient for the given
+    /// key/team/bundle triple. Reused across Test Push clicks and real
+    /// triggers so the JWT stays cached — avoids APNs 429
+    /// TooManyProviderTokenUpdates when the user clicks Test Push
+    /// several times in a short window.
+    ///
+    /// If the user changes any of the three inputs in Settings, the
+    /// cache key changes and we rebuild the client (new JWT cycle).
+    func cachedClient(keyId: String, teamId: String, bundleId: String) throws -> APNsClient {
+        let cacheKey = "\(keyId)|\(teamId)|\(bundleId)"
+        if let existing = sharedClient, sharedClientKey == cacheKey {
+            return existing
+        }
+        let client = try APNsClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
+        sharedClient = client
+        sharedClientKey = cacheKey
+        return client
+    }
+
+    /// Drop the cached client — called if the user edits the .p8 key
+    /// via APNsKeyStore.set, since the old client still holds the old
+    /// parsed private key in memory.
+    func invalidateClient() {
+        sharedClient = nil
+        sharedClientKey = nil
     }
 
     /// Add or refresh a device. De-duped by token (same token re-registered
@@ -184,7 +222,7 @@ final class PushNotificationService {
 
         let client: APNsClient
         do {
-            client = try APNsClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
+            client = try cachedClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
         } catch {
             print("[PushNotificationService] APNsClient init failed: \(error)")
             return

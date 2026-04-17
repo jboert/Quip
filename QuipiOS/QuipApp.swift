@@ -1682,8 +1682,14 @@ struct MainiOSView: View {
                     }
                     terminalContentView
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.vertical, 4)
-                        .padding(.trailing, 8)
+                        // Same horizontal breathing room as portrait so the
+                        // tinted window-color border is visible on ALL four
+                        // sides. Landscape was missing the leading inset
+                        // (only had trailing 8), which let the terminal card
+                        // run flush against the drag handle / left bezel.
+                        .padding(.vertical, 6)
+                        .padding(.leading, 8)
+                        .padding(.trailing, 12)
                 }
             }
         } else {
