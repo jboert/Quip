@@ -246,19 +246,22 @@ struct QuipApp: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             generator.impactOccurred(intensity: 1.0)
         }
-        // Grab the live transcription (already visible on screen) and send immediately.
-        // Then stop the recognizer — the text we saw is what we send. Trim whitespace
-        // and newlines: stray trailing \n characters get typed into the terminal as
-        // literal line-breaks inside Claude Code's input box, which then swallows the
-        // pressReturn keystroke as "add another newline" instead of "submit".
+        // Type the transcription straight into Claude Code's `>` prompt on
+        // the Mac — `pressReturn: false` keeps it in the input line rather
+        // than submitting, so a long dictation shows up verbatim in the
+        // terminal (and thus in the phone's content panel via the next
+        // refresh). User hits Return when they're ready.
+        //
+        // Trim trailing whitespace/newlines: a stray \n typed into Claude's
+        // box would get swallowed by the box as a newline rather than
+        // treated as "submit," and it breaks the render.
         let text = speech.stopRecording().trimmingCharacters(in: .whitespacesAndNewlines)
         let windowId = pttTracker.end()
         NSLog("[Quip] stopRecording: windowId=%@, text='%@' (length=%d)", windowId ?? "nil", text, text.count)
         if let windowId {
             client.send(STTStateMessage.ended(windowId: windowId))
             if !text.isEmpty {
-                NSLog("[Quip] Sending text to window %@", windowId)
-                client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
+                client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: false))
             }
         }
     }
