@@ -336,6 +336,12 @@ struct MainiOSView: View {
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
     private var isPortrait: Bool { verticalSizeClass == .regular }
 
+    // Pending image attachment — shared between portrait and landscape input rows.
+    @StateObject private var pendingImage = PendingImageState()
+    @State private var showingImageSourceSheet = false
+    @State private var showingLibraryPicker = false
+    @State private var showingCameraPicker = false
+
     var body: some View {
         ZStack {
             colors.background
@@ -461,6 +467,7 @@ struct MainiOSView: View {
                         }
                     }
                 )
+                .environmentObject(pendingImage)
             }
         }
         .overlay {
@@ -538,6 +545,33 @@ struct MainiOSView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+        }
+        // Image-attach sheets — hoisted to the body so both portrait and
+        // landscape views can trigger them via the shared @State bindings.
+        .confirmationDialog("Attach image", isPresented: $showingImageSourceSheet, titleVisibility: .hidden) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Take Photo") { showingCameraPicker = true }
+            }
+            Button("Choose from Library") { showingLibraryPicker = true }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showingLibraryPicker) {
+            LibraryImagePicker(
+                onPicked: { image, mime, name in
+                    pendingImage.setPending(image: image, mimeType: mime, filename: name)
+                    showingLibraryPicker = false
+                },
+                onCancel: { showingLibraryPicker = false }
+            )
+        }
+        .fullScreenCover(isPresented: $showingCameraPicker) {
+            CameraImagePicker(
+                onPicked: { image, mime, name in
+                    pendingImage.setPending(image: image, mimeType: mime, filename: name)
+                    showingCameraPicker = false
+                },
+                onCancel: { showingCameraPicker = false }
+            )
         }
         .sheet(isPresented: $showSpawnPicker) {
             // Sheet lives on the outer body (not portraitControls) because the
@@ -922,6 +956,9 @@ struct MainiOSView: View {
         let windowColor = selectedWindow.map { Color(hex: $0.color) } ?? colors.textSecondary
 
         return VStack(spacing: 8) {
+            // Pending image thumbnail — only takes space when an image is attached.
+            PendingImagePreviewStrip(state: pendingImage)
+
             // Control buttons
             HStack(spacing: 6) {
                 // Previous window — slimmer than the main input buttons so
@@ -1040,6 +1077,19 @@ struct MainiOSView: View {
                         .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+
+                // Attach image — tapping opens source picker (library / camera).
+                Button {
+                    showingImageSourceSheet = true
+                } label: {
+                    Image(systemName: pendingImage.hasPendingImage ? "photo.fill" : "photo")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(pendingImage.hasPendingImage ? colors.buttonPrimary : colors.textPrimary)
+                        .frame(width: 56, height: 56)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .accessibilityLabel("Attach image")
 
                 // Press Return
                 Button {
