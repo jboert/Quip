@@ -8,6 +8,7 @@ struct QuipMacApp: App {
     @State private var terminalStateDetector = TerminalStateDetector()
     @State private var terminalColorManager = TerminalColorManager()
     @State private var keystrokeInjector = KeystrokeInjector()
+    private let imageUploadHandler = ImageUploadHandler.defaultProduction()
     @State private var tunnel = CloudflareTunnel()
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
@@ -499,6 +500,56 @@ struct QuipMacApp: App {
                     webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
             }
+
+        case "image_upload":
+            if let msg = MessageCoder.decode(ImageUploadMessage.self, from: data) {
+                AuditLogger.log(messageType: "image_upload", clientIdentifier: "ws-client", textContent: msg.filename)
+
+                // Resolve target window first — fail fast, don't write the file if it's gone.
+                guard let window = windowManager.windows.first(where: { $0.id == msg.windowId }) else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] image_upload DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "unknown window"))
+                    return
+                }
+
+                // Write to disk.
+                let savedURL: URL
+                do {
+                    savedURL = try imageUploadHandler.save(message: msg)
+                } catch {
+                    print("[Quip] image_upload write failed: \(error)")
+                    webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "write failed: \(error)"))
+                    return
+                }
+
+                // Paste the absolute path into the terminal input with a trailing space, no Return.
+                let termApp = terminalAppForWindow(window)
+                windowManager.focusWindow(msg.windowId)
+                let name = window.name
+                let wn = window.windowNumber
+                let delay = KeystrokeInjector.focusDelay(
+                    path: .sendText, terminalApp: termApp,
+                    iterm2SessionId: window.iterm2SessionId
+                )
+                let textToInject = savedURL.path + " "
+                let inject = {
+                    self.keystrokeInjector.sendText(
+                        textToInject, to: msg.windowId, pressReturn: false,
+                        terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                        iterm2SessionId: window.iterm2SessionId
+                    )
+                }
+                if delay == 0 {
+                    inject()
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { inject() }
+                }
+
+                // Ack back to phone.
+                webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
+            }
+
         case "quick_action":
             if let msg = MessageCoder.decode(QuickActionMessage.self, from: data) {
                 AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
