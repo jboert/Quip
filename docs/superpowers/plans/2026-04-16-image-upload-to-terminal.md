@@ -259,7 +259,6 @@ final class ImageUploadHandlerTests: XCTestCase {
         // 1x1 transparent PNG
         let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
         let msg = ImageUploadMessage(
-            type: "image_upload",
             imageId: "abc-123",
             windowId: "w1",
             filename: "tiny.png",
@@ -283,7 +282,6 @@ final class ImageUploadHandlerTests: XCTestCase {
 
         let handler = ImageUploadHandler(uploadsDirectory: root)
         let msg = ImageUploadMessage(
-            type: "image_upload",
             imageId: "bad",
             windowId: "w1",
             filename: "broken.png",
@@ -301,7 +299,6 @@ final class ImageUploadHandlerTests: XCTestCase {
         let handler = ImageUploadHandler(uploadsDirectory: root)
         let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
         let msg = ImageUploadMessage(
-            type: "image_upload",
             imageId: "x",
             windowId: "w1",
             filename: "../../evil.png",
@@ -1265,7 +1262,6 @@ private func sendPendingImageIfNeeded(windowId: String) {
             let (data, finalMime) = try self.imageRecompressor.recompress(rawData: rawData, declaredMime: mime)
             let base64 = data.base64EncodedString()
             let msg = ImageUploadMessage(
-                type: "image_upload",
                 imageId: UUID().uuidString,
                 windowId: windowId,
                 filename: filename,
