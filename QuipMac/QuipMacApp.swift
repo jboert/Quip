@@ -544,21 +544,26 @@ struct QuipMacApp: App {
                     iterm2SessionId: window.iterm2SessionId
                 )
                 let textToInject = savedURL.path + " "
-                let inject = {
-                    self.keystrokeInjector.sendText(
+                let finishInjection = { [self] in
+                    let result = self.keystrokeInjector.sendText(
                         textToInject, to: msg.windowId, pressReturn: false,
                         terminalApp: termApp, windowName: name, cgWindowNumber: wn,
                         iterm2SessionId: window.iterm2SessionId
                     )
+                    if result.success {
+                        print("[Quip] image_upload: typed path into windowId=\(msg.windowId) (\(textToInject.count) chars)")
+                        self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
+                    } else {
+                        let err = result.error ?? "couldn't type path"
+                        print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId): \(err)")
+                        self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
+                    }
                 }
                 if delay == 0 {
-                    inject()
+                    finishInjection()
                 } else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { inject() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { finishInjection() }
                 }
-
-                // Ack back to phone.
-                webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
             }
 
         case "quick_action":
