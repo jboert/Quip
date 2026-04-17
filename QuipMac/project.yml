@@ -23,6 +23,7 @@ targets:
           - "*.xcodeproj/**"
           - "Resources/cloudflared"
           - "build/**"
+          - "Tests/**"
       - path: ../Shared
         excludes:
           - "Tests/**"
@@ -56,6 +57,7 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
+      - path: Tests
       - path: ../Shared/Tests
     dependencies:
       - target: QuipMac
