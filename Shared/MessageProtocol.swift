@@ -424,9 +424,16 @@ struct PushPreferencesMessage: Codable, Sendable {
     let quietHoursEnd: Int?
     let sound: Bool
     let foregroundBanner: Bool
+    /// Master toggle for APNs banner alerts. When false, the Mac skips the
+    /// APNs push entirely — Live Activities still update via WebSocket, so
+    /// the user can opt into "island-only" notification behavior without
+    /// lock-screen / notification-center noise. Optional in the wire format
+    /// so older iOS clients (that don't know about this field) still decode
+    /// cleanly as banner-on.
+    let bannerEnabled: Bool?
 
     init(deviceToken: String, paused: Bool, quietHoursStart: Int?, quietHoursEnd: Int?,
-         sound: Bool, foregroundBanner: Bool) {
+         sound: Bool, foregroundBanner: Bool, bannerEnabled: Bool? = nil) {
         self.type = "push_preferences"
         self.deviceToken = deviceToken
         self.paused = paused
@@ -434,6 +441,7 @@ struct PushPreferencesMessage: Codable, Sendable {
         self.quietHoursEnd = quietHoursEnd
         self.sound = sound
         self.foregroundBanner = foregroundBanner
+        self.bannerEnabled = bannerEnabled
     }
 }
 

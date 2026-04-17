@@ -45,6 +45,11 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
     var quietHoursEnd: Int? = nil     // 0-23, local TZ
     var sound: Bool = true
     var foregroundBanner: Bool = false
+    /// Master banner toggle. False = skip the APNs push entirely so no
+    /// lock-screen / notification-center alert appears. Live Activities
+    /// still run because they're driven by WebSocket state changes, not
+    /// APNs. Default true for backwards-compat with existing prefs rows.
+    var bannerEnabled: Bool = true
 
     static let defaults = DevicePushPreferences()
 
@@ -256,6 +261,12 @@ final class PushNotificationService {
         for device in devicesSnapshot {
             let prefs = prefsSnapshot[device.token] ?? .defaults
             if prefs.paused {
+                continue
+            }
+            if !prefs.bannerEnabled {
+                // Banner disabled in iOS Settings → no APNs push. Live
+                // Activity still runs via WebSocket so the island keeps
+                // showing thinking/waiting without the alert tray clutter.
                 continue
             }
             if prefs.isQuietNow(now: now) {

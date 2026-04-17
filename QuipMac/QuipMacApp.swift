@@ -821,7 +821,11 @@ struct QuipMacApp: App {
                     quietHoursStart: msg.quietHoursStart,
                     quietHoursEnd: msg.quietHoursEnd,
                     sound: msg.sound,
-                    foregroundBanner: msg.foregroundBanner
+                    foregroundBanner: msg.foregroundBanner,
+                    // Older iOS clients omit this field — decode to nil,
+                    // default to true here so existing phones keep getting
+                    // banners until they upgrade.
+                    bannerEnabled: msg.bannerEnabled ?? true
                 )
                 pushNotificationService.updatePreferences(forDevice: msg.deviceToken, prefs: prefs)
                 print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") device=\(msg.deviceToken.prefix(8))")
