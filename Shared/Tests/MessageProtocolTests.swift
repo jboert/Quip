@@ -515,6 +515,37 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertTrue(textIndex < typeIndex)
     }
 
+    // MARK: - Attach-existing-iTerm flow
+
+    func testScanITermWindowsMessageEncoding() throws {
+        let msg = ScanITermWindowsMessage()
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["type"] as? String, "scan_iterm_windows")
+    }
+
+    func testAttachITermWindowMessageEncoding() throws {
+        let msg = AttachITermWindowMessage(windowNumber: 4271, sessionId: "ABC-DEF")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["type"] as? String, "attach_iterm_window")
+        XCTAssertEqual(dict["windowNumber"] as? Int, 4271)
+        XCTAssertEqual(dict["sessionId"] as? String, "ABC-DEF")
+    }
+
+    func testITermWindowListMessageRoundTrip() throws {
+        let infos = [
+            ITermWindowInfo(windowNumber: 1, title: "claude", sessionId: "A",
+                            cwd: "/Users/dev/proj", isAlreadyTracked: false, isMiniaturized: false),
+            ITermWindowInfo(windowNumber: 2, title: "zsh", sessionId: "B",
+                            cwd: "/tmp", isAlreadyTracked: true, isMiniaturized: true),
+        ]
+        let data = try XCTUnwrap(MessageCoder.encode(ITermWindowListMessage(windows: infos)))
+        let decoded = try XCTUnwrap(MessageCoder.decode(ITermWindowListMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "iterm_window_list")
+        XCTAssertEqual(decoded.windows, infos)
+    }
+
     // MARK: - Helpers
 
     private func jsonDict(from data: Data) throws -> [String: Any] {

@@ -118,6 +118,9 @@ final class WebSocketClient {
     /// spawned a new window (e.g. duplicate) and wants the phone to follow along.
     var onSelectWindow: ((String) -> Void)?
     var onProjectDirectories: (([String]) -> Void)?
+    /// Mac responded to a `scan_iterm_windows` request with the full list of
+    /// iTerm2 windows it can see. The iOS scan sheet listens for this.
+    var onITermWindowList: (([ITermWindowInfo]) -> Void)?
     var onError: ((String) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
@@ -447,6 +450,12 @@ final class WebSocketClient {
             if let msg = try? decoder.decode(ProjectDirectoriesMessage.self, from: data) {
                 NSLog("[WebSocketClient] Received %d project directories", msg.directories.count)
                 onProjectDirectories?(msg.directories)
+            }
+        case "iterm_window_list":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ITermWindowListMessage.self, from: data) {
+                NSLog("[WebSocketClient] iterm_window_list: %d windows", msg.windows.count)
+                onITermWindowList?(msg.windows)
             }
         case "error":
             guard isAuthenticated else { return }
