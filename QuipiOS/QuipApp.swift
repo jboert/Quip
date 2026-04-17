@@ -1628,7 +1628,13 @@ struct InlineTerminalContent: View {
     var onSendAction: (String) -> Void
     @Environment(\.quipColors) private var colors
     @AppStorage("tintContentBorder") private var tintContentBorder = true
+    /// Zoom level for the screenshot view: 0 = fills panel edge-to-edge
+    /// (default), 1 = medium (some margin), 2 = small (more margin, text
+    /// renders smaller so more of the terminal fits without scrolling).
+    /// Persists across relaunches per the user's preference.
+    @AppStorage("contentZoomLevel") private var contentZoomLevel = 0
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    private static let zoomPaddings: [CGFloat] = [0, 24, 48]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1640,6 +1646,16 @@ struct InlineTerminalContent: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer()
+                // Text-size cycler — taps through the three zoom presets so
+                // you can trade panel fill for more terminal content on
+                // screen at once. Icon's the A+/A− "text size" symbol.
+                Button {
+                    contentZoomLevel = (contentZoomLevel + 1) % Self.zoomPaddings.count
+                } label: {
+                    Image(systemName: "textformat.size")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
                 // Expand / collapse — hides the window-picker card above to
                 // give the terminal more vertical real estate. Tap again to
                 // bring the picker back. Compact: single icon button, reuses
@@ -1669,10 +1685,15 @@ struct InlineTerminalContent: View {
                 ScrollView {
                     if let screenshot, let imageData = Data(base64Encoded: screenshot),
                        let uiImage = UIImage(data: imageData) {
+                        // Edge-to-edge at zoom 0 (default), progressively
+                        // narrower at higher levels so terminal text renders
+                        // smaller and more of the window is visible at once.
+                        let pad = Self.zoomPaddings[contentZoomLevel]
                         Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFit()
                             .frame(maxWidth: .infinity)
+                            .padding(.horizontal, pad)
                             .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)
