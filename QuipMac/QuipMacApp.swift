@@ -794,11 +794,20 @@ struct QuipMacApp: App {
     private func handleAttachITermWindow(windowNumber: Int, sessionId: String) {
         Task.detached {
             let descriptors = WindowManager.fetchAllITermWindows()
+            // Capture the minimized flag on the target so we know whether we
+            // need to un-minimize. CG's `.optionOnScreenOnly` scan excludes
+            // minimized windows, so without un-minimizing first the attach
+            // path can't find a ManagedWindow to enable.
+            let target = descriptors.first { Int($0.windowNumber) == windowNumber && $0.sessionId == sessionId }
+            if target?.isMiniaturized == true {
+                print("[Quip] attach_iterm_window: target is minimized, un-minimizing first")
+                _ = WindowManager.unminimizeITermWindow(windowNumber: windowNumber)
+                // iTerm2 needs a moment to redraw the window on-screen before
+                // the next CG snapshot will see it.
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
             await MainActor.run {
-                let stillExists = descriptors.contains {
-                    Int($0.windowNumber) == windowNumber && $0.sessionId == sessionId
-                }
-                guard stillExists else {
+                guard target != nil else {
                     print("[Quip] attach_iterm_window DROPPED: window closed between scan and attach")
                     self.webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                     return

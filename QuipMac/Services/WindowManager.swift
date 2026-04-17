@@ -640,6 +640,36 @@ final class WindowManager {
         Self.fetchAllITermWindows()
     }
 
+    /// Un-minimize an iTerm2 window and bring it to the front. Required
+    /// before attaching a minimized window — CG's `.optionOnScreenOnly`
+    /// excludes miniaturized windows, so without this the ManagedWindow
+    /// never gets created and the phone's picker can't see it. Safe to
+    /// call on a non-minimized window (no-op). Matches windows by their
+    /// AppleScript `id`, which is the same number as CGWindowID.
+    nonisolated static func unminimizeITermWindow(windowNumber: Int) -> Bool {
+        let script = """
+        tell application "iTerm2"
+            try
+                set w to first window whose id is \(windowNumber)
+                if miniaturized of w then set miniaturized of w to false
+                activate
+                select w
+                return "ok"
+            on error errMsg
+                return "err:" & errMsg
+            end try
+        end tell
+        """
+        guard let appleScript = NSAppleScript(source: script) else { return false }
+        var error: NSDictionary?
+        let result = appleScript.executeAndReturnError(&error)
+        if let err = error {
+            print("[WindowManager] unminimizeITermWindow failed: \(err)")
+            return false
+        }
+        return result.stringValue == "ok"
+    }
+
     nonisolated static func fetchIterm2SessionIds() -> [Iterm2SessionInfo] {
         var result: [Iterm2SessionInfo] = []
         // bounds of w returns {left, top, right, bottom} in screen coordinates
