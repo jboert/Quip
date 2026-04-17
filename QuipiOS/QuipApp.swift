@@ -1667,7 +1667,14 @@ struct InlineTerminalContent: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    if !content.isEmpty {
+                    if let screenshot, let imageData = Data(base64Encoded: screenshot),
+                       let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .id("bottom")
+                    } else if !content.isEmpty {
                         Text(content)
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.85))
