@@ -293,7 +293,10 @@ struct MainiOSView: View {
     @AppStorage("lastURL") private var urlText: String = ""
     @AppStorage("recentConnectionsData") private var recentConnectionsData: Data = Data()
     @AppStorage("ttsEnabled") private var ttsEnabled = false
-    @AppStorage("enabledQuickButtons") private var enabledQuickButtonsRaw: String = "plan,backspace"
+    // Default covers the most common Claude Code interactions: one slash
+    // command, the Y/N confirmations that Claude asks for, Esc to dismiss,
+    // and Ctrl+C to abort. Everything else is opt-in from Settings.
+    @AppStorage("enabledQuickButtons") private var enabledQuickButtonsRaw: String = "plan,yes,no,esc,ctrlC"
     @State private var showSettings = false
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
@@ -1814,10 +1817,13 @@ struct InlineTerminalContent: View {
 
 enum QuickButton: String, CaseIterable, Identifiable {
     // Declaration order matters — `allCases` uses it to render the settings
-    // list and `QuickButton.allCases.filter(...)` uses it to order the
-    // enabled row on the phone. Slash commands grouped first so the whole
-    // "/plan /btw /compact /clear" strip sits together, then the rest.
-    case plan, btw, compact, clearContext, backspace, one, two, three
+    // list and the enabled row on the phone. Grouped:
+    //   Slash commands (sends "/foo"),
+    //   Claude Code answers (Y/N and number choices),
+    //   Terminal keystrokes (Esc, Ctrl-C, Ctrl-D, Tab, Backspace).
+    case plan, btw, compact, clearContext
+    case yes, no, one, two, three
+    case esc, ctrlC, ctrlD, tab, backspace
 
     var id: String { rawValue }
 
@@ -1826,29 +1832,50 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .plan: return "/plan"
         case .btw: return "/btw"
         case .compact: return "/compact"
-        case .backspace: return "Backspace"
         case .clearContext: return "Clear context (/clear)"
+        case .yes: return "Y"
+        case .no: return "N"
         case .one: return "1"
         case .two: return "2"
         case .three: return "3"
+        case .esc: return "Esc"
+        case .ctrlC: return "Ctrl+C"
+        case .ctrlD: return "Ctrl+D"
+        case .tab: return "Tab"
+        case .backspace: return "Backspace"
         }
     }
 
+    /// Short label shown in the on-screen button itself (vs. `displayName`
+    /// which shows in Settings).
     var label: String {
         switch self {
         case .plan: return "/plan"
         case .btw: return "/btw"
         case .compact: return "/compact"
-        case .backspace: return ""
         case .clearContext: return "/clear"
+        case .yes: return "Y"
+        case .no: return "N"
         case .one: return "1"
         case .two: return "2"
         case .three: return "3"
+        case .esc: return "Esc"
+        case .ctrlC: return "Ctrl+C"
+        case .ctrlD: return "Ctrl+D"
+        case .tab: return "Tab"
+        case .backspace: return ""
         }
     }
 
     var systemImage: String? {
-        self == .backspace ? "delete.left" : nil
+        switch self {
+        case .backspace: return "delete.left"
+        case .esc: return "escape"
+        case .ctrlC: return "xmark.octagon"
+        case .ctrlD: return "eject"
+        case .tab: return "arrow.right.to.line"
+        default: return nil
+        }
     }
 
     enum Action {
@@ -1864,11 +1891,17 @@ enum QuickButton: String, CaseIterable, Identifiable {
         // take a follow-up argument — it's a standalone command that
         // tells Claude "summarize the context now."
         case .compact: return .sendText("/compact", pressReturn: true)
-        case .backspace: return .quickAction("press_backspace")
         case .clearContext: return .sendText("/clear", pressReturn: true)
+        case .yes: return .quickAction("press_y")
+        case .no: return .quickAction("press_n")
         case .one: return .sendText("1", pressReturn: true)
         case .two: return .sendText("2", pressReturn: true)
         case .three: return .sendText("3", pressReturn: true)
+        case .esc: return .quickAction("press_escape")
+        case .ctrlC: return .quickAction("press_ctrl_c")
+        case .ctrlD: return .quickAction("press_ctrl_d")
+        case .tab: return .quickAction("press_tab")
+        case .backspace: return .quickAction("press_backspace")
         }
     }
 
@@ -1890,25 +1923,29 @@ struct SettingsSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
+            List {
+                // Appearance — single-row section; footer goes away once the
+                // feature's self-explanatory so the page stops feeling padded.
+                Section("Appearance") {
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
-                } header: {
-                    Text("Appearance")
-                } footer: {
-                    Text("Colors the border around the terminal content panel to match the selected window's palette — quick visual cue for which window you're driving.")
                 }
 
-                Section {
-                    ForEach(QuickButton.allCases) { button in
-                        Toggle(button.displayName, isOn: binding(for: button))
+                // Quick Buttons — multi-column grid of chip toggles instead
+                // of the one-toggle-per-row Form layout. Fits 2-3x the
+                // settings on screen at once, which matters once the enum
+                // starts pushing a dozen options.
+                Section("Quick Buttons") {
+                    let columns = [GridItem(.adaptive(minimum: 100, maximum: 180), spacing: 6)]
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+                        ForEach(QuickButton.allCases) { button in
+                            quickButtonChip(button)
+                        }
                     }
-                } header: {
-                    Text("Quick Buttons")
-                } footer: {
-                    Text("Shown in the compact row under the main shortcuts. Order matches the list above.")
+                    .padding(.vertical, 4)
                 }
             }
+            .listStyle(.insetGrouped)
+            .environment(\.defaultMinListRowHeight, 0)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1919,24 +1956,46 @@ struct SettingsSheet: View {
         }
     }
 
-    private func binding(for button: QuickButton) -> Binding<Bool> {
-        Binding(
-            get: { QuickButton.decode(enabledQuickButtonsRaw).contains(button) },
-            set: { isOn in
-                var current = QuickButton.decode(enabledQuickButtonsRaw)
-                if isOn {
-                    if !current.contains(button) {
-                        // Insert in canonical order (matches allCases) so the row
-                        // stays stable regardless of toggle sequence.
-                        current = QuickButton.allCases.filter { current.contains($0) || $0 == button }
-                    }
-                } else {
-                    current.removeAll { $0 == button }
+    /// Tappable chip for a QuickButton — lit when enabled, dim when off.
+    /// Dense enough that ~a dozen fit in the same space one Form row used
+    /// to take.
+    @ViewBuilder
+    private func quickButtonChip(_ button: QuickButton) -> some View {
+        let isOn = QuickButton.decode(enabledQuickButtonsRaw).contains(button)
+        Button {
+            toggle(button)
+        } label: {
+            HStack(spacing: 4) {
+                if let icon = button.systemImage {
+                    Image(systemName: icon)
+                        .font(.system(size: 10))
                 }
-                enabledQuickButtonsRaw = QuickButton.encode(current)
+                Text(button.displayName)
+                    .font(.system(size: 12, weight: isOn ? .semibold : .regular))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 0)
             }
-        )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .foregroundStyle(isOn ? .white : .secondary)
+            .background(isOn ? Color.accentColor : Color.secondary.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
+
+    private func toggle(_ button: QuickButton) {
+        var current = QuickButton.decode(enabledQuickButtonsRaw)
+        if current.contains(button) {
+            current.removeAll { $0 == button }
+        } else {
+            // Canonical order keeps the row stable regardless of toggle sequence.
+            current = QuickButton.allCases.filter { current.contains($0) || $0 == button }
+        }
+        enabledQuickButtonsRaw = QuickButton.encode(current)
+    }
+
 }
 
 /// State for the inline connection-test probe that sits next to the URL field.
