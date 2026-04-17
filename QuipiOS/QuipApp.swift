@@ -39,6 +39,7 @@ struct QuipApp: App {
     @State private var pushRegistration = PushRegistrationService()
     @State private var attentionCenter = WindowAttentionCenter()
     @State private var pushDelegate = PushNotificationCenterDelegate()
+    @State private var liveActivity = LiveActivityService()
 
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
@@ -141,6 +142,25 @@ struct QuipApp: App {
                 // selection path: tap, Mac echo, deep-link tap, etc.
                 if let newId { attentionCenter.clearAttention(for: newId) }
             }
+            .onOpenURL { url in
+                // Deep link from the Live Activity island / lock screen:
+                // quip://window/<windowId> → select that window + open input.
+                guard url.scheme == "quip" else { return }
+                let windowId: String
+                if url.host == "window" {
+                    windowId = url.pathComponents.dropFirst().first ?? ""
+                } else if let host = url.host, !host.isEmpty, url.pathComponents.count <= 1 {
+                    // Fallback: quip://<windowId> (no "window/" prefix)
+                    windowId = host
+                } else {
+                    return
+                }
+                guard !windowId.isEmpty else { return }
+                selectedWindowId = windowId
+                attentionCenter.clearAttention(for: windowId)
+                showTextInput = true
+                client.send(SelectWindowMessage(windowId: windowId))
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
                 // Only reset the audio session if TTS isn't actively playing —
                 // background audio mode keeps the session alive during playback
@@ -235,6 +255,22 @@ struct QuipApp: App {
                         frame: w.frame, state: newState, color: w.color,
                         isThinking: w.isThinking
                     )
+                    // Drive the Dynamic Island Live Activity for the user's
+                    // currently-selected window. PRD scope: only the selected
+                    // window gets an island; every other thinking window is
+                    // tracked by the Mac but doesn't pop its own activity.
+                    if windowId == selectedWindowId {
+                        switch newState {
+                        case "thinking":
+                            liveActivity.startOrUpdate(windowId: windowId, windowName: w.name, state: "thinking")
+                        case "waiting_for_input":
+                            liveActivity.startOrUpdate(windowId: windowId, windowName: w.name, state: "waiting")
+                        default:
+                            // neutral or anything else: user is actively engaged
+                            // with the terminal; no need for an island card.
+                            liveActivity.end(windowId: windowId)
+                        }
+                    }
                 }
             }
         }
