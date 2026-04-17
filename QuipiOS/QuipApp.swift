@@ -1743,7 +1743,7 @@ struct InlineTerminalContent: View {
 // MARK: - Quick Button Config
 
 enum QuickButton: String, CaseIterable, Identifiable {
-    case plan, btw, backspace, clearContext, one, two, three
+    case plan, btw, compact, backspace, clearContext, one, two, three
 
     var id: String { rawValue }
 
@@ -1751,6 +1751,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         switch self {
         case .plan: return "/plan"
         case .btw: return "/btw"
+        case .compact: return "/compact"
         case .backspace: return "Backspace"
         case .clearContext: return "Clear context (/clear)"
         case .one: return "1"
@@ -1763,6 +1764,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         switch self {
         case .plan: return "/plan"
         case .btw: return "/btw"
+        case .compact: return "/compact"
         case .backspace: return ""
         case .clearContext: return "/clear"
         case .one: return "1"
@@ -1784,6 +1786,10 @@ enum QuickButton: String, CaseIterable, Identifiable {
         switch self {
         case .plan: return .sendText("/plan ", pressReturn: false)
         case .btw: return .sendText("/btw ", pressReturn: false)
+        // /compact auto-submits because unlike /plan or /btw it doesn't
+        // take a follow-up argument — it's a standalone command that
+        // tells Claude "summarize the context now."
+        case .compact: return .sendText("/compact", pressReturn: true)
         case .backspace: return .quickAction("press_backspace")
         case .clearContext: return .sendText("/clear", pressReturn: true)
         case .one: return .sendText("1", pressReturn: true)
