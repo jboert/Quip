@@ -41,8 +41,158 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Colors", systemImage: "paintpalette")
                 }
+
+            NotificationsTab()
+                .tabItem {
+                    Label("Notifications", systemImage: "bell.badge")
+                }
         }
-        .frame(width: 520, height: 400)
+        .frame(width: 520, height: 460)
+    }
+}
+
+// MARK: - Notifications Tab
+
+/// Collects the APNs auth-key configuration (.p8 file, Key ID, Team ID,
+/// Bundle ID) + a Test Push button. The .p8 goes into the Keychain via
+/// APNsKeyStore; the three ID fields sit in UserDefaults. No pushes fire
+/// from here — the only send is Test Push, which loops registered
+/// devices and reports per-device success/failure inline.
+private struct NotificationsTab: View {
+    @Environment(PushNotificationService.self) private var pushService
+
+    @AppStorage("apnsKeyId") private var keyId: String = ""
+    @AppStorage("apnsTeamId") private var teamId: String = ""
+    @AppStorage("apnsBundleId") private var bundleId: String = "com.quip.QuipiOS"
+
+    @State private var hasKey: Bool = APNsKeyStore.hasKey
+    @State private var importStatus: String?
+    @State private var testStatus: [String] = []
+    @State private var isSending: Bool = false
+
+    var body: some View {
+        Form {
+            Section("APNs Auth Key") {
+                HStack {
+                    Text(hasKey ? "Key: stored in Keychain" : "Key: (not set)")
+                        .foregroundStyle(hasKey ? .primary : .secondary)
+                    Spacer()
+                    Button(hasKey ? "Replace .p8…" : "Import .p8…") { importKey() }
+                    if hasKey {
+                        Button("Clear") { clearKey() }
+                    }
+                }
+                if let importStatus {
+                    Text(importStatus)
+                        .font(.caption)
+                        .foregroundStyle(importStatus.hasPrefix("Error") ? .red : .secondary)
+                }
+                TextField("Key ID", text: $keyId)
+                TextField("Team ID", text: $teamId)
+                TextField("Bundle ID", text: $bundleId)
+            }
+
+            Section("Registered Devices (\(pushService.devices.count))") {
+                if pushService.devices.isEmpty {
+                    Text("No iPhones have registered yet. Open Quip on the phone and connect.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(pushService.devices, id: \.token) { device in
+                        HStack {
+                            Text(device.token.prefix(12) + "…")
+                                .font(.system(.caption, design: .monospaced))
+                            Spacer()
+                            Text(device.environment)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            Section {
+                HStack {
+                    Button {
+                        Task { await sendTestPush() }
+                    } label: {
+                        Label("Send Test Push", systemImage: "paperplane")
+                    }
+                    .disabled(isSending || !hasKey || keyId.isEmpty || teamId.isEmpty || bundleId.isEmpty || pushService.devices.isEmpty)
+                    if isSending { ProgressView().scaleEffect(0.7) }
+                }
+                ForEach(testStatus, id: \.self) { line in
+                    Text(line)
+                        .font(.caption)
+                        .foregroundStyle(line.hasPrefix("✓") ? Color.secondary : Color.red)
+                }
+            }
+        }
+        .padding()
+    }
+
+    private func importKey() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = []
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Import"
+        panel.message = "Select your APNs .p8 auth key"
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                let data = try Data(contentsOf: url)
+                if APNsKeyStore.set(data) {
+                    hasKey = true
+                    importStatus = "Imported \(url.lastPathComponent)"
+                } else {
+                    importStatus = "Error: could not save to Keychain"
+                }
+            } catch {
+                importStatus = "Error: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func clearKey() {
+        if APNsKeyStore.clear() {
+            hasKey = false
+            importStatus = "Key cleared"
+        }
+    }
+
+    private func sendTestPush() async {
+        testStatus = []
+        isSending = true
+        defer { isSending = false }
+
+        let hostName = Host.current().localizedName ?? "Mac"
+        let payload: [String: Any] = [
+            "aps": [
+                "alert": ["title": "Quip", "body": "Test push from \(hostName)"],
+                "sound": "default"
+            ],
+            "quip_event": "test_push"
+        ]
+        let devicesSnapshot = pushService.devices
+        let client: APNsClient
+        do {
+            client = try APNsClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
+        } catch {
+            testStatus.append("Error creating client: \(error)")
+            return
+        }
+        for device in devicesSnapshot {
+            do {
+                try await client.send(payload: payload, toDevice: device)
+                testStatus.append("✓ \(device.token.prefix(8))… sent")
+            } catch APNsError.unregistered {
+                testStatus.append("⚠ \(device.token.prefix(8))… dropped (unregistered)")
+                pushService.removeDevice(token: device.token)
+            } catch {
+                testStatus.append("✗ \(device.token.prefix(8))… \(error)")
+            }
+        }
     }
 }
 
