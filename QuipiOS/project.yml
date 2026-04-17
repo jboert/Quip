@@ -23,12 +23,18 @@ targets:
           - "Signing.xcconfig"
           - "Signing.local.xcconfig"
           - "build/**"
+          - "QuipLiveActivity/**"
+      - path: QuipLiveActivity/Shared
       - path: ../Shared
         excludes:
           - "Tests/**"
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
+    dependencies:
+      - target: QuipLiveActivity
+        embed: true
+        copyPhase: PlugIns
     settings:
       base:
         PRODUCT_NAME: Quip
@@ -53,6 +59,10 @@ targets:
           - _quip._tcp.
           - _quip._tcp
         NSSupportsLiveActivities: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.fintechadventures.quip
+            CFBundleURLSchemes:
+              - quip
         NSBluetoothAlwaysUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSBluetoothPeripheralUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSLocalNetworkUsageDescription: Quip connects to your Mac over the local network to control Claude Code sessions.
@@ -70,6 +80,22 @@ targets:
           # this flag from Info.plist directly but forgot to update project.yml,
           # so every xcodegen regeneration silently re-added it.
           NSAllowsArbitraryLoads: true
+  QuipLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - QuipLiveActivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipiOS.liveactivity
+        PRODUCT_NAME: QuipLiveActivity
+        INFOPLIST_FILE: QuipLiveActivity/Info.plist
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: D2PM6R797Q
+        GENERATE_INFOPLIST_FILE: "NO"
+        SKIP_INSTALL: "NO"
   QuipiOSTests:
     type: bundle.unit-test
     platform: iOS
