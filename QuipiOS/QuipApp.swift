@@ -24,6 +24,10 @@ struct QuipApp: App {
     @State private var screenAspect: Double = 16.0 / 10.0
     @State private var isRecording = false
     @State private var pttTracker = PTTWindowTracker()
+    // Text input bar state owned here so PTT can drop the voice
+    // transcription into the field for review instead of auto-sending.
+    @State private var showTextInput = false
+    @State private var textInputValue = ""
     @State private var terminalContentText: String?
     @State private var terminalContentScreenshot: String?
     @State private var terminalContentWindowId: String?
@@ -54,6 +58,8 @@ struct QuipApp: App {
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
                 screenAspect: screenAspect,
+                showTextInput: $showTextInput,
+                textInputValue: $textInputValue,
                 onStartRecording: { DispatchQueue.main.async { startRecording() } },
                 onStopRecording: { DispatchQueue.main.async { stopRecording() } },
                 onRequestContent: { windowId in
@@ -286,6 +292,8 @@ struct MainiOSView: View {
     var ttsOverlayTexts: [String: String]
     var monitorName: String
     var screenAspect: Double
+    @Binding var showTextInput: Bool
+    @Binding var textInputValue: String
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
@@ -317,6 +325,12 @@ struct MainiOSView: View {
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.
     @State private var isTerminalExpanded = false
+    // Draggable split between windowLayout (top) and InlineTerminalContent (bottom).
+    // Stored as the terminal's share of the split area; clamped to [0.1, 0.9] so
+    // the windowLayout can't be squeezed to zero and the terminal can't take 100%
+    // (the isTerminalExpanded toggle is the explicit way to hide the windows).
+    @AppStorage("terminalHeightFraction") private var terminalHeightFraction: Double = 0.6
+    @GestureState private var dragFractionDelta: Double = 0
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
@@ -342,42 +356,15 @@ struct MainiOSView: View {
                         .padding(.top, 2)
                 }
 
-                if isPortrait && !isTerminalExpanded {
-                    windowLayout
-                        .aspectRatio(CGFloat(screenAspect) / 1.45, contentMode: .fit)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                } else if !isPortrait {
+                if isPortrait {
+                    portraitContentSection
+                } else {
                     windowLayout
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
-                }
-
-                if showTextInput {
-                    textInputBar
-                }
-
-                if isPortrait && client.isAuthenticated && selectedWindowId != nil {
-                    InlineTerminalContent(
-                        content: terminalContentText ?? "",
-                        screenshot: terminalContentScreenshot,
-                        windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
-                        windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
-                        isExpanded: $isTerminalExpanded,
-                        onRefresh: {
-                            if let wid = selectedWindowId { onRequestContent(wid) }
-                        },
-                        onSendAction: { action in
-                            if let wid = selectedWindowId {
-                                client.send(QuickActionMessage(windowId: wid, action: action))
-                            }
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 6)
-                    .padding(.top, 4)
-                } else if isPortrait {
-                    Spacer(minLength: 0)
+                    if showTextInput {
+                        textInputBar
+                    }
                 }
 
                 if isPortrait && client.isAuthenticated && !windows.isEmpty {
@@ -531,6 +518,14 @@ struct MainiOSView: View {
             }
         }
         .onChange(of: selectedWindowId) { _, newId in
+            // Wipe the cached terminal content immediately so the inline view
+            // shows "Loading…" instead of the previous window's text while
+            // the new window's fresh content is being fetched. Without this,
+            // users would see stale output from the last window and quick
+            // action buttons looked like they hit the wrong one.
+            terminalContentText = nil
+            terminalContentScreenshot = nil
+            terminalContentWindowId = newId
             // Auto-fetch terminal output for the inline view in portrait.
             if isPortrait, let id = newId { onRequestContent(id) }
         }
@@ -929,16 +924,17 @@ struct MainiOSView: View {
         return VStack(spacing: 8) {
             // Control buttons
             HStack(spacing: 6) {
-                // Previous window
+                // Previous window — slimmer than the main input buttons so
+                // the PTT/keyboard/Return trio visually dominates the row.
                 Button {
                     cycleWindow(direction: -1)
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 40, height: 56)
+                        .frame(width: 30, height: 40)
                         .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .disabled(windows.count <= 1)
 
@@ -947,11 +943,11 @@ struct MainiOSView: View {
                     cycleWindow(direction: 1)
                 } label: {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: 40, height: 56)
+                        .frame(width: 30, height: 40)
                         .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .disabled(windows.count <= 1)
 
@@ -997,7 +993,13 @@ struct MainiOSView: View {
                 }
                 .disabled(windows.filter(\.enabled).count < 2)
 
-                // Push to talk
+                // Push to talk — icon-only. Red mic when idle; when live, the
+                // pill keeps its surface fill but gains a red stroke so it
+                // reads as "recording" without scorching the eyeballs with a
+                // solid-red rectangle. Icon switches to a red stop square.
+                // Symmetric spacers pin the mic to geometric center of the
+                // row regardless of how many buttons sit on either side.
+                Spacer()
                 Button {
                     if isRecording {
                         onStopRecording()
@@ -1007,12 +1009,16 @@ struct MainiOSView: View {
                 } label: {
                     Image(systemName: isRecording ? "stop.fill" : "mic.fill")
                         .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(isRecording ? .white : .red)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 56)
-                        .background(isRecording ? Color.red.opacity(0.7) : colors.surface)
+                        .foregroundStyle(Color.red.opacity(0.75))
+                        .frame(width: 72, height: 56)
+                        .background(colors.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(Color.red.opacity(0.7), lineWidth: isRecording ? 2 : 0)
+                        )
                 }
+                Spacer()
 
                 // Type — toggles the text input bar above the terminal
                 // content. Replaces the old "view output" icon, which became
@@ -1055,7 +1061,10 @@ struct MainiOSView: View {
             let enabled = QuickButton.decode(enabledQuickButtonsRaw)
             if !enabled.isEmpty {
                 HStack(spacing: 5) {
-                    ForEach(enabled) { button in
+                    ForEach(Array(enabled.enumerated()), id: \.element.id) { index, button in
+                        if index > 0, enabled[index - 1].isSlashCommand != button.isSlashCommand {
+                            Spacer().frame(width: 10)
+                        }
                         quickActionButton(button)
                     }
                     Spacer()
@@ -1105,18 +1114,6 @@ struct MainiOSView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(ttsEnabled ? colors.statusConnected : colors.textTertiary)
                 }
-                .padding(.trailing, 8)
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showTextInput.toggle()
-                        if !showTextInput { textInputValue = "" }
-                    }
-                } label: {
-                    Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
-                        .font(.system(size: 14))
-                        .foregroundStyle(colors.textSecondary)
-                }
             }
         }
     }
@@ -1153,6 +1150,103 @@ struct MainiOSView: View {
         guard !text.isEmpty, let windowId = selectedWindowId else { return }
         client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
         textInputValue = ""
+    }
+
+    // MARK: - Portrait Split
+
+    /// Live fraction of the split area given to the terminal, factoring in
+    /// any in-progress drag. `dragFractionDelta` is a @GestureState that
+    /// resets to 0 once the drag ends — at that point `onEnded` has already
+    /// committed the new value into @AppStorage, so reads stay stable.
+    private var resolvedTerminalFraction: Double {
+        min(0.9, max(0.1, terminalHeightFraction - dragFractionDelta))
+    }
+
+    @ViewBuilder
+    private var portraitContentSection: some View {
+        let hasTerminal = client.isAuthenticated && selectedWindowId != nil
+        if hasTerminal {
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    if !isTerminalExpanded {
+                        windowLayout
+                            .frame(height: geo.size.height * (1 - resolvedTerminalFraction))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                        resizeHandle(containerHeight: geo.size.height)
+                    }
+                    if showTextInput {
+                        textInputBar
+                    }
+                    terminalContentView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, 6)
+                        .padding(.top, 4)
+                }
+            }
+        } else {
+            windowLayout
+                .aspectRatio(CGFloat(screenAspect) / 1.45, contentMode: .fit)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+            if showTextInput {
+                textInputBar
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var terminalContentView: some View {
+        InlineTerminalContent(
+            content: terminalContentText ?? "",
+            screenshot: terminalContentScreenshot,
+            windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
+            windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
+            isExpanded: $isTerminalExpanded,
+            onRefresh: {
+                if let wid = selectedWindowId { onRequestContent(wid) }
+            },
+            onSendAction: { action in
+                if let wid = selectedWindowId {
+                    client.send(QuickActionMessage(windowId: wid, action: action))
+                    // 300ms is enough for the keystroke to reach iTerm and
+                    // for Claude to render its first byte; asking sooner
+                    // mostly captures the pre-action state. The Mac throttle
+                    // (500ms per window) still protects against floods.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        client.send(RequestContentMessage(windowId: wid))
+                    }
+                }
+            }
+        )
+    }
+
+    /// Drag-to-resize handle between windowLayout and the terminal. A full-
+    /// row hairline reads as a divider; a brighter centered capsule is the
+    /// grip. The 20pt vertical padding makes the whole strip tappable.
+    private func resizeHandle(containerHeight: CGFloat) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(height: 0.5)
+                .frame(maxWidth: .infinity)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.white.opacity(0.5))
+                .frame(width: 44, height: 4)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture()
+                .updating($dragFractionDelta) { value, state, _ in
+                    state = containerHeight > 0 ? Double(value.translation.height) / Double(containerHeight) : 0
+                }
+                .onEnded { value in
+                    guard containerHeight > 0 else { return }
+                    let delta = Double(value.translation.height) / Double(containerHeight)
+                    terminalHeightFraction = min(0.9, max(0.1, terminalHeightFraction - delta))
+                }
+        )
     }
 
     // MARK: - Window Layout
@@ -1546,13 +1640,19 @@ struct MainiOSView: View {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .semibold))
                 } else {
+                    // Single-line with auto-shrink so a row of 8-10 buttons
+                    // fits on the phone without `/compact` wrapping to two
+                    // lines mid-word.
                     Text(button.label)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
                 }
             }
             .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 6)
             .padding(.vertical, 7)
+            .frame(minWidth: 26)
             .background(Color.white.opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -1761,19 +1861,6 @@ struct InlineTerminalContent: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            HStack(spacing: 5) {
-                keyButton("Return", icon: "return") { onSendAction("press_return") }
-                keyButton("Ctrl+C", icon: "xmark.octagon") { onSendAction("press_ctrl_c") }
-                keyButton("Ctrl+D", icon: "eject") { onSendAction("press_ctrl_d") }
-                keyButton("Esc", icon: "escape") { onSendAction("press_escape") }
-                keyButton("Tab", icon: "arrow.right.to.line") { onSendAction("press_tab") }
-                keyButton("Y", icon: nil) { onSendAction("press_y") }
-                keyButton("N", icon: nil) { onSendAction("press_n") }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Color.white.opacity(0.06))
         }
         .background(colors.overlayContainer)
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -1880,6 +1967,11 @@ enum QuickButton: String, CaseIterable, Identifiable {
     enum Action {
         case sendText(String, pressReturn: Bool)
         case quickAction(String)
+    }
+
+    var isSlashCommand: Bool {
+        if case .sendText(let text, _) = action { return text.hasPrefix("/") }
+        return false
     }
 
     var action: Action {

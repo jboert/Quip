@@ -167,6 +167,10 @@ struct QuipMacApp: App {
         windowManager.refreshDisplays()
         windowManager.refreshWindowList()
         syncTrackedWindows()
+        // One-time Accessibility prompt at launch. Without this, the phone's
+        // arrange button used to fire the dialog on every tap — Spammed until
+        // the user granted or manually denied in System Settings.
+        windowManager.promptForAccessibilityIfNeeded()
 
         // One-time Accessibility prompt at launch. Without this, the phone's
         // arrange button used to fire the dialog on every tap — Spammed until

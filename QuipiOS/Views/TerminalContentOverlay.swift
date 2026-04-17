@@ -15,6 +15,14 @@ struct TerminalContentOverlay: View {
     /// Shares the same @AppStorage key as InlineTerminalContent so the
     /// text-size preference carries between orientations.
     @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
+    /// Same unified quick-button list as the portrait view — toggle on/off
+    /// in Settings → Quick Buttons.
+    @AppStorage("enabledQuickButtons") private var enabledQuickButtonsRaw: String = "plan,yes,no,esc,ctrlC"
+
+    /// Text-input state local to landscape so the overlay can stage and
+    /// send a typed prompt without pulling in the portrait @Binding.
+    @State private var showTextInput = false
+    @State private var textInputValue = ""
 
     let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -89,18 +97,76 @@ struct TerminalContentOverlay: View {
                     }
                 }
 
-                // Keyboard action buttons
+                // Text-input bar — shown when the keyboard button in the
+                // keys row is tapped. Sends with pressReturn: false so the
+                // text lands in Claude's prompt line rather than submitting.
+                if showTextInput {
+                    HStack(spacing: 6) {
+                        TextField("Type a prompt\u{2026}", text: $textInputValue)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .onSubmit { sendTypedText() }
+
+                        Button { sendTypedText() } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(textInputValue.isEmpty ? Color.white.opacity(0.3) : Color.blue)
+                        }
+                        .disabled(textInputValue.isEmpty)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.04))
+                }
+
+                // Keyboard action buttons — Return, the keyboard toggle,
+                // then the user's enabled quick-buttons list from Settings.
                 HStack(spacing: 6) {
                     keyButton("Return", icon: "return") { onSendAction("press_return") }
-                    keyButton("⌫", icon: "delete.left") { onSendAction("press_backspace") }
-                    keyButton("Ctrl+C", icon: "xmark.octagon") { onSendAction("press_ctrl_c") }
-                    keyButton("Ctrl+D", icon: "eject") { onSendAction("press_ctrl_d") }
-                    keyButton("Esc", icon: "escape") { onSendAction("press_escape") }
-                    keyButton("Tab", icon: "arrow.right.to.line") { onSendAction("press_tab") }
-                    keyButton("/plan", icon: nil) { onSendText("/plan ") }
-                    keyButton("/btw", icon: nil) { onSendText("/btw ") }
-                    keyButton("Y", icon: nil) { onSendAction("press_y") }
-                    keyButton("N", icon: nil) { onSendAction("press_n") }
+                    // Keyboard toggle is a *primary* action in landscape
+                    // (typed prompts live here), so it gets a chunkier
+                    // button and tints when active rather than sitting at
+                    // key-sized default.
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showTextInput.toggle()
+                            if !showTextInput { textInputValue = "" }
+                        }
+                    } label: {
+                        Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(showTextInput ? .white : Color.white.opacity(0.85))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(showTextInput ? Color.blue.opacity(0.7) : Color.white.opacity(0.18))
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                    }
+                    let quickButtons = QuickButton.decode(enabledQuickButtonsRaw)
+                    ForEach(Array(quickButtons.enumerated()), id: \.element.id) { index, button in
+                        if index > 0, quickButtons[index - 1].isSlashCommand != button.isSlashCommand {
+                            Spacer().frame(width: 10)
+                        }
+                        keyButton(button.label, icon: button.systemImage) {
+                            switch button.action {
+                            case .sendText(let text, let pressReturn):
+                                if pressReturn {
+                                    onSendText(text)
+                                    onSendAction("press_return")
+                                } else {
+                                    onSendText(text)
+                                }
+                            case .quickAction(let name):
+                                onSendAction(name)
+                            }
+                        }
+                    }
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -115,15 +181,19 @@ struct TerminalContentOverlay: View {
         }
     }
 
-    private func keyButton(_ label: String, icon: String?, action: @escaping () -> Void) -> some View {
+    private func keyButton(_ label: String?, icon: String?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 3) {
                 if let icon {
                     Image(systemName: icon)
                         .font(.system(size: 9))
                 }
-                Text(label)
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                if let label {
+                    Text(label)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
             }
             .foregroundStyle(.white.opacity(0.7))
             .padding(.horizontal, 8)
@@ -131,5 +201,12 @@ struct TerminalContentOverlay: View {
             .background(Color.white.opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
+    }
+
+    private func sendTypedText() {
+        let text = textInputValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        onSendText(text)
+        textInputValue = ""
     }
 }
