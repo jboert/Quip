@@ -31,16 +31,16 @@ final class APNsJWTTests: XCTestCase {
         testPrivateKey = nil
     }
 
-    func test_makeJWT_producesThreeSegmentToken() throws {
+    func test_makeJWT_producesThreeSegmentToken() async throws {
         let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
-        let jwt = try client.makeJWT()
+        let jwt = try await client.makeJWT()
         let parts = jwt.components(separatedBy: ".")
         XCTAssertEqual(parts.count, 3, "JWT must be header.payload.signature")
     }
 
-    func test_makeJWT_headerContainsExpectedFields() throws {
+    func test_makeJWT_headerContainsExpectedFields() async throws {
         let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
-        let jwt = try client.makeJWT()
+        let jwt = try await client.makeJWT()
         let headerB64 = jwt.components(separatedBy: ".")[0]
         let headerData = try decodeB64URL(headerB64)
         let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: headerData) as? [String: Any])
@@ -48,10 +48,10 @@ final class APNsJWTTests: XCTestCase {
         XCTAssertEqual(dict["kid"] as? String, "ABC123")
     }
 
-    func test_makeJWT_payloadContainsIssAndRecentIat() throws {
+    func test_makeJWT_payloadContainsIssAndRecentIat() async throws {
         let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
         let before = Int(Date().timeIntervalSince1970)
-        let jwt = try client.makeJWT()
+        let jwt = try await client.makeJWT()
         let after = Int(Date().timeIntervalSince1970)
         let payloadB64 = jwt.components(separatedBy: ".")[1]
         let payloadData = try decodeB64URL(payloadB64)
@@ -62,9 +62,9 @@ final class APNsJWTTests: XCTestCase {
         XCTAssertLessThanOrEqual(iat, after)
     }
 
-    func test_makeJWT_signatureVerifiesAgainstPublicKey() throws {
+    func test_makeJWT_signatureVerifiesAgainstPublicKey() async throws {
         let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
-        let jwt = try client.makeJWT()
+        let jwt = try await client.makeJWT()
         let parts = jwt.components(separatedBy: ".")
         let signingInput = "\(parts[0]).\(parts[1])".data(using: .utf8)!
         let sigData = try decodeB64URL(parts[2])
@@ -74,11 +74,11 @@ final class APNsJWTTests: XCTestCase {
                       "Signature must verify against the private key we signed with")
     }
 
-    func test_makeJWT_rotatesAfterStaleness() throws {
+    func test_makeJWT_rotatesAfterStaleness() async throws {
         let client = try APNsClient(keyId: "K", teamId: "T", bundleId: "b")
         // Sign "now - 55 minutes" — older than the 50-min rotation threshold
-        let stale = try client.makeJWT(now: Date().addingTimeInterval(-55 * 60))
-        let fresh = try client.makeJWT(now: Date())
+        let stale = try await client.makeJWT(now: Date().addingTimeInterval(-55 * 60))
+        let fresh = try await client.makeJWT(now: Date())
         XCTAssertNotEqual(stale, fresh, "New timestamp must produce a different JWT")
     }
 
