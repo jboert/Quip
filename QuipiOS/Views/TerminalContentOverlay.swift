@@ -79,19 +79,18 @@ struct TerminalContentOverlay: View {
                             // the screenshot's text renders comparably to
                             // portrait at the same zoom level.
                             let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
-                            // Subtract a 48pt inset each side from the available
-                            // width before applying the zoom fraction + landscape
-                            // shrink. Keeps the screenshot off the edges at fill.
-                            let horizontalInset: CGFloat = 48
                             let landscapeShrink: CGFloat = 0.58
-                            let availableW = UIScreen.main.bounds.width - horizontalInset * 2
-                            let maxW = availableW * zoom.widthFraction * landscapeShrink
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: maxW)
-                                .frame(maxWidth: .infinity)
-                                .id("bottom")
+                            // Spacer-based margin — the two-frame + padding
+                            // approach kept getting collapsed inside ScrollView.
+                            HStack(spacing: 0) {
+                                Spacer(minLength: 32)
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxWidth: UIScreen.main.bounds.width * zoom.widthFraction * landscapeShrink)
+                                Spacer(minLength: 32)
+                            }
+                            .id("bottom")
                         } else {
                             Text(content)
                                 .font(.system(size: 10, design: .monospaced))

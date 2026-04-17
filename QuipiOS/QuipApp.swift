@@ -1963,23 +1963,20 @@ struct InlineTerminalContent: View {
                 ScrollView {
                     if let screenshot, let imageData = Data(base64Encoded: screenshot),
                        let uiImage = UIImage(data: imageData) {
-                        // Percent-of-screen-width so the same zoom level
-                        // shrinks proportionally in portrait and landscape
-                        // — a fixed point margin was barely visible in
-                        // landscape where the panel is much wider.
                         let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
-                        // Subtract a 28pt inset each side from the available width
-                        // before applying the zoom fraction — keeps the screenshot
-                        // off the screen edges even at fill zoom.
-                        let horizontalInset: CGFloat = 28
-                        let availableW = UIScreen.main.bounds.width - horizontalInset * 2
-                        let maxW = availableW * zoom.widthFraction
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: maxW)
-                            .frame(maxWidth: .infinity)
-                            .id("bottom")
+                        // Spacer-based margin instead of .padding: the previous
+                        // two-frame + padding approach got collapsed by ScrollView's
+                        // layout pass, leaving the screenshot edge-to-edge. Spacers
+                        // guarantee a visible gutter even at fill zoom.
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 20)
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: UIScreen.main.bounds.width * zoom.widthFraction)
+                            Spacer(minLength: 20)
+                        }
+                        .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)
                             .font(.system(size: 10, design: .monospaced))
