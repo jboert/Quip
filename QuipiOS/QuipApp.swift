@@ -38,6 +38,12 @@ struct QuipApp: App {
     @AppStorage("ttsEnabled") private var ttsEnabled = false
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
+    /// Pending image attachment — hoisted to QuipApp (from MainiOSView) so
+    /// PTT stopRecording can flush a queued image even though that closure
+    /// lives at the App level. Propagated to MainiOSView and
+    /// TerminalContentOverlay via .environmentObject.
+    @StateObject private var pendingImage = PendingImageState()
+    private let imageRecompressor = ImageRecompressor(maxPayloadBytes: 7_300_000)
 
     var body: some Scene {
         WindowGroup {
@@ -66,6 +72,7 @@ struct QuipApp: App {
                     client.send(RequestContentMessage(windowId: windowId))
                 }
             )
+            .environmentObject(pendingImage)
             .onAppear {
                 setup()
                 bonjourBrowser.startBrowsing()
@@ -265,9 +272,68 @@ struct QuipApp: App {
         let windowId = pttTracker.end()
         NSLog("[Quip] stopRecording: windowId=%@, text='%@' (length=%d)", windowId ?? "nil", text, text.count)
         if let windowId {
-            client.send(STTStateMessage.ended(windowId: windowId))
-            if !text.isEmpty {
-                client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: false))
+            // Flush a queued image first — defer the STT-ended + dictated text
+            // until after the image actually hits the wire so the Mac processes
+            // them in order (path first, then dictated text).
+            flushPendingImage(windowId: windowId) { [client] in
+                client.send(STTStateMessage.ended(windowId: windowId))
+                if !text.isEmpty {
+                    client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: false))
+                }
+            }
+        }
+    }
+
+    /// Ship the queued image (if any) to the Mac for the given window. Shared
+    /// logic used by PTT stopRecording here and by MainiOSView's submit paths.
+    /// `afterSend` runs on the main thread AFTER the WebSocket send has been
+    /// issued — callers use it to fire follow-up messages (like press_return)
+    /// so they don't race ahead of the image over the wire.
+    @MainActor
+    fileprivate func flushPendingImage(windowId: String, afterSend: (@MainActor () -> Void)? = nil) {
+        guard let image = pendingImage.image,
+              let filename = pendingImage.filename,
+              let mime = pendingImage.mimeType else {
+            afterSend?()
+            return
+        }
+        pendingImage.markUploading()
+        let recompressor = imageRecompressor
+        let clientRef = client
+        DispatchQueue.global(qos: .userInitiated).async {
+            let rawData: Data?
+            if mime == "image/png" {
+                rawData = image.pngData()
+            } else {
+                rawData = image.jpegData(compressionQuality: 0.95)
+            }
+            guard let rawData else {
+                DispatchQueue.main.async { [weak pendingImage] in
+                    pendingImage?.markError("couldn't encode image")
+                    afterSend?()
+                }
+                return
+            }
+            do {
+                let (data, finalMime) = try recompressor.recompress(rawData: rawData, declaredMime: mime)
+                let base64 = data.base64EncodedString()
+                NSLog("[Quip] flushPendingImage: sending image_upload msg, payload=%d bytes", base64.count)
+                let msg = ImageUploadMessage(
+                    imageId: UUID().uuidString,
+                    windowId: windowId,
+                    filename: filename,
+                    mimeType: finalMime,
+                    data: base64
+                )
+                DispatchQueue.main.async {
+                    clientRef.send(msg)
+                    afterSend?()
+                }
+            } catch {
+                DispatchQueue.main.async { [weak pendingImage] in
+                    pendingImage?.markError("image too large to send")
+                    afterSend?()
+                }
             }
         }
     }
@@ -329,7 +395,7 @@ struct MainiOSView: View {
     // Stored as the terminal's share of the split area; clamped to [0.1, 0.9] so
     // the windowLayout can't be squeezed to zero and the terminal can't take 100%
     // (the isTerminalExpanded toggle is the explicit way to hide the windows).
-    @AppStorage("terminalHeightFraction") private var terminalHeightFraction: Double = 0.6
+    @AppStorage("terminalHeightFraction") private var terminalHeightFraction: Double = 0.72
     @GestureState private var dragFractionDelta: Double = 0
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -337,7 +403,9 @@ struct MainiOSView: View {
     private var isPortrait: Bool { verticalSizeClass == .regular }
 
     // Pending image attachment — shared between portrait and landscape input rows.
-    @StateObject private var pendingImage = PendingImageState()
+    // Owned by QuipApp and injected via environmentObject so PTT stopRecording
+    // (which lives at the App level) can reach the same instance.
+    @EnvironmentObject private var pendingImage: PendingImageState
     @State private var showingImageSourceSheet = false
     @State private var showingLibraryPicker = false
     @State private var showingCameraPicker = false
@@ -459,18 +527,23 @@ struct MainiOSView: View {
                     onSendAction: { action in
                         if let wid = terminalContentWindowId {
                             // press_return is the "submit" action — flush a queued image
-                            // first so landscape mirrors the portrait Return behavior.
+                            // first AND defer the Enter press until after the image has
+                            // been dispatched, so the Mac processes them in order.
                             if action == "press_return" {
-                                sendPendingImageIfNeeded(windowId: wid)
+                                sendPendingImageIfNeeded(windowId: wid) { [client] in
+                                    client.send(QuickActionMessage(windowId: wid, action: action))
+                                }
+                            } else {
+                                client.send(QuickActionMessage(windowId: wid, action: action))
                             }
-                            client.send(QuickActionMessage(windowId: wid, action: action))
                         }
                     },
                     onSendText: { text in
                         if let wid = terminalContentWindowId {
-                            sendPendingImageIfNeeded(windowId: wid)
-                            if !text.isEmpty {
-                                client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
+                            sendPendingImageIfNeeded(windowId: wid) { [client] in
+                                if !text.isEmpty {
+                                    client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
+                                }
                             }
                         }
                     },
@@ -521,7 +594,14 @@ struct MainiOSView: View {
             // Register image upload result callbacks. These are idempotent
             // reassignments so re-firing onAppear is harmless.
             client.onImageUploadAck = { [weak pendingImage] _ in
-                DispatchQueue.main.async { pendingImage?.clear() }
+                DispatchQueue.main.async {
+                    // Brief checkmark flash over the thumbnail so the user
+                    // sees the path actually landed in the prompt before
+                    // the preview strip vanishes.
+                    let generator = UINotificationFeedbackGenerator()
+                    generator.notificationOccurred(.success)
+                    pendingImage?.markSentAndClear()
+                }
             }
             client.onImageUploadError = { [weak pendingImage] reason in
                 DispatchQueue.main.async { pendingImage?.markError(reason) }
@@ -1116,12 +1196,16 @@ struct MainiOSView: View {
                 }
                 .accessibilityLabel("Attach image")
 
-                // Press Return — flushes any pending image first so a pick-then-tap-Return
-                // flow actually submits the image instead of leaving the thumbnail stuck.
+                // Press Return — flushes any pending image first AND defers the
+                // press_return until the image has actually been dispatched, so
+                // the Mac receives them in the correct order (path first, then
+                // Enter) rather than racing and pressing Enter before the path
+                // types.
                 Button {
                     if let wid = selectedWindowId {
-                        sendPendingImageIfNeeded(windowId: wid)
-                        client.send(QuickActionMessage(windowId: wid, action: "press_return"))
+                        sendPendingImageIfNeeded(windowId: wid) {
+                            client.send(QuickActionMessage(windowId: wid, action: "press_return"))
+                        }
                     }
                 } label: {
                     Image(systemName: "return")
@@ -1227,23 +1311,34 @@ struct MainiOSView: View {
         guard let windowId = selectedWindowId else { return }
         // An image-only submit is valid — only bail if both text AND image are empty.
         guard !text.isEmpty || pendingImage.hasPendingImage else { return }
-        // Ship the image first (fire-and-forget); the Mac queues messages in order.
-        sendPendingImageIfNeeded(windowId: windowId)
-        if !text.isEmpty {
-            client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
-        }
         textInputValue = ""
+        // Ship the image first; only fire the text send AFTER the image has
+        // actually been dispatched so the Mac processes them in order.
+        sendPendingImageIfNeeded(windowId: windowId) { [client] in
+            if !text.isEmpty {
+                client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
+            }
+        }
     }
 
     // MARK: - Image Upload
 
     private let imageRecompressor = ImageRecompressor(maxPayloadBytes: 7_300_000)
 
+    /// `afterSend` runs on the main thread AFTER the WebSocket send has been
+    /// issued — callers use it to fire follow-up messages (like press_return)
+    /// so they don't race ahead of the image over the wire. When no image is
+    /// queued, the callback fires immediately so the normal submit path still
+    /// runs.
     @MainActor
-    private func sendPendingImageIfNeeded(windowId: String) {
+    private func sendPendingImageIfNeeded(windowId: String, afterSend: (@MainActor () -> Void)? = nil) {
+        NSLog("[Quip-iOS] sendPendingImageIfNeeded called for windowId=%@, hasImage=%@", windowId, pendingImage.image == nil ? "NO" : "YES")
         guard let image = pendingImage.image,
               let filename = pendingImage.filename,
-              let mime = pendingImage.mimeType else { return }
+              let mime = pendingImage.mimeType else {
+            afterSend?()
+            return
+        }
 
         pendingImage.markUploading()
 
@@ -1252,6 +1347,7 @@ struct MainiOSView: View {
         let clientRef = client
 
         DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.main.async { [weak pendingImage] in pendingImage?.setDebugStage("encoding-start") }
             let rawData: Data?
             if mime == "image/png" {
                 rawData = image.pngData()
@@ -1261,12 +1357,15 @@ struct MainiOSView: View {
             guard let rawData else {
                 DispatchQueue.main.async { [weak pendingImage] in
                     pendingImage?.markError("couldn't encode image")
+                    afterSend?()
                 }
                 return
             }
+            DispatchQueue.main.async { [weak pendingImage, c = rawData.count] in pendingImage?.setDebugStage("encoded \(c)B") }
             do {
                 let (data, finalMime) = try recompressor.recompress(rawData: rawData, declaredMime: mime)
                 let base64 = data.base64EncodedString()
+                NSLog("[Quip-iOS] sendPendingImageIfNeeded: dispatching image_upload, base64=%d bytes", base64.count)
                 let msg = ImageUploadMessage(
                     imageId: UUID().uuidString,
                     windowId: windowId,
@@ -1274,12 +1373,16 @@ struct MainiOSView: View {
                     mimeType: finalMime,
                     data: base64
                 )
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak pendingImage, n = base64.count] in
+                    pendingImage?.setDebugStage("sending b64=\(n)B")
                     clientRef.send(msg)
+                    pendingImage?.setDebugStage("sent, awaiting ack")
+                    afterSend?()
                 }
             } catch {
                 DispatchQueue.main.async { [weak pendingImage] in
                     pendingImage?.markError("image too large to send")
+                    afterSend?()
                 }
             }
         }
@@ -1313,7 +1416,6 @@ struct MainiOSView: View {
                     }
                     terminalContentView
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, 6)
                         .padding(.top, 4)
                 }
             }
@@ -1763,12 +1865,24 @@ struct MainiOSView: View {
             guard let wid = selectedWindowId else { return }
             switch button.action {
             case .sendText(let text, let pressReturn):
-                // Auto-submitting text is a "submit" — flush any pending image first.
-                if pressReturn { sendPendingImageIfNeeded(windowId: wid) }
-                client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
+                // Auto-submitting text is a "submit" — flush any pending image
+                // first and defer the text send until after the image hits the
+                // wire so the Mac processes them in order.
+                if pressReturn {
+                    sendPendingImageIfNeeded(windowId: wid) { [client] in
+                        client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
+                    }
+                } else {
+                    client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
+                }
             case .quickAction(let action):
-                if action == "press_return" { sendPendingImageIfNeeded(windowId: wid) }
-                client.send(QuickActionMessage(windowId: wid, action: action))
+                if action == "press_return" {
+                    sendPendingImageIfNeeded(windowId: wid) { [client] in
+                        client.send(QuickActionMessage(windowId: wid, action: action))
+                    }
+                } else {
+                    client.send(QuickActionMessage(windowId: wid, action: action))
+                }
             }
         } label: {
             Group {
@@ -1964,25 +2078,21 @@ struct InlineTerminalContent: View {
                     if let screenshot, let imageData = Data(base64Encoded: screenshot),
                        let uiImage = UIImage(data: imageData) {
                         let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
-                        // Spacer-based margin instead of .padding: the previous
-                        // two-frame + padding approach got collapsed by ScrollView's
-                        // layout pass, leaving the screenshot edge-to-edge. Spacers
-                        // guarantee a visible gutter even at fill zoom.
-                        HStack(spacing: 0) {
-                            Spacer(minLength: 20)
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: UIScreen.main.bounds.width * zoom.widthFraction)
-                            Spacer(minLength: 20)
-                        }
-                        .id("bottom")
+                        // Edge-to-edge fill at the default zoom; smaller zoom levels
+                        // shrink the image via widthFraction so text renders smaller.
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: UIScreen.main.bounds.width * zoom.widthFraction)
+                            .frame(maxWidth: .infinity)
+                            .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.85))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
                             .textSelection(.enabled)
                             .id("bottom")
                     } else {

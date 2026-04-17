@@ -80,23 +80,19 @@ struct TerminalContentOverlay: View {
                             // portrait at the same zoom level.
                             let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
                             let landscapeShrink: CGFloat = 0.58
-                            // Spacer-based margin — the two-frame + padding
-                            // approach kept getting collapsed inside ScrollView.
-                            HStack(spacing: 0) {
-                                Spacer(minLength: 32)
-                                Image(uiImage: uiImage)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxWidth: UIScreen.main.bounds.width * zoom.widthFraction * landscapeShrink)
-                                Spacer(minLength: 32)
-                            }
-                            .id("bottom")
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: UIScreen.main.bounds.width * zoom.widthFraction * landscapeShrink)
+                                .frame(maxWidth: .infinity)
+                                .id("bottom")
                         } else {
                             Text(content)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.white.opacity(0.85))
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(10)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
                                 .textSelection(.enabled)
                                 .id("bottom")
                         }

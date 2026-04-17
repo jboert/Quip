@@ -18,11 +18,22 @@ struct PendingImagePreviewStrip: View {
                         .frame(width: 48, height: 48)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .overlay {
-                            if state.uploadState == .uploading {
+                            switch state.uploadState {
+                            case .uploading:
                                 Color.black.opacity(0.45)
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                                 ProgressView()
                                     .tint(.white)
+                            case .justSent:
+                                // Green tint + checkmark for the brief moment
+                                // between ack arrival and the thumbnail clearing.
+                                Color.green.opacity(0.55)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundStyle(.white)
+                            case .idle, .error:
+                                EmptyView()
                             }
                         }
 
