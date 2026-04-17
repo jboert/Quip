@@ -168,6 +168,11 @@ struct QuipMacApp: App {
         windowManager.refreshWindowList()
         syncTrackedWindows()
 
+        // One-time Accessibility prompt at launch. Without this, the phone's
+        // arrange button used to fire the dialog on every tap — Spammed until
+        // the user granted or manually denied in System Settings.
+        windowManager.promptForAccessibilityIfNeeded()
+
         // Pre-warm the Kokoro daemon so the first synth doesn't pay model load
         kokoroTTS.preload()
 
@@ -674,7 +679,16 @@ struct QuipMacApp: App {
         for (index, window) in enabled.enumerated() where index < frames.count {
             targetFrames[window.id] = frames[index].toCGRect(in: display.frame)
         }
-        windowManager.arrangeWindows(frames: targetFrames)
+        if !windowManager.arrangeWindows(frames: targetFrames) {
+            webSocketServer.broadcast(ErrorMessage(reason: "Grant Accessibility access to Quip in System Settings"))
+            // Pop the Settings pane directly to the Accessibility list so the
+            // user can grant in one click instead of hunting for it. Without
+            // this, the error toast shows up every time they tap arrange with
+            // no obvious way to fix it.
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     /// After spawning a window via duplicate_window, poll WindowManager for the
