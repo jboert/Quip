@@ -222,6 +222,12 @@ final class KeystrokeInjector {
                 terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
+        case "ctrl+u":
+            script = keystrokeScript(
+                key: "u", using: "control down",
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
+            )
+
         case "escape", "esc":
             script = keystrokeScript(
                 key: "escape", using: "",
@@ -258,6 +264,9 @@ final class KeystrokeInjector {
         case "backspace", "delete":  return 127  // DEL
         case "ctrl+c":               return 3    // ETX / SIGINT
         case "ctrl+d":               return 4    // EOT / EOF
+        // NAK — readline "kill backward" (clears prompt to start of line in
+        // most TUI input layers, including Claude Code's Ink-based prompt).
+        case "ctrl+u":               return 21
         default:                     return nil
         }
     }
