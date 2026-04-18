@@ -445,6 +445,103 @@ struct PushPreferencesMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Preferences Backup Messages
+
+/// Bundle of phone preferences that survive a reinstall by being mirrored
+/// to the Mac. Connection-specific keys (lastURL, recentConnectionsData)
+/// are intentionally excluded — those are tied to the current install's
+/// network state and shouldn't move between installs. Each field optional
+/// so we only persist values the user has actually touched.
+struct PreferencesSnapshot: Codable, Sendable, Equatable {
+    var enabledQuickButtons: String?
+    var tintContentBorder: Bool?
+    var contentZoomLevel: Int?
+    var terminalHeightFraction: Double?
+    var terminalWidthFraction: Double?
+    var pushPaused: Bool?
+    var pushBannerEnabled: Bool?
+    var pushSound: Bool?
+    var pushForegroundBanner: Bool?
+    var pushQuietHoursEnabled: Bool?
+    var pushQuietHoursStart: Int?
+    var pushQuietHoursEnd: Int?
+    var liveActivitiesEnabled: Bool?
+    var ttsEnabled: Bool?
+
+    init(
+        enabledQuickButtons: String? = nil,
+        tintContentBorder: Bool? = nil,
+        contentZoomLevel: Int? = nil,
+        terminalHeightFraction: Double? = nil,
+        terminalWidthFraction: Double? = nil,
+        pushPaused: Bool? = nil,
+        pushBannerEnabled: Bool? = nil,
+        pushSound: Bool? = nil,
+        pushForegroundBanner: Bool? = nil,
+        pushQuietHoursEnabled: Bool? = nil,
+        pushQuietHoursStart: Int? = nil,
+        pushQuietHoursEnd: Int? = nil,
+        liveActivitiesEnabled: Bool? = nil,
+        ttsEnabled: Bool? = nil
+    ) {
+        self.enabledQuickButtons = enabledQuickButtons
+        self.tintContentBorder = tintContentBorder
+        self.contentZoomLevel = contentZoomLevel
+        self.terminalHeightFraction = terminalHeightFraction
+        self.terminalWidthFraction = terminalWidthFraction
+        self.pushPaused = pushPaused
+        self.pushBannerEnabled = pushBannerEnabled
+        self.pushSound = pushSound
+        self.pushForegroundBanner = pushForegroundBanner
+        self.pushQuietHoursEnabled = pushQuietHoursEnabled
+        self.pushQuietHoursStart = pushQuietHoursStart
+        self.pushQuietHoursEnd = pushQuietHoursEnd
+        self.liveActivitiesEnabled = liveActivitiesEnabled
+        self.ttsEnabled = ttsEnabled
+    }
+}
+
+/// iPhone → Mac. Sent every time a tracked preference changes (debounced).
+/// Mac stores the snapshot in UserDefaults keyed by `deviceID` so multiple
+/// phones each have their own backup.
+struct PreferenceSnapshotMessage: Codable, Sendable {
+    let type: String
+    let deviceID: String
+    let preferences: PreferencesSnapshot
+
+    init(deviceID: String, preferences: PreferencesSnapshot) {
+        self.type = "preferences_snapshot"
+        self.deviceID = deviceID
+        self.preferences = preferences
+    }
+}
+
+/// iPhone → Mac. Sent on each WebSocket auth so the phone can pull back
+/// its preferences after a reinstall. Mac responds with `PreferenceRestoreMessage`
+/// (with empty preferences if no backup exists for this deviceID).
+struct PreferenceRequestMessage: Codable, Sendable {
+    let type: String
+    let deviceID: String
+
+    init(deviceID: String) {
+        self.type = "preferences_request"
+        self.deviceID = deviceID
+    }
+}
+
+/// Mac → iPhone in response to `PreferenceRequestMessage`. The phone applies
+/// these into UserDefaults during a brief sync-suppression window so it
+/// doesn't echo the restore right back to the Mac.
+struct PreferenceRestoreMessage: Codable, Sendable {
+    let type: String
+    let preferences: PreferencesSnapshot
+
+    init(preferences: PreferencesSnapshot) {
+        self.type = "preferences_restore"
+        self.preferences = preferences
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {

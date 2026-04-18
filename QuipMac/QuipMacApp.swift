@@ -841,9 +841,46 @@ struct QuipMacApp: App {
                 handleAttachITermWindow(windowNumber: msg.windowNumber, sessionId: msg.sessionId)
             }
 
+        // Phone is uploading its current preference snapshot for backup.
+        // Stored in UserDefaults under a per-device key so two phones can
+        // each have their own backup against this Mac.
+        case "preferences_snapshot":
+            if let msg = MessageCoder.decode(PreferenceSnapshotMessage.self, from: data) {
+                let key = phonePrefsKey(deviceID: msg.deviceID)
+                if let encoded = try? JSONEncoder().encode(msg.preferences) {
+                    UserDefaults.standard.set(encoded, forKey: key)
+                    print("[Quip] preferences_snapshot stored for device \(msg.deviceID.prefix(8))")
+                }
+            }
+
+        // Phone (typically right after authenticating from a fresh install)
+        // is asking for any backup we have. Always respond — if no backup
+        // exists we send an empty snapshot so the phone knows to stop
+        // waiting.
+        case "preferences_request":
+            if let msg = MessageCoder.decode(PreferenceRequestMessage.self, from: data) {
+                let key = phonePrefsKey(deviceID: msg.deviceID)
+                let snapshot: PreferencesSnapshot
+                if let blob = UserDefaults.standard.data(forKey: key),
+                   let decoded = try? JSONDecoder().decode(PreferencesSnapshot.self, from: blob) {
+                    snapshot = decoded
+                    print("[Quip] preferences_request: restoring snapshot for device \(msg.deviceID.prefix(8))")
+                } else {
+                    snapshot = PreferencesSnapshot()
+                    print("[Quip] preferences_request: no backup for device \(msg.deviceID.prefix(8))")
+                }
+                webSocketServer.broadcast(PreferenceRestoreMessage(preferences: snapshot))
+            }
+
         default:
             break
         }
+    }
+
+    /// UserDefaults key under which a given phone's preferences snapshot
+    /// lives. Per-device so a household with two phones doesn't collide.
+    private func phonePrefsKey(deviceID: String) -> String {
+        "phonePrefs.\(deviceID)"
     }
 
     /// Enumerate every iTerm2 window (not just Quip-tracked ones), tag each

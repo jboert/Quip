@@ -40,6 +40,7 @@ struct QuipApp: App {
     @State private var attentionCenter = WindowAttentionCenter()
     @State private var pushDelegate = PushNotificationCenterDelegate()
     @State private var liveActivity = LiveActivityService()
+    @State private var prefsSync = PreferencesSyncService()
 
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
@@ -365,10 +366,28 @@ struct QuipApp: App {
                             client.send(prefs)
                         }
                     }
+                    // Ask the Mac for our backed-up preferences. If this is a
+                    // fresh reinstall, the Mac will push back whatever we last
+                    // synced; otherwise it'll send an empty snapshot and the
+                    // local UserDefaults stay as-is.
+                    prefsSync.requestRestore()
                 }
                 // On failure, PIN entry stays open — authError displayed in the UI
             }
         }
+
+        client.onPreferencesRestore = { snapshot in
+            DispatchQueue.main.async {
+                prefsSync.applyRestore(snapshot)
+            }
+        }
+
+        // Wire the sync service to actually transmit via the WebSocket. Done
+        // once at setup so every UserDefaults change can fire-and-forget.
+        prefsSync.send = { [client] data in
+            client.sendRaw(data)
+        }
+        prefsSync.start()
 
         volumeHandler.onPTTStart = {
             DispatchQueue.main.async { startRecording() }
