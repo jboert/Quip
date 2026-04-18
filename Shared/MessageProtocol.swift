@@ -415,7 +415,8 @@ struct RegisterPushDeviceMessage: Codable, Sendable {
 /// device token so a shared account with two phones behaves independently.
 ///
 /// `quietHoursStart` / `quietHoursEnd` are hours of day (0-23) in the
-/// user's local time zone. nil = quiet hours disabled.
+/// phone's local time zone (identified by `timeZone`).
+/// nil start/end = quiet hours disabled.
 struct PushPreferencesMessage: Codable, Sendable {
     let type: String
     let deviceToken: String
@@ -431,9 +432,17 @@ struct PushPreferencesMessage: Codable, Sendable {
     /// so older iOS clients (that don't know about this field) still decode
     /// cleanly as banner-on.
     let bannerEnabled: Bool?
+    /// IANA time-zone identifier (e.g. "America/Phoenix") for the phone
+    /// that set these prefs. The Mac uses it to evaluate `quietHoursStart`/
+    /// `End` against the user's intent rather than the Mac's own TZ, which
+    /// matters when the two machines aren't co-located (travel, VPS host).
+    /// Optional so older iOS clients decode cleanly — the Mac falls back
+    /// to its own `Calendar.current` in that case.
+    let timeZone: String?
 
     init(deviceToken: String, paused: Bool, quietHoursStart: Int?, quietHoursEnd: Int?,
-         sound: Bool, foregroundBanner: Bool, bannerEnabled: Bool? = nil) {
+         sound: Bool, foregroundBanner: Bool, bannerEnabled: Bool? = nil,
+         timeZone: String? = nil) {
         self.type = "push_preferences"
         self.deviceToken = deviceToken
         self.paused = paused
@@ -442,6 +451,7 @@ struct PushPreferencesMessage: Codable, Sendable {
         self.sound = sound
         self.foregroundBanner = foregroundBanner
         self.bannerEnabled = bannerEnabled
+        self.timeZone = timeZone
     }
 }
 
