@@ -117,8 +117,17 @@ final class WebSocketClient {
     /// Mac asks the phone to switch its selected window — fired when the Mac just
     /// spawned a new window (e.g. duplicate) and wants the phone to follow along.
     var onSelectWindow: ((String) -> Void)?
+    var onProjectDirectories: (([String]) -> Void)?
+    /// Mac responded to a `scan_iterm_windows` request with the full list of
+    /// iTerm2 windows it can see. The iOS scan sheet listens for this.
+    var onITermWindowList: (([ITermWindowInfo]) -> Void)?
+    var onError: ((String) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
+    /// Mac confirms an image upload; argument is the absolute path the Mac wrote.
+    var onImageUploadAck: ((String) -> Void)?
+    /// Mac rejects an image upload; argument is a human-readable reason.
+    var onImageUploadError: ((String) -> Void)?
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -436,17 +445,46 @@ final class WebSocketClient {
             if let msg = try? decoder.decode(SelectWindowMessage.self, from: data) {
                 onSelectWindow?(msg.windowId)
             }
+        case "project_directories":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ProjectDirectoriesMessage.self, from: data) {
+                NSLog("[WebSocketClient] Received %d project directories", msg.directories.count)
+                onProjectDirectories?(msg.directories)
+            }
+        case "iterm_window_list":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ITermWindowListMessage.self, from: data) {
+                NSLog("[WebSocketClient] iterm_window_list: %d windows", msg.windows.count)
+                onITermWindowList?(msg.windows)
+            }
+        case "error":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ErrorMessage.self, from: data) {
+                onError?(msg.reason)
+            }
+        case "image_upload_ack":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ImageUploadAckMessage.self, from: data) {
+                onImageUploadAck?(msg.savedPath)
+            }
+        case "image_upload_error":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(ImageUploadErrorMessage.self, from: data) {
+                onImageUploadError?(msg.reason)
+            }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)
         }
     }
 
-    /// Ping the server every 30 seconds. If a ping fails, tear down and reconnect.
+    /// Ping the server every 10 seconds. If a ping fails, tear down and reconnect.
+    /// The tighter interval (vs the old 30s) surfaces dead connections within ~10-15s
+    /// so the phone shows "disconnected" quickly instead of silently swallowing taps.
     private func startKeepalive() {
         keepaliveTask?.cancel()
         keepaliveTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
                 guard !Task.isCancelled, let self, let task = self.webSocketTask else { return }
                 task.sendPing { error in
                     DispatchQueue.main.async {

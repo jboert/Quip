@@ -27,6 +27,18 @@ enum LayoutMode: String, Codable, CaseIterable, Identifiable {
         case .custom: "rectangle.dashed"
         }
     }
+
+    /// Translate the `arrange_windows` protocol's layout string — which the
+    /// phone speaks in user-facing vocabulary — into the internal LayoutMode.
+    /// Returns nil for any other value so the handler can reject unknown
+    /// layouts instead of silently picking a default.
+    static func fromArrangeLayout(_ layout: String) -> LayoutMode? {
+        switch layout {
+        case "horizontal": return .columns
+        case "vertical":   return .rows
+        default:           return nil
+        }
+    }
 }
 
 // MARK: - Layout Calculator

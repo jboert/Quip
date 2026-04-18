@@ -22,7 +22,11 @@ targets:
           - "*.entitlements"
           - "*.xcodeproj/**"
           - "Resources/cloudflared"
+          - "build/**"
+          - "Tests/**"
       - path: ../Shared
+        excludes:
+          - "Tests/**"
     postBuildScripts:
       - script: |
           cp -f "${SRCROOT}/Resources/cloudflared" "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared"
@@ -49,3 +53,18 @@ targets:
           - _quip._tcp.
           - _quip._tcp
         NSLocalNetworkUsageDescription: Quip uses your local network to connect with the iPhone remote controller app.
+  QuipMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      - path: ../Shared/Tests
+    dependencies:
+      - target: QuipMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipMacTests
+        GENERATE_INFOPLIST_FILE: "YES"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quip.app/Contents/MacOS/Quip"
+        BUNDLE_LOADER: "$(TEST_HOST)"

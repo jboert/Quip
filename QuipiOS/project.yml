@@ -22,16 +22,26 @@ targets:
           - "Tests/**"
           - "Signing.xcconfig"
           - "Signing.local.xcconfig"
+          - "build/**"
+          - "QuipLiveActivity/**"
+      - path: QuipLiveActivity/Shared
       - path: ../Shared
+        excludes:
+          - "Tests/**"
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
+    dependencies:
+      - target: QuipLiveActivity
+        embed: true
+        copyPhase: PlugIns
     settings:
       base:
         PRODUCT_NAME: Quip
         INFOPLIST_FILE: Info.plist
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: QuipiOS.entitlements
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
@@ -42,11 +52,17 @@ targets:
         UILaunchScreen:
           UIColorName: ""
         NSSpeechRecognitionUsageDescription: Quip uses speech recognition to transcribe your voice commands for Claude Code.
-        NSCameraUsageDescription: Quip uses the camera to scan QR codes for connecting to your Mac.
+        NSCameraUsageDescription: Quip uses the camera to scan QR codes for connecting to your Mac, and to capture photos you attach to the active Claude Code terminal.
+        NSPhotoLibraryUsageDescription: Quip attaches images you pick from your library to the active Claude Code terminal on your Mac.
         NSMicrophoneUsageDescription: Quip needs microphone access for push-to-talk voice commands.
         NSBonjourServices:
           - _quip._tcp.
           - _quip._tcp
+        NSSupportsLiveActivities: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.fintechadventures.quip
+            CFBundleURLSchemes:
+              - quip
         NSBluetoothAlwaysUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSBluetoothPeripheralUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSLocalNetworkUsageDescription: Quip connects to your Mac over the local network to control Claude Code sessions.
@@ -64,16 +80,33 @@ targets:
           # this flag from Info.plist directly but forgot to update project.yml,
           # so every xcodegen regeneration silently re-added it.
           NSAllowsArbitraryLoads: true
+  QuipLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - QuipLiveActivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipiOS.liveactivity
+        PRODUCT_NAME: QuipLiveActivity
+        INFOPLIST_FILE: QuipLiveActivity/Info.plist
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: D2PM6R797Q
+        GENERATE_INFOPLIST_FILE: "NO"
+        SKIP_INSTALL: "NO"
   QuipiOSTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
-      - path: ../Shared
+      - path: ../Shared/Tests
     dependencies:
       - target: QuipiOS
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipiOSTests
+        GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quip"
         BUNDLE_LOADER: "$(TEST_HOST)"

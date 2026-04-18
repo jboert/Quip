@@ -1,5 +1,23 @@
 import SwiftUI
 
+/// Append a line to `/tmp/quip-push.log`. Used to debug "I didn't get
+/// a notification" — print()/NSLog can't be seen by the user when the
+/// app is launched via `open`, but this file is trivial to `tail -f`.
+/// Mirrors the helper inside PushNotificationService.
+fileprivate func appendPushDiagnostic(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        let path = "/tmp/quip-push.log"
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -8,9 +26,12 @@ struct QuipMacApp: App {
     @State private var terminalStateDetector = TerminalStateDetector()
     @State private var terminalColorManager = TerminalColorManager()
     @State private var keystrokeInjector = KeystrokeInjector()
+    private let imageUploadHandler = ImageUploadHandler.defaultProduction()
     @State private var tunnel = CloudflareTunnel()
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
+    @State private var connectionLog = ConnectionLog()
+    @State private var pushNotificationService = PushNotificationService()
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
     private var networkMode: NetworkMode {
@@ -80,6 +101,8 @@ struct QuipMacApp: App {
                 .environment(tunnel)
                 .environment(tailscale)
                 .environment(pinManager)
+                .environment(connectionLog)
+                .environment(pushNotificationService)
         }
     }
 
@@ -99,6 +122,7 @@ struct QuipMacApp: App {
         _ = migrateNetworkModeIfNeeded()
 
         webSocketServer.pinManager = pinManager
+        webSocketServer.connectionLog = connectionLog
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
         webSocketServer.requireAuth = requirePIN
         webSocketServer.start()
@@ -135,7 +159,14 @@ struct QuipMacApp: App {
             }
         }
 
+        webSocketServer.onClientAuthenticated = { [self] in
+            DispatchQueue.main.async {
+                self.broadcastLayout()
+            }
+        }
+
         terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
+            appendPushDiagnostic("state \(oldState.rawValue)→\(newState.rawValue) for \(windowId) (selected=\(clientSelectedWindowId ?? "nil"))")
             webSocketServer.broadcast(StateChangeMessage(windowId: windowId, state: newState.rawValue))
 
             // Clear the pending-input flag as soon as we see Claude actually become busy.
@@ -146,6 +177,37 @@ struct QuipMacApp: App {
 
             if newState == .waitingForInput {
                 thinkingWindows.remove(windowId)
+
+                // Diagnostic so we can see what's blocking pushes when
+                // the phone says "I didn't get a notification." Three
+                // common cases: (a) no window selected, (b) a different
+                // window is selected, (c) no registered devices yet.
+                let diag = "waiting_for_input for \(windowId) — clientSelectedWindowId=\(clientSelectedWindowId ?? "nil"), devices=\(pushNotificationService.devices.count)"
+                NSLog("[Quip] %@", diag)
+                appendPushDiagnostic(diag)
+
+                // Fire a push ONLY when the phone's current selection is
+                // this window — prevents a notification flood from every
+                // background Claude. Safe to call even when no devices
+                // are registered; it's a no-op in that case.
+                if windowId == clientSelectedWindowId {
+                    let window = windowManager.windows.first(where: { $0.id == windowId })
+                    let windowName = window?.name ?? "Terminal"
+                    // subtitle = directory basename (e.g. "Quip", "credit-unions")
+                    // via fetchSubtitles/applySubtitles. That's the project.
+                    let project = window?.subtitle
+                    pushNotificationService.notifyWaitingForInput(
+                        windowId: windowId,
+                        windowName: windowName,
+                        projectName: project,
+                        attentionCount: 1
+                    )
+                } else {
+                    let skip = "push SKIPPED — selection mismatch (selected=\(clientSelectedWindowId ?? "nil"), event=\(windowId))"
+                    NSLog("[Quip] %@", skip)
+                    appendPushDiagnostic(skip)
+                }
+
                 if pendingInputForWindow.contains(windowId) {
                     KokoroTTSDebug.log("TTS suppressed: \(windowId) still pending input response")
                     return
@@ -158,14 +220,24 @@ struct QuipMacApp: App {
         windowManager.refreshDisplays()
         windowManager.refreshWindowList()
         syncTrackedWindows()
+        // One-time Accessibility prompt at launch. Without this, the phone's
+        // arrange button used to fire the dialog on every tap — Spammed until
+        // the user granted or manually denied in System Settings.
+        windowManager.promptForAccessibilityIfNeeded()
+
+        // One-time Accessibility prompt at launch. Without this, the phone's
+        // arrange button used to fire the dialog on every tap — Spammed until
+        // the user granted or manually denied in System Settings.
+        windowManager.promptForAccessibilityIfNeeded()
 
         // Pre-warm the Kokoro daemon so the first synth doesn't pay model load
         kokoroTTS.preload()
 
         var subtitleCounter = 0
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            // All heavy work (CG queries, AppleScript) runs off main so it
-            // can't block tunnel message delivery or other main-queue work.
+            // Read on main so we can use @MainActor state; the expensive
+            // AppleScript/CG calls run off-main below.
+            let forceSessionFetch = windowManager.needsIterm2SessionIdRefresh
             DispatchQueue.global(qos: .utility).async {
                 let snapshot = WindowManager.fetchWindowList()
                 subtitleCounter += 1
@@ -176,9 +248,20 @@ struct QuipMacApp: App {
                 } else {
                     subtitles = nil
                 }
+                // Fetch session IDs on the subtitle cycle OR whenever the Mac
+                // side has any iTerm2 window still missing a UUID. Without the
+                // latter, a new window can route keystrokes to the wrong pane
+                // for up to the full 10s subtitle-cycle gap.
+                let shouldFetchSessions = subtitles != nil || forceSessionFetch
+                let sessions = shouldFetchSessions ? WindowManager.fetchIterm2SessionIds() : nil
                 DispatchQueue.main.async {
                     windowManager.applyWindowSnapshot(snapshot)
                     if let subtitles { windowManager.applySubtitles(subtitles) }
+                    if let sessions { windowManager.applyIterm2SessionIds(sessions) }
+                    // After session IDs are matched, re-enable anything the
+                    // user attached in a prior run so the window is in the
+                    // picker again without a round-trip.
+                    windowManager.enableAttachedWindows()
                     self.syncTrackedWindows()
                     broadcastLayout()
                 }
@@ -238,7 +321,7 @@ struct QuipMacApp: App {
             let baseline = sttBaselineContent[windowId] ?? ""
 
             DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
-                let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
                 let baselineLast = self.lastResponseMarkerText(in: baseline)
                 let currentLast = self.lastResponseMarkerText(in: current)
 
@@ -297,7 +380,7 @@ struct QuipMacApp: App {
 
         if skipStableWait {
             DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
-                let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
                 if !content.isEmpty {
                     processContent(content)
                 }
@@ -305,7 +388,7 @@ struct QuipMacApp: App {
             return
         }
 
-        waitForStableContent(termApp: termApp, windowNumber: wn) { stableContent in
+        waitForStableContent(termApp: termApp, windowNumber: wn, iterm2SessionId: window.iterm2SessionId) { stableContent in
             guard let content = stableContent else { return }
             DispatchQueue.main.async { [self] in
                 doTriggerTTSBody(windowId: windowId, name: name, content: content)
@@ -388,7 +471,9 @@ struct QuipMacApp: App {
         let display = windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first
         let screenBounds = display?.frame ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
 
-        let states = windowManager.windows.filter(\.isEnabled).map { window in
+        let mirrorDesktop = UserDefaults.standard.bool(forKey: "mirrorDesktop")
+        let visible = WindowManager.windowsForBroadcast(windowManager.windows, mirrorDesktop: mirrorDesktop)
+        let states = visible.map { window in
             window.toWindowState(
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
                 screenBounds: screenBounds,
@@ -398,10 +483,40 @@ struct QuipMacApp: App {
         let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
         let update = LayoutUpdate(monitor: display?.name ?? "Display 1", screenAspect: aspect, windows: states)
         webSocketServer.broadcast(update)
+        broadcastProjectDirectories()
+    }
+
+    private func broadcastProjectDirectories() {
+        let data = UserDefaults.standard.data(forKey: "projectDirectories") ?? Data()
+        let roots = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+        guard !roots.isEmpty else { return }
+        // Expand each configured root to its immediate subdirectories so the
+        // phone shows individual projects, not just the parent folder.
+        var projects: [String] = []
+        let fm = FileManager.default
+        for root in roots {
+            if let children = try? fm.contentsOfDirectory(atPath: root) {
+                for child in children.sorted() where !child.hasPrefix(".") {
+                    let full = (root as NSString).appendingPathComponent(child)
+                    var isDir: ObjCBool = false
+                    if fm.fileExists(atPath: full, isDirectory: &isDir), isDir.boolValue {
+                        projects.append(full)
+                    }
+                }
+            }
+        }
+        guard !projects.isEmpty else { return }
+        print("[Quip] Broadcasting \(projects.count) project directories to phone")
+        webSocketServer.broadcast(ProjectDirectoriesMessage(directories: projects))
     }
 
     @MainActor
     private func handleIncomingMessage(_ data: Data) {
+        // Diagnostic: log every incoming WebSocket payload size so we can see
+        // whether large image_upload frames are arriving at all.
+        if data.count > 1024 {
+            print("[Quip] incoming frame: size=\(data.count) bytes")
+        }
         guard let type = MessageCoder.messageType(from: data) else {
             print("[Quip] handleIncomingMessage: unparseable message, size=\(data.count)")
             return
@@ -410,8 +525,28 @@ struct QuipMacApp: App {
         switch type {
         case "select_window":
             if let msg = MessageCoder.decode(SelectWindowMessage.self, from: data) {
+                appendPushDiagnostic("select_window: \(msg.windowId)")
+
+                // Stop watching the previously selected window — unless it's also
+                // user-enabled, in which case syncTrackedWindows owns it.
+                if let previous = clientSelectedWindowId, previous != msg.windowId {
+                    let stillEnabled = windowManager.windows.first(where: { $0.id == previous })?.isEnabled ?? false
+                    if !stillEnabled {
+                        terminalStateDetector.untrackWindow(previous)
+                    }
+                }
+
                 clientSelectedWindowId = msg.windowId
                 windowManager.focusWindow(msg.windowId)
+
+                // Start watching the new selection so waiting_for_input fires → push.
+                // Without this, the detector only polls `isEnabled` windows and
+                // never sees state changes on a phone-selected window.
+                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }),
+                   terminalStateDetector.trackedWindows[msg.windowId] == nil {
+                    let pid = shellPidForWindow(window)
+                    terminalStateDetector.trackWindow(msg.windowId, shellPid: pid)
+                }
             }
 
         case "send_text":
@@ -423,20 +558,95 @@ struct QuipMacApp: App {
                     windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    // 80ms lets windowManager.focusWindow's AX raise propagate
-                    // before sendText's AppleScript talks to iTerm2/Terminal.app.
-                    // Earlier attempt zeroed this for iTerm2 based on an
-                    // AppleScript-side window picker that got reverted (465d5b5);
-                    // without the delay, keystrokes race the focus and Return
-                    // misses the intended window.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                        self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn)
+                    // When iTerm2 session-write can target the session by UUID,
+                    // the AX raise doesn't need to finish before AppleScript fires
+                    // — `write text` bypasses focus. `focusDelay` returns 0 in
+                    // that case. Otherwise we fall back to the old 80ms delay
+                    // that the System Events/front-window path needs.
+                    let delay = KeystrokeInjector.focusDelay(
+                        path: .sendText, terminalApp: termApp,
+                        iterm2SessionId: window.iterm2SessionId
+                    )
+                    let inject = {
+                        self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                    }
+                    if delay == 0 {
+                        inject()
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { inject() }
                     }
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] send_text DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
             }
+
+        case "image_upload":
+            if let msg = MessageCoder.decode(ImageUploadMessage.self, from: data) {
+                AuditLogger.log(messageType: "image_upload", clientIdentifier: "ws-client", textContent: msg.filename)
+
+                // Resolve target window first — fail fast, don't write the file if it's gone.
+                guard let window = windowManager.windows.first(where: { $0.id == msg.windowId }) else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] image_upload DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "unknown window"))
+                    return
+                }
+
+                // Write to disk.
+                let savedURL: URL
+                do {
+                    savedURL = try imageUploadHandler.save(message: msg)
+                } catch {
+                    print("[Quip] image_upload failed: \(error)")
+                    let reason: String
+                    switch error {
+                    case ImageUploadHandlerError.invalidBase64:
+                        reason = "invalid image data"
+                    case ImageUploadHandlerError.invalidPath:
+                        reason = "invalid filename"
+                    case ImageUploadHandlerError.writeFailed:
+                        reason = "could not save image"
+                    default:
+                        reason = "upload failed"
+                    }
+                    webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: reason))
+                    return
+                }
+
+                // Paste the absolute path into the terminal input with a trailing space, no Return.
+                let termApp = terminalAppForWindow(window)
+                windowManager.focusWindow(msg.windowId)
+                let name = window.name
+                let wn = window.windowNumber
+                let delay = KeystrokeInjector.focusDelay(
+                    path: .sendText, terminalApp: termApp,
+                    iterm2SessionId: window.iterm2SessionId
+                )
+                let textToInject = savedURL.path + " "
+                let finishInjection = { [self] in
+                    let result = self.keystrokeInjector.sendText(
+                        textToInject, to: msg.windowId, pressReturn: false,
+                        terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                        iterm2SessionId: window.iterm2SessionId
+                    )
+                    if result.success {
+                        print("[Quip] image_upload: typed path into windowId=\(msg.windowId) (\(textToInject.count) chars)")
+                        self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
+                    } else {
+                        let err = result.error ?? "couldn't type path"
+                        print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId): \(err)")
+                        self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
+                    }
+                }
+                if delay == 0 {
+                    finishInjection()
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { finishInjection() }
+                }
+            }
+
         case "quick_action":
             if let msg = MessageCoder.decode(QuickActionMessage.self, from: data) {
                 AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
@@ -447,6 +657,7 @@ struct QuipMacApp: App {
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] quick_action DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
             }
         case "stt_started":
@@ -474,7 +685,7 @@ struct QuipMacApp: App {
                     let termApp = terminalAppForWindow(window)
                     let wn = window.windowNumber
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
-                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
+                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
                         DispatchQueue.main.async { [self] in
                             sttBaselineContent[wid] = content
                             outputHighWaterMarks[wid] = content
@@ -494,10 +705,13 @@ struct QuipMacApp: App {
             }
         case "request_content":
             if let msg = MessageCoder.decode(RequestContentMessage.self, from: data) {
-                // Throttle: at most once per 10 seconds per window.
+                // Throttle: at most once per 0.5s per window. Was 10s, which
+                // meant 4-out-of-5 polls got dropped and button taps sat on
+                // stale content for up to 10s. 500ms still protects the
+                // AppleScript read from getting hammered but feels instant.
                 let now = Date()
                 if let last = lastContentRequestTime[msg.windowId],
-                   now.timeIntervalSince(last) < 10.0 {
+                   now.timeIntervalSince(last) < 0.5 {
                     break
                 }
                 lastContentRequestTime[msg.windowId] = now
@@ -509,8 +723,15 @@ struct QuipMacApp: App {
                     // Do the heavy AppleScript read + screenshot off main so it
                     // can't block send_text, auth, or other time-sensitive messages.
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer] in
-                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn) ?? ""
-                        let lines = content.components(separatedBy: "\n")
+                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
+                        var lines = content.components(separatedBy: "\n")
+                        // iTerm's buffer includes the whitespace cells Claude Code
+                        // pads below its prompt box to wipe stale text. Shipped
+                        // raw those blank rows land at the bottom of the phone's
+                        // scroll view and shove the prompt out of sight.
+                        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+                            lines.removeLast()
+                        }
                         let trimmed = lines.suffix(200).joined(separator: "\n")
                         let redacted = SecretRedactor.redact(trimmed)
                         let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
@@ -551,6 +772,7 @@ struct QuipMacApp: App {
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] duplicate_window DROPPED: unknown source windowId=\(msg.sourceWindowId). Known: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Source window no longer exists"))
                 }
             }
 
@@ -564,11 +786,180 @@ struct QuipMacApp: App {
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] close_window DROPPED: unknown windowId=\(msg.windowId). Known: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
+            }
+
+        case "spawn_window":
+            if let msg = MessageCoder.decode(SpawnWindowMessage.self, from: data) {
+                print("[Quip] spawn_window: directory=\(msg.directory)")
+                let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                let knownIds = Set(windowManager.windows.map(\.id))
+                keystrokeInjector.spawnWindow(in: msg.directory, command: cmd, terminalApp: .iterm2)
+                selectNewWindowAfterSpawn(knownIds: knownIds, attempt: 0)
+            }
+
+        case "arrange_windows":
+            if let msg = MessageCoder.decode(ArrangeWindowsMessage.self, from: data) {
+                print("[Quip] arrange_windows: layout=\(msg.layout)")
+                handleArrangeWindows(layout: msg.layout)
+            }
+
+        case "scan_iterm_windows":
+            handleScanITermWindows()
+
+        case "register_push_device":
+            if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
+                appendPushDiagnostic("register_push_device: \(msg.deviceToken.prefix(8)) env=\(msg.environment)")
+                pushNotificationService.registerDevice(token: msg.deviceToken, environment: msg.environment)
+            }
+
+        case "push_preferences":
+            if let msg = MessageCoder.decode(PushPreferencesMessage.self, from: data) {
+                let prefs = DevicePushPreferences(
+                    paused: msg.paused,
+                    quietHoursStart: msg.quietHoursStart,
+                    quietHoursEnd: msg.quietHoursEnd,
+                    sound: msg.sound,
+                    foregroundBanner: msg.foregroundBanner
+                )
+                pushNotificationService.updatePreferences(forDevice: msg.deviceToken, prefs: prefs)
+                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") device=\(msg.deviceToken.prefix(8))")
+            }
+
+        case "attach_iterm_window":
+            if let msg = MessageCoder.decode(AttachITermWindowMessage.self, from: data) {
+                print("[Quip] attach_iterm_window: windowNumber=\(msg.windowNumber) sessionId=\(msg.sessionId)")
+                handleAttachITermWindow(windowNumber: msg.windowNumber, sessionId: msg.sessionId)
             }
 
         default:
             break
+        }
+    }
+
+    /// Enumerate every iTerm2 window (not just Quip-tracked ones), tag each
+    /// with whether Quip is already tracking it, and broadcast the list so
+    /// the phone's "attach existing" sheet can populate.
+    @MainActor
+    private func handleScanITermWindows() {
+        // AppleScript enumeration can take 200-500ms on a busy Mac — push
+        // off-main so we don't freeze the UI, then hop back to classify.
+        Task.detached {
+            let descriptors = WindowManager.fetchAllITermWindows()
+            await MainActor.run {
+                let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
+                // Prune attached-session UUIDs that iTerm no longer knows
+                // about. Only do this when iTerm returned at least one window
+                // so a transient "iTerm not running" state doesn't wipe
+                // persistence.
+                let liveSessionIds = Set(descriptors.map(\.sessionId))
+                self.windowManager.reconcileAttachedSessions(withLiveSessionIds: liveSessionIds)
+                let trackedSessionIds: Set<String> = Set(
+                    self.windowManager.windows
+                        .filter { $0.bundleId == iterm2BundleId && $0.isEnabled }
+                        .compactMap(\.iterm2SessionId)
+                )
+                let infos: [ITermWindowInfo] = descriptors.map { d in
+                    ITermWindowInfo(
+                        windowNumber: Int(d.windowNumber),
+                        title: d.title,
+                        sessionId: d.sessionId,
+                        cwd: d.cwd,
+                        isAlreadyTracked: trackedSessionIds.contains(d.sessionId),
+                        isMiniaturized: d.isMiniaturized
+                    )
+                }
+                print("[Quip] scan_iterm_windows: returning \(infos.count) windows (\(infos.filter(\.isAlreadyTracked).count) already tracked)")
+                self.webSocketServer.broadcast(ITermWindowListMessage(windows: infos))
+            }
+        }
+    }
+
+    /// User picked a row in the scan sheet. Re-verify the window still
+    /// exists (could've closed between scan and tap), promote it to a
+    /// Quip-tracked window by enabling the matching ManagedWindow, persist
+    /// the sessionId so the attachment survives Quip restarts, and
+    /// broadcast a fresh layout so the phone's picker refreshes.
+    @MainActor
+    private func handleAttachITermWindow(windowNumber: Int, sessionId: String) {
+        Task.detached {
+            let descriptors = WindowManager.fetchAllITermWindows()
+            // Capture the minimized flag on the target so we know whether we
+            // need to un-minimize. CG's `.optionOnScreenOnly` scan excludes
+            // minimized windows, so without un-minimizing first the attach
+            // path can't find a ManagedWindow to enable.
+            let target = descriptors.first { Int($0.windowNumber) == windowNumber && $0.sessionId == sessionId }
+            if target?.isMiniaturized == true {
+                print("[Quip] attach_iterm_window: target is minimized, un-minimizing first")
+                _ = WindowManager.unminimizeITermWindow(windowNumber: windowNumber)
+                // iTerm2 needs a moment to redraw the window on-screen before
+                // the next CG snapshot will see it.
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+            await MainActor.run {
+                guard target != nil else {
+                    print("[Quip] attach_iterm_window DROPPED: window closed between scan and attach")
+                    self.webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
+                    return
+                }
+
+                // Persist FIRST so the enable sticks even if the CG snapshot
+                // hasn't matched this sessionId to a ManagedWindow yet.
+                self.windowManager.markSessionAttached(sessionId: sessionId)
+
+                // Force a fresh scan + session ID match so the ManagedWindow
+                // for this iTerm window is populated and flagged enabled.
+                self.windowManager.refreshWindowList()
+                self.windowManager.refreshIterm2SessionIds()
+
+                if let target = self.windowManager.windows.first(where: { $0.iterm2SessionId == sessionId }) {
+                    self.windowManager.toggleWindow(target.id, enabled: true)
+                    print("[Quip] attach_iterm_window: promoted \(target.id) (sessionId=\(sessionId))")
+                } else {
+                    // sessionId persisted — next snapshot will enable it.
+                    print("[Quip] attach_iterm_window: sessionId=\(sessionId) not yet in CG window list; will enable on next snapshot")
+                }
+                self.broadcastLayout()
+            }
+        }
+    }
+
+    /// Drives the "arrange horizontally/vertically" command coming from the
+    /// phone. Mirrors MenuBarView's local "Arrange Windows" path: filter to
+    /// enabled windows, pick the main display, hand over to LayoutCalculator
+    /// + WindowManager.arrangeWindows. Invalid layout strings are rejected
+    /// with an error toast the phone can show.
+    @MainActor
+    private func handleArrangeWindows(layout: String) {
+        guard let mode = LayoutMode.fromArrangeLayout(layout) else {
+            webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement: \(layout)"))
+            return
+        }
+        let enabled = windowManager.windows.filter(\.isEnabled)
+        guard !enabled.isEmpty else {
+            webSocketServer.broadcast(ErrorMessage(reason: "No enabled windows to arrange"))
+            return
+        }
+        guard let display = windowManager.displays.first(where: { $0.isMain })
+                ?? windowManager.displays.first else {
+            webSocketServer.broadcast(ErrorMessage(reason: "No display available"))
+            return
+        }
+        let frames = LayoutCalculator.calculate(mode: mode, windowCount: enabled.count)
+        var targetFrames: [String: CGRect] = [:]
+        for (index, window) in enabled.enumerated() where index < frames.count {
+            targetFrames[window.id] = frames[index].toCGRect(in: display.frame)
+        }
+        if !windowManager.arrangeWindows(frames: targetFrames) {
+            webSocketServer.broadcast(ErrorMessage(reason: "Grant Accessibility access to Quip in System Settings"))
+            // Pop the Settings pane directly to the Accessibility list so the
+            // user can grant in one click instead of hunting for it. Without
+            // this, the error toast shows up every time they tap arrange with
+            // no obvious way to fix it.
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 
@@ -579,12 +970,18 @@ struct QuipMacApp: App {
     /// polls. Gives up silently if nothing new appears in the time budget.
     @MainActor
     private func selectNewWindowAfterSpawn(knownIds: Set<String>, attempt: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
+            // Force a window list refresh so we don't wait for the 2-second timer
+            windowManager.refreshWindowList()
             let currentIds = Set(windowManager.windows.map(\.id))
-            if let newId = currentIds.subtracting(knownIds).first {
-                print("[Quip] duplicate_window: new window detected \(newId), enabling and switching selection")
-                // Newly-detected windows arrive disabled — enable so it shows up
-                // in broadcastLayout and reaches the phone at all.
+            let newIds = currentIds.subtracting(knownIds)
+            // Prefer a terminal window (the one we just spawned) over any random
+            // app window that happened to appear in the same refresh cycle.
+            let newTerminalId = newIds.first(where: { id in
+                windowManager.windows.first(where: { $0.id == id })?.isTerminal == true
+            })
+            if let newId = newTerminalId ?? newIds.first {
+                print("[Quip] spawn: new window detected \(newId), enabling + switching selection")
                 windowManager.toggleWindow(newId, enabled: true)
                 clientSelectedWindowId = newId
                 windowManager.focusWindow(newId)
@@ -609,62 +1006,84 @@ struct QuipMacApp: App {
             windowManager.focusWindow(wid)
         }
         // 200ms lets windowManager.focusWindow's AX raise propagate before the
-        // keystroke AppleScript fires. An earlier attempt zeroed this for iTerm2
-        // on the assumption a new AppleScript-side window picker would pin the
-        // target window, but that picker got reverted (465d5b5) and never worked
-        // because iTerm2's `id of window` isn't the CGWindowID. Without this
-        // delay, Return and other shortcut keystrokes race the AX raise and
-        // either land in the wrong iTerm2 window or get dropped entirely.
-        let injectionDelay: TimeInterval = 0.2
+        // keystroke AppleScript fires — but only when we're falling back to
+        // the front-window/System-Events path. When iTerm2 session-write has
+        // a real session UUID, the keystroke targets the session directly and
+        // can fire immediately. Skipping the 200ms there is the single biggest
+        // button-latency win.
+        let injectionDelay = KeystrokeInjector.focusDelay(
+            path: .quickAction, terminalApp: termApp,
+            iterm2SessionId: window.iterm2SessionId
+        )
+        let runAfterDelay: (@escaping () -> Void) -> Void = { work in
+            if injectionDelay == 0 { work() }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) { work() } }
+        }
         switch action {
         case "press_return":
             // Use sendText's direct iTerm2/Terminal AppleScript path (empty text
             // + newline) rather than System Events keystroke. Volume-PTT uses the
             // same path reliably; the System Events path races the AX raise and
             // drops Return on iTerm2 when multiple windows are open.
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_ctrl_c":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_ctrl_d":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_escape":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_tab":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_backspace":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            }
+        // Ctrl+U — readline "kill to start of line." Wipes the current
+        // prompt input in one keystroke instead of holding backspace.
+        case "clear_input":
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("ctrl+u", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_y":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_n":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "clear_terminal":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "restart_claude":
-            DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn)
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn)
+                    keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
                 }
             }
-        case "toggle_enabled": windowManager.toggleWindow(window.id, enabled: !window.isEnabled)
+        case "toggle_enabled":
+            let newEnabled = !window.isEnabled
+            windowManager.toggleWindow(window.id, enabled: newEnabled)
+            // If the user is turning off a window that was previously attached,
+            // also drop it from the persistent attached set — otherwise the
+            // next snapshot's `enableAttachedWindows()` will re-enable it and
+            // the toggle "doesn't stick." Turning ON doesn't add to the set;
+            // only the explicit Attach Existing flow promotes a sessionId.
+            if !newEnabled, let sid = window.iterm2SessionId {
+                windowManager.markSessionDetached(sessionId: sid)
+            }
         default: break
         }
     }
@@ -675,6 +1094,7 @@ struct QuipMacApp: App {
     /// Completion fires on main with the stable content, or nil if timeout.
     @MainActor
     private func waitForStableContent(termApp: TerminalApp, windowNumber: CGWindowID,
+                                      iterm2SessionId: String? = nil,
                                       pollInterval: TimeInterval = 0.2,
                                       maxWaitSeconds: TimeInterval = 2.5,
                                       completion: @Sendable @escaping (String?) -> Void) {
@@ -682,11 +1102,11 @@ struct QuipMacApp: App {
         // don't block main and starve tunnel message delivery.
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
             let deadline = Date().addingTimeInterval(maxWaitSeconds)
-            var previous = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber) ?? ""
+            var previous = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber, iterm2SessionId: iterm2SessionId) ?? ""
 
             while true {
                 Thread.sleep(forTimeInterval: pollInterval)
-                let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber) ?? ""
+                let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber, iterm2SessionId: iterm2SessionId) ?? ""
                 if current == previous && !current.isEmpty {
                     DispatchQueue.main.async { completion(current) }
                     return
@@ -716,7 +1136,25 @@ struct QuipMacApp: App {
         return Array(newLines.suffix(25)).joined(separator: "\n")
     }
 
+    /// Pick the PID the state detector should watch for this window.
+    /// For iTerm2 we look up the session's tty and resolve it to the
+    /// actual shell PID — iTerm2 shells reparent to launchd, so the
+    /// window's own pid (kCGWindowOwnerPID = iTerm app PID) is useless;
+    /// all iTerm windows would share the same process tree and state
+    /// transitions would conflate across every Claude session.
+    /// For Terminal.app the window pid still points into the terminal,
+    /// which is good enough — fall through.
     @MainActor
+    private func shellPidForWindow(_ window: ManagedWindow) -> pid_t {
+        if window.bundleId == TerminalApp.iterm2.bundleIdentifier,
+           let tty = window.iterm2Tty,
+           !tty.isEmpty,
+           let shellPid = TerminalStateDetector.shellPidForTTY(tty) {
+            return shellPid
+        }
+        return window.pid
+    }
+
     private func syncTrackedWindows() {
         let terminalBundleIds: Set<String> = [
             TerminalApp.terminal.bundleIdentifier,
@@ -728,13 +1166,23 @@ struct QuipMacApp: App {
         // Track new windows
         for window in enabledTerminals {
             if terminalStateDetector.trackedWindows[window.id] == nil {
-                terminalStateDetector.trackWindow(window.id, shellPid: window.pid)
+                let pid = shellPidForWindow(window)
+                terminalStateDetector.trackWindow(window.id, shellPid: pid)
             }
         }
-        // Untrack removed/disabled windows
+        // Also ensure the phone-selected window is tracked, even if not
+        // user-enabled — otherwise the detector never polls it and
+        // waiting_for_input pushes silently drop.
+        if let selected = clientSelectedWindowId,
+           let window = windowManager.windows.first(where: { $0.id == selected }),
+           terminalStateDetector.trackedWindows[selected] == nil {
+            let pid = shellPidForWindow(window)
+            terminalStateDetector.trackWindow(selected, shellPid: pid)
+        }
+        // Untrack removed/disabled windows — but preserve the selected one.
         let enabledIds = Set(enabledTerminals.map(\.id))
         for windowId in terminalStateDetector.trackedWindows.keys {
-            if !enabledIds.contains(windowId) {
+            if !enabledIds.contains(windowId) && windowId != clientSelectedWindowId {
                 terminalStateDetector.untrackWindow(windowId)
             }
         }
