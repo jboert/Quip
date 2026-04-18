@@ -88,13 +88,19 @@ impl WaylandInputBackend {
     pub fn new() -> Self {
         let compositor = Self::detect_compositor();
 
-        let tool = if Self::is_in_path("ydotool") {
+        let tool = if Self::is_in_path("ydotool") && Self::ydotool_daemon_running() {
             Some(InputTool::Ydotool)
         } else if Self::is_in_path("wtype") {
             Some(InputTool::Wtype)
         } else {
             None
         };
+
+        tracing::info!(
+            "Wayland input backend: compositor={:?} tool={:?}",
+            compositor,
+            tool
+        );
 
         Self { tool, compositor }
     }
@@ -119,6 +125,16 @@ impl WaylandInputBackend {
     fn is_in_path(program: &str) -> bool {
         Command::new("which")
             .arg(program)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn ydotool_daemon_running() -> bool {
+        // ydotool needs ydotoold running. A no-op key event is the fastest
+        // smoke test — exits 0 if the daemon is reachable, 1 otherwise.
+        Command::new("ydotool")
+            .args(["key", ""])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -370,8 +386,10 @@ impl WaylandInputBackend {
         // The window_id is a hash — we need the PID. Read it from /proc or
         // use the KDE_ID_MAP to find the window, then look up PID from the
         // window enumeration. For now, try all running Konsole instances.
+        // Claude Code's TUI only fires submit on CR (0x0D), not LF (0x0A) —
+        // see the Mac fix (commit 9f1b531).
         let send_text = if press_return {
-            format!("{text}\n")
+            format!("{text}\r")
         } else {
             text.to_string()
         };
@@ -386,12 +404,17 @@ impl WaylandInputBackend {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let konsole_services: Vec<String> = stdout.lines()
             .filter_map(|l| {
-                // Format: '      string "org.kde.konsole-12345"'
+                // Format: '      string "org.kde.konsole-12345"' or
+                // '      string "org.kde.konsole"' on newer KDE/Fedora
                 let trimmed = l.trim();
                 let name = trimmed.strip_prefix("string \"")
                     .and_then(|s| s.strip_suffix('"'))
                     .unwrap_or(trimmed);
-                if name.starts_with("org.kde.konsole-") { Some(name.to_string()) } else { None }
+                if name == "org.kde.konsole" || name.starts_with("org.kde.konsole-") {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -463,7 +486,7 @@ impl WaylandInputBackend {
                 let name = t.strip_prefix("string \"")
                     .and_then(|s| s.strip_suffix('"'))
                     .unwrap_or(t);
-                if name.starts_with("org.kde.konsole-") {
+                if name == "org.kde.konsole" || name.starts_with("org.kde.konsole-") {
                     Some(name.to_string())
                 } else {
                     None
@@ -558,8 +581,11 @@ impl WaylandInputBackend {
     ) -> PlatformResult<()> {
         let (service, session) = Self::konsole_find_session_by_title(window_title)
             .ok_or_else(|| Self::konsole_unavailable_error(window_title))?;
+        // Claude Code's TUI only fires submit on CR (0x0D), not LF (0x0A) —
+        // same bug the Mac fix (commit 9f1b531) hit. Using \n leaves a blank
+        // line under the text with the prompt unsubmitted.
         let payload = if press_return {
-            format!("{text}\n")
+            format!("{text}\r")
         } else {
             text.to_string()
         };
@@ -607,6 +633,7 @@ impl WaylandInputBackend {
         match key.to_lowercase().as_str() {
             "return" | "enter" => Some("\n"),
             "tab" => Some("\t"),
+            "backspace" => Some("\x7f"),
             "escape" => Some("\x1b"),
             "ctrl+c" => Some("\x03"),
             "ctrl+d" => Some("\x04"),

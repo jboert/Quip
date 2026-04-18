@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::sink::SinkExt;
 use futures_util::stream::{SplitSink, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
+use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, warn};
@@ -244,7 +245,14 @@ impl WsServer {
     }
 
     /// Send a text message to all authenticated clients, removing any that have errored.
+    /// Each send is bounded by a short timeout so a single slow/dead client
+    /// can't stall the broadcast loop or balloon memory while TCP keepalive
+    /// takes its time noticing — see the Mac's backpressure fix.
     pub async fn broadcast(&self, message: &str) {
+        // 5 seconds is generous for LAN/Tailscale but short enough that a
+        // backgrounded phone doesn't pile up TTS audio chunks behind it.
+        const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
         let mut clients = self.clients.lock().await;
         let mut dead_ids = Vec::new();
 
@@ -252,14 +260,29 @@ impl WsServer {
             if !client.authenticated {
                 continue;
             }
-            if let Err(e) = client.sink.send(Message::Text(message.into())).await {
-                warn!("Dropping dead WebSocket client id={id}: {e}");
-                dead_ids.push(*id);
+            let send_fut = client.sink.send(Message::Text(message.into()));
+            match timeout(SEND_TIMEOUT, send_fut).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    warn!("Dropping dead WebSocket client id={id}: {e}");
+                    dead_ids.push(*id);
+                }
+                Err(_) => {
+                    warn!(
+                        "Dropping slow WebSocket client id={id}: send exceeded {:?}",
+                        SEND_TIMEOUT
+                    );
+                    dead_ids.push(*id);
+                }
             }
         }
 
-        for id in dead_ids {
-            clients.remove(&id);
+        for id in &dead_ids {
+            if let Some(mut client) = clients.remove(id) {
+                // Force the socket closed so any queued bytes in the kernel
+                // send buffer get released immediately instead of lingering.
+                let _ = client.sink.close().await;
+            }
         }
 
         self.client_count.store(clients.len(), Ordering::Relaxed);
