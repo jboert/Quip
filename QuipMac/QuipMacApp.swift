@@ -552,10 +552,16 @@ struct QuipMacApp: App {
         case "send_text":
             if let msg = MessageCoder.decode(SendTextMessage.self, from: data) {
                 AuditLogger.log(messageType: "send_text", clientIdentifier: "ws-client", textContent: msg.text)
-                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
-                    if msg.pressReturn { thinkingWindows.insert(msg.windowId) }
-                    let termApp = terminalAppForWindow(window)
-                    windowManager.focusWindow(msg.windowId)
+                guard windowManager.windows.contains(where: { $0.id == msg.windowId }) else {
+                    let known = windowManager.windows.map { $0.id }
+                    print("[Quip] send_text DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
+                    break
+                }
+                ensureITermSessionResolved(for: msg.windowId) { window in
+                    if msg.pressReturn { self.thinkingWindows.insert(msg.windowId) }
+                    let termApp = self.terminalAppForWindow(window)
+                    self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
                     // When iTerm2 session-write can target the session by UUID,
@@ -575,10 +581,6 @@ struct QuipMacApp: App {
                     } else {
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { inject() }
                     }
-                } else {
-                    let known = windowManager.windows.map { $0.id }
-                    print("[Quip] send_text DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
-                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                 }
             }
 
@@ -587,7 +589,7 @@ struct QuipMacApp: App {
                 AuditLogger.log(messageType: "image_upload", clientIdentifier: "ws-client", textContent: msg.filename)
 
                 // Resolve target window first — fail fast, don't write the file if it's gone.
-                guard let window = windowManager.windows.first(where: { $0.id == msg.windowId }) else {
+                guard windowManager.windows.contains(where: { $0.id == msg.windowId }) else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] image_upload DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
                     webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "unknown window"))
@@ -615,35 +617,37 @@ struct QuipMacApp: App {
                     return
                 }
 
-                // Paste the absolute path into the terminal input with a trailing space, no Return.
-                let termApp = terminalAppForWindow(window)
-                windowManager.focusWindow(msg.windowId)
-                let name = window.name
-                let wn = window.windowNumber
-                let delay = KeystrokeInjector.focusDelay(
-                    path: .sendText, terminalApp: termApp,
-                    iterm2SessionId: window.iterm2SessionId
-                )
-                let textToInject = savedURL.path + " "
-                let finishInjection = { [self] in
-                    let result = self.keystrokeInjector.sendText(
-                        textToInject, to: msg.windowId, pressReturn: false,
-                        terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                ensureITermSessionResolved(for: msg.windowId) { window in
+                    // Paste the absolute path into the terminal input with a trailing space, no Return.
+                    let termApp = self.terminalAppForWindow(window)
+                    self.windowManager.focusWindow(msg.windowId)
+                    let name = window.name
+                    let wn = window.windowNumber
+                    let delay = KeystrokeInjector.focusDelay(
+                        path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    if result.success {
-                        print("[Quip] image_upload: typed path into windowId=\(msg.windowId) (\(textToInject.count) chars)")
-                        self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
-                    } else {
-                        let err = result.error ?? "couldn't type path"
-                        print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId): \(err)")
-                        self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
+                    let textToInject = savedURL.path + " "
+                    let finishInjection = {
+                        let result = self.keystrokeInjector.sendText(
+                            textToInject, to: msg.windowId, pressReturn: false,
+                            terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                            iterm2SessionId: window.iterm2SessionId
+                        )
+                        if result.success {
+                            print("[Quip] image_upload: typed path into windowId=\(msg.windowId) (\(textToInject.count) chars)")
+                            self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
+                        } else {
+                            let err = result.error ?? "couldn't type path"
+                            print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId): \(err)")
+                            self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
+                        }
                     }
-                }
-                if delay == 0 {
-                    finishInjection()
-                } else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { finishInjection() }
+                    if delay == 0 {
+                        finishInjection()
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { finishInjection() }
+                    }
                 }
             }
 
@@ -821,7 +825,11 @@ struct QuipMacApp: App {
                     quietHoursStart: msg.quietHoursStart,
                     quietHoursEnd: msg.quietHoursEnd,
                     sound: msg.sound,
-                    foregroundBanner: msg.foregroundBanner
+                    foregroundBanner: msg.foregroundBanner,
+                    // Older iOS clients omit this field — decode to nil,
+                    // default to true here so existing phones keep getting
+                    // banners until they upgrade.
+                    bannerEnabled: msg.bannerEnabled ?? true
                 )
                 pushNotificationService.updatePreferences(forDevice: msg.deviceToken, prefs: prefs)
                 print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") device=\(msg.deviceToken.prefix(8))")
@@ -833,9 +841,46 @@ struct QuipMacApp: App {
                 handleAttachITermWindow(windowNumber: msg.windowNumber, sessionId: msg.sessionId)
             }
 
+        // Phone is uploading its current preference snapshot for backup.
+        // Stored in UserDefaults under a per-device key so two phones can
+        // each have their own backup against this Mac.
+        case "preferences_snapshot":
+            if let msg = MessageCoder.decode(PreferenceSnapshotMessage.self, from: data) {
+                let key = phonePrefsKey(deviceID: msg.deviceID)
+                if let encoded = try? JSONEncoder().encode(msg.preferences) {
+                    UserDefaults.standard.set(encoded, forKey: key)
+                    print("[Quip] preferences_snapshot stored for device \(msg.deviceID.prefix(8))")
+                }
+            }
+
+        // Phone (typically right after authenticating from a fresh install)
+        // is asking for any backup we have. Always respond — if no backup
+        // exists we send an empty snapshot so the phone knows to stop
+        // waiting.
+        case "preferences_request":
+            if let msg = MessageCoder.decode(PreferenceRequestMessage.self, from: data) {
+                let key = phonePrefsKey(deviceID: msg.deviceID)
+                let snapshot: PreferencesSnapshot
+                if let blob = UserDefaults.standard.data(forKey: key),
+                   let decoded = try? JSONDecoder().decode(PreferencesSnapshot.self, from: blob) {
+                    snapshot = decoded
+                    print("[Quip] preferences_request: restoring snapshot for device \(msg.deviceID.prefix(8))")
+                } else {
+                    snapshot = PreferencesSnapshot()
+                    print("[Quip] preferences_request: no backup for device \(msg.deviceID.prefix(8))")
+                }
+                webSocketServer.broadcast(PreferenceRestoreMessage(preferences: snapshot))
+            }
+
         default:
             break
         }
+    }
+
+    /// UserDefaults key under which a given phone's preferences snapshot
+    /// lives. Per-device so a household with two phones doesn't collide.
+    private func phonePrefsKey(deviceID: String) -> String {
+        "phonePrefs.\(deviceID)"
     }
 
     /// Enumerate every iTerm2 window (not just Quip-tracked ones), tag each
@@ -1134,6 +1179,39 @@ struct QuipMacApp: App {
         // Take the last 25 lines — the Python filter handles stripping UI chrome
         let newLines = newContent.components(separatedBy: "\n")
         return Array(newLines.suffix(25)).joined(separator: "\n")
+    }
+
+    /// Ensure the window's iTerm2 session UUID is resolved before we
+    /// fire keystroke/text injection. When the Mac just launched (or an
+    /// iTerm2 window was created a split-second ago), `iterm2SessionId`
+    /// is still nil because the AppleScript that matches session UUIDs
+    /// to CG bounds runs on the subtitle-refresh cycle, not on window
+    /// discovery. Without this guard the phone sees a red toast like
+    /// "iTerm2 session not yet mapped for window …" for the first
+    /// handful of seconds after launch. This kicks a one-shot session
+    /// refresh off-main and retries the injection with the freshly
+    /// resolved window. For Terminal.app or already-mapped windows the
+    /// callback runs synchronously on main with zero latency.
+    @MainActor
+    private func ensureITermSessionResolved(
+        for windowId: String,
+        perform: @escaping @MainActor @Sendable (ManagedWindow) -> Void
+    ) {
+        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else { return }
+        let needsResolve = window.bundleId == TerminalApp.iterm2.bundleIdentifier
+            && window.iterm2SessionId == nil
+        if !needsResolve {
+            perform(window)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let sessions = WindowManager.fetchIterm2SessionIds()
+            Task { @MainActor in
+                self.windowManager.applyIterm2SessionIds(sessions)
+                guard let refreshed = self.windowManager.windows.first(where: { $0.id == windowId }) else { return }
+                perform(refreshed)
+            }
+        }
     }
 
     /// Pick the PID the state detector should watch for this window.

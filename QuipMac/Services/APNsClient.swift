@@ -128,7 +128,11 @@ actor APNsClient {
     /// Payload is passed as Data (not [String: Any]) so it crosses
     /// concurrency domains cleanly — [String: Any] isn't Sendable in
     /// Swift 6 strict mode.
-    func send(payloadData body: Data, toDevice device: RegisteredPushDevice) async throws {
+    func send(
+        payloadData body: Data,
+        toDevice device: RegisteredPushDevice,
+        collapseId: String? = nil
+    ) async throws {
         let host = device.environment == "production"
             ? "api.push.apple.com"
             : "api.sandbox.push.apple.com"
@@ -143,6 +147,15 @@ actor APNsClient {
         request.setValue(bundleId, forHTTPHeaderField: "apns-topic")
         request.setValue("10", forHTTPHeaderField: "apns-priority")
         request.setValue("bearer \(try currentJWT())", forHTTPHeaderField: "authorization")
+        // apns-collapse-id: if a prior push for the same key hasn't been
+        // delivered or tapped yet, the new one REPLACES it on the lock
+        // screen / notification center instead of stacking. Max 64 bytes
+        // per APNs spec. We key by windowId so repeated "waiting for
+        // input" pings on the same window don't pile up.
+        if let collapseId, !collapseId.isEmpty {
+            let truncated = String(collapseId.prefix(64))
+            request.setValue(truncated, forHTTPHeaderField: "apns-collapse-id")
+        }
 
         do {
             try await performSend(request: request, isRetry: false)
