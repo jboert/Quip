@@ -717,6 +717,15 @@ struct MainiOSView: View {
                 if !connected {
                     windows = []
                     selectedWindowId = nil
+                    // If an upload was in flight when the socket dropped,
+                    // the ack will never come back. Flip the thumbnail to
+                    // an error state immediately so the user can dismiss
+                    // it — otherwise they stare at a spinner for 10s
+                    // (the watchdog) or longer, with no visible way out
+                    // until the watchdog trips.
+                    if pendingImage.uploadState == .uploading {
+                        pendingImage.markError("disconnected — try again")
+                    }
                 }
                 updateOrientation()
             }

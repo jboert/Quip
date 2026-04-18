@@ -37,7 +37,15 @@ struct PendingImagePreviewStrip: View {
                             }
                         }
 
-                    if case .idle = state.uploadState {
+                    // ✕ is available in every state except `.justSent`
+                    // (the brief green-flash between ack and auto-clear).
+                    // Previously gated to `.idle` only — which left the user
+                    // stuck staring at a frozen thumbnail when the upload
+                    // wedged mid-flight or the watchdog tripped into
+                    // `.error`. If cancelling during `.uploading`, the
+                    // local thumbnail is cleared immediately; any in-flight
+                    // watchdog no-ops (it checks uploadState before firing).
+                    if state.uploadState != .justSent {
                         Button {
                             state.clear()
                         } label: {
