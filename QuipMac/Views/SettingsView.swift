@@ -2,6 +2,7 @@
 // QuipMac — macOS Settings window with tabbed configuration panels
 
 import SwiftUI
+import Darwin
 
 struct SettingsView: View {
     @Environment(WindowManager.self) private var windowManager
@@ -40,18 +41,176 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Colors", systemImage: "paintpalette")
                 }
+
+            NotificationsTab()
+                .tabItem {
+                    Label("Notifications", systemImage: "bell.badge")
+                }
         }
-        .frame(width: 520, height: 400)
+        .frame(width: 520, height: 460)
+    }
+}
+
+// MARK: - Notifications Tab
+
+/// Collects the APNs auth-key configuration (.p8 file, Key ID, Team ID,
+/// Bundle ID) + a Test Push button. The .p8 goes into the Keychain via
+/// APNsKeyStore; the three ID fields sit in UserDefaults. No pushes fire
+/// from here — the only send is Test Push, which loops registered
+/// devices and reports per-device success/failure inline.
+private struct NotificationsTab: View {
+    @Environment(PushNotificationService.self) private var pushService
+
+    @AppStorage("apnsKeyId") private var keyId: String = ""
+    @AppStorage("apnsTeamId") private var teamId: String = ""
+    @AppStorage("apnsBundleId") private var bundleId: String = "com.quip.QuipiOS"
+
+    @State private var hasKey: Bool = APNsKeyStore.hasKey
+    @State private var importStatus: String?
+    @State private var testStatus: [String] = []
+    @State private var isSending: Bool = false
+
+    var body: some View {
+        Form {
+            Section("APNs Auth Key") {
+                HStack {
+                    Text(hasKey ? "Key: stored in Keychain" : "Key: (not set)")
+                        .foregroundStyle(hasKey ? .primary : .secondary)
+                    Spacer()
+                    Button(hasKey ? "Replace .p8…" : "Import .p8…") { importKey() }
+                    if hasKey {
+                        Button("Clear") { clearKey() }
+                    }
+                }
+                if let importStatus {
+                    Text(importStatus)
+                        .font(.caption)
+                        .foregroundStyle(importStatus.hasPrefix("Error") ? .red : .secondary)
+                }
+                TextField("Key ID", text: $keyId)
+                TextField("Team ID", text: $teamId)
+                TextField("Bundle ID", text: $bundleId)
+            }
+
+            Section("Registered Devices (\(pushService.devices.count))") {
+                if pushService.devices.isEmpty {
+                    Text("No iPhones have registered yet. Open Quip on the phone and connect.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(pushService.devices, id: \.token) { device in
+                        HStack {
+                            Text(device.token.prefix(12) + "…")
+                                .font(.system(.caption, design: .monospaced))
+                            Spacer()
+                            Text(device.environment)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            Section {
+                HStack {
+                    Button {
+                        Task { await sendTestPush() }
+                    } label: {
+                        Label("Send Test Push", systemImage: "paperplane")
+                    }
+                    .disabled(isSending || !hasKey || keyId.isEmpty || teamId.isEmpty || bundleId.isEmpty || pushService.devices.isEmpty)
+                    if isSending { ProgressView().scaleEffect(0.7) }
+                }
+                ForEach(testStatus, id: \.self) { line in
+                    Text(line)
+                        .font(.caption)
+                        .foregroundStyle(line.hasPrefix("✓") ? Color.secondary : Color.red)
+                }
+            }
+        }
+        .padding()
+    }
+
+    private func importKey() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = []
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Import"
+        panel.message = "Select your APNs .p8 auth key"
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                let data = try Data(contentsOf: url)
+                if APNsKeyStore.set(data) {
+                    hasKey = true
+                    importStatus = "Imported \(url.lastPathComponent)"
+                    // New key → cached APNsClient's parsed private key
+                    // is stale. Drop it so the next send re-reads.
+                    pushService.invalidateClient()
+                } else {
+                    importStatus = "Error: could not save to Keychain"
+                }
+            } catch {
+                importStatus = "Error: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func clearKey() {
+        if APNsKeyStore.clear() {
+            hasKey = false
+            importStatus = "Key cleared"
+        }
+    }
+
+    private func sendTestPush() async {
+        testStatus = []
+        isSending = true
+        defer { isSending = false }
+
+        let hostName = Host.current().localizedName ?? "Mac"
+        let payload: [String: Any] = [
+            "aps": [
+                "alert": ["title": "Quip", "body": "Test push from \(hostName)"],
+                "sound": "default"
+            ],
+            "quip_event": "test_push"
+        ]
+        let devicesSnapshot = pushService.devices
+        let client: APNsClient
+        do {
+            client = try pushService.cachedClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
+        } catch {
+            testStatus.append("Error creating client: \(error)")
+            return
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            testStatus.append("Error: could not encode payload")
+            return
+        }
+        for device in devicesSnapshot {
+            do {
+                try await client.send(payloadData: body, toDevice: device)
+                testStatus.append("✓ \(device.token.prefix(8))… sent")
+            } catch APNsError.unregistered {
+                testStatus.append("⚠ \(device.token.prefix(8))… dropped (unregistered)")
+                pushService.removeDevice(token: device.token)
+            } catch {
+                testStatus.append("✗ \(device.token.prefix(8))… \(error)")
+            }
+        }
     }
 }
 
 // MARK: - General Tab
 
 private struct GeneralTab: View {
-    @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.terminal.rawValue
+    @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.iterm2.rawValue
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("showInMenuBar") private var showInMenuBar = true
     @AppStorage("showInDock") private var showInDock = true
+    @AppStorage("mirrorDesktop") private var mirrorDesktop = false
 
     var body: some View {
         Form {
@@ -67,6 +226,13 @@ private struct GeneralTab: View {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                 Toggle("Show in menu bar", isOn: $showInMenuBar)
                 Toggle("Show in Dock", isOn: $showInDock)
+            }
+
+            Section("Phone Display") {
+                Toggle("Mirror desktop terminals", isOn: $mirrorDesktop)
+                Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Window Refresh") {
@@ -298,6 +464,8 @@ private struct ConnectionTab: View {
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(TailscaleService.self) private var tailscale
+    @Environment(CloudflareTunnel.self) private var tunnel
+    @Environment(ConnectionLog.self) private var connectionLog
 
     @AppStorage("wsPort") private var port: Int = 8765
     @AppStorage("bonjourServiceName") private var serviceName: String = "Quip"
@@ -305,7 +473,6 @@ private struct ConnectionTab: View {
     @AppStorage("tailscaleHostnameOverride") private var tailscaleOverride: String = ""
     @AppStorage("requirePINForLocal") private var requirePINForLocal = false
     @AppStorage("spawnCommand") private var spawnCommand: String = "claude"
-    @State private var logEntries: [String] = []
 
     private var networkMode: NetworkMode {
         NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
@@ -414,9 +581,24 @@ private struct ConnectionTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Connection Log") {
-                if logEntries.isEmpty {
-                    Text("No recent activity")
+            Section("Diagnostics — Connection URLs") {
+                // Show every URL the phone could reasonably try right now —
+                // LAN, Tailscale, Cloudflare tunnel — each with a one-click
+                // copy. Debugging "nothing's loading on the phone" used to
+                // mean guessing which URL it had saved; now it's literally
+                // "copy this into the app's URL field."
+                urlRow(label: "LAN", url: Self.lanWSURL(port: port))
+                if let tsURL = tailscaleWSURL {
+                    urlRow(label: "Tailscale", url: tsURL)
+                }
+                if !tunnel.webSocketURL.isEmpty {
+                    urlRow(label: "Cloudflare", url: tunnel.webSocketURL)
+                }
+            }
+
+            Section("Diagnostics — Recent Connections") {
+                if connectionLog.events.isEmpty {
+                    Text("No connection attempts recorded yet.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -424,19 +606,134 @@ private struct ConnectionTab: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
-                            ForEach(logEntries, id: \.self) { entry in
-                                Text(entry)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                            ForEach(connectionLog.events) { event in
+                                connectionLogRow(event)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(height: 100)
+                    .frame(height: 140)
+
+                    Button {
+                        connectionLog.clear()
+                    } label: {
+                        Label("Clear Log", systemImage: "trash")
+                    }
+                    .controlSize(.small)
                 }
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func urlRow(label: String, url: String) -> some View {
+        LabeledContent(label) {
+            HStack(spacing: 6) {
+                Text(url)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy \(url)")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectionLogRow(_ event: ConnectionEvent) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(Self.timeFormatter.string(from: event.timestamp))
+                .font(.caption.monospaced())
+                .foregroundStyle(.tertiary)
+                .frame(width: 70, alignment: .leading)
+
+            Text(Self.eventLabel(event.kind))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Self.eventColor(event.kind))
+                .frame(width: 90, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.remote)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail = event.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var tailscaleWSURL: String? {
+        let url = tailscale.webSocketURL
+        return url.isEmpty ? nil : url
+    }
+
+    /// The LAN URL helper in `MainWindow.swift` uses the same getifaddrs loop —
+    /// we duplicate it here rather than reach across views for a private field.
+    /// Cheap enough; runs only on Settings render.
+    private static func lanWSURL(port: Int) -> String {
+        var address = "localhost"
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&ifaddr) == 0 {
+            var ptr = ifaddr
+            while let ifa = ptr {
+                let sa = ifa.pointee.ifa_addr.pointee
+                if sa.sa_family == UInt8(AF_INET) {
+                    let name = String(cString: ifa.pointee.ifa_name)
+                    if name.hasPrefix("en") {
+                        let addr = ifa.pointee.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                        let ip = String(cString: inet_ntoa(addr.sin_addr))
+                        if ip != "127.0.0.1" {
+                            address = ip
+                            break
+                        }
+                    }
+                }
+                ptr = ifa.pointee.ifa_next
+            }
+            freeifaddrs(ifaddr)
+        }
+        return "ws://\(address):\(port)"
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    private static func eventLabel(_ kind: ConnectionEvent.Kind) -> String {
+        switch kind {
+        case .connected: return "Connected"
+        case .disconnected: return "Disconnected"
+        case .authSucceeded: return "Auth ✓"
+        case .authFailed: return "Auth ✗"
+        case .failed: return "Failed"
+        }
+    }
+
+    private static func eventColor(_ kind: ConnectionEvent.Kind) -> Color {
+        switch kind {
+        case .connected, .authSucceeded: return .green
+        case .disconnected: return .secondary
+        case .authFailed, .failed: return .red
+        }
     }
 }
 

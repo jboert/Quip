@@ -106,6 +106,44 @@ final class TerminalStateDetector {
 
     // MARK: - Track / Untrack
 
+    /// Resolve an iTerm2 tty (e.g. "ttys009") to its session-leader shell PID.
+    /// Used so each iTerm window can be polled against its own process tree
+    /// instead of sharing the iTerm app PID (which conflates all sessions
+    /// into one big "is any claude busy?" answer). Nil if the tty has no
+    /// active processes — typically means the session just closed.
+    nonisolated static func shellPidForTTY(_ tty: String) -> pid_t? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-t", tty, "-o", "pid=,ppid=,stat=,comm="]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        do { try task.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard let out = String(data: data, encoding: .utf8) else { return nil }
+
+        // Walk: find the shallowest process on this tty — usually login, then
+        // shell. We want the SHELL (zsh/bash/fish) not login, because Claude
+        // and friends are descendants of the shell, not login.
+        struct Row { let pid: pid_t; let ppid: pid_t; let comm: String }
+        var rows: [Row] = []
+        for line in out.components(separatedBy: "\n") {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard parts.count >= 4, let p = pid_t(parts[0]), let pp = pid_t(parts[1]) else { continue }
+            let comm = parts[3]
+            rows.append(Row(pid: p, ppid: pp, comm: comm))
+        }
+        // Prefer the shell itself (zsh/bash/fish/sh). Fall back to session
+        // leader, then any process on the tty — beats returning nil and
+        // blindly trusting the app PID.
+        let shellNames: Set<String> = ["zsh", "-zsh", "bash", "-bash", "fish", "-fish", "sh", "-sh"]
+        if let shell = rows.first(where: { shellNames.contains(($0.comm as NSString).lastPathComponent) }) {
+            return shell.pid
+        }
+        return rows.first?.pid
+    }
+
     /// Register a terminal window for state detection
     func trackWindow(_ windowId: String, shellPid: pid_t) {
         trackedWindows[windowId] = shellPid
@@ -274,30 +312,33 @@ final class TerminalStateDetector {
 
     /// Get ALL descendant processes of a given PID by walking the process tree.
     /// Uses `ps -ax` to get the full process list, then filters to descendants.
+    ///
+    /// IMPORTANT: read stdout BEFORE waitUntilExit. On a busy Mac, ps output
+    /// often exceeds the pipe buffer (~64KB). Calling waitUntilExit first
+    /// deadlocks: ps blocks writing to a full pipe, we block waiting for it
+    /// to exit. Reading first drains the pipe until ps closes it at exit,
+    /// which unblocks ps and makes waitUntilExit instant. Stderr goes to
+    /// /dev/null so we never risk the mirror-image deadlock on errPipe.
     private nonisolated func getChildProcesses(of parentPid: pid_t) -> [ProcessInfo]? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
         task.arguments = ["-ax", "-o", "pid,ppid,pcpu,comm"]
 
         let pipe = Pipe()
-        let errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = errPipe
+        task.standardError = FileHandle(forWritingAtPath: "/dev/null")
 
         do {
             try task.run()
-            task.waitUntilExit()
         } catch {
             try? pipe.fileHandleForReading.close()
             try? pipe.fileHandleForWriting.close()
-            try? errPipe.fileHandleForReading.close()
-            try? errPipe.fileHandleForWriting.close()
             return nil
         }
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
         try? pipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForReading.close()
         guard let output = String(data: data, encoding: .utf8) else { return nil }
 
         // Parse all processes into (pid, ppid, cpu, comm)

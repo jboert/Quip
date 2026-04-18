@@ -15,6 +15,25 @@ final class KeystrokeInjector {
         let error: String?
     }
 
+    /// Which injection path the delay is being computed for. `.sendText`
+    /// historically needed 80ms; `.quickAction` needed 200ms because the
+    /// System Events keystroke path races the AX window raise harder.
+    enum KeystrokePath: Sendable { case sendText, quickAction }
+
+    /// Returns the delay QuipMac should wait after calling `focusWindow`
+    /// before firing the AppleScript keystroke. When iTerm2 session-write
+    /// targets a session directly by UUID, it does NOT require the window
+    /// to be frontmost — the delay is pure latency and must be zero.
+    nonisolated static func focusDelay(path: KeystrokePath,
+                                       terminalApp: TerminalApp,
+                                       iterm2SessionId: String?) -> TimeInterval {
+        if terminalApp == .iterm2 && iterm2SessionId != nil { return 0 }
+        switch path {
+        case .sendText:    return 0.08
+        case .quickAction: return 0.2
+        }
+    }
+
     // MARK: - Send Text
 
     /// Send text to a specific terminal window, optionally pressing Return after.
@@ -26,7 +45,7 @@ final class KeystrokeInjector {
     ///   - windowIndex: 1-based window index in the terminal app (default: 1)
     /// - Returns: Result indicating success or failure
     @discardableResult
-    func sendText(_ text: String, to windowId: String, pressReturn: Bool, terminalApp: TerminalApp, windowName: String? = nil, cgWindowNumber: CGWindowID = 0) -> InjectionResult {
+    func sendText(_ text: String, to windowId: String, pressReturn: Bool, terminalApp: TerminalApp, windowName: String? = nil, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> InjectionResult {
         let escapedText = escapeForAppleScript(text)
         let textToSend = escapedText
 
@@ -69,24 +88,48 @@ final class KeystrokeInjector {
             """
 
         case .iterm2:
-            // Try matching by window ID first, then by name, then fallback to front window
+            // No session id → no safe target. Falling back to `current session
+            // of front window` would silently type into whatever iTerm2 window
+            // is frontmost on the Mac — a different terminal than the phone is
+            // looking at. Refuse instead and let the next session-id refresh
+            // heal things; the phone can retry.
+            guard let sessionId = iterm2SessionId else {
+                let err = "iTerm2 session not yet mapped for window \(windowId)"
+                print("[KeystrokeInjector] sendText DROPPED: \(err)")
+                return InjectionResult(success: false, error: err)
+            }
+            let escapedId = escapeForAppleScript(sessionId)
+            // iTerm2's AppleScript hierarchy is window → tab → session. The
+            // shorthand `sessions of w` the old code used silently errors
+            // ("Can't get every session of item 1 of every window") and the
+            // old fallback happened to mask it by writing to front window —
+            // which is how every keystroke quietly landed in the wrong pane
+            // for months. Walk the tabs explicitly.
             script = """
             tell application "iTerm2"
-                -- Try by window id (matches CG window number)
-                try
-                    repeat with w in windows
-                        if id of w is \(cgWindowNumber) then
-                            tell current session of w
-                                write text "\(textToSend)" newline no\(returnSuffix)
+                set quipFound to false
+                repeat with aWindow in windows
+                    tell aWindow
+                        repeat with aTab in tabs
+                            tell aTab
+                                repeat with aSession in sessions
+                                    if unique id of aSession is "\(escapedId)" then
+                                        tell aSession
+                                            write text "\(textToSend)" newline no\(returnSuffix)
+                                        end tell
+                                        set quipFound to true
+                                        exit repeat
+                                    end if
+                                end repeat
                             end tell
-                            return
-                        end if
-                    end repeat
-                end try
-                -- Fallback: use front window (should be focused by AX already)
-                tell current session of front window
-                    write text "\(textToSend)" newline no\(returnSuffix)
-                end tell
+                            if quipFound then exit repeat
+                        end repeat
+                    end tell
+                    if quipFound then exit repeat
+                end repeat
+                if not quipFound then
+                    error "Quip: iTerm2 session \(escapedId) not found"
+                end if
             end tell
             """
         }
@@ -114,7 +157,7 @@ final class KeystrokeInjector {
     /// approach), which relies on `windowManager.focusWindow(windowId)` having
     /// raised the correct window before the AppleScript runs.
     @discardableResult
-    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1) -> InjectionResult {
+    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1, iterm2SessionId: String? = nil) -> InjectionResult {
         // iTerm2: use native write-text-with-character-id. Byte-identical to
         // what typing the key into an iTerm2 session does, reliable because
         // write text targets a session by object address rather than by
@@ -123,21 +166,42 @@ final class KeystrokeInjector {
             guard let charId = iTerm2CharIdFor(key) else {
                 return InjectionResult(success: false, error: "No iTerm2 char id for key: \(key)")
             }
+            // Same rule as sendText: refuse to type into a random front window
+            // when we don't have a verified session id. A stray Ctrl+C landing
+            // in the wrong terminal kills whatever's running there.
+            guard let sessionId = iterm2SessionId else {
+                let err = "iTerm2 session not yet mapped for window \(windowId)"
+                print("[KeystrokeInjector] sendKeystroke DROPPED: \(err)")
+                return InjectionResult(success: false, error: err)
+            }
+            let escapedId = escapeForAppleScript(sessionId)
+            // Walks window → tab → session (same reason as sendText: iTerm2's
+            // AppleScript rejects the `sessions of w` shortcut).
             let script = """
             tell application "iTerm2"
-                try
-                    repeat with w in windows
-                        if id of w is \(cgWindowNumber) then
-                            tell current session of w
-                                write text (character id \(charId))
+                set quipFound to false
+                repeat with aWindow in windows
+                    tell aWindow
+                        repeat with aTab in tabs
+                            tell aTab
+                                repeat with aSession in sessions
+                                    if unique id of aSession is "\(escapedId)" then
+                                        tell aSession
+                                            write text (character id \(charId))
+                                        end tell
+                                        set quipFound to true
+                                        exit repeat
+                                    end if
+                                end repeat
                             end tell
-                            return
-                        end if
-                    end repeat
-                end try
-                tell current session of front window
-                    write text (character id \(charId))
-                end tell
+                            if quipFound then exit repeat
+                        end repeat
+                    end tell
+                    if quipFound then exit repeat
+                end repeat
+                if not quipFound then
+                    error "Quip: iTerm2 session \(escapedId) not found"
+                end if
             end tell
             """
             return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, charId=\(charId)]")
@@ -161,6 +225,12 @@ final class KeystrokeInjector {
         case "ctrl+d":
             script = keystrokeScript(
                 key: "d", using: "control down",
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
+            )
+
+        case "ctrl+u":
+            script = keystrokeScript(
+                key: "u", using: "control down",
                 terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
@@ -200,6 +270,9 @@ final class KeystrokeInjector {
         case "backspace", "delete":  return 127  // DEL
         case "ctrl+c":               return 3    // ETX / SIGINT
         case "ctrl+d":               return 4    // EOT / EOF
+        // NAK — readline "kill backward" (clears prompt to start of line in
+        // most TUI input layers, including Claude Code's Ink-based prompt).
+        case "ctrl+u":               return 21
         default:                     return nil
         }
     }
@@ -338,7 +411,7 @@ final class KeystrokeInjector {
     // MARK: - Read Terminal Content
 
     /// Read the visible/recent text content from a terminal window via AppleScript.
-    nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0) -> String? {
+    nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> String? {
         let script: String
         switch terminalApp {
         case .terminal:
@@ -348,20 +421,35 @@ final class KeystrokeInjector {
             end tell
             """
         case .iterm2:
+            // Read falls under the same "don't guess" rule as sendText. Without
+            // a verified session id, the old fallback returned the contents of
+            // whichever iTerm2 window happened to be frontmost — that's how
+            // the phone ended up displaying another window's buffer while the
+            // user thought they were looking at their selection.
+            guard let sessionId = iterm2SessionId else { return nil }
+            let escapedId = sessionId
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            // window → tab → session — see sendText for why the shortcut
+            // `sessions of w` can't be used here.
             script = """
             tell application "iTerm2"
-                try
-                    repeat with w in windows
-                        if id of w is \(cgWindowNumber) then
-                            tell current session of w
-                                return contents
+                repeat with aWindow in windows
+                    tell aWindow
+                        repeat with aTab in tabs
+                            tell aTab
+                                repeat with aSession in sessions
+                                    if unique id of aSession is "\(escapedId)" then
+                                        tell aSession
+                                            return contents
+                                        end tell
+                                    end if
+                                end repeat
                             end tell
-                        end if
-                    end repeat
-                end try
-                tell current session of front window
-                    return contents
-                end tell
+                        end repeat
+                    end tell
+                end repeat
+                return ""
             end tell
             """
         }

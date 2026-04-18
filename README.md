@@ -44,11 +44,35 @@ Requires macOS 14+, iOS 17+, Xcode 16+, and [XcodeGen](https://github.com/yonask
 ```bash
 cd QuipMac && xcodegen generate && cd ..
 cd QuipiOS && xcodegen generate && cd ..
+```
 
+**Install iPhone app over the air on your paired device (recommended):**
+
+```bash
+# Build
+xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
+  -destination 'generic/platform=iOS' -derivedDataPath QuipiOS/build build
+
+# Install wirelessly on Tim apple 17 (replace with your device name — list paired
+# devices with `xcrun devicectl list devices`)
+xcrun devicectl device install app --device "Tim apple 17" \
+  QuipiOS/build/Build/Products/Debug-iphoneos/Quip.app
+```
+
+**Build Mac app:**
+
+```bash
 xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac build
+```
+
+**Alternative — iOS generic build without install (for CI or generic device targets):**
+
+```bash
 xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
   -destination 'generic/platform=iOS' build
 ```
+
+**Note:** `QuipMac/Info.plist` and `QuipiOS/Info.plist` are gitignored — they're regenerated from `project.yml` by `xcodegen generate`. Edit `project.yml`, not the `Info.plist`. (`.xcodeproj` files stay tracked so fresh clones open in Xcode without `xcodegen` first, but `Info.plist` is small enough to fall into "I'll just edit it directly" traps — hence the asymmetry.)
 
 ### Android
 

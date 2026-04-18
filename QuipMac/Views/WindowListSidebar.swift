@@ -9,7 +9,7 @@ struct WindowListSidebar: View {
     @Binding var windowOrder: [String]
 
     @State private var showingAddPopover = false
-    @State private var newTerminalApp: TerminalApp = .terminal
+    @State private var newTerminalApp: TerminalApp = .iterm2
     @State private var newProjectDirectory: String = ""
 
     var body: some View {
@@ -280,34 +280,27 @@ private struct WindowRow: View {
     var onMoveUp: (() -> Void)?
     var onMoveDown: (() -> Void)?
 
-    @State private var isEnabled: Bool
     @State private var isHovering = false
 
-    init(window: ManagedWindow, index: Int, isSelected: Bool, onToggle: @escaping (Bool) -> Void, onMoveUp: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
-        self.window = window
-        self.index = index
-        self.isSelected = isSelected
-        self.onToggle = onToggle
-        self.onMoveUp = onMoveUp
-        self.onMoveDown = onMoveDown
-        self._isEnabled = State(initialValue: window.isEnabled)
+    /// Checkbox reads directly from the live ManagedWindow and writes through
+    /// the onToggle callback. We used to mirror `window.isEnabled` into a
+    /// local @State that was only seeded at init — so when the phone (or an
+    /// auto-enable triggered by mirror-desktop's tap-to-activate) flipped a
+    /// window on, this sidebar stayed visually out of sync. Direct binding
+    /// keeps the checkbox honest no matter who changed the state.
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { window.isEnabled },
+            set: { onToggle($0) }
+        )
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            Toggle(isOn: $isEnabled) {
+            Toggle(isOn: enabledBinding) {
                 EmptyView()
             }
             .toggleStyle(.checkbox)
-            .onChange(of: isEnabled) { _, newValue in
-                onToggle(newValue)
-            }
-            // Local @State init only fires once per row instance, so external
-            // flips of window.isEnabled (e.g. duplicate-window auto-enable)
-            // never reach the checkbox without this sync.
-            .onChange(of: window.isEnabled) { _, newValue in
-                if isEnabled != newValue { isEnabled = newValue }
-            }
 
             Text("\(index).")
                 .font(.caption.monospacedDigit())
@@ -364,7 +357,7 @@ private struct WindowRow: View {
                 }
             }
         }
-        .opacity(isEnabled ? 1.0 : 0.5)
+        .opacity(window.isEnabled ? 1.0 : 0.5)
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering

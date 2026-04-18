@@ -169,13 +169,23 @@ struct WindowRectangle: View {
                 )
             }
         }
-        .alert("Close terminal?", isPresented: $showCloseConfirmation) {
+        .alert("Close \(window.name)?", isPresented: $showCloseConfirmation) {
             Button("Cancel", role: .cancel) {}
-            Button("Close", role: .destructive) {
+            // "Remove from Phone" is only meaningful when the window is
+            // currently being managed — toggling an already-disabled window
+            // here would re-enable it, which is the opposite of what the
+            // user asked for. On a disabled window (visible via
+            // mirror-desktop), only the destructive Close Terminal remains.
+            if window.enabled {
+                Button("Remove from Phone") {
+                    triggerAction(.toggleEnabled)
+                }
+            }
+            Button("Close Terminal", role: .destructive) {
                 triggerAction(.closeWindow)
             }
         } message: {
-            Text("This will close \(window.name) and kill any running command. You can't undo this.")
+            Text("Remove from Phone keeps the terminal running on your Mac — you just stop driving it from here. Close Terminal kills any running command and can't be undone.")
         }
         .onAppear {
             if window.isThinking {

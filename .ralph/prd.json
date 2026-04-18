@@ -1,0 +1,88 @@
+{
+  "project": "Quip",
+  "branchName": "ralph/push-notifications",
+  "description": "Push Notifications + Dynamic Island Live Activity for Claude waiting-for-input — so the user doesn't have to stare at the Quip app. See tasks/prd-push-notifications-for-waiting-input.md for the full spec.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Wire device token plumbing (iOS registration + Mac storage)",
+      "description": "As a developer, I need the phone to register for APNs, capture its device token, and send it to the Mac over the existing WebSocket so the Mac has an address to push to. This is the foundation — no pushes fire yet.",
+      "acceptanceCriteria": [
+        "Shared/MessageProtocol.swift: add RegisterPushDeviceMessage(deviceToken: String, environment: String) (iOS→Mac, type=\"register_push_device\") and PushPreferencesMessage(paused: Bool, quietHoursStart: Int?, quietHoursEnd: Int?, sound: Bool, foregroundBanner: Bool) (iOS→Mac, type=\"push_preferences\").",
+        "QuipiOS.entitlements: add aps-environment = development. QuipiOS/Info.plist: add NSSupportsLiveActivities = YES (needed for US-004 but safe to add now).",
+        "QuipiOS/QuipApp.swift or a new QuipiOS/Services/PushRegistrationService.swift: UIApplicationDelegateAdaptor hooks didRegisterForRemoteNotificationsWithDeviceToken and didFailToRegisterForRemoteNotificationsWithError. On launch + after WebSocketClient.onAuthResult(success), call UNUserNotificationCenter.requestAuthorization([.alert, .sound, .badge]); on grant, registerForRemoteNotifications(); store the hex-encoded token in @AppStorage(\"apnsDeviceToken\"); send RegisterPushDeviceMessage to Mac.",
+        "QuipMac/Services/PushNotificationService.swift: new @Observable class. Stores [{token, environment, registeredAt}] in UserDefaults key \"registeredPushDevices\", deduped by token. Exposes registerDevice(token:environment:) and removeDevice(token:).",
+        "QuipMac/QuipMacApp.swift: handle type==\"register_push_device\" in handleIncomingMessage, decode RegisterPushDeviceMessage, call pushNotificationService.registerDevice(...). Log \"[Quip] push device registered: <prefix-8chars>\".",
+        "Xcode pbxproj regenerated via xcodegen for both targets.",
+        "Unit test: PushRegisteredDeviceStoreTests verifies dedup + persistence round-trip across instances.",
+        "xcodebuild on QuipMac target passes.",
+        "xcodebuild on QuipiOS target passes (iOS device destination).",
+        "All existing tests pass."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Mac APNs client: settings UI, Keychain, JWT signing, HTTP/2 POST, test-push button",
+      "description": "As a developer, I need the Mac to accept the user's APNs auth key, sign ES256 JWTs, POST to Apple's HTTP/2 API, and verify end-to-end with a Test Push button in Settings. No trigger wiring yet — the Test Push button is the only caller in this iteration.",
+      "acceptanceCriteria": [
+        "QuipMac/Services/APNsKeyStore.swift: reads/writes the .p8 key in the Mac Keychain under service=\"com.quip.mac.apns\", account=\"p8key\". Never persists the key to UserDefaults or disk.",
+        "QuipMac UserDefaults keys: apnsKeyId (String), apnsTeamId (String), apnsBundleId (String, default \"com.quip.QuipiOS\").",
+        "QuipMac/Services/APNsClient.swift: ES256-signs JWT using CryptoKit.P256.Signing.PrivateKey(pemRepresentation:), caches + rotates every 50 minutes. Header {\"alg\":\"ES256\",\"kid\":<keyId>}, payload {\"iss\":<teamId>,\"iat\":now}. Exposes send(payload: [String: Any], toDevice: RegisteredDevice) async throws.",
+        "POST via URLSession to https://api.sandbox.push.apple.com/3/device/<token> (development) or https://api.push.apple.com/3/device/<token> (production) based on device.environment. Headers: apns-push-type=alert, apns-topic=<bundleId>, apns-priority=10, authorization=bearer <jwt>.",
+        "Error handling: on HTTP 410 or 400+reason=\"Unregistered\" or \"BadDeviceToken\", call pushNotificationService.removeDevice(token:). On 429/503, retry once after 2s. Throw APNsError otherwise.",
+        "QuipMac/Views/SettingsView.swift: new Notifications tab with: .p8 file picker (reads bytes, stores via APNsKeyStore.set), Key ID TextField, Team ID TextField, Bundle ID TextField, and \"Send Test Push\" button.",
+        "Test Push: loops registered devices, sends payload { aps: { alert: { title: \"Quip\", body: \"Test push from <Mac hostname>\" }, sound: \"default\" } } and reports per-device success/error status inline.",
+        "Unit test: APNsJWTTests — sign a payload with a fixture key, parse the resulting token, verify signature against the public key derived from the private key. Assert cached token reuses within 50min and rotates after.",
+        "xcodebuild on QuipMac target passes.",
+        "All existing tests pass."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Trigger + delivery — Mac fires on waiting_for_input, iOS receives with subtle foreground UX, tap deep-link, settings sync",
+      "description": "As a user, I want the phone to buzz within ~2s of Claude finishing its response in the window I have selected. Foreground delivery is subtle — the triggering window auto-front-loads in the picker with a pulsing yellow dot, no banner. Background/locked delivery is a standard APNs banner. Tapping the notification opens Quip, switches to that window, and focuses the text input. A Settings panel in iOS controls pause/quiet-hours/sound/foreground-banner, synced to the Mac.",
+      "acceptanceCriteria": [
+        "QuipMac/QuipMacApp.swift: in the terminal state-change path (where StateChangeMessage is broadcast), when new state == \"waiting_for_input\" AND windowId == clientSelectedWindowId, call pushNotificationService.notifyWaitingForInput(windowId:, windowName:).",
+        "PushNotificationService.notifyWaitingForInput: per-window debounce (max one call per 30s per windowId). Honors global paused + quietHours schedule (in the user's local time zone) + sound toggle. Builds payload { aps: { alert: { title: \"Quip\", body: \"<windowName> is waiting for input\" }, sound: sound ? \"default\" : nil, badge: windowsWaitingCount }, quip_window_id: <id>, quip_event: \"waiting_for_input\" } and sends to every registered device via APNsClient.",
+        "QuipMac: handle type==\"push_preferences\" in handleIncomingMessage — decode PushPreferencesMessage and store per-device preferences in UserDefaults keyed by device token.",
+        "QuipiOS/QuipApp.swift: add Notifications section to Settings with four toggles — Pause All, Quiet Hours (+ start/end TimePickers that show when enabled), Sound, In-App Banner When Foreground. Default: pause=false, quietHours=off, sound=true, foregroundBanner=false.",
+        "iOS: on any toggle change, send PushPreferencesMessage to Mac immediately. Also send on every successful auth reconnect so Mac always has current prefs.",
+        "iOS AppDelegate: implement UNUserNotificationCenterDelegate.userNotificationCenter(willPresent:) — return [.list, .banner, .sound] if foregroundBanner is on OR the windowId != currently-selected windowId, else return [] (suppress banner entirely) but DO set @State windowsAttentionSet = windowsAttentionSet.union([windowId]) and trigger auto-front-load.",
+        "iOS: auto-front-load = move the triggering window to the top of the WindowPicker/windowLayout display order until the user selects it (clears the attention flag on SelectWindowMessage). Pulsing yellow dot overlay on the window's picker card while in attention state.",
+        "iOS: userNotificationCenter(didReceive:) — extract quip_window_id from userInfo, set selectedWindowId, trigger the same input-sheet presentation path as tapping the keyboard button, clear attention flag for that window. If window not in current layout, show toast \"Window no longer tracked\".",
+        "iOS: badge count — UIApplication.shared.applicationIconBadgeNumber = count of windows currently in attention state. Cleared when any window is selected (assume user is now engaged).",
+        "xcodebuild on QuipMac target passes.",
+        "xcodebuild on QuipiOS target passes.",
+        "Manual test on iPhone device: send a SendText from phone to a spawned iTerm window running \"claude\", wait for Claude to respond, confirm banner on lock-screen + pulsing dot on return to foreground."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Dynamic Island Live Activity for thinking/waiting state",
+      "description": "As an iPhone 14 Pro-or-later user, I want the Dynamic Island to show whether Claude is thinking or waiting on me without opening the app. Starts when Claude begins thinking on the selected window, flips to waiting state when ready, dismisses when user responds. Updates driven by existing WebSocket state-changes (no APNs Live Activity push tokens in this iteration).",
+      "acceptanceCriteria": [
+        "New Widget Extension target QuipLiveActivity (iOS 16.1+) added via xcodegen — Info.plist with NSExtension.NSExtensionPointIdentifier = com.apple.widgetkit-extension and NSSupportsLiveActivities = YES.",
+        "Shared between app and widget: QuipLiveActivity/QuipLiveActivityAttributes.swift — struct QuipLiveActivityAttributes: ActivityAttributes with static fields { windowId: String, windowName: String } and ContentState { state: String /* \"thinking\"|\"waiting\" */ }.",
+        "QuipLiveActivity/QuipLiveActivityWidget.swift: ActivityConfiguration(for: QuipLiveActivityAttributes.self) with lockScreen + DynamicIsland closures. Compact-leading = window color dot. Compact-trailing = spinner icon (thinking) or pulsing yellow ↵ (waiting). Minimal = color dot. Expanded regions: leading=color dot, center=windowName, trailing=state label, bottom=Deep-link Button(\"Open Quip\") using url(URL(string: \"quip://window/<windowId>\")).",
+        "QuipiOS/Services/LiveActivityService.swift: exposes startOrUpdate(windowId:, windowName:, state:) and end(windowId:). Maintains [String: Activity<QuipLiveActivityAttributes>]. No-op on devices where ActivityAuthorizationInfo().areActivitiesEnabled is false or the device lacks Dynamic Island.",
+        "QuipApp wiring: in WebSocketClient.onStateChange, if windowId == selectedWindowId and state in {\"thinking\", \"waiting_for_input\"}, call LiveActivityService.startOrUpdate. On user-triggered send (send_text or quick_action), call LiveActivityService.end(windowId:).",
+        "URL-scheme deep link: Info.plist CFBundleURLTypes includes quip://. AppDelegate/App .onOpenURL(_:) parses quip://window/<id> → sets selectedWindowId + clears attention flag + opens input sheet (same path as US-003's tap handler).",
+        "Graceful fallback: on iPhones without Dynamic Island (e.g. iPhone 13), LiveActivityService.startOrUpdate returns early with a single debug log — no crash, no errors surfaced to user.",
+        "xcodebuild on QuipiOS target passes (with Widget Extension included).",
+        "Manual test on iPhone 17 Pro Max: spawn a claude window, send a text from phone, observe island shows spinner during thinking then flips to yellow ↵ when claude finishes; tap island → Quip opens to that window with input focused; send reply → island dismisses."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

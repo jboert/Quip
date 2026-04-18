@@ -430,6 +430,9 @@ final class CloudflareTunnel {
                     response = AuthResultMessage(success: true, error: nil)
                     self.tunnelAuthenticated[ObjectIdentifier(conn)] = true
                     print("[TunnelProxy] Client authenticated")
+                    DispatchQueue.main.async {
+                        self.cachedServer?.onClientAuthenticated?()
+                    }
                     // Register for broadcasts immediately — registerTunnelClient is thread-safe.
                     // The sender enforces per-connection backpressure: if the NWConnection
                     // is already sitting on too much un-acked data, drop this broadcast

@@ -166,6 +166,45 @@ struct CloseWindowMessage: Codable, Sendable {
     }
 }
 
+/// iPhone → Mac. Asks the Mac to spawn a new iTerm2 window in the given
+/// directory, running the configured spawn command.
+struct SpawnWindowMessage: Codable, Sendable {
+    let type: String
+    let directory: String
+
+    init(directory: String) {
+        self.type = "spawn_window"
+        self.directory = directory
+    }
+}
+
+/// iPhone → Mac. Asks the Mac to evenly arrange all enabled windows on the
+/// main display, either side-by-side (`layout == "horizontal"`) or stacked
+/// top-to-bottom (`layout == "vertical"`). Any other value is rejected on
+/// the Mac side. Mac uses the existing LayoutCalculator + arrangeWindows
+/// path — same one the menu-bar "Arrange Windows" button triggers.
+struct ArrangeWindowsMessage: Codable, Sendable {
+    let type: String
+    let layout: String  // "horizontal" or "vertical"
+
+    init(layout: String) {
+        self.type = "arrange_windows"
+        self.layout = layout
+    }
+}
+
+/// Mac → iPhone. Sends the list of project directories configured in
+/// Mac Settings so the iPhone can offer a "new window" picker.
+struct ProjectDirectoriesMessage: Codable, Sendable {
+    let type: String
+    let directories: [String]
+
+    init(directories: [String]) {
+        self.type = "project_directories"
+        self.directories = directories
+    }
+}
+
 struct RequestContentMessage: Codable, Sendable {
     let type: String
     let windowId: String
@@ -230,6 +269,171 @@ struct TTSAudioMessage: Codable, Sendable {
         self.isFinal = isFinal
         self.audioBase64 = audioBase64
         self.format = format
+    }
+}
+
+/// Mac → iPhone. Sent when the Mac drops a message (unknown window, throttled,
+/// decode failure, etc.) so the phone can show feedback instead of silently
+/// swallowing the tap.
+struct ErrorMessage: Codable, Sendable {
+    let type: String
+    let reason: String
+
+    init(reason: String) {
+        self.type = "error"
+        self.reason = reason
+    }
+}
+
+// MARK: - Image Upload
+
+/// iPhone → Mac. Carries a single image to be attached to a terminal.
+/// `data` is the image bytes base64-encoded as a string (standard base64, no URL-safe variant).
+/// Post-encoding message size must be ≤ 10 MB (enforced on the sender side).
+struct ImageUploadMessage: Codable, Sendable {
+    let type: String
+    let imageId: String
+    let windowId: String
+    let filename: String
+    let mimeType: String
+    let data: String
+
+    init(imageId: String, windowId: String, filename: String, mimeType: String, data: String) {
+        self.type = "image_upload"
+        self.imageId = imageId
+        self.windowId = windowId
+        self.filename = filename
+        self.mimeType = mimeType
+        self.data = data
+    }
+}
+
+/// Mac → iPhone. Sent after the image was written to disk and the path was pasted.
+struct ImageUploadAckMessage: Codable, Sendable {
+    let type: String
+    let imageId: String
+    let savedPath: String
+
+    init(imageId: String, savedPath: String) {
+        self.type = "image_upload_ack"
+        self.imageId = imageId
+        self.savedPath = savedPath
+    }
+}
+
+/// Mac → iPhone. Sent on any failure (decode error, unknown window, disk write error, etc.).
+struct ImageUploadErrorMessage: Codable, Sendable {
+    let type: String
+    let imageId: String
+    let reason: String
+
+    init(imageId: String, reason: String) {
+        self.type = "image_upload_error"
+        self.imageId = imageId
+        self.reason = reason
+    }
+}
+
+// MARK: - Attach Existing iTerm Window
+
+/// iPhone → Mac. Asks the Mac to enumerate every iTerm2 window it can see so
+/// the phone can show the user a "pick one to attach" list. Empty body beyond
+/// `type`.
+struct ScanITermWindowsMessage: Codable, Sendable {
+    let type: String
+
+    init() { self.type = "scan_iterm_windows" }
+}
+
+/// Mac → iPhone. One row in the scan result — mirrors
+/// `WindowManager.ITermWindowDescriptor` but flattened for the wire. The
+/// `isAlreadyTracked` flag lets the UI dim rows that are already in Quip's
+/// window list so the user doesn't double-attach.
+struct ITermWindowInfo: Codable, Sendable, Equatable, Hashable {
+    /// CG / iTerm window number — stable for the lifetime of the window
+    /// but reassigned across iTerm relaunches, so always pair with sessionId.
+    let windowNumber: Int
+    let title: String
+    /// iTerm2 session `unique id`. Persists across iTerm restarts for
+    /// undetached sessions — this is the primary identity.
+    let sessionId: String
+    /// Current working directory of the session's shell.
+    let cwd: String
+    /// True when the session is already promoted to a Quip-tracked window.
+    let isAlreadyTracked: Bool
+    /// iTerm window's miniaturized state at scan time. UI shows these
+    /// dimmed and tagged so the user can tell them apart.
+    let isMiniaturized: Bool
+}
+
+/// Mac → iPhone. Response to a scan request.
+struct ITermWindowListMessage: Codable, Sendable {
+    let type: String
+    let windows: [ITermWindowInfo]
+
+    init(windows: [ITermWindowInfo]) {
+        self.type = "iterm_window_list"
+        self.windows = windows
+    }
+}
+
+/// iPhone → Mac. User picked a row from the scan list — promote it to a
+/// tracked Quip window.
+struct AttachITermWindowMessage: Codable, Sendable {
+    let type: String
+    let windowNumber: Int
+    let sessionId: String
+
+    init(windowNumber: Int, sessionId: String) {
+        self.type = "attach_iterm_window"
+        self.windowNumber = windowNumber
+        self.sessionId = sessionId
+    }
+}
+
+// MARK: - Push Notifications
+
+/// iPhone → Mac. Hands over the APNs device token so the Mac can push to
+/// this device. `environment` is `"development"` or `"production"` — must
+/// match the aps-environment entitlement the iOS app was signed with,
+/// because a dev-env token won't work against prod APNs (or vice-versa).
+struct RegisterPushDeviceMessage: Codable, Sendable {
+    let type: String
+    let deviceToken: String
+    let environment: String
+
+    init(deviceToken: String, environment: String) {
+        self.type = "register_push_device"
+        self.deviceToken = deviceToken
+        self.environment = environment
+    }
+}
+
+/// iPhone → Mac. User's notification preferences. Synced on every toggle
+/// change AND on every successful reconnect so the Mac is always working
+/// with current prefs. Per-device: stored on the Mac keyed by the
+/// device token so a shared account with two phones behaves independently.
+///
+/// `quietHoursStart` / `quietHoursEnd` are hours of day (0-23) in the
+/// user's local time zone. nil = quiet hours disabled.
+struct PushPreferencesMessage: Codable, Sendable {
+    let type: String
+    let deviceToken: String
+    let paused: Bool
+    let quietHoursStart: Int?
+    let quietHoursEnd: Int?
+    let sound: Bool
+    let foregroundBanner: Bool
+
+    init(deviceToken: String, paused: Bool, quietHoursStart: Int?, quietHoursEnd: Int?,
+         sound: Bool, foregroundBanner: Bool) {
+        self.type = "push_preferences"
+        self.deviceToken = deviceToken
+        self.paused = paused
+        self.quietHoursStart = quietHoursStart
+        self.quietHoursEnd = quietHoursEnd
+        self.sound = sound
+        self.foregroundBanner = foregroundBanner
     }
 }
 

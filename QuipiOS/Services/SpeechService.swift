@@ -214,8 +214,19 @@ private class AudioWorker: @unchecked Sendable {
     private var recognitionTask: SFSpeechRecognitionTask?
     private let queue = DispatchQueue(label: "com.quip.speech", qos: .userInteractive)
 
+    // Dictation sessions naturally terminate at ~1 minute or on silence. To let
+    // users talk longer, we stitch consecutive recognition tasks together and
+    // preserve the transcription across the seam.
+    private var accumulatedText = ""
+    private var isStopping = false
+    private var onUpdateCallback: ((String?, Bool) -> Void)?
+
     func start(onUpdate: @escaping (String?, Bool) -> Void) {
         queue.async { [self] in
+            self.accumulatedText = ""
+            self.isStopping = false
+            self.onUpdateCallback = onUpdate
+
             guard let recognizer = speechRecognizer, recognizer.isAvailable else {
                 onUpdate(nil, true)
                 return
@@ -228,40 +239,77 @@ private class AudioWorker: @unchecked Sendable {
             let session = AVAudioSession.sharedInstance()
             try? session.setActive(true)
 
-            // Create recognition request
-            let request = SFSpeechAudioBufferRecognitionRequest()
-            request.shouldReportPartialResults = true
-            request.requiresOnDeviceRecognition = true
-            self.recognitionRequest = request
-
-            // Install audio tap
+            // The tap reads from inputNode and forwards to whatever the current
+            // request is — so we can swap the request/task on restart without
+            // reinstalling the tap or stopping the engine.
             let inputNode = audioEngine.inputNode
-            let format = inputNode.outputFormat(forBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-                request.append(buffer)
-            }
-
-            do {
-                audioEngine.prepare()
-                try audioEngine.start()
-            } catch {
+            if !audioEngine.isRunning {
                 inputNode.removeTap(onBus: 0)
-                onUpdate(nil, true)
-                return
+                let format = inputNode.outputFormat(forBus: 0)
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                    self?.recognitionRequest?.append(buffer)
+                }
+                do {
+                    audioEngine.prepare()
+                    try audioEngine.start()
+                } catch {
+                    inputNode.removeTap(onBus: 0)
+                    onUpdate(nil, true)
+                    return
+                }
             }
 
-            // Start recognition
-            recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-                let text = result?.bestTranscription.formattedString
+            self.beginRecognitionTask(recognizer: recognizer)
+        }
+    }
+
+    private func beginRecognitionTask(recognizer: SFSpeechRecognizer) {
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
+        self.recognitionRequest = request
+
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self else { return }
+            self.queue.async {
+                let text = result?.bestTranscription.formattedString ?? ""
                 let isFinal = result?.isFinal ?? false
                 let hasError = error != nil
-                onUpdate(text, hasError || isFinal)
+
+                // Present accumulated previous chunks + current partial to caller.
+                let combined = self.accumulatedText.isEmpty
+                    ? text
+                    : (text.isEmpty ? self.accumulatedText : self.accumulatedText + " " + text)
+
+                if hasError {
+                    self.onUpdateCallback?(combined.isEmpty ? nil : combined, true)
+                    return
+                }
+
+                self.onUpdateCallback?(combined, false)
+
+                if isFinal {
+                    // Commit this chunk and decide whether to restart.
+                    self.accumulatedText = combined
+                    self.recognitionTask = nil
+                    self.recognitionRequest = nil
+
+                    if self.isStopping {
+                        self.onUpdateCallback?(combined, true)
+                    } else {
+                        // End-of-speech hit (silence or the ~1-minute ceiling)
+                        // but user is still holding PTT — spin up a new task so
+                        // dictation continues without a forced cutoff.
+                        self.beginRecognitionTask(recognizer: recognizer)
+                    }
+                }
             }
         }
     }
 
     func stop() {
         queue.async { [self] in
+            self.isStopping = true
             recognitionRequest?.endAudio()
             if audioEngine.isRunning {
                 audioEngine.stop()

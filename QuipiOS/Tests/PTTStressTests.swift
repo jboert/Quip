@@ -1,5 +1,5 @@
 import XCTest
-@testable import QuipiOS
+@testable import Quip
 
 /// Stress tests for rapid PTT (push-to-talk) toggling.
 /// Simulates rapid start/stop sequences to surface race conditions
