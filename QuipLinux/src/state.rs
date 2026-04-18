@@ -105,13 +105,21 @@ impl AppState {
                     bounds: raw.bounds,
                 });
             } else {
+                // First time seeing this window — check the persisted set so
+                // the user's selection survives Quip restarts.
+                let was_enabled = self
+                    .settings
+                    .general
+                    .enabled_window_ids
+                    .iter()
+                    .any(|id| id == &window_id);
                 refreshed.push(ManagedWindow {
                     id: window_id,
                     name: raw.title.clone(),
                     app: raw.app_name.clone(),
                     subtitle: String::new(),
                     app_class: raw.app_class.clone(),
-                    is_enabled: false,
+                    is_enabled: was_enabled,
                     assigned_color: self.assign_color().to_string(),
                     pid: raw.pid,
                     window_id: raw.window_id,
@@ -183,13 +191,29 @@ impl AppState {
             .collect();
 
         let monitor_name = display.map(|d| d.name.clone()).unwrap_or_else(|| "Display 1".into());
-        LayoutUpdate::new(monitor_name, states)
+        let screen_aspect = if screen_bounds.width > 0 && screen_bounds.height > 0 {
+            Some(screen_bounds.width as f64 / screen_bounds.height as f64)
+        } else {
+            None
+        };
+        LayoutUpdate::new(monitor_name, screen_aspect, states)
     }
 
-    /// Toggle window enabled state
+    /// Toggle window enabled state and persist the enabled set so the user's
+    /// selection survives Quip restarts.
     pub fn toggle_window(&mut self, window_id: &str, enabled: bool) {
         if let Some(w) = self.windows.iter_mut().find(|w| w.id == window_id) {
             w.is_enabled = enabled;
+        }
+        let ids: Vec<String> = self
+            .windows
+            .iter()
+            .filter(|w| w.is_enabled)
+            .map(|w| w.id.clone())
+            .collect();
+        if ids != self.settings.general.enabled_window_ids {
+            self.settings.general.enabled_window_ids = ids;
+            self.settings.save();
         }
     }
 

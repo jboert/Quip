@@ -71,6 +71,11 @@ pub struct GeneralSettings {
     pub tailscale_hostname_override: String,
     #[serde(default)]
     pub require_pin_for_local: bool,
+    /// Window IDs the user last had ticked. Rehydrated on startup so restarts
+    /// don't lose the selection. Windows whose IDs no longer exist are ignored
+    /// on load and pruned on save.
+    #[serde(default)]
+    pub enabled_window_ids: Vec<String>,
 }
 
 impl Default for GeneralSettings {
@@ -88,6 +93,7 @@ impl Default for GeneralSettings {
             network_mode: None,
             tailscale_hostname_override: String::new(),
             require_pin_for_local: false,
+            enabled_window_ids: Vec::new(),
         }
     }
 }

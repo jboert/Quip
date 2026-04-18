@@ -195,7 +195,12 @@ impl WindowListWidget {
 
         let state = self.shared_state.read().unwrap();
 
-        for (i, window) in state.windows.iter().enumerate() {
+        // Herd terminal windows up to the top so Claude sessions aren't
+        // buried under browser windows and whatnot. Within each group the
+        // user's custom order is preserved. Mirrors the Mac sidebar.
+        let (terminals, others): (Vec<_>, Vec<_>) = state.windows.iter()
+            .partition(|w| crate::platform::traits::is_terminal_class(&w.app_class));
+        for (i, window) in terminals.iter().chain(others.iter()).enumerate() {
             let row = self.build_row(window, i);
             self.list_box.append(&row);
         }
@@ -240,23 +245,38 @@ impl WindowListWidget {
         color_dot.set_valign(Align::Center);
         hbox.append(&color_dot);
 
-        // Name + subtitle
+        // Name + subtitle. Primary label is the folder/project when known,
+        // else the app name — rendered bold in the window's palette color so
+        // it doubles as the visual identifier of the selection. Secondary is
+        // the app name when a folder sits above, otherwise the window title.
         let text_box = gtk4::Box::new(Orientation::Vertical, 1);
         text_box.set_hexpand(true);
 
-        let name_label = gtk4::Label::new(Some(&window.name));
-        name_label.set_halign(Align::Start);
-        name_label.set_ellipsize(pango::EllipsizeMode::End);
-        name_label.set_max_width_chars(30);
-        text_box.append(&name_label);
+        let has_folder = !window.subtitle.is_empty();
+        let primary_text = if has_folder { &window.subtitle } else { &window.app };
+        let secondary_text = if has_folder { &window.app } else { &window.name };
 
-        let sub_text = if window.subtitle.is_empty() { &window.app } else { &window.subtitle };
-        let sub_label = gtk4::Label::new(Some(sub_text));
-        sub_label.set_halign(Align::Start);
-        sub_label.add_css_class("dim-label");
-        sub_label.add_css_class("caption");
-        sub_label.set_ellipsize(pango::EllipsizeMode::End);
-        text_box.append(&sub_label);
+        let (pr, pg, pb) = hex_to_rgb(&window.assigned_color);
+        let primary_markup = format!(
+            "<span color=\"#{:02x}{:02x}{:02x}\" weight=\"bold\">{}</span>",
+            (pr * 255.0) as u8,
+            (pg * 255.0) as u8,
+            (pb * 255.0) as u8,
+            glib::markup_escape_text(primary_text)
+        );
+        let primary_label = gtk4::Label::new(None);
+        primary_label.set_markup(&primary_markup);
+        primary_label.set_halign(Align::Start);
+        primary_label.set_ellipsize(pango::EllipsizeMode::End);
+        primary_label.set_max_width_chars(30);
+        text_box.append(&primary_label);
+
+        let secondary_label = gtk4::Label::new(Some(secondary_text));
+        secondary_label.set_halign(Align::Start);
+        secondary_label.add_css_class("dim-label");
+        secondary_label.add_css_class("caption");
+        secondary_label.set_ellipsize(pango::EllipsizeMode::End);
+        text_box.append(&secondary_label);
 
         hbox.append(&text_box);
 
