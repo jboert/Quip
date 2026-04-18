@@ -63,6 +63,15 @@ final class HardwareButtonHandler {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
 
+                // Don't touch volume or interpret presses unless Quip is actually
+                // foreground-active. KVO keeps firing while .inactive (app switcher,
+                // Control Center, lock-screen peek) and between willResignActive
+                // and didEnterBackground — hitting restoreVolume() in that window
+                // fights whatever app the user is actually using (YouTube etc.).
+                // We deliberately do NOT tear down the observer or audio session
+                // here; that path broke PTT resume before.
+                guard UIApplication.shared.applicationState == .active else { return }
+
                 // Ignore phantom KVO events caused by audio session reconfiguration
                 guard Date() >= self.suppressUntil else { return }
 
