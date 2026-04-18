@@ -40,6 +40,7 @@ struct QuipApp: App {
     @State private var attentionCenter = WindowAttentionCenter()
     @State private var pushDelegate = PushNotificationCenterDelegate()
     @State private var liveActivity = LiveActivityService()
+    @State private var prefsSync = PreferencesSyncService()
 
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
@@ -186,14 +187,6 @@ struct QuipApp: App {
                 // Buy ~30s of background execution so a quick app switch doesn't
                 // suspend the network stack and stale the WebSocket.
                 client.suspendForBackground()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                // Stop listening for volume changes — our KVO observer is on the
-                // shared system outputVolume and would otherwise fight other apps
-                // for control of the user's volume. Use didEnterBackground (not
-                // willResignActive) so transient interruptions like Control Center
-                // don't tear down the observer.
-                volumeHandler.pauseForBackground()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Probe the socket on return; force-reconnect with reset backoff
@@ -367,15 +360,34 @@ struct QuipApp: App {
                                 quietHoursStart: qhEnabled ? (ud.object(forKey: "pushQuietHoursStart") as? Int ?? 22) : nil,
                                 quietHoursEnd: qhEnabled ? (ud.object(forKey: "pushQuietHoursEnd") as? Int ?? 7) : nil,
                                 sound: ud.object(forKey: "pushSound") as? Bool ?? true,
-                                foregroundBanner: ud.bool(forKey: "pushForegroundBanner")
+                                foregroundBanner: ud.bool(forKey: "pushForegroundBanner"),
+                                bannerEnabled: ud.object(forKey: "pushBannerEnabled") as? Bool ?? true
                             )
                             client.send(prefs)
                         }
                     }
+                    // Ask the Mac for our backed-up preferences. If this is a
+                    // fresh reinstall, the Mac will push back whatever we last
+                    // synced; otherwise it'll send an empty snapshot and the
+                    // local UserDefaults stay as-is.
+                    prefsSync.requestRestore()
                 }
                 // On failure, PIN entry stays open — authError displayed in the UI
             }
         }
+
+        client.onPreferencesRestore = { snapshot in
+            DispatchQueue.main.async {
+                prefsSync.applyRestore(snapshot)
+            }
+        }
+
+        // Wire the sync service to actually transmit via the WebSocket. Done
+        // once at setup so every UserDefaults change can fire-and-forget.
+        prefsSync.send = { [client] data in
+            client.sendRaw(data)
+        }
+        prefsSync.start()
 
         volumeHandler.onPTTStart = {
             DispatchQueue.main.async { startRecording() }
@@ -724,6 +736,15 @@ struct MainiOSView: View {
                 if !connected {
                     windows = []
                     selectedWindowId = nil
+                    // If an upload was in flight when the socket dropped,
+                    // the ack will never come back. Flip the thumbnail to
+                    // an error state immediately so the user can dismiss
+                    // it — otherwise they stare at a spinner for 10s
+                    // (the watchdog) or longer, with no visible way out
+                    // until the watchdog trips.
+                    if pendingImage.uploadState == .uploading {
+                        pendingImage.markError("disconnected — try again")
+                    }
                 }
                 updateOrientation()
             }
@@ -2685,6 +2706,7 @@ struct SettingsSheet: View {
     var pushRegistration: PushRegistrationService
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     @AppStorage("pushPaused") private var pushPaused = false
+    @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
     @AppStorage("pushForegroundBanner") private var pushForegroundBanner = false
     @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
@@ -2705,18 +2727,28 @@ struct SettingsSheet: View {
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
                 }
 
+                // Notifications — one section. Kill switch on top; the
+                // usual sub-toggles only matter if Pause All is off, so we
+                // gate them behind it to cut visual noise. Quiet Hours
+                // steppers only show when the toggle is on, same deal.
+                // Kept tight: no secondary "status" footer unless the OS
+                // hasn't granted permission — that's the one case worth
+                // surfacing because push won't work at all.
                 Section {
                     Toggle("Pause All", isOn: $pushPaused)
-                    Toggle("Sound", isOn: $pushSound)
-                    Toggle("Banner When App Open", isOn: $pushForegroundBanner)
-                    Toggle("Live Activities", isOn: $liveActivitiesEnabled)
-                    Toggle("Quiet Hours", isOn: $quietHoursEnabled)
-                    if quietHoursEnabled {
-                        Stepper(value: $quietHoursStart, in: 0...23) {
-                            Text("From \(formatHour(quietHoursStart))")
+                    if !pushPaused {
+                        Toggle("Banner", isOn: $pushBannerEnabled)
+                        if pushBannerEnabled {
+                            Toggle("Sound", isOn: $pushSound)
+                            Toggle("Banner When App Open", isOn: $pushForegroundBanner)
                         }
-                        Stepper(value: $quietHoursEnd, in: 0...23) {
-                            Text("Until \(formatHour(quietHoursEnd))")
+                        Toggle("Live Activities", isOn: $liveActivitiesEnabled)
+                        Toggle("Quiet Hours", isOn: $quietHoursEnabled)
+                        if quietHoursEnabled {
+                            Stepper("From \(formatHour(quietHoursStart))",
+                                    value: $quietHoursStart, in: 0...23)
+                            Stepper("Until \(formatHour(quietHoursEnd))",
+                                    value: $quietHoursEnd, in: 0...23)
                         }
                     }
                 } header: {
@@ -2724,11 +2756,10 @@ struct SettingsSheet: View {
                 } footer: {
                     if pushRegistration.deviceToken == nil {
                         Text("Notification permission not granted. Reconnect or check iOS Settings → Quip.")
-                    } else {
-                        Text("Token registered: \(pushRegistration.deviceToken?.prefix(8) ?? "—")…")
                     }
                 }
                 .onChange(of: pushPaused) { _, _ in sendPrefs() }
+                .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
                 .onChange(of: pushSound) { _, _ in sendPrefs() }
                 .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
                 .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
@@ -2812,7 +2843,8 @@ struct SettingsSheet: View {
             quietHoursStart: quietHoursEnabled ? quietHoursStart : nil,
             quietHoursEnd: quietHoursEnabled ? quietHoursEnd : nil,
             sound: pushSound,
-            foregroundBanner: pushForegroundBanner
+            foregroundBanner: pushForegroundBanner,
+            bannerEnabled: pushBannerEnabled
         )
         client.send(msg)
     }

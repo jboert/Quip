@@ -124,6 +124,9 @@ final class WebSocketClient {
     var onError: ((String) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
+    /// Mac is sending back a preferences snapshot the phone previously
+    /// uploaded — used to repopulate UserDefaults after a reinstall.
+    var onPreferencesRestore: ((PreferencesSnapshot) -> Void)?
     /// Mac confirms an image upload; argument is the absolute path the Mac wrote.
     var onImageUploadAck: ((String) -> Void)?
     /// Mac rejects an image upload; argument is a human-readable reason.
@@ -257,6 +260,18 @@ final class WebSocketClient {
             }
         } catch {
             NSLog("[WebSocketClient] Encode error: %@", error.localizedDescription)
+        }
+    }
+
+    /// Send pre-encoded JSON. Used by services that already have a Data
+    /// blob and don't need a second encode pass.
+    func sendRaw(_ data: Data) {
+        guard let task = webSocketTask else { return }
+        let string = String(data: data, encoding: .utf8) ?? ""
+        task.send(.string(string)) { error in
+            if let error = error {
+                NSLog("[WebSocketClient] sendRaw error: %@", error.localizedDescription)
+            }
         }
     }
 
@@ -444,6 +459,11 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(SelectWindowMessage.self, from: data) {
                 onSelectWindow?(msg.windowId)
+            }
+        case "preferences_restore":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(PreferenceRestoreMessage.self, from: data) {
+                onPreferencesRestore?(msg.preferences)
             }
         case "project_directories":
             guard isAuthenticated else { return }
