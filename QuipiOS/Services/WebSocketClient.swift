@@ -497,21 +497,34 @@ final class WebSocketClient {
         }
     }
 
-    /// Ping the server every 10 seconds. If a ping fails, tear down and reconnect.
-    /// The tighter interval (vs the old 30s) surfaces dead connections within ~10-15s
-    /// so the phone shows "disconnected" quickly instead of silently swallowing taps.
+    /// Ping the server every 10s and *await the pong* with a 3s timeout.
+    /// Two consecutive missed pongs → treat the socket as dead and reconnect.
+    ///
+    /// The previous fire-and-forget `sendPing` only flipped to disconnected on a
+    /// local send error. One-sided drops (Mac restart, NAT idle timeout, Cloudflare
+    /// tunnel rotation) leave the callback hanging silently — pong never arrives,
+    /// no error fires, and the UI shows "Connected" forever. Worst case to detect
+    /// a real disconnect is now ~13s (10s interval + 3s pong timeout) instead of
+    /// "until iOS or the OS notices TCP is dead," which can take many minutes on
+    /// cellular.
     private func startKeepalive() {
         keepaliveTask?.cancel()
         keepaliveTask = Task { [weak self] in
+            var consecutiveMisses = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 guard !Task.isCancelled, let self, let task = self.webSocketTask else { return }
-                task.sendPing { error in
-                    DispatchQueue.main.async {
-                        if let error {
-                            NSLog("[WebSocketClient] Keepalive ping failed: %@", error.localizedDescription)
-                            self.handleDisconnect()
-                        }
+                let pongReceived = await Self.probeSocket(task: task, timeoutNanos: 3_000_000_000)
+                guard !Task.isCancelled else { return }
+                if pongReceived {
+                    consecutiveMisses = 0
+                } else {
+                    consecutiveMisses += 1
+                    NSLog("[WebSocketClient] Keepalive pong missed (%d/2)", consecutiveMisses)
+                    if consecutiveMisses >= 2 {
+                        NSLog("[WebSocketClient] Two consecutive missed pongs — forcing reconnect")
+                        self.handleDisconnect()
+                        return
                     }
                 }
             }
