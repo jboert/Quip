@@ -369,7 +369,7 @@ final class WindowManager {
     /// so the user sees one dialog at launch, not one per arrange tap.
     func promptForAccessibilityIfNeeded() {
         if AXIsProcessTrusted() { return }
-        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        print("[WindowManager] Accessibility not granted. Enable in System Settings → Privacy & Security → Accessibility.")
     }
 
     // MARK: - AXUIElement Window Control

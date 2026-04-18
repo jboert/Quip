@@ -31,10 +31,7 @@ targets:
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
-    dependencies:
-      - target: QuipLiveActivity
-        embed: true
-        copyPhase: PlugIns
+    dependencies: []
     settings:
       base:
         PRODUCT_NAME: Quip

@@ -36,7 +36,6 @@
 		996767763A69068B0D1D8687 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EED90216075AC25A1EDB70 /* SpeechService.swift */; };
 		A977CCC72BA863A04F17FB77 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 07BAAAC4E0E8051B6FF2664E /* Assets.xcassets */; };
 		AC12BD221896070181F785DC /* QuipLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109D3594919D4EF54DE97C72 /* QuipLiveActivityWidget.swift */; };
-		B2CCEBCAD82A47416AB85901 /* QuipLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 18E21C7F1FD2E724E4790F5D /* QuipLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B74D4BBBD664959095BE58DE /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */; };
 		B86CDE99611F63E70CB7C7A3 /* RemoteLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */; };
 		BC0AAA34114426CFF2BEEB74 /* ArrangeLayoutMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEE82AF4A4EEBCF4A0DED50 /* ArrangeLayoutMappingTests.swift */; };
@@ -58,28 +57,7 @@
 			remoteGlobalIDString = 0106693FA1DD6F4A224F80DD;
 			remoteInfo = QuipiOS;
 		};
-		D85540D6B0F13CC1EF04ADBA /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 1FFEE7473E4CC1ABAFA5B870 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 9DEF60E2FC7CAF561E947475;
-			remoteInfo = QuipLiveActivity;
-		};
 /* End PBXContainerItemProxy section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		C21FC7A601B45936CCD9F843 /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				B2CCEBCAD82A47416AB85901 /* QuipLiveActivity.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		01EA3B9F2E651E55A79DFB40 /* QuipiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = QuipiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -284,12 +262,10 @@
 			buildPhases = (
 				D9E99051B59BC6D7B0670DE2 /* Sources */,
 				F5D327F6CB23C79C005A110C /* Resources */,
-				C21FC7A601B45936CCD9F843 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				9794DCF5155D1838F36CCAA6 /* PBXTargetDependency */,
 			);
 			name = QuipiOS;
 			packageProductDependencies = (
@@ -447,11 +423,6 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		9794DCF5155D1838F36CCAA6 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 9DEF60E2FC7CAF561E947475 /* QuipLiveActivity */;
-			targetProxy = D85540D6B0F13CC1EF04ADBA /* PBXContainerItemProxy */;
-		};
 		F6908ACEDED58F2BCA7F02C8 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 0106693FA1DD6F4A224F80DD /* QuipiOS */;

@@ -188,6 +188,9 @@ struct QuipApp: App {
                 // suspend the network stack and stale the WebSocket.
                 client.suspendForBackground()
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                volumeHandler.stopMonitoring()
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Probe the socket on return; force-reconnect with reset backoff
                 // if the probe doesn't pong within 2s.
@@ -2494,21 +2497,11 @@ struct InlineTerminalContent: View {
                 ScrollView {
                     if let screenshot, let imageData = Data(base64Encoded: screenshot),
                        let uiImage = UIImage(data: imageData) {
-                        let zoom = ContentZoomLevel.from(raw: contentZoomLevel)
-                        // Use the ACTUAL container width via GeometryReader so
-                        // landscape (where this panel is ~70% of screen, not
-                        // full-screen-wide) doesn't blow the image up. Old code
-                        // used UIScreen.main.bounds.width which in landscape is
-                        // the long side — making text comically oversized.
-                        GeometryReader { panelGeo in
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: panelGeo.size.width * zoom.widthFraction)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .aspectRatio(uiImage.size, contentMode: .fit)
-                        .id("bottom")
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .id("bottom")
                     } else if !content.isEmpty {
                         Text(content)
                             .font(.system(size: 10, design: .monospaced))
@@ -2528,6 +2521,9 @@ struct InlineTerminalContent: View {
                     }
                 }
                 .onChange(of: content) { _, _ in
+                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                .onChange(of: screenshot) { _, _ in
                     withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
             }
@@ -2923,7 +2919,7 @@ enum ContentZoomLevel: Int, CaseIterable {
     }
 
     static func from(raw: Int) -> ContentZoomLevel {
-        ContentZoomLevel(rawValue: raw) ?? .medium
+        ContentZoomLevel(rawValue: raw) ?? .fill
     }
 
     var next: Int {

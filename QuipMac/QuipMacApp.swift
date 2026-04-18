@@ -225,11 +225,6 @@ struct QuipMacApp: App {
         // the user granted or manually denied in System Settings.
         windowManager.promptForAccessibilityIfNeeded()
 
-        // One-time Accessibility prompt at launch. Without this, the phone's
-        // arrange button used to fire the dialog on every tap — Spammed until
-        // the user granted or manually denied in System Settings.
-        windowManager.promptForAccessibilityIfNeeded()
-
         // Pre-warm the Kokoro daemon so the first synth doesn't pay model load
         kokoroTTS.preload()
 
@@ -709,10 +704,6 @@ struct QuipMacApp: App {
             }
         case "request_content":
             if let msg = MessageCoder.decode(RequestContentMessage.self, from: data) {
-                // Throttle: at most once per 0.5s per window. Was 10s, which
-                // meant 4-out-of-5 polls got dropped and button taps sat on
-                // stale content for up to 10s. 500ms still protects the
-                // AppleScript read from getting hammered but feels instant.
                 let now = Date()
                 if let last = lastContentRequestTime[msg.windowId],
                    now.timeIntervalSince(last) < 0.5 {
@@ -721,23 +712,24 @@ struct QuipMacApp: App {
                 lastContentRequestTime[msg.windowId] = now
 
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
-                    let termApp = terminalAppForWindow(window)
                     let wn = window.windowNumber
                     let wid = msg.windowId
-                    // Do the heavy AppleScript read + screenshot off main so it
-                    // can't block send_text, auth, or other time-sensitive messages.
+                    let isTerminal = window.isTerminal
+                    let termApp = terminalAppForWindow(window)
+                    let sessionId = window.iterm2SessionId
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer] in
-                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
-                        var lines = content.components(separatedBy: "\n")
-                        // iTerm's buffer includes the whitespace cells Claude Code
-                        // pads below its prompt box to wipe stale text. Shipped
-                        // raw those blank rows land at the bottom of the phone's
-                        // scroll view and shove the prompt out of sight.
-                        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-                            lines.removeLast()
+                        let redacted: String
+                        if isTerminal {
+                            let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? ""
+                            var lines = content.components(separatedBy: "\n")
+                            while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+                                lines.removeLast()
+                            }
+                            let trimmed = lines.suffix(200).joined(separator: "\n")
+                            redacted = SecretRedactor.redact(trimmed)
+                        } else {
+                            redacted = "[non-terminal window — screenshot requires Screen Recording permission for Quip]"
                         }
-                        let trimmed = lines.suffix(200).joined(separator: "\n")
-                        let redacted = SecretRedactor.redact(trimmed)
                         let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
                         DispatchQueue.main.async {
                             webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot))
