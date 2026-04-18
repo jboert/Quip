@@ -821,10 +821,11 @@ struct QuipMacApp: App {
                     // Older iOS clients omit this field — decode to nil,
                     // default to true here so existing phones keep getting
                     // banners until they upgrade.
-                    bannerEnabled: msg.bannerEnabled ?? true
+                    bannerEnabled: msg.bannerEnabled ?? true,
+                    timeZone: msg.timeZone
                 )
                 pushNotificationService.updatePreferences(forDevice: msg.deviceToken, prefs: prefs)
-                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") device=\(msg.deviceToken.prefix(8))")
+                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") tz=\(msg.timeZone ?? "nil") device=\(msg.deviceToken.prefix(8))")
             }
 
         case "attach_iterm_window":

@@ -71,6 +71,13 @@ struct QuipApp: App {
     /// certainly want the island card too. Flipping it off tears down
     /// any in-flight activity (see `.onChange` below).
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
+    /// Quiet-hours window for Live Activities. Live Activities bypass the
+    /// Mac's APNs prefs (WebSocket-driven, not APNs), so the quiet-hours
+    /// check is duplicated here instead of relying on the Mac-side gate.
+    /// Start/end are 0-23 hours in the phone's local TZ.
+    @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
+    @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
+    @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
     /// Pending image attachment — hoisted to QuipApp (from MainiOSView) so
@@ -199,6 +206,20 @@ struct QuipApp: App {
         }
     }
 
+    /// True when the current wall-clock hour falls inside the user's
+    /// quiet-hours window. Handles both same-day (9-17) and overnight
+    /// (22-7) ranges. Mirrors the Mac-side `DevicePushPreferences.isQuietNow`
+    /// so both the APNs path and the Live Activity path agree.
+    private func isInQuietHoursNow(now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        guard quietHoursEnabled else { return false }
+        let hour = calendar.component(.hour, from: now)
+        if quietHoursStart == quietHoursEnd { return false }
+        if quietHoursStart < quietHoursEnd {
+            return hour >= quietHoursStart && hour < quietHoursEnd
+        }
+        return hour >= quietHoursStart || hour < quietHoursEnd
+    }
+
     private func setup() {
         speech.requestAuthorization()
 
@@ -278,12 +299,18 @@ struct QuipApp: App {
                     // window gets an island; every other thinking window is
                     // tracked by the Mac but doesn't pop its own activity.
                     if windowId == selectedWindowId, liveActivitiesEnabled {
-                        switch newState {
-                        case "thinking":
-                            liveActivity.startOrUpdate(windowId: windowId, windowName: w.name, state: "thinking")
-                        case "waiting_for_input":
-                            liveActivity.startOrUpdate(windowId: windowId, windowName: w.name, state: "waiting")
-                        default:
+                        // During quiet hours, suppress start/update so no new
+                        // island card pops and existing cards stop changing
+                        // state. `end` still fires on neutral so anything that
+                        // started before quiet hours can clean itself up.
+                        let islandState: String? = switch newState {
+                        case "thinking": "thinking"
+                        case "waiting_for_input": "waiting"
+                        default: nil
+                        }
+                        if let islandState, !isInQuietHoursNow() {
+                            liveActivity.startOrUpdate(windowId: windowId, windowName: w.name, state: islandState)
+                        } else if islandState == nil {
                             // neutral or anything else: user is actively engaged
                             // with the terminal; no need for an island card.
                             liveActivity.end(windowId: windowId)
@@ -364,7 +391,8 @@ struct QuipApp: App {
                                 quietHoursEnd: qhEnabled ? (ud.object(forKey: "pushQuietHoursEnd") as? Int ?? 7) : nil,
                                 sound: ud.object(forKey: "pushSound") as? Bool ?? true,
                                 foregroundBanner: ud.bool(forKey: "pushForegroundBanner"),
-                                bannerEnabled: ud.object(forKey: "pushBannerEnabled") as? Bool ?? true
+                                bannerEnabled: ud.object(forKey: "pushBannerEnabled") as? Bool ?? true,
+                                timeZone: TimeZone.current.identifier
                             )
                             client.send(prefs)
                         }
@@ -2858,7 +2886,8 @@ struct SettingsSheet: View {
             quietHoursEnd: quietHoursEnabled ? quietHoursEnd : nil,
             sound: pushSound,
             foregroundBanner: pushForegroundBanner,
-            bannerEnabled: pushBannerEnabled
+            bannerEnabled: pushBannerEnabled,
+            timeZone: TimeZone.current.identifier
         )
         client.send(msg)
     }

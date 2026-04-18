@@ -41,8 +41,8 @@ struct RegisteredPushDevice: Codable, Equatable, Sendable {
 /// message for a device, we treat it as "allow everything with sound."
 struct DevicePushPreferences: Codable, Equatable, Sendable {
     var paused: Bool = false
-    var quietHoursStart: Int? = nil   // 0-23, local TZ
-    var quietHoursEnd: Int? = nil     // 0-23, local TZ
+    var quietHoursStart: Int? = nil   // 0-23, phone's local TZ
+    var quietHoursEnd: Int? = nil     // 0-23, phone's local TZ
     var sound: Bool = true
     var foregroundBanner: Bool = false
     /// Master banner toggle. False = skip the APNs push entirely so no
@@ -50,15 +50,25 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
     /// still run because they're driven by WebSocket state changes, not
     /// APNs. Default true for backwards-compat with existing prefs rows.
     var bannerEnabled: Bool = true
+    /// IANA identifier for the phone's TZ at the time prefs were set.
+    /// nil = legacy prefs row or legacy client — fall back to the Mac's
+    /// own `Calendar.current`, which matches the pre-TZ behavior.
+    var timeZone: String? = nil
 
     static let defaults = DevicePushPreferences()
 
     /// True if the current wall-clock hour falls inside the quiet-hours
     /// window. Supports both same-day (start < end, e.g. 13-17) and
     /// overnight (start > end, e.g. 22-7) ranges. Returns false when
-    /// either bound is nil (quiet hours disabled).
-    func isQuietNow(now: Date = Date(), calendar: Calendar = .current) -> Bool {
+    /// either bound is nil (quiet hours disabled). Evaluates the hour in
+    /// the phone's TZ when known, so "10 PM - 7 AM" means the user's 10
+    /// PM even if the Mac is in a different TZ (traveling, remote host).
+    func isQuietNow(now: Date = Date()) -> Bool {
         guard let start = quietHoursStart, let end = quietHoursEnd else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        if let tzId = timeZone, let parsed = TimeZone(identifier: tzId) {
+            calendar.timeZone = parsed
+        }
         let hour = calendar.component(.hour, from: now)
         if start == end { return false }      // degenerate; treat as disabled
         if start < end { return hour >= start && hour < end }
@@ -260,21 +270,28 @@ final class PushNotificationService {
 
         for device in devicesSnapshot {
             let prefs = prefsSnapshot[device.token] ?? .defaults
+            let tokenPrefix = device.token.prefix(8)
             if prefs.paused {
+                quipPushLog("skip paused — device=\(tokenPrefix) window=\(windowId)")
                 continue
             }
             if !prefs.bannerEnabled {
                 // Banner disabled in iOS Settings → no APNs push. Live
                 // Activity still runs via WebSocket so the island keeps
                 // showing thinking/waiting without the alert tray clutter.
+                quipPushLog("skip banner_disabled — device=\(tokenPrefix) window=\(windowId)")
                 continue
             }
             if prefs.isQuietNow(now: now) {
+                let range = "\(prefs.quietHoursStart?.description ?? "nil")-\(prefs.quietHoursEnd?.description ?? "nil")"
+                quipPushLog("skip quiet_hours — device=\(tokenPrefix) tz=\(prefs.timeZone ?? "mac") range=\(range)")
                 continue
             }
             // Per (windowId, device) debounce
             let debounceKey = "\(windowId)|\(device.token)"
             if let last = lastPushTimes[debounceKey], now.timeIntervalSince(last) < debounceInterval {
+                let elapsed = String(format: "%.1f", now.timeIntervalSince(last))
+                quipPushLog("skip debounce — device=\(tokenPrefix) window=\(windowId) last=\(elapsed)s ago")
                 continue
             }
             lastPushTimes[debounceKey] = now
