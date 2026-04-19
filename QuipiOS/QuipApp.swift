@@ -2461,9 +2461,10 @@ struct AttentionPulseDot: View {
 }
 
 /// Wrap http(s) URLs in the terminal content with `.link` attributes so SwiftUI's
-/// `Text` renders them as tappable. Bare domains aren't matched on purpose —
-/// `NSDataDetector` would false-positive on file paths like `Sources/Foo.swift`.
-private func linkifiedTerminalContent(_ raw: String) -> AttributedString {
+/// `Text` renders them as tappable. Only matches with an explicit `http://` or
+/// `https://` prefix are linkified — `NSDataDetector` happily matches bare TLDs,
+/// which would turn `README.md` (`.md` is a real TLD) and `Quip.app` into links.
+func linkifiedTerminalContent(_ raw: String) -> AttributedString {
     var attr = AttributedString(raw)
     guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
         return attr
@@ -2472,6 +2473,8 @@ private func linkifiedTerminalContent(_ raw: String) -> AttributedString {
     detector.enumerateMatches(in: raw, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, _ in
         guard let match, let url = match.url,
               let range = Range(match.range, in: attr) else { return }
+        let matched = ns.substring(with: match.range)
+        guard matched.hasPrefix("http://") || matched.hasPrefix("https://") else { return }
         attr[range].link = url
         attr[range].underlineStyle = .single
     }
