@@ -187,7 +187,13 @@ final class KeystrokeInjector {
                                 repeat with aSession in sessions
                                     if unique id of aSession is "\(escapedId)" then
                                         tell aSession
-                                            write text (character id \(charId))
+                                            -- `newline no` is critical. Without it, iTerm2 appends a
+                                            -- CR after every keystroke — Claude Code's Ink prompt reads
+                                            -- that as "submit," so backspace (and tab/esc/ctrl-*) would
+                                            -- delete a char and then immediately enter the half-edited
+                                            -- input. See sendText's comment above for the same rule on
+                                            -- the text path.
+                                            write text (character id \(charId)) newline no
                                         end tell
                                         set quipFound to true
                                         exit repeat
