@@ -525,6 +525,42 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 ---
 
+### 30. Reliability & UX hardening pass (5-thread backlog)
+
+**Status:** Wishlist (brainstorm paused mid-flight on 2026-04-18 — backlogged)
+
+**Context:** Brainstorming session started to explore what would make the app feel more trustworthy. User identified *silent correctness failures* (the app doesn't do what was asked, and nothing tells you it failed) as the #1 pain driver, and picked a weekend-budget appetite. Five threads were surfaced before the session was paused:
+
+**Threads in scope:**
+
+1. **Diagnostic tooling / observability.** CLAUDE.md already lists 7 distinct root causes for a single symptom (photo upload spinning forever). Silent `continue`, silent `try?`, and `guard let ... else { return }` paths cripple triage. The push-notification service just got loud-drop logging (commit `8517835`) as a prototype of the pattern — extend that discipline across the rest of the codebase. Inventory candidate files: `QuipMac/Services/*`, `QuipiOS/Services/*`, `Shared/*`.
+
+2. **Connection truth / status pill honesty.** Commit `3431046` fixed the "pill was lyin'" keepalive-without-pong bug. Next round: surface *why* a disconnect happened, not just the binary. E.g., when the phone flips to "Not connected", it should say whether it was pong timeout, explicit close frame, network loss, or auth failure. Review probe cadence.
+
+3. **State invariants across app lifecycle.** Audit what state persists across `willResignActive` / `didEnterBackground` / `willEnterForeground` / `didBecomeActive` on iOS and the equivalent on Mac. Known offenders: `isPTTActive` isn't reset on `HardwareButtonHandler.stopMonitoring`; Live Activity handles can outlive their activities if user dismisses from Dynamic Island long-press; `PreferencesSyncService.suppressUntil` uses a fixed 2s window that races with network latency; force-quit-after-install is required because `devicectl install` replaces the bundle but doesn't kill the process. Each is a one-line or few-line fix once identified.
+
+4. **Error-handling gaps (silent failures).** Repo-wide audit of `try?`, `if let ... { } else { return }` with no log, empty `catch { }` blocks, and `guard` statements that swallow failures. Triage each: some are legitimately "don't care" (framework quirks), others are real bugs-in-waiting. Convert the real ones to either loud logs or typed errors.
+
+5. **Notification triage in-app (originally bucketed as UX).** Today you have to `tail /tmp/quip-push.log` on the Mac to see why a push didn't fire. Surface recent push attempts + skip reasons in Mac Settings → Notifications. With the weekend budget, a stripped-down version is feasible: a `List` in SettingsView that reads the last N lines from `/tmp/quip-push.log`. Anything fancier (structured events, iOS-side mirror) defers to a later iteration.
+
+**Decisions already made in the paused session:**
+
+- Shape picked: **A** — strategy-level spec covering all 5 threads + their sequencing, with separate implementation plans when each is executed. (B = one thread first, C = monster spec were alternatives.)
+- Top pain: **A = silent correctness failures.**
+- Appetite: **A = weekend / few evenings.** No new shared infrastructure. Ruthless audit + fix the worst offenders only.
+
+**Paused at:** proposing concrete weekend shapes. Three options were on the table when user chose to backlog:
+
+- **A. #1 + #4 together, deep** — observability + silent-error-handling share the same methodology (grep → triage → log or fix). One audit pass yields two threads. #3 gets a short appendix checklist. #2 and #5 defer to a second weekend.
+- **B. Just #1 alone** — tightest single-weekend scope.
+- **C. Shallow sweep across all 5** — one targeted fix per thread, 2-3 hours each. Maximum coverage, surface-level depth, high risk of "looks done but isn't."
+
+**When picking this up:** resume brainstorming from that choice. Recommended starting point is **A** (#1 + #4 together) unless the user's constraints have shifted. If scope creeps beyond a weekend at brainstorming time, consider promoting to a multi-weekend plan with #1+#4 shipped first and the rest queued.
+
+**Related:** commits `8517835` (push-service loud-drop logs as the pattern seed), `843fb68` (volume KVO guard — lifecycle-state example of thread #3), `3431046` (keepalive-pong fix — example of thread #2).
+
+---
+
 ## Completed
 
 *(none yet — move items here as they ship)*
