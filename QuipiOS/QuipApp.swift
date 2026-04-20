@@ -2525,10 +2525,125 @@ struct AttentionPulseDot: View {
     }
 }
 
+/// `UITextView`-backed terminal text view. SwiftUI `Text` with `.link`
+/// AttributedString is documented to be tappable but in practice tap routing
+/// drops to the floor inside our InlineTerminalContent layout (parent
+/// ScrollView gestures + view-modifier cascades both interfere). UITextView
+/// owns its own gesture stack and tap-to-open-url is rock solid.
+///
+/// The view uses `dataDetectorTypes = .link` plus `linkTextAttributes` for
+/// styling, and gets the SAME scheme filter as `linkifiedTerminalContent` via
+/// a delegate `shouldInteractWith url:` hook that rejects taps on non-http(s)
+/// matches (so README.md / Quip.app render as links visually but ignore the
+/// tap; that's a minor cosmetic loss vs. the alternative of building the
+/// attributed string by hand).
+struct LinkableTerminalText: UIViewRepresentable {
+    let content: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.isScrollEnabled = true            // owns scrolling
+        tv.backgroundColor = .clear
+        tv.textContainerInset = UIEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
+        tv.textContainer.lineFragmentPadding = 0
+        tv.dataDetectorTypes = .link
+        tv.linkTextAttributes = [
+            .foregroundColor: UIColor.cyan,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ]
+        tv.delegate = context.coordinator
+        tv.alwaysBounceVertical = true
+        return tv
+    }
+
+    func updateUIView(_ tv: UITextView, context: Context) {
+        let attr = NSMutableAttributedString(string: content, attributes: [
+            .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: UIColor.white.withAlphaComponent(0.85),
+        ])
+        tv.attributedText = attr
+        // Auto-scroll to bottom on new content so latest output is visible
+        // (mirrors the SwiftUI ScrollViewReader.scrollTo("bottom") pattern).
+        let bottom = NSRange(location: max(0, attr.length - 1), length: 1)
+        tv.scrollRangeToVisible(bottom)
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        /// iOS 17+ tap handler. The OLD `shouldInteractWith url:in:interaction:`
+        /// delegate method is deprecated; iOS 17 routes taps through this method
+        /// instead and falls through to a no-op if it returns nil. Returning
+        /// the system's default openURL action — wrapped in a fresh UIAction
+        /// to FORCE immediate execution rather than the iOS 17 default of
+        /// showing a Safari-style preview menu first.
+        ///
+        /// Scheme filter: `dataDetectorTypes = .link` matches bare TLDs
+        /// (`README.md` → `http://README.md`, `Quip.app` → `http://Quip.app`).
+        /// We reject those by inspecting the original substring's prefix.
+        @available(iOS 17.0, *)
+        func textView(_ textView: UITextView,
+                      primaryActionFor textItem: UITextItem,
+                      defaultAction: UIAction) -> UIAction? {
+            guard case .link(let url) = textItem.content else { return defaultAction }
+            let scheme = url.scheme?.lowercased() ?? ""
+            let allowed: Bool
+            if scheme == "mailto" {
+                allowed = true
+            } else if scheme == "http" || scheme == "https" {
+                let raw = (textView.attributedText.string as NSString).substring(with: textItem.range)
+                allowed = raw.hasPrefix("http://") || raw.hasPrefix("https://")
+            } else {
+                allowed = false
+            }
+            guard allowed else { return nil }
+            // Return a custom UIAction that calls UIApplication.shared.open
+            // directly. iOS 17's defaultAction sometimes resolves to "show
+            // preview popover" instead of "open immediately"; this guarantees
+            // immediate openURL on tap.
+            return UIAction(title: "Open Link") { _ in
+                UIApplication.shared.open(url, options: [:]) { success in
+                    if !success {
+                        NSLog("[LinkableTerminalText] open(%@) returned false", url.absoluteString)
+                    }
+                }
+            }
+        }
+
+        /// Suppress the iOS 17 link preview menu so tap → open immediately
+        /// without an intermediate "show URL preview" popover.
+        @available(iOS 17.0, *)
+        func textView(_ textView: UITextView,
+                      menuConfigurationFor textItem: UITextItem,
+                      defaultMenu: UIMenu) -> UITextItem.MenuConfiguration? {
+            return nil
+        }
+
+        /// Pre-iOS 17 fallback (unreachable on this app — deployment target is
+        /// iOS 17.0 — but kept defensively in case the project bumps backward).
+        func textView(_ textView: UITextView, shouldInteractWith URL: URL,
+                      in characterRange: NSRange,
+                      interaction: UITextItemInteraction) -> Bool {
+            let scheme = URL.scheme?.lowercased() ?? ""
+            if scheme == "mailto" { return true }
+            if scheme == "http" || scheme == "https" {
+                let raw = (textView.attributedText.string as NSString).substring(with: characterRange)
+                return raw.hasPrefix("http://") || raw.hasPrefix("https://")
+            }
+            return false
+        }
+    }
+}
+
 /// Wrap http(s) URLs in the terminal content with `.link` attributes so SwiftUI's
 /// `Text` renders them as tappable. Only matches with an explicit `http://` or
 /// `https://` prefix are linkified — `NSDataDetector` happily matches bare TLDs,
 /// which would turn `README.md` (`.md` is a real TLD) and `Quip.app` into links.
+///
+/// Kept around for unit-test reuse + as documentation of the scheme-filter rule;
+/// the actual render path now goes through `LinkableTerminalText` (UITextView).
 func linkifiedTerminalContent(_ raw: String) -> AttributedString {
     var attr = AttributedString(raw)
 
@@ -2625,51 +2740,52 @@ struct InlineTerminalContent: View {
             .padding(.vertical, 6)
             .background(Color.white.opacity(0.06))
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    if let screenshot, let imageData = Data(base64Encoded: screenshot),
-                       let uiImage = UIImage(data: imageData) {
+            // Three render branches:
+            //   - screenshot present → SwiftUI Image inside a ScrollView (zoom/pan)
+            //   - text content present → UITextView (own scroll, tap-to-open URL)
+            //   - empty → "Loading…" placeholder
+            // Branches are kept structurally separate because UITextView wants to
+            // own its scrolling for reliable link tap routing, while the screenshot
+            // path needs SwiftUI ScrollView's scroll-to-bottom hook.
+            if let screenshot, let imageData = Data(base64Encoded: screenshot),
+               let uiImage = UIImage(data: imageData) {
+                ScrollViewReader { proxy in
+                    ScrollView {
                         Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFit()
                             .frame(maxWidth: .infinity)
                             .id("bottom")
-                    } else if !content.isEmpty {
-                        // SwiftUI Text + AttributedString with `.link` SHOULD
-                        // be tappable out of the box, but a `.foregroundStyle`
-                        // modifier on the same Text overrides per-run colors
-                        // AND interferes with link-tap recognition (the link
-                        // attribute and the global foreground style fight for
-                        // priority on the same characters). Fix: bake the
-                        // foreground color INTO the AttributedString itself
-                        // (see `linkifiedTerminalContent`) and drop the
-                        // `.foregroundStyle` modifier here. Then SwiftUI sees
-                        // the link runs as having all the expected styling
-                        // including their own foreground, and routes taps
-                        // through to the system openURL handler.
-                        Text(linkifiedTerminalContent(content))
-                            .font(.system(size: 10, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 6)
-                            .id("bottom")
-                    } else {
-                        Text("Loading…")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .frame(maxWidth: .infinity)
-                            .padding(16)
-                            .id("bottom")
+                    }
+                    .onChange(of: screenshot) { _, _ in
+                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
                 }
-                .onChange(of: content) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !content.isEmpty {
+                VStack(spacing: 0) {
+                    // DIAGNOSTIC — pure SwiftUI Link sitting above the
+                    // UITextView. If this one IS tappable but the cyan URLs
+                    // below aren't, the bug is UITextView-specific.
+                    // If neither tap works, parent SwiftUI is intercepting.
+                    Link(destination: URL(string: "https://github.com")!) {
+                        Text("DEBUG: tap me → github.com")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.yellow)
+                            .padding(8)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.yellow.opacity(0.2))
+                    }
+                    LinkableTerminalText(content: content)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .onChange(of: screenshot) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
+            } else {
+                Text("Loading…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(16)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(colors.overlayContainer)
         .clipShape(RoundedRectangle(cornerRadius: 10))
