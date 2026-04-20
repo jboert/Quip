@@ -561,6 +561,27 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 ---
 
+### 35. Cross-app paste from iPhone clipboard into Quip terminal
+
+**Status:** Wishlist
+**Context:** User wants to copy text from any iOS app (Safari, Mail, Messages, Notes, ChatGPT, etc.), switch to Quip, and paste it into the currently selected terminal — text gets piped to the Mac via WebSocket and typed into the active iTerm window. Today the iPhone has a text-input field for typed/dictated input but no obvious paste affordance.
+
+**Likely shape:**
+- A paste button (clipboard icon) inline next to the existing text-input bar OR in the QuickButton row.
+- Tapping reads `UIPasteboard.general.string`, sends it via the existing `SendTextMessage` (no new protocol needed), with `pressReturn: false` so the user can review before submitting.
+- Long-press on the paste button could surface options (paste with return, paste raw multi-line, paste as `cat << EOF` heredoc for multi-line code blocks).
+- Visual feedback on tap: brief "Pasted N chars" toast or button flash.
+
+**Open questions for /prd time:**
+- Paste size cap — iOS clipboard can hold MBs; cap at e.g. 32KB for terminal sanity?
+- Multi-line paste handling — does Mac inject as one chunk via `write text`, or line-by-line?
+- Dedicated UI affordance vs. invoke via long-press on the existing input bar?
+- Do we want the inverse direction too (copy terminal selection → iPhone clipboard)?
+
+**Related:** Existing `SendTextMessage` protocol path (`Shared/MessageProtocol.swift`); existing `keystrokeInjector.sendText` on Mac side; existing dictation/text-input UI in `portraitControls`.
+
+---
+
 ### 34. iPhone Quip never receives `mac_permissions` despite Mac broadcasting it
 
 **Status:** In Progress (debugging stuck) — eb-branch local
