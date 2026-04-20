@@ -2705,6 +2705,10 @@ struct InlineTerminalContent: View {
     /// Toggle for the tap-to-open URL tray. Default on. Users who don't want
     /// the extra row between header and screenshot can hide it from Settings.
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
+    /// How many of the most recent URLs to show. Mac sends everything it
+    /// finds in the 200-line scrape window; iOS caps here so a `tail -f`
+    /// log doesn't produce a pill strip that scrolls for days.
+    @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
     /// Zoom level index into `ContentZoomLevel.allCases`. Persisted so the
     /// user's pick survives relaunch, and shared between portrait and
     /// landscape views so cycling in one affects both.
@@ -2750,22 +2754,26 @@ struct InlineTerminalContent: View {
     /// vertical real estate. Each pill: tap → `UIApplication.shared.open`.
     @ViewBuilder
     private var urlTray: some View {
-        if urlTrayEnabled && !urls.isEmpty {
+        // Keep the most recent N URLs — `TerminalURLExtractor` preserves
+        // document order so suffix() == newest. Hide entirely when empty
+        // or when the user has the tray turned off in Settings.
+        let visible = Array(urls.suffix(max(1, urlTrayLimit)))
+        if urlTrayEnabled && !visible.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(urls, id: \.self) { url in
+                    ForEach(visible, id: \.self) { url in
                         Button {
                             if let u = URL(string: url) {
                                 UIApplication.shared.open(u)
                             }
                         } label: {
                             Text(urlTrayLabel(for: url))
-                                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .foregroundStyle(Color.cyan)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
                                 .background(Color.cyan.opacity(0.15))
                                 .clipShape(Capsule())
                                 .overlay(
@@ -3072,6 +3080,7 @@ struct SettingsSheet: View {
     var macPermissions: MacPermissionsMessage?
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
+    @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -3134,6 +3143,10 @@ struct SettingsSheet: View {
                 Section("Appearance") {
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
                     Toggle("URL tray", isOn: $urlTrayEnabled)
+                    if urlTrayEnabled {
+                        Stepper("URL tray limit: \(urlTrayLimit)",
+                                value: $urlTrayLimit, in: 1...50)
+                    }
                 }
 
                 // Notifications — one section. Kill switch on top; the
