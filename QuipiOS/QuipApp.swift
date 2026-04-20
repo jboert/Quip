@@ -170,8 +170,14 @@ struct QuipApp: App {
             }
             .onOpenURL { url in
                 // Deep link from the Live Activity island / lock screen:
-                // quip://window/<windowId> → select that window + open input.
+                //   quip://window/<windowId> — select that window + open input
+                //   quip://perms            — pop the SettingsSheet open (Mac
+                //                             perms section is at the top)
                 guard url.scheme == "quip" else { return }
+                if url.host == "perms" {
+                    NotificationCenter.default.post(name: .quipShowSettings, object: nil)
+                    return
+                }
                 let windowId: String
                 if url.host == "window" {
                     windowId = url.pathComponents.dropFirst().first ?? ""
@@ -349,6 +355,14 @@ struct QuipApp: App {
         client.onMacPermissions = { snapshot in
             DispatchQueue.main.async {
                 macPermissions = snapshot
+                let denied = snapshot.deniedCount
+                if liveActivitiesEnabled {
+                    if denied > 0 {
+                        liveActivity.startOrUpdateMacPerms(deniedCount: denied)
+                    } else {
+                        liveActivity.endMacPerms()
+                    }
+                }
             }
         }
 
@@ -575,6 +589,11 @@ struct MainiOSView: View {
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
     var macPermissions: MacPermissionsMessage?
+    /// Tracks whether we've already auto-popped the SettingsSheet for the
+    /// current connection's first degraded snapshot. Reset on disconnect so a
+    /// reconnect can re-pop if Mac is still degraded — but the 5s update
+    /// stream doesn't keep re-popping after the user dismisses.
+    @State private var hasAutoShownPermsForConnection = false
 
     @AppStorage("lastURL") private var urlText: String = ""
     @AppStorage("recentConnectionsData") private var recentConnectionsData: Data = Data()
@@ -778,6 +797,9 @@ struct MainiOSView: View {
                 if !connected {
                     windows = []
                     selectedWindowId = nil
+                    // Reset auto-pop guard so the next reconnect can re-pop
+                    // the SettingsSheet if Mac is still degraded.
+                    hasAutoShownPermsForConnection = false
                     // If an upload was in flight when the socket dropped,
                     // the ack will never come back. Flip the thumbnail to
                     // an error state immediately so the user can dismiss
@@ -790,6 +812,21 @@ struct MainiOSView: View {
                 }
                 updateOrientation()
             }
+        }
+        .onChange(of: macPermissions) { _, snapshot in
+            // First snapshot of a connection: if Mac is degraded, auto-pop
+            // the SettingsSheet so the user lands on the perm strip without
+            // a manual nav. Only fires once per connection — the 5s update
+            // stream wouldn't get past the guard, and dismissing won't re-pop.
+            guard let s = snapshot, s.deniedCount > 0, !hasAutoShownPermsForConnection else { return }
+            hasAutoShownPermsForConnection = true
+            showSettings = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quipShowSettings)) { _ in
+            // Triggered by the `quip://perms` deep link from the Mac-perms
+            // Live Activity. Goes straight to the SettingsSheet (Mac
+            // Permissions section is at the top).
+            showSettings = true
         }
         .onChange(of: client.isAuthenticated) { _, authenticated in
             withAnimation(.easeInOut(duration: 0.5)) {
@@ -2772,6 +2809,13 @@ enum QuickButton: String, CaseIterable, Identifiable {
 }
 
 // MARK: - Settings Sheet
+
+extension Notification.Name {
+    /// Posted by the `quip://perms` deep-link handler so MainiOSView can pop
+    /// the SettingsSheet. Carries no payload — the sheet always opens to the
+    /// Mac Permissions section (it's at the top).
+    static let quipShowSettings = Notification.Name("quip.showSettings")
+}
 
 struct SettingsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
