@@ -127,6 +127,9 @@ final class WebSocketClient {
     /// Mac is sending back a preferences snapshot the phone previously
     /// uploaded — used to repopulate UserDefaults after a reinstall.
     var onPreferencesRestore: ((PreferencesSnapshot) -> Void)?
+    /// Mac sent its current TCC permission status. Phone surfaces it in the
+    /// settings sheet + as a badge on the main screen when anything is denied.
+    var onMacPermissions: ((MacPermissionsMessage) -> Void)?
     /// Mac confirms an image upload; argument is the absolute path the Mac wrote.
     var onImageUploadAck: ((String) -> Void)?
     /// Mac rejects an image upload; argument is a human-readable reason.
@@ -491,6 +494,11 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(ImageUploadErrorMessage.self, from: data) {
                 onImageUploadError?(msg.reason)
+            }
+        case "mac_permissions":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(MacPermissionsMessage.self, from: data) {
+                onMacPermissions?(msg)
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)
