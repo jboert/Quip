@@ -31,14 +31,12 @@ A one-tap button on the iPhone remote that types `/plan ` into the currently sel
 
 ### 2. Add / close terminal tabs from the iPhone remote
 
-**Status:** Wishlist
-**Context:** The iPhone currently cycles through existing Claude Code terminal windows via the left/right chevron buttons but cannot create or destroy them. The user wants to open new Claude Code sessions and close existing ones directly from the phone. Implementation will need:
-- New message types in `Shared/MessageProtocol.swift` (e.g., `OpenWindowMessage`, `CloseWindowMessage`).
-- Mac-side AppleScript for spawning a new Terminal.app / iTerm2 window running `claude`, and a close-window handler.
-- iPhone UI affordances — probably `+` and `×` buttons attached to the window list, or a pair of new shortcut buttons in `portraitControls`.
-- A decision about what "close a tab" means when a Claude Code session has unsaved state.
+**Status:** ✅ Done — retroactively. Both halves shipped via larger follow-on features that subsumed this entry:
+- **Open-new-tab:** `SpawnWindowMessage` via the project-directory picker — shipped under #29 on `eb-branch` (commits `5b35c71`, `24fee2d`, `2320170`). `QuipiOS/QuipApp.swift:981` fires the message when the user taps a project; `QuipMac/QuipMacApp.swift:842` handles it and auto-selects the new window.
+- **Close-tab:** `CloseWindowMessage` via the per-window context menu's "Close terminal…" item with destructive alert confirmation — shipped under the duplicate/close feature (commits `44033ee → 75c2b95`). `QuipiOS/Views/WindowRectangle.swift:184` fires the message from the confirmation alert's destructive button; `QuipMac/QuipMacApp.swift:828` handles it with a windowId lookup + `ErrorMessage` broadcast on drop. The context menu also offers "Remove from Phone" (soft-delete via `toggleEnabled`) to separate "hide the terminal from the phone" from "kill the terminal session."
 
-User asked for this explicitly as a separate feature from `/plan`.
+**Original context** (kept for historical reference):
+The iPhone currently cycles through existing Claude Code terminal windows via the left/right chevron buttons but cannot create or destroy them. The user wants to open new Claude Code sessions and close existing ones directly from the phone. User asked for this explicitly as a separate feature from `/plan`.
 
 ---
 
@@ -78,9 +76,16 @@ Known risk: without mode detection, blind Shift+Tab presses can land in the wron
 
 ### 7. Read Claude Code mode from terminal content stream
 
-**Status:** Wishlist
-**Context:** Parse the terminal content stream (already flowing via `TerminalContentMessage` / `OutputDeltaMessage` on the existing websocket protocol) to detect Claude Code's current mode indicator strings — `plan mode on`, `auto-accept edits on`, or the absence of either (= Normal mode). Exposes Claude Code's internal mode state to Quip's UI.
-**Unlocks:** #6 (robust Shift+Tab plan-mode switching), #18 (context-aware 1/2/3 prompt-response buttons), visible mode indicator on the iPhone status area, intelligent prompt routing decisions.
+**Status:** ✅ Done — shipped on `eb-branch` (2026-04-20). New `ClaudeModeDetector` service on the Mac polls each tracked window's iTerm buffer every 2s, scans the last ~40 lines for `plan mode on` / `auto-accept edits on`, and exposes the result via a new optional `claudeMode: String?` field on the `WindowState` protocol struct (raw values: `"normal"`, `"plan"`, `"autoAccept"`). On mode change, `broadcastLayout()` re-fires so iOS sees the new state within one poll cycle.
+
+**Files:** `Shared/MessageProtocol.swift` (added `ClaudeMode` enum + `claudeMode` field with backward-compat decoder), `QuipMac/Services/ClaudeModeDetector.swift` (new), `QuipMac/Services/WindowManager.swift` (`toWindowState` accepts mode), `QuipMac/QuipMacApp.swift` (instantiate, wire `onModeChange` → `broadcastLayout`, mirror tracked-window set, prune on `syncTrackedWindows`).
+
+**Tests:** `Shared/Tests/MessageProtocolTests.swift` (round-trip + backward-compat for `claudeMode`), `QuipMac/Tests/ClaudeModeScannerTests.swift` (scanner unit tests covering plan, autoAccept, normal-as-nil, empty, tail-window cutoff for old-prose mentions, both-strings-plan-wins, case insensitivity). 116 Mac tests pass; iOS build green.
+
+**Unlocks:** #6 (robust Shift+Tab plan-mode switching), #18 (context-aware 1/2/3 prompt-response buttons), visible mode indicator on the iPhone status area, intelligent prompt routing decisions. iOS doesn't yet *consume* the field — that lands when #18 (or a v2 status indicator) implements it.
+
+**Original context** (kept for historical reference):
+Parse the terminal content stream to detect Claude Code's current mode indicator strings — `plan mode on`, `auto-accept edits on`, or the absence of either (= Normal mode). Exposes Claude Code's internal mode state to Quip's UI.
 
 ---
 
