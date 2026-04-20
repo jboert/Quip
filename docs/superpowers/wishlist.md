@@ -561,6 +561,39 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 ---
 
+### 34. iPhone Quip never receives `mac_permissions` despite Mac broadcasting it
+
+**Status:** In Progress (debugging stuck) — eb-branch local
+**Context:** During the autonomous burn-down of #33 we discovered the iPhone Quip app's "Mac Permissions" SettingsSheet section is permanently stuck on "Waiting for Mac…". Captured iOS device console (`xcrun devicectl device process launch --console`) shows iOS receives `auth_result`, `layout_update`, and `project_directories` over WebSocket every ~2s — but **never** receives `mac_permissions`. A parallel Node.js fake-iOS-client (`/tmp/perms-watcher.js` style) connecting to the same Mac WebSocket with the same PIN consistently receives `mac_permissions acc=true ae=true sr=true` within ~22ms of auth. So the broadcast IS going out (proven via Node) but the iPhone specifically isn't seeing it.
+
+**What's been verified:**
+- Build binary HAS `case "mac_permissions":` in `WebSocketClient.swift:498` (confirmed via `nm` + `strings` on the installed `Quip.debug.dylib`).
+- iOS dispatch trace (NSLog at top of `handleMessage`) — never fires for `mac_permissions`. `[ws-trace] received type=mac_permissions` would appear if iOS even saw the type. It doesn't.
+- iOS receives other broadcast types fine (`layout_update`, `project_directories` flow constantly from the same `webSocketServer.broadcast(_:)` Mac-side function).
+- Mac's `broadcastPermissions(force:true)` fires on every `onClientAuthenticated` callback. Both Node and iPhone clients should be in the `clients[]` array at that moment, both auth'd. Yet only Node sees the message.
+
+**Suspected root causes (not yet narrowed):**
+1. Backpressure check in Mac's `broadcast(_:)` (`pendingBytes + payloadSize > maxPendingBytes` at `WebSocketServer.swift:~250`) silently drops the broadcast for the iPhone client only — possible if a stale TTS audio chunk or screenshot send completion never fires for the iPhone connection, accumulating `pendingBytes` past 2MB. But layout_update would also be dropped under that theory and it isn't.
+2. NWConnection-level frame fragmentation specific to LAN clients (iPhone is on `192.168.4.34` over WiFi; Node listener is on `localhost`). Apple's WebSocket implementation may handle frame ordering / queueing differently for the two transports.
+3. The iOS app's WebSocket task queue silently drops messages received during a specific moment of the auth flow — perhaps `mac_permissions` arrives in the same TCP receive buffer as `auth_result` and gets eaten during the "first message marks connected" branch in `receiveNext()` (`WebSocketClient.swift:373-388`).
+
+**Diagnostic infrastructure built (uncommitted, removed before commit):**
+- `/tmp/perms-watcher.js` — long-lived Node WebSocket fake-client that prints every `mac_permissions` it receives.
+- `/tmp/quip-content-probe.js` — one-shot probe that auths + requests terminal_content for a given window name.
+- NSLog `[ws-trace]` at top of `handleMessage` and `[mac_perms-debug]` in dispatch + handler.
+
+**Next steps when resuming:**
+1. Add per-client logging on Mac side inside `webSocketServer.broadcast(_:)` — log payload type + per-client decision (auth'd? skipped due to pendingBytes? sent? completion fired?). Write to `/tmp/quip-broadcast.log`. This makes the broadcast path observable from the Mac terminal without requiring iOS console capture.
+2. Run with both Node listener and iPhone connected, verify which clients get which messages.
+3. If pendingBytes is the culprit, investigate why the iPhone connection accumulates without completion.
+4. If it's NWConnection-specific, file an Apple Feedback or work around with explicit per-message delivery confirmation.
+
+**Workaround idea worth trying first:** add a periodic mac_permissions re-broadcast every 30s with `force=true` (not just on snapshot change). If the iPhone misses the auth-time broadcast for any reason, the next periodic one would catch it.
+
+**Related:** Discovered while burning down #33's autonomous half. Mac binary on disk at `/Applications/Quip.app` (CDHash `c2d7ce61...`). Latest iOS bundle on phone (databaseSequenceNumber 7612) has `[ws-trace]` instrumentation removed.
+
+---
+
 ### 33. Mac perms feature — verify all sub-flows in production
 
 **Status:** Partially verified (autonomous). Manual checklist below pending user.
