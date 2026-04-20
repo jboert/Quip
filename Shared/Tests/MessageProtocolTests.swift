@@ -625,6 +625,44 @@ final class MessageProtocolTests: XCTestCase {
 
     // MARK: - Helpers
 
+    // MARK: - Mac permissions / settings-pane messages
+
+    func testMacPermissionsEncoding() throws {
+        let msg = MacPermissionsMessage(accessibility: true, appleEvents: false, screenRecording: true)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "mac_permissions")
+        XCTAssertEqual(dict["accessibility"] as? Bool, true)
+        XCTAssertEqual(dict["appleEvents"] as? Bool, false)
+        XCTAssertEqual(dict["screenRecording"] as? Bool, true)
+    }
+
+    func testMacPermissionsRoundTrip() throws {
+        let msg = MacPermissionsMessage(accessibility: false, appleEvents: true, screenRecording: false)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(MacPermissionsMessage.self, from: data))
+        XCTAssertEqual(decoded, msg)
+    }
+
+    func testOpenMacSettingsPaneEncoding() throws {
+        for pane in MacSettingsPane.allCases {
+            let msg = OpenMacSettingsPaneMessage(pane: pane)
+            let data = try XCTUnwrap(MessageCoder.encode(msg))
+            let dict = try jsonDict(from: data)
+
+            XCTAssertEqual(dict["type"] as? String, "open_mac_settings_pane")
+            XCTAssertEqual(dict["pane"] as? String, pane.rawValue)
+        }
+    }
+
+    func testOpenMacSettingsPaneRoundTrip() throws {
+        let msg = OpenMacSettingsPaneMessage(pane: .accessibility)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(OpenMacSettingsPaneMessage.self, from: data))
+        XCTAssertEqual(decoded.pane, .accessibility)
+    }
+
     private func jsonDict(from data: Data) throws -> [String: Any] {
         try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]

@@ -62,6 +62,10 @@ struct QuipMacApp: App {
     /// which does interrupt any leftover audio from the prior response.
     @State private var ttsSessionIds: [String: String] = [:]
     private let kokoroTTS = KokoroTTS()
+    private let permissionProbe = PermissionProbeService()
+    /// Last broadcast snapshot — keeps the 5s timer from re-sending unchanged
+    /// status every tick. Phone gets fresh status on every client auth anyway.
+    @State private var lastPermissionsSnapshot: MacPermissionsMessage? = nil
 
     var body: some Scene {
         WindowGroup {
@@ -162,6 +166,7 @@ struct QuipMacApp: App {
         webSocketServer.onClientAuthenticated = { [self] in
             DispatchQueue.main.async {
                 self.broadcastLayout()
+                self.broadcastPermissions(force: true)
             }
         }
 
@@ -262,6 +267,44 @@ struct QuipMacApp: App {
                 }
             }
         }
+
+        // Re-probe TCC perms every 5s and only broadcast when the snapshot
+        // actually changes — keeps the wire quiet during steady state but the
+        // phone gets a near-real-time green/red flip when the user grants or
+        // revokes a permission. Auth-time broadcast (force=true) covers the
+        // first-connection case.
+        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            DispatchQueue.main.async {
+                self.broadcastPermissions(force: false)
+            }
+        }
+    }
+
+    /// Probe + broadcast permissions. `force` skips the equality check (used at
+    /// client-auth time so a freshly-connected phone always gets the current state).
+    @MainActor
+    private func broadcastPermissions(force: Bool) {
+        let snapshot = permissionProbe.probe()
+        if !force, snapshot == lastPermissionsSnapshot { return }
+        lastPermissionsSnapshot = snapshot
+        webSocketServer.broadcast(snapshot)
+    }
+
+    /// Open the right `x-apple.systempreferences:` URL for the requested pane.
+    /// Triggered by the phone tapping a red ❌ row in its perm strip.
+    @MainActor
+    private func openSettingsPane(_ pane: MacSettingsPane) {
+        let urlString: String
+        switch pane {
+        case .accessibility:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case .automation:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        case .screenRecording:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+        guard let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Switch between Cloudflare tunnel, Tailscale, and local-only based on
@@ -863,6 +906,12 @@ struct QuipMacApp: App {
                     print("[Quip] preferences_request: no backup for device \(msg.deviceID.prefix(8))")
                 }
                 webSocketServer.broadcast(PreferenceRestoreMessage(preferences: snapshot))
+            }
+
+        case "open_mac_settings_pane":
+            if let msg = MessageCoder.decode(OpenMacSettingsPaneMessage.self, from: data) {
+                print("[Quip] open_mac_settings_pane: \(msg.pane.rawValue)")
+                openSettingsPane(msg.pane)
             }
 
         default:

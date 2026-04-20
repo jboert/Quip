@@ -64,6 +64,9 @@ struct QuipApp: App {
     /// decoded in QuipApp's `onITermWindowList` callback. Passed down as
     /// a Binding so the sheet can clear it before re-scanning.
     @State private var iTermScanResults: [ITermWindowInfo]? = nil
+    /// Most recent Mac TCC permission snapshot. nil = Mac hasn't sent one yet
+    /// (older Mac build, or just connected and waiting for the first probe).
+    @State private var macPermissions: MacPermissionsMessage? = nil
     @State private var errorToast: String?
     @AppStorage("ttsEnabled") private var ttsEnabled = false
     /// Master toggle for the Dynamic Island / Lock Screen Live Activity.
@@ -115,7 +118,8 @@ struct QuipApp: App {
                 onStopRecording: { DispatchQueue.main.async { stopRecording() } },
                 onRequestContent: { windowId in
                     client.send(RequestContentMessage(windowId: windowId))
-                }
+                },
+                macPermissions: macPermissions
             )
             .environmentObject(pendingImage)
             .onAppear {
@@ -342,6 +346,12 @@ struct QuipApp: App {
             }
         }
 
+        client.onMacPermissions = { snapshot in
+            DispatchQueue.main.async {
+                macPermissions = snapshot
+            }
+        }
+
         client.onOutputDelta = { windowId, windowName, text, isFinal in
             DispatchQueue.main.async {
                 guard ttsEnabled else { return }
@@ -564,6 +574,7 @@ struct MainiOSView: View {
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
+    var macPermissions: MacPermissionsMessage?
 
     @AppStorage("lastURL") private var urlText: String = ""
     @AppStorage("recentConnectionsData") private var recentConnectionsData: Data = Data()
@@ -809,7 +820,12 @@ struct MainiOSView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw, client: client, pushRegistration: pushRegistration)
+            SettingsSheet(
+                enabledQuickButtonsRaw: $enabledQuickButtonsRaw,
+                client: client,
+                pushRegistration: pushRegistration,
+                macPermissions: macPermissions
+            )
         }
         // Image-attach sheets — hoisted to the body so both portrait and
         // landscape views can trigger them via the shared @State bindings.
@@ -1265,10 +1281,22 @@ struct MainiOSView: View {
             Button {
                 showSettings = true
             } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 12))
-                    .foregroundStyle(colors.textTertiary)
-                    .frame(width: 20, height: 20)
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 12))
+                        .foregroundStyle(colors.textTertiary)
+                        .frame(width: 20, height: 20)
+                    // Red dot when any Mac TCC perm is denied so the user
+                    // notices something needs attention without having to
+                    // open the sheet to find out.
+                    if let perms = macPermissions,
+                       !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 6, height: 6)
+                            .offset(x: -2, y: 2)
+                    }
+                }
             }
             Button {
                 client.disconnect()
@@ -2749,6 +2777,7 @@ struct SettingsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
     var client: WebSocketClient
     var pushRegistration: PushRegistrationService
+    var macPermissions: MacPermissionsMessage?
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
@@ -2766,6 +2795,32 @@ struct SettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                // Mac Status — TCC permissions Quip needs on the Mac side.
+                // Tap a red row to pop the right System Settings pane open
+                // remotely so the user doesn't have to dig for it.
+                if let perms = macPermissions {
+                    Section {
+                        macPermRow(name: "Accessibility",
+                                   icon: "accessibility",
+                                   granted: perms.accessibility,
+                                   pane: .accessibility)
+                        macPermRow(name: "Automation (iTerm)",
+                                   icon: "terminal",
+                                   granted: perms.appleEvents,
+                                   pane: .automation)
+                        macPermRow(name: "Screen Recording",
+                                   icon: "rectangle.dashed",
+                                   granted: perms.screenRecording,
+                                   pane: .screenRecording)
+                    } header: {
+                        Text("Mac Permissions")
+                    } footer: {
+                        if !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
+                            Text("Tap a red row — Mac will pop the right System Settings pane open.")
+                        }
+                    }
+                }
+
                 // Appearance — single-row section; footer goes away once the
                 // feature's self-explanatory so the page stops feeling padded.
                 Section("Appearance") {
@@ -2834,6 +2889,37 @@ struct SettingsSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    /// Single Mac-permission row. Green check when granted; red cross when not,
+    /// and tapping a denied row asks the Mac to open the matching System Settings
+    /// pane via `OpenMacSettingsPaneMessage`. Granted rows aren't tappable —
+    /// nothing useful happens there and we don't want to bounce the Mac into
+    /// Settings on accidental taps.
+    @ViewBuilder
+    private func macPermRow(name: String, icon: String, granted: Bool, pane: MacSettingsPane) -> some View {
+        let row = HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .frame(width: 20)
+                .foregroundStyle(.secondary)
+            Text(name)
+            Spacer()
+            Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(granted ? Color.green : Color.red)
+            if !granted {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        if granted {
+            row
+        } else {
+            Button { client.send(OpenMacSettingsPaneMessage(pane: pane)) } label: { row }
+                .buttonStyle(.plain)
         }
     }
 

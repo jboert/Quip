@@ -576,6 +576,53 @@ struct AuthResultMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Mac Permission Status
+
+/// One of the macOS TCC panes Quip needs the user to grant. The phone sends this
+/// back via `OpenMacSettingsPaneMessage` so the Mac can pop the right pane open
+/// without the user hunting through System Settings.
+enum MacSettingsPane: String, Codable, Sendable, CaseIterable {
+    case accessibility
+    case automation
+    case screenRecording
+}
+
+/// Mac → iPhone. Snapshot of what's currently granted on the Mac. Sent on
+/// startup, on each new client auth, and every 5s while a client is connected.
+/// Local Network is intentionally omitted — if you can read this message at all,
+/// Local Network is working.
+struct MacPermissionsMessage: Codable, Sendable, Equatable {
+    let type: String
+    let accessibility: Bool
+    /// Apple Events / Automation grant for iTerm specifically. Probed via
+    /// `AEDeterminePermissionToAutomateTarget(askUserIfNeeded: false)` against
+    /// iTerm's bundle ID. If iTerm isn't running we report `true` rather than
+    /// false-alarm — the alternative is a red dot every time the user hasn't
+    /// launched iTerm yet.
+    let appleEvents: Bool
+    let screenRecording: Bool
+
+    init(accessibility: Bool, appleEvents: Bool, screenRecording: Bool) {
+        self.type = "mac_permissions"
+        self.accessibility = accessibility
+        self.appleEvents = appleEvents
+        self.screenRecording = screenRecording
+    }
+}
+
+/// iPhone → Mac. Tap-to-open shortcut: Mac calls `NSWorkspace.shared.open(...)`
+/// with the matching `x-apple.systempreferences:` URL so the right pane pops up
+/// without the user navigating System Settings manually.
+struct OpenMacSettingsPaneMessage: Codable, Sendable {
+    let type: String
+    let pane: MacSettingsPane
+
+    init(pane: MacSettingsPane) {
+        self.type = "open_mac_settings_pane"
+        self.pane = pane
+    }
+}
+
 // MARK: - Message Encoding/Decoding Helpers
 
 enum MessageCoder {
