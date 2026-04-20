@@ -2702,6 +2702,9 @@ struct InlineTerminalContent: View {
     var onSendAction: (String) -> Void
     @Environment(\.quipColors) private var colors
     @AppStorage("tintContentBorder") private var tintContentBorder = true
+    /// Toggle for the tap-to-open URL tray. Default on. Users who don't want
+    /// the extra row between header and screenshot can hide it from Settings.
+    @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     /// Zoom level index into `ContentZoomLevel.allCases`. Persisted so the
     /// user's pick survives relaunch, and shared between portrait and
     /// landscape views so cycling in one affects both.
@@ -2747,7 +2750,7 @@ struct InlineTerminalContent: View {
     /// vertical real estate. Each pill: tap → `UIApplication.shared.open`.
     @ViewBuilder
     private var urlTray: some View {
-        if !urls.isEmpty {
+        if urlTrayEnabled && !urls.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(urls, id: \.self) { url in
@@ -2757,12 +2760,12 @@ struct InlineTerminalContent: View {
                             }
                         } label: {
                             Text(urlTrayLabel(for: url))
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .foregroundStyle(Color.cyan)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
                                 .background(Color.cyan.opacity(0.15))
                                 .clipShape(Capsule())
                                 .overlay(
@@ -3068,6 +3071,7 @@ struct SettingsSheet: View {
     var pushRegistration: PushRegistrationService
     var macPermissions: MacPermissionsMessage?
     @AppStorage("tintContentBorder") private var tintContentBorder = true
+    @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -3129,6 +3133,7 @@ struct SettingsSheet: View {
                 // feature's self-explanatory so the page stops feeling padded.
                 Section("Appearance") {
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
+                    Toggle("URL tray", isOn: $urlTrayEnabled)
                 }
 
                 // Notifications — one section. Kill switch on top; the
