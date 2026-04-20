@@ -212,8 +212,23 @@ private struct GeneralTab: View {
     @AppStorage("showInDock") private var showInDock = true
     @AppStorage("mirrorDesktop") private var mirrorDesktop = false
 
+    /// Re-probe TCC perms every 3s while this tab is visible so the row
+    /// status flips green within seconds of the user granting in System
+    /// Settings — without forcing the user to bounce back into Quip to
+    /// see it. TimelineView is the cheapest reactive timer in SwiftUI.
+    private let permissionProbe = PermissionProbeService()
+
     var body: some View {
         Form {
+            Section("Permissions") {
+                TimelineView(.periodic(from: .now, by: 3.0)) { _ in
+                    let perms = permissionProbe.probe()
+                    macPermRow(name: "Accessibility", granted: perms.accessibility, pane: .accessibility)
+                    macPermRow(name: "Automation (iTerm)", granted: perms.appleEvents, pane: .automation)
+                    macPermRow(name: "Screen Recording", granted: perms.screenRecording, pane: .screenRecording)
+                }
+            }
+
             Section("Terminal") {
                 Picker("Default Terminal App", selection: $defaultTerminalApp) {
                     ForEach(TerminalApp.allCases) { app in
@@ -242,6 +257,37 @@ private struct GeneralTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// One TCC perm row. Granted = green check. Denied = red ✗ + a "Grant"
+    /// button that drops the user straight into the matching System Settings
+    /// pane via an x-apple.systempreferences URL — no nav required.
+    @ViewBuilder
+    private func macPermRow(name: String, granted: Bool, pane: MacSettingsPane) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(granted ? Color.green : Color.red)
+            Text(name)
+            Spacer()
+            if !granted {
+                Button("Grant") { openSettingsPane(pane) }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func openSettingsPane(_ pane: MacSettingsPane) {
+        let urlString: String
+        switch pane {
+        case .accessibility:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case .automation:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        case .screenRecording:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+        guard let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 
