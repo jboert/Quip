@@ -2531,6 +2531,15 @@ struct AttentionPulseDot: View {
 /// which would turn `README.md` (`.md` is a real TLD) and `Quip.app` into links.
 func linkifiedTerminalContent(_ raw: String) -> AttributedString {
     var attr = AttributedString(raw)
+
+    // Bake the default white foreground into the attributed string itself so
+    // the call site doesn't need a `.foregroundStyle` modifier on the Text.
+    // The modifier interferes with link-tap recognition by making SwiftUI
+    // recompute foreground per-character at render time and stomping on the
+    // link attribute's tap-routing. Setting it on the attributed string
+    // leaves the per-run link runs intact and tappable.
+    attr.foregroundColor = .white.opacity(0.85)
+
     guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
         return attr
     }
@@ -2542,6 +2551,9 @@ func linkifiedTerminalContent(_ raw: String) -> AttributedString {
         guard matched.hasPrefix("http://") || matched.hasPrefix("https://") else { return }
         attr[range].link = url
         attr[range].underlineStyle = .single
+        // Brighter foreground for link runs so they stand out from the .85
+        // white body text — visually distinguishes "this is tappable".
+        attr[range].foregroundColor = .cyan
     }
     return attr
 }
@@ -2617,13 +2629,23 @@ struct InlineTerminalContent: View {
                             .frame(maxWidth: .infinity)
                             .id("bottom")
                     } else if !content.isEmpty {
+                        // SwiftUI Text + AttributedString with `.link` SHOULD
+                        // be tappable out of the box, but a `.foregroundStyle`
+                        // modifier on the same Text overrides per-run colors
+                        // AND interferes with link-tap recognition (the link
+                        // attribute and the global foreground style fight for
+                        // priority on the same characters). Fix: bake the
+                        // foreground color INTO the AttributedString itself
+                        // (see `linkifiedTerminalContent`) and drop the
+                        // `.foregroundStyle` modifier here. Then SwiftUI sees
+                        // the link runs as having all the expected styling
+                        // including their own foreground, and routes taps
+                        // through to the system openURL handler.
                         Text(linkifiedTerminalContent(content))
                             .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.85))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
-                            .textSelection(.enabled)
                             .id("bottom")
                     } else {
                         Text("Loading…")
