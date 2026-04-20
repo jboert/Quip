@@ -2548,7 +2548,13 @@ func linkifiedTerminalContent(_ raw: String) -> AttributedString {
         guard let match, let url = match.url,
               let range = Range(match.range, in: attr) else { return }
         let matched = ns.substring(with: match.range)
-        guard matched.hasPrefix("http://") || matched.hasPrefix("https://") else { return }
+        // Allow http(s) explicitly + mailto: for emails (NSDataDetector returns
+        // bare addresses as `mailto:foo@bar.com` URLs natively, so this filter
+        // accepts both `mailto:hi@example.com` substring matches and bare
+        // `noreply@anthropic.com` matches surfaced by the detector).
+        guard matched.hasPrefix("http://") || matched.hasPrefix("https://")
+              || matched.hasPrefix("mailto:") || url.scheme?.lowercased() == "mailto"
+        else { return }
         attr[range].link = url
         attr[range].underlineStyle = .single
         // Brighter foreground for link runs so they stand out from the .85

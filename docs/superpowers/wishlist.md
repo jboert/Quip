@@ -561,14 +561,6 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 ---
 
-### 32. `mailto:` link support in terminal content
-
-**Status:** Wishlist
-**Depends on:** #31 (need http(s) working first)
-**Context:** Once the `linkifiedTerminalContent` URL detection actually fires on iOS, extend the scheme filter (`hasPrefix("http://") || hasPrefix("https://")`) to also accept `mailto:`. `NSDataDetector` already detects email-style links; the filter just needs the extra prefix check. Tap → opens Mail compose draft via the system URL handler. One-line code change + 1-2 unit tests.
-
----
-
 ### 33. Mac perms feature — verify all sub-flows in production
 
 **Status:** Wishlist (acceptance testing)
@@ -591,4 +583,8 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 Diagnosed autonomously via a Node.js fake-iOS-client (`/tmp/quip-content-probe.js`) that auths to the Mac WebSocket, requests terminal content, dumps the raw bytes, and a standalone Swift script (`/tmp/test-linkifier.swift`) that runs the exact `linkifiedTerminalContent` logic against those bytes. That confirmed `raw=6 kept=2` — the linkifier was working correctly all along; the bug was further down the SwiftUI render chain. The earlier "Case B" report was a misread caused by the user testing when no http(s) URLs happened to be in the visible iTerm buffer at that moment.
 
-**Related:** commits `d3bf4c9` (initial linkifier), `b5bb8d7` (scheme filter + tests).
+**Related:** commits `d3bf4c9` (initial linkifier), `b5bb8d7` (scheme filter + tests), `03ebfc9` (the gesture-routing fix).
+
+### 32. `mailto:` link support in terminal content
+
+**Status:** ✅ Done — extended the scheme filter in `linkifiedTerminalContent` to accept `mailto:` substring matches AND any URL whose `scheme` is "mailto" (NSDataDetector returns bare emails like `noreply@anthropic.com` as `mailto:noreply@anthropic.com` URLs natively, so both cases are covered). Two new unit tests: bare-email-as-mailto + explicit-mailto-uri. Tap pops the system Mail compose sheet via the standard URL handler.
