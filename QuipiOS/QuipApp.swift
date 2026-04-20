@@ -2842,8 +2842,8 @@ struct SettingsSheet: View {
                 // Mac Status — TCC permissions Quip needs on the Mac side.
                 // Tap a red row to pop the right System Settings pane open
                 // remotely so the user doesn't have to dig for it.
-                if let perms = macPermissions {
-                    Section {
+                Section {
+                    if let perms = macPermissions {
                         macPermRow(name: "Accessibility",
                                    icon: "accessibility",
                                    granted: perms.accessibility,
@@ -2856,12 +2856,27 @@ struct SettingsSheet: View {
                                    icon: "rectangle.dashed",
                                    granted: perms.screenRecording,
                                    pane: .screenRecording)
-                    } header: {
-                        Text("Mac Permissions")
-                    } footer: {
-                        if !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
-                            Text("Tap a red row — Mac will pop the right System Settings pane open.")
+                    } else {
+                        // No snapshot yet — likely the Mac hasn't sent one
+                        // since the phone connected, or this Mac build
+                        // predates Phase 1. Show the placeholder explicitly
+                        // so the user (and we) can tell "missing" from
+                        // "all-granted-no-section".
+                        HStack {
+                            Image(systemName: "questionmark.circle")
+                                .foregroundStyle(.secondary)
+                            Text("Waiting for Mac…")
+                                .foregroundStyle(.secondary)
                         }
+                    }
+                } header: {
+                    Text("Mac Permissions")
+                } footer: {
+                    if let perms = macPermissions,
+                       !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
+                        Text("Tap a red row — Mac will pop the right System Settings pane open.")
+                    } else if macPermissions == nil {
+                        Text("If this never updates, the Mac may be on an older build that doesn't broadcast permission status.")
                     }
                 }
 

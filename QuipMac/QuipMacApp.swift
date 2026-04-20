@@ -273,10 +273,20 @@ struct QuipMacApp: App {
         // phone gets a near-real-time green/red flip when the user grants or
         // revokes a permission. Auth-time broadcast (force=true) covers the
         // first-connection case.
-        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+        let permsTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
             DispatchQueue.main.async {
                 self.broadcastPermissions(force: false)
             }
+        }
+        // .common mode so the timer keeps firing while the user is tracking
+        // a menu/popover (MenuBarExtra). Default mode would pause it.
+        RunLoop.main.add(permsTimer, forMode: .common)
+
+        // Initial broadcast so the snapshot exists before the first phone
+        // client authenticates — keeps the timer's "skip on equality" path
+        // from suppressing the very first send.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.broadcastPermissions(force: true)
         }
     }
 

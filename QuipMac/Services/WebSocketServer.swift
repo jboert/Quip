@@ -12,6 +12,8 @@ final class WebSocketServer {
 
     var isRunning: Bool = false
     var connectedClientCount: Int = 0
+    /// Number of currently-authenticated direct WebSocket clients. Diagnostic.
+    var authenticatedClientCount: Int { clients.filter(\.isAuthenticated).count }
     var onMessageReceived: ((Data) -> Void)?
     var onClientAuthenticated: (() -> Void)?
     var pinManager: PINManager?
