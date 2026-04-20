@@ -608,6 +608,12 @@ struct MacPermissionsMessage: Codable, Sendable, Equatable {
         self.appleEvents = appleEvents
         self.screenRecording = screenRecording
     }
+
+    /// 0-3 — number of perms currently denied. Used by the Live Activity badge
+    /// and by the in-app sheet's "any denied" footer.
+    var deniedCount: Int {
+        (accessibility ? 0 : 1) + (appleEvents ? 0 : 1) + (screenRecording ? 0 : 1)
+    }
 }
 
 /// iPhone → Mac. Tap-to-open shortcut: Mac calls `NSWorkspace.shared.open(...)`

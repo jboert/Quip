@@ -16,6 +16,9 @@ import Observation
 @Observable
 final class LiveActivityService {
     private var activities: [String: Activity<QuipLiveActivityAttributes>] = [:]
+    /// Single global activity for the "Mac TCC perms degraded" alert.
+    /// Distinct from per-window activities — there's only ever one Mac.
+    private var macPermsActivity: Activity<QuipMacPermsActivityAttributes>?
 
     /// True if Live Activities are usable on this device. False on
     /// iPhones without Dynamic Island (iPhone 13 and earlier), when
@@ -42,6 +45,20 @@ final class LiveActivityService {
     nonisolated func endAll() {
         Task { @MainActor in
             await self.endAllAsync()
+        }
+    }
+
+    /// Start or update the Mac-perms degraded activity. Pass `deniedCount`
+    /// (1-3) to refresh the badge; passing 0 ends the activity.
+    nonisolated func startOrUpdateMacPerms(deniedCount: Int) {
+        Task { @MainActor in
+            await self.startOrUpdateMacPermsAsync(deniedCount: deniedCount)
+        }
+    }
+
+    nonisolated func endMacPerms() {
+        Task { @MainActor in
+            await self.endMacPermsAsync()
         }
     }
 
@@ -90,7 +107,8 @@ final class LiveActivityService {
 
     /// End every activity — used on sign-out / connection loss so the
     /// island doesn't show stale "waiting" state for a window the Mac
-    /// no longer reports.
+    /// no longer reports. Also tears down the Mac-perms alert because a
+    /// disconnected phone has nothing useful to say about Mac state.
     private func endAllAsync() async {
         let all = activities
         activities.removeAll()
@@ -100,5 +118,40 @@ final class LiveActivityService {
                 dismissalPolicy: .immediate
             )
         }
+        await endMacPermsAsync()
+    }
+
+    private func startOrUpdateMacPermsAsync(deniedCount: Int) async {
+        guard areActivitiesEnabled else {
+            print("[LiveActivity] mac-perms skipped (activities not enabled)")
+            return
+        }
+        guard deniedCount > 0 else {
+            await endMacPermsAsync()
+            return
+        }
+        let newContent = QuipMacPermsActivityAttributes.ContentState(deniedCount: deniedCount)
+        if let existing = macPermsActivity {
+            await existing.update(ActivityContent(state: newContent, staleDate: nil))
+            return
+        }
+        do {
+            macPermsActivity = try Activity.request(
+                attributes: QuipMacPermsActivityAttributes(),
+                content: ActivityContent(state: newContent, staleDate: nil),
+                pushType: nil
+            )
+        } catch {
+            print("[LiveActivity] mac-perms start failed: \(error)")
+        }
+    }
+
+    private func endMacPermsAsync() async {
+        guard let activity = macPermsActivity else { return }
+        macPermsActivity = nil
+        await activity.end(
+            ActivityContent(state: activity.content.state, staleDate: nil),
+            dismissalPolicy: .immediate
+        )
     }
 }
