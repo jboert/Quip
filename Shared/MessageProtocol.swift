@@ -250,12 +250,19 @@ struct TerminalContentMessage: Codable, Sendable {
     let windowId: String
     let content: String
     let screenshot: String?
+    /// URLs extracted from `content` on the Mac (http/https/mailto only,
+    /// no bare-TLD false positives — same scheme filter as the iOS linkifier).
+    /// Surfaced so iOS can render a tap-to-open URL tray alongside the
+    /// screenshot, which is otherwise pixels and can't be linkified.
+    /// Optional for backwards compat with pre-tray Mac builds.
+    let urls: [String]?
 
-    init(windowId: String, content: String, screenshot: String? = nil) {
+    init(windowId: String, content: String, screenshot: String? = nil, urls: [String]? = nil) {
         self.type = "terminal_content"
         self.windowId = windowId
         self.content = content
         self.screenshot = screenshot
+        self.urls = urls
     }
 }
 

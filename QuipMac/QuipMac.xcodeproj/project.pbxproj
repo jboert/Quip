@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		0553EF1A21F0C774DAA2F0D6 /* LayoutPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5EFE906905D43F124D49A7A /* LayoutPreview.swift */; };
-		06739DDE32002EE5EC49534E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_4BBAEC1A-7687-4777-923C-205772F8C60A" /* Assets.xcassets */; };
 		10651D74B2A895F33F9D4F2B /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F512A11137B9D4537AB6361B /* MessageProtocolTests.swift */; };
 		107399D353901EBFF5FB310B /* NetworkMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BE934418962AAB550CF87F /* NetworkMode.swift */; };
 		116314BEF65175C6546B7FD6 /* PushRegisteredDeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E4F97BA0BB789B8E2A1D6 /* PushRegisteredDeviceStoreTests.swift */; };
@@ -30,6 +29,7 @@
 		6A687DBD83641F9456CDB731 /* KeystrokeInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A56A336266F29BFDA4CB1C10 /* KeystrokeInjector.swift */; };
 		6AF59F80397868055AA1DA8F /* PINManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BBCCD34532C15A5A05B49A /* PINManager.swift */; };
 		6FF9FBA8F15F5B3448809A8D /* APNsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5D9089FAA12F8CDF0710813 /* APNsClient.swift */; };
+		776B6808FFB2C42DE93FF535 /* TerminalURLExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792D57DC8FC3B11646E7AA24 /* TerminalURLExtractorTests.swift */; };
 		7893732742065279CC924FCF /* ImageUploadMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BDEBA5C1FF3ADA484633B4B /* ImageUploadMessageTests.swift */; };
 		82C001C2D1E751B52E9323D6 /* WindowManagerSessionIdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2FC54EF7BE5384458CC160 /* WindowManagerSessionIdTests.swift */; };
 		864A7798EAC351C8B5E8E39F /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B19559A6253B0E85D5C581 /* Color+Hex.swift */; };
@@ -38,12 +38,13 @@
 		9B4D46C0E2C0623E6F9BE1C6 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C947C022B2F6D1CB4FED43F /* MainWindow.swift */; };
 		9E9263F5B804961A1B7225A8 /* KokoroTTS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ED3CA65D3DE8E2C7DCF5769 /* KokoroTTS.swift */; };
 		A81002D85A2BC5AA5976AFCF /* WebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EC90466A8AD9BEAE5A07DDC /* WebSocketServer.swift */; };
+		AF54B4FBF351780F625437CA /* TerminalURLExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73FCC8550866B2D7A72DE1C5 /* TerminalURLExtractor.swift */; };
+		B01F5A5D8EFE27FA3272B597 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_FE786F05-78E4-4B97-8443-013148F4CFC2" /* Assets.xcassets */; };
 		B8F784DAB51BBEBD94DE4D1A /* APNsJWTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBBECC11724C6B7430E8A8DA /* APNsJWTTests.swift */; };
 		BB7AD29C435EAFFE6F8DED12 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81BB452979FFEEB64D818B68 /* MenuBarView.swift */; };
 		BF0FBA9E0D24561D417C885D /* ImageUploadHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0B9C724A81CC5A243284D8 /* ImageUploadHandler.swift */; };
 		BFAEC96E6C28193C492E7873 /* KeystrokeFocusDelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45F9BC10D98A7C867B02D5A1 /* KeystrokeFocusDelayTests.swift */; };
 		C3E6AD2C931293FB771CF8CC /* ImageUploadHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9432A677E617A6B09DA7DD0B /* ImageUploadHandlerTests.swift */; };
-		C3F1591EF9D78E5AA608D455 /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_B36BAD64-5EBE-4CD5-A9C6-F007E4946F42" /* QuipMacApp.swift */; };
 		C68B39F81066E2B42D55AE69 /* APNsKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81E08E6062A74F4982F5FA16 /* APNsKeyStore.swift */; };
 		CA061A5EA5E9FFFED7B88CA6 /* kokoro_tts.py in Resources */ = {isa = PBXBuildFile; fileRef = 68BD4937C2DB6DD04A719C32 /* kokoro_tts.py */; };
 		CB4CE20C3C4CB1AA46978892 /* ITermWindowListParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF071C3CBB7547A6D15F74D /* ITermWindowListParserTests.swift */; };
@@ -55,6 +56,7 @@
 		EB8C0145B42599AFC038A801 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */; };
 		F0476745D4BE09BEA5E6FA79 /* AuditLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFBB5F208F16F99E170009A /* AuditLogger.swift */; };
 		F0BDBE94C7CB5AD6685E33E5 /* BonjourAdvertiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBFB66F35E0DB7CFEA44761B /* BonjourAdvertiser.swift */; };
+		F154694169DAFAA7BBBBAC8C /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_34437E8B-F476-476A-82F6-102A4BC9A8D7" /* QuipMacApp.swift */; };
 		F6BAA00D69BD1F037B3D22A1 /* TerminalColorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */; };
 /* End PBXBuildFile section */
 
@@ -90,6 +92,8 @@
 		6C947C022B2F6D1CB4FED43F /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
 		6ED3CA65D3DE8E2C7DCF5769 /* KokoroTTS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroTTS.swift; sourceTree = "<group>"; };
 		6F2F800B05C6E3B1022489FD /* ConnectionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionLog.swift; sourceTree = "<group>"; };
+		73FCC8550866B2D7A72DE1C5 /* TerminalURLExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalURLExtractor.swift; sourceTree = "<group>"; };
+		792D57DC8FC3B11646E7AA24 /* TerminalURLExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalURLExtractorTests.swift; sourceTree = "<group>"; };
 		7C72FAA7988E0CA53E9ADCCD /* QuipMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuipMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7F854257F09ED55190DA9754 /* SecretRedactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretRedactor.swift; sourceTree = "<group>"; };
 		81BB452979FFEEB64D818B68 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
@@ -118,9 +122,9 @@
 		FBAFA76040229EEE779AC055 /* WindowListSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowListSidebar.swift; sourceTree = "<group>"; };
 		FBBECC11724C6B7430E8A8DA /* APNsJWTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNsJWTTests.swift; sourceTree = "<group>"; };
 		FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalColorManager.swift; sourceTree = "<group>"; };
-		"TEMP_4BBAEC1A-7687-4777-923C-205772F8C60A" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		"TEMP_97E72391-9709-4E11-9105-2279ED2433CA" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_B36BAD64-5EBE-4CD5-A9C6-F007E4946F42" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
+		"TEMP_34437E8B-F476-476A-82F6-102A4BC9A8D7" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
+		"TEMP_98A9DC6B-C342-488D-A5AF-D3B963B544B2" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_FE786F05-78E4-4B97-8443-013148F4CFC2" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -133,6 +137,7 @@
 				4AF071C3CBB7547A6D15F74D /* ITermWindowListParserTests.swift */,
 				E37933B6AB818F38B0D7418F /* KeystrokeInjectorWriteExpressionTests.swift */,
 				6C4E4F97BA0BB789B8E2A1D6 /* PushRegisteredDeviceStoreTests.swift */,
+				792D57DC8FC3B11646E7AA24 /* TerminalURLExtractorTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -158,6 +163,7 @@
 				88BE6CF66C22B39C6DAACAA1 /* TailscaleService.swift */,
 				FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */,
 				B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */,
+				73FCC8550866B2D7A72DE1C5 /* TerminalURLExtractor.swift */,
 				3EC90466A8AD9BEAE5A07DDC /* WebSocketServer.swift */,
 				3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */,
 			);
@@ -252,12 +258,12 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		"TEMP_7472C978-2123-4789-8DEF-1B6137EF96FA" /* QuipMac */ = {
+		"TEMP_527CBE73-B44B-450A-A722-6340A8A840BB" /* QuipMac */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_B36BAD64-5EBE-4CD5-A9C6-F007E4946F42" /* QuipMacApp.swift */,
-				"TEMP_4BBAEC1A-7687-4777-923C-205772F8C60A" /* Assets.xcassets */,
-				"TEMP_97E72391-9709-4E11-9105-2279ED2433CA" /* Info.plist */,
+				"TEMP_34437E8B-F476-476A-82F6-102A4BC9A8D7" /* QuipMacApp.swift */,
+				"TEMP_FE786F05-78E4-4B97-8443-013148F4CFC2" /* Assets.xcassets */,
+				"TEMP_98A9DC6B-C342-488D-A5AF-D3B963B544B2" /* Info.plist */,
 				F621177D73579FB347509BD2 /* Resources */,
 				D32FA749E86D0C4ECD728F1E /* Models */,
 				D87702261819716197ADF4C3 /* Views */,
@@ -345,7 +351,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				06739DDE32002EE5EC49534E /* Assets.xcassets in Resources */,
+				B01F5A5D8EFE27FA3272B597 /* Assets.xcassets in Resources */,
 				425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */,
 				CA061A5EA5E9FFFED7B88CA6 /* kokoro_tts.py in Resources */,
 			);
@@ -402,12 +408,13 @@
 				1BFFDD98C1E1578755E3B874 /* PTTWindowTracker.swift in Sources */,
 				DB25E0C4E38ECC8B9A42D04D /* PermissionProbeService.swift in Sources */,
 				9084D0AD136CA9E40A96DE7E /* PushNotificationService.swift in Sources */,
-				C3F1591EF9D78E5AA608D455 /* QuipMacApp.swift in Sources */,
+				F154694169DAFAA7BBBBAC8C /* QuipMacApp.swift in Sources */,
 				E16F140F49A779C15EAA0862 /* SecretRedactor.swift in Sources */,
 				63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */,
 				166D5EA3635FC5603D18D5A6 /* TailscaleService.swift in Sources */,
 				F6BAA00D69BD1F037B3D22A1 /* TerminalColorManager.swift in Sources */,
 				2D3A9D787C29669647538F78 /* TerminalStateDetector.swift in Sources */,
+				AF54B4FBF351780F625437CA /* TerminalURLExtractor.swift in Sources */,
 				A81002D85A2BC5AA5976AFCF /* WebSocketServer.swift in Sources */,
 				44D85DED79B8403CA7AE7459 /* WindowInfo.swift in Sources */,
 				D771CA86FD23E660375CC1AC /* WindowListSidebar.swift in Sources */,
@@ -431,6 +438,7 @@
 				13D5412FA1D65684388478B6 /* MirrorDesktopFilterTests.swift in Sources */,
 				2204E721778AD2067D7822DF /* PTTWindowTrackerTests.swift in Sources */,
 				116314BEF65175C6546B7FD6 /* PushRegisteredDeviceStoreTests.swift in Sources */,
+				776B6808FFB2C42DE93FF535 /* TerminalURLExtractorTests.swift in Sources */,
 				82C001C2D1E751B52E9323D6 /* WindowManagerSessionIdTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

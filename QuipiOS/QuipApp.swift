@@ -54,6 +54,10 @@ struct QuipApp: App {
     @State private var textInputValue = ""
     @State private var terminalContentText: String?
     @State private var terminalContentScreenshot: String?
+    /// URLs extracted Mac-side from the scraped text, for the tap-to-open
+    /// tray. nil until first content arrives; empty array from an older Mac
+    /// build (pre-tray) reads as "no URLs" and hides the tray.
+    @State private var terminalContentURLs: [String]?
     @State private var terminalContentWindowId: String?
     @State private var showPINEntry = false
     @State private var pinText = ""
@@ -101,6 +105,7 @@ struct QuipApp: App {
                 isRecording: $isRecording,
                 terminalContentText: $terminalContentText,
                 terminalContentScreenshot: $terminalContentScreenshot,
+                terminalContentURLs: $terminalContentURLs,
                 terminalContentWindowId: $terminalContentWindowId,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
@@ -344,11 +349,12 @@ struct QuipApp: App {
             }
         }
 
-        client.onTerminalContent = { windowId, content, screenshot in
+        client.onTerminalContent = { windowId, content, screenshot, urls in
             DispatchQueue.main.async {
                 terminalContentWindowId = windowId
                 terminalContentText = content
                 terminalContentScreenshot = screenshot
+                terminalContentURLs = urls
             }
         }
 
@@ -572,6 +578,7 @@ struct MainiOSView: View {
     @Binding var isRecording: Bool
     @Binding var terminalContentText: String?
     @Binding var terminalContentScreenshot: String?
+    @Binding var terminalContentURLs: [String]?
     @Binding var terminalContentWindowId: String?
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
@@ -845,6 +852,7 @@ struct MainiOSView: View {
             // action buttons looked like they hit the wrong one.
             terminalContentText = nil
             terminalContentScreenshot = nil
+            terminalContentURLs = nil
             terminalContentWindowId = newId
             // Auto-fetch terminal output for the inline view in portrait.
             if isPortrait, let id = newId { onRequestContent(id) }
@@ -1912,6 +1920,7 @@ struct MainiOSView: View {
         InlineTerminalContent(
             content: terminalContentText ?? "",
             screenshot: terminalContentScreenshot,
+            urls: terminalContentURLs ?? [],
             windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
             windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
             isExpanded: $isTerminalExpanded,
@@ -2682,6 +2691,10 @@ func linkifiedTerminalContent(_ raw: String) -> AttributedString {
 struct InlineTerminalContent: View {
     let content: String
     let screenshot: String?
+    /// URLs extracted Mac-side for the tap-to-open tray. Empty → tray hides.
+    /// Screenshot mode (the typical case) renders URLs as pixels with no tap
+    /// routing, so this tray is how they become interactive.
+    let urls: [String]
     let windowName: String
     let windowColor: Color
     @Binding var isExpanded: Bool
@@ -2694,6 +2707,87 @@ struct InlineTerminalContent: View {
     /// landscape views so cycling in one affects both.
     @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    /// Which of the three render branches is active. Pinned by
+    /// `InlineTerminalContentBranchTests` so future refactors don't silently
+    /// flip the priority again.
+    enum RenderBranch { case image, text, loading }
+
+    /// Priority: screenshot > text > loading.
+    ///
+    /// Screenshot wins because Claude Code renders its UI in the terminal's
+    /// alternate screen buffer (the bordered input box), and the Mac's
+    /// text scrape (`readContent` in QuipMacApp.swift) only returns the
+    /// main scrollback buffer — text mode would hide the thing users are
+    /// actually looking at. The screenshot captures pixels regardless of
+    /// buffer and preserves ANSI colors.
+    ///
+    /// URLs in the image are pixels and can't be tapped in-situ. That's
+    /// why the header renders a tap-to-open URL tray from the Mac's
+    /// `TerminalURLExtractor` — Claude Code emits plenty of URLs in its
+    /// regular output (commit links, docs references, error URLs) and the
+    /// tray makes them openable without losing the screenshot.
+    static func branch(content: String, screenshot: String?) -> RenderBranch {
+        if let screenshot, let data = Data(base64Encoded: screenshot),
+           UIImage(data: data) != nil {
+            return .image
+        }
+        if !content.isEmpty { return .text }
+        return .loading
+    }
+
+    private var currentBranch: RenderBranch {
+        Self.branch(content: content, screenshot: screenshot)
+    }
+
+    /// Tiny pill in the header showing which render branch is live.
+    /// Horizontal scroll of tap-to-open URL pills. Renders above the
+    /// terminal content, below the window-name header. Hidden entirely when
+    /// `urls` is empty so zero-URL scrapes (the common case) don't burn
+    /// vertical real estate. Each pill: tap → `UIApplication.shared.open`.
+    @ViewBuilder
+    private var urlTray: some View {
+        if !urls.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(urls, id: \.self) { url in
+                        Button {
+                            if let u = URL(string: url) {
+                                UIApplication.shared.open(u)
+                            }
+                        } label: {
+                            Text(urlTrayLabel(for: url))
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .foregroundStyle(Color.cyan)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.cyan.opacity(0.15))
+                                .clipShape(Capsule())
+                                .overlay(
+                                    Capsule().stroke(Color.cyan.opacity(0.35), lineWidth: 0.5)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+            }
+            .background(Color.white.opacity(0.03))
+        }
+    }
+
+    /// Pill label — drop the scheme prefix for http(s)/mailto because it's
+    /// visual noise that wastes pill width on a phone. The tap handler uses
+    /// the full URL string so functionality is unchanged.
+    private func urlTrayLabel(for url: String) -> String {
+        if url.hasPrefix("https://") { return String(url.dropFirst("https://".count)) }
+        if url.hasPrefix("http://")  { return String(url.dropFirst("http://".count)) }
+        if url.hasPrefix("mailto:")  { return String(url.dropFirst("mailto:".count)) }
+        return url
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2740,46 +2834,38 @@ struct InlineTerminalContent: View {
             .padding(.vertical, 6)
             .background(Color.white.opacity(0.06))
 
-            // Three render branches:
-            //   - screenshot present → SwiftUI Image inside a ScrollView (zoom/pan)
-            //   - text content present → UITextView (own scroll, tap-to-open URL)
-            //   - empty → "Loading…" placeholder
-            // Branches are kept structurally separate because UITextView wants to
-            // own its scrolling for reliable link tap routing, while the screenshot
-            // path needs SwiftUI ScrollView's scroll-to-bottom hook.
-            if let screenshot, let imageData = Data(base64Encoded: screenshot),
-               let uiImage = UIImage(data: imageData) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity)
-                            .id("bottom")
+            // URL tray above the content area so users can open URLs from
+            // the screenshot (which is pixels and can't be tapped in-situ).
+            urlTray
+
+            // Three render branches, selected by `currentBranch` (pure fn
+            // pinned by InlineTerminalContentBranchTests):
+            //   .image   → SwiftUI Image inside ScrollView (zoom/pan, scroll-to-bottom)
+            //   .text    → UITextView (own scroll, tap-to-open URL) — fallback
+            //              when screenshot capture fails
+            //   .loading → placeholder
+            switch currentBranch {
+            case .image:
+                if let screenshot, let imageData = Data(base64Encoded: screenshot),
+                   let uiImage = UIImage(data: imageData) {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: .infinity)
+                                .id("bottom")
+                        }
+                        .onChange(of: screenshot) { _, _ in
+                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        }
                     }
-                    .onChange(of: screenshot) { _, _ in
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if !content.isEmpty {
-                VStack(spacing: 0) {
-                    // DIAGNOSTIC — pure SwiftUI Link sitting above the
-                    // UITextView. If this one IS tappable but the cyan URLs
-                    // below aren't, the bug is UITextView-specific.
-                    // If neither tap works, parent SwiftUI is intercepting.
-                    Link(destination: URL(string: "https://github.com")!) {
-                        Text("DEBUG: tap me → github.com")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.yellow)
-                            .padding(8)
-                            .frame(maxWidth: .infinity)
-                            .background(Color.yellow.opacity(0.2))
-                    }
-                    LinkableTerminalText(content: content)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
+            case .text:
+                LinkableTerminalText(content: content)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .loading:
                 Text("Loading…")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.4))

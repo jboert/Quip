@@ -792,8 +792,13 @@ struct QuipMacApp: App {
                             redacted = "[non-terminal window — screenshot requires Screen Recording permission for Quip]"
                         }
                         let screenshot = keystrokeInjector.captureWindowScreenshot(cgWindowNumber: wn)
+                        // URLs for the iOS tap-to-open tray. Extract from the
+                        // redacted text so SecretRedactor's scrubbing is
+                        // respected — we never ship a URL we also redacted
+                        // from the visible content.
+                        let urls = TerminalURLExtractor.extract(from: redacted)
                         DispatchQueue.main.async {
-                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot))
+                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot, urls: urls.isEmpty ? nil : urls))
                         }
                     }
                 }
