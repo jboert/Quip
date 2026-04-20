@@ -563,13 +563,18 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 ### 33. Mac perms feature — verify all sub-flows in production
 
-**Status:** Wishlist (acceptance testing)
-**Context:** PR #6 ships Phase 1 + Phase 2 of the Mac TCC perms feature (probe → broadcast → iOS strip → deep-link → Live Activity → auto-pop sheet → Mac UI). End-to-end happy path verified manually (`clients=1 auth=1`, three green checks). Unverified flows worth a deliberate pass before merging or shipping wider:
-- Revoke a perm in System Settings → confirm phone strip flips red within 5s, gear-icon red dot appears, Dynamic Island shows triangle + count
+**Status:** Partially verified (autonomous). Manual checklist below pending user.
+
+**Autonomously verified (this session):** Connected a fake-iOS-client (Node WebSocket) to the Mac, authed with the saved PIN, observed that Mac broadcasts `mac_permissions accessibility=true appleEvents=true screenRecording=true` within ~22ms of auth — the auth-time `force=true` broadcast path is correct, the on-disk Mac binary is sending what Phase 1 designed.
+
+**Pending user (state-change sub-flows + visual confirmation):**
+- Revoke a perm in System Settings → phone strip flips red within 5s, gear-icon red dot appears, Dynamic Island shows triangle + count
 - Tap a red row in iOS SettingsSheet → matching System Settings pane opens on Mac (test all three: Accessibility, Automation, Screen Recording)
-- Tap Dynamic Island banner from Quip-backgrounded state → Quip launches into `quip://perms` deep link → SettingsSheet opens straight on Mac Permissions section
-- Mac UI Settings → General → Permissions section: tap Grant on a denied row → matching pane opens; flip green within 3s of granting (TimelineView refresh)
-- Live Activities toggle in Quip iOS Settings: turning OFF should kill any active perms LA + suppress new ones; turning ON should start one if perms are degraded
+- Tap Dynamic Island banner from Quip-backgrounded state → Quip launches via `quip://perms` deep link → SettingsSheet opens on the Mac Permissions section
+- Mac UI Settings → General → Permissions: tap Grant on a denied row → matching pane opens; flip green within 3s of granting (TimelineView refresh)
+- Live Activities toggle in Quip iOS Settings: turning OFF kills any active perms LA + suppresses new ones; turning ON spawns one if degraded
+
+Skipped autonomous TCC revoke (would force user re-grant — explicitly painful per their saved feedback). Trusting the broadcast pipe verification + Phase 1's prior all-green test until the manual run-through.
 
 **Related:** commits `0f3a0be`, `90e8e1a`, `59cfb3a`. PR https://github.com/jboert/Quip/pull/6.
 
