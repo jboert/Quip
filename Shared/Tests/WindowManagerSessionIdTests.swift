@@ -22,7 +22,8 @@ final class WindowManagerSessionIdTests: XCTestCase {
             pid: 1,
             windowNumber: windowNumber,
             bounds: bounds,
-            iterm2SessionId: nil
+            iterm2SessionId: nil,
+            iterm2Tty: nil
         )
     }
 
@@ -41,8 +42,8 @@ final class WindowManagerSessionIdTests: XCTestCase {
         ]
 
         wm.applyIterm2SessionIds([
-            WindowManager.Iterm2SessionInfo(bounds: boundsA, uuid: "UUID-A"),
-            WindowManager.Iterm2SessionInfo(bounds: boundsB, uuid: "UUID-B")
+            WindowManager.Iterm2SessionInfo(bounds: boundsA, uuid: "UUID-A", tty: "ttys001"),
+            WindowManager.Iterm2SessionInfo(bounds: boundsB, uuid: "UUID-B", tty: "ttys002")
         ])
 
         XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-A",
@@ -63,7 +64,7 @@ final class WindowManagerSessionIdTests: XCTestCase {
         ]
 
         wm.applyIterm2SessionIds([
-            WindowManager.Iterm2SessionInfo(bounds: boundsInList, uuid: "UUID-X")
+            WindowManager.Iterm2SessionInfo(bounds: boundsInList, uuid: "UUID-X", tty: "ttys003")
         ])
 
         XCTAssertNil(wm.windows[0].iterm2SessionId,
@@ -108,7 +109,8 @@ final class WindowManagerSessionIdTests: XCTestCase {
             pid: terminalWindow.pid,
             windowNumber: terminalWindow.windowNumber,
             bounds: terminalWindow.bounds,
-            iterm2SessionId: nil
+            iterm2SessionId: nil,
+            iterm2Tty: nil
         )
         _ = terminalWindow // silence unused
         wm.windows = [mirrored]
@@ -129,7 +131,7 @@ final class WindowManagerSessionIdTests: XCTestCase {
         ]
 
         wm.applyIterm2SessionIds([
-            WindowManager.Iterm2SessionInfo(bounds: applescriptBounds, uuid: "UUID-CLOSE")
+            WindowManager.Iterm2SessionInfo(bounds: applescriptBounds, uuid: "UUID-CLOSE", tty: "ttys004")
         ])
 
         XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-CLOSE",
