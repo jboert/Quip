@@ -158,13 +158,12 @@ final class KeystrokeInjector {
     /// raised the correct window before the AppleScript runs.
     @discardableResult
     func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1, iterm2SessionId: String? = nil) -> InjectionResult {
-        // iTerm2: use native write-text-with-character-id. Byte-identical to
-        // what typing the key into an iTerm2 session does, reliable because
-        // write text targets a session by object address rather than by
-        // keyboard focus.
+        // iTerm2: use native write-text. Byte-identical to typing the key into an
+        // iTerm2 session, reliable because write text targets a session by object
+        // address rather than by keyboard focus.
         if terminalApp == .iterm2 {
-            guard let charId = iTerm2CharIdFor(key) else {
-                return InjectionResult(success: false, error: "No iTerm2 char id for key: \(key)")
+            guard let writeExpr = Self.iTerm2WriteExpression(for: key) else {
+                return InjectionResult(success: false, error: "No iTerm2 write expression for key: \(key)")
             }
             // Same rule as sendText: refuse to type into a random front window
             // when we don't have a verified session id. A stray Ctrl+C landing
@@ -193,7 +192,7 @@ final class KeystrokeInjector {
                                             -- delete a char and then immediately enter the half-edited
                                             -- input. See sendText's comment above for the same rule on
                                             -- the text path.
-                                            write text (character id \(charId)) newline no
+                                            write text \(writeExpr) newline no
                                         end tell
                                         set quipFound to true
                                         exit repeat
@@ -210,7 +209,7 @@ final class KeystrokeInjector {
                 end if
             end tell
             """
-            return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, charId=\(charId)]")
+            return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, expr=\(writeExpr)]")
         }
 
         // Terminal.app: legacy System Events keystroke path.
@@ -258,6 +257,12 @@ final class KeystrokeInjector {
                 terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
+        case "shift+tab":
+            script = keystrokeScript(
+                key: "tab", using: "shift down",
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
+            )
+
         default:
             return InjectionResult(success: false, error: "Unknown key: \(key)")
         }
@@ -265,20 +270,33 @@ final class KeystrokeInjector {
         return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
     }
 
-    /// Map a key descriptor to the ASCII/Unicode codepoint that iTerm2's
-    /// `write text (character id N)` will send into a session. Returns nil for
-    /// unknown keys.
-    private func iTerm2CharIdFor(_ key: String) -> Int? {
+    /// Map a key descriptor to an AppleScript expression suitable as the
+    /// argument to iTerm2's `write text` verb. Single-byte keys come back as
+    /// `(character id N)`. Multi-byte sequences (CSI escape codes like Shift+Tab)
+    /// come back as a concatenation of `character id` plus a literal string,
+    /// which iTerm2 writes verbatim into the session — same effect as a real
+    /// terminal seeing those bytes from the keyboard. Returns nil for unknown keys.
+    ///
+    /// Exposed `internal static` so unit tests can lock the AppleScript shape
+    /// for every key (any drift here breaks every keystroke — high-stakes table).
+    /// Marked `nonisolated` because it's pure / has no instance state, which
+    /// also lets non-MainActor tests call it without an actor hop.
+    nonisolated static func iTerm2WriteExpression(for key: String) -> String? {
         switch key.lowercased() {
-        case "return", "enter":      return 13   // CR
-        case "escape", "esc":        return 27   // ESC
-        case "tab":                  return 9    // HT
-        case "backspace", "delete":  return 127  // DEL
-        case "ctrl+c":               return 3    // ETX / SIGINT
-        case "ctrl+d":               return 4    // EOT / EOF
+        case "return", "enter":      return "(character id 13)"   // CR
+        case "escape", "esc":        return "(character id 27)"   // ESC
+        case "tab":                  return "(character id 9)"    // HT
+        case "backspace", "delete":  return "(character id 127)"  // DEL
+        case "ctrl+c":               return "(character id 3)"    // ETX / SIGINT
+        case "ctrl+d":               return "(character id 4)"    // EOT / EOF
         // NAK — readline "kill backward" (clears prompt to start of line in
         // most TUI input layers, including Claude Code's Ink-based prompt).
-        case "ctrl+u":               return 21
+        case "ctrl+u":               return "(character id 21)"
+        // Shift+Tab is the standard CSI sequence ESC [ Z (`back-tab`). Used by
+        // Claude Code to cycle the editing mode (normal → autoAccept → plan → normal).
+        // iTerm2 writes the concatenated bytes verbatim — the TUI sees them as
+        // the same keypress the user would have pressed on a real keyboard.
+        case "shift+tab":            return #"((character id 27) & "[Z")"#
         default:                     return nil
         }
     }

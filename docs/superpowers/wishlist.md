@@ -64,13 +64,21 @@ The iPhone currently cycles through existing Claude Code terminal windows via th
 
 ### 6. Real Claude Code plan mode via Shift+Tab cycling
 
-**Status:** Wishlist (explicitly scrapped from `/plan` v1)
-**Context:** Instead of typing `/plan` as a literal prefix (which only gives *plan-style* behavior via prompt text), actually put Claude Code into its built-in plan mode by pressing Shift+Tab the correct number of times. Requires:
-- Adding `shift_tab` case to `KeystrokeInjector.sendKeystroke` — today's injector supports Return, Ctrl+C, Ctrl+D, Escape, Tab, but not Shift+Tab.
-- Either tracking Claude Code's current mode in Quip locally, OR reading the mode indicator from terminal content (see #7) to know how many Shift+Tab presses to send.
-- A user-visible fallback / manual override when detection fails.
+**Status:** ✅ Done — shipped on `eb-branch` (2026-04-20). Builds on #7's mode detection.
 
-Known risk: without mode detection, blind Shift+Tab presses can land in the wrong mode (Normal / Auto-Accept / Plan cycle is state-dependent).
+**What shipped:**
+- New `shift+tab` case in `KeystrokeInjector.sendKeystroke`. iTerm2 path uses the standard CSI back-tab sequence `ESC [ Z` via `write text ((character id 27) & "[Z") newline no` — concatenating the escape byte with the literal CSI tail in AppleScript. Terminal.app path uses System Events `keystroke "tab" using {shift down}`.
+- Refactored the per-key table from `iTerm2CharIdFor(_) -> Int?` to `iTerm2WriteExpression(for:) -> String?` so it can return multi-character expressions; full table locked under unit tests so accidental edits don't silently break a keystroke.
+- New high-level quick actions on the Mac: `set_plan_mode`, `set_auto_accept_mode`, `set_normal_mode`. Each reads `claudeModeDetector.windowModes[windowId]` and uses `ClaudeMode.shiftTabPresses(from:to:)` to compute exactly the right number of Shift+Tab presses (0…2; cycle is normal → autoAccept → plan → normal). Presses are staggered 80ms apart so Claude Code's TUI redraws between them.
+- Fallback: if the mode for that window is unknown (detector hasn't seen an indicator yet), the Mac broadcasts an `ErrorMessage` toast instead of pressing blind. User then taps the manual `press_shift_tab` action to step the cycle.
+- iOS QuickButton additions: `planMode` ("→Plan mode" with `wand.and.stars` icon, slash category) and `shiftTab` ("Shift+Tab" with `arrow.left.to.line` icon, keystroke category).
+
+**Files:** `QuipMac/Services/KeystrokeInjector.swift` (new shift+tab case + refactored expression table), `Shared/MessageProtocol.swift` (`ClaudeMode.cycle` + `shiftTabPresses(from:to:)` math), `QuipMac/QuipMacApp.swift` (`cycleClaudeMode(to:for:)` helper + 4 new quick-action cases), `QuipiOS/QuipApp.swift` (2 new QuickButton enum cases with display name / label / icon / category / action).
+
+**Tests:** `QuipMac/Tests/KeystrokeInjectorWriteExpressionTests.swift` (locks every key's AppleScript expression under unit tests — single-byte chars + Shift+Tab CSI + case insensitivity + unknown→nil), `Shared/Tests/MessageProtocolTests.swift` (4 new tests for cycle math: no-movement, forward, wrap-around, never-exceeds-cycle-length-minus-one). 116 Mac tests pass; iOS build green.
+
+**Original context** (kept for historical reference):
+Instead of typing `/plan` as a literal prefix (which only gives *plan-style* behavior via prompt text), actually put Claude Code into its built-in plan mode by pressing Shift+Tab the correct number of times. Without mode detection (#7), blind Shift+Tab presses land in the wrong mode (Normal / Auto-Accept / Plan cycle is state-dependent).
 
 ---
 

@@ -2835,6 +2835,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
     case plan, btw, compact, clearContext, prd
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
+    case planMode, shiftTab
 
     var id: String { rawValue }
 
@@ -2856,6 +2857,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return "Tab"
         case .backspace: return "Backspace"
         case .clearInput: return "Clear input"
+        case .planMode: return "→Plan mode"
+        case .shiftTab: return "Shift+Tab"
         }
     }
 
@@ -2879,6 +2882,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return "Tab"
         case .backspace: return ""
         case .clearInput: return ""
+        case .planMode: return ""
+        case .shiftTab: return ""
         }
     }
 
@@ -2890,6 +2895,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlD: return "eject"
         case .tab: return "arrow.right.to.line"
         case .clearInput: return "delete.left.fill"
+        case .planMode: return "wand.and.stars"
+        case .shiftTab: return "arrow.left.to.line"
         default: return nil
         }
     }
@@ -2911,9 +2918,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var category: Category {
         switch self {
-        case .plan, .btw, .compact, .clearContext, .prd: return .slash
+        case .plan, .btw, .compact, .clearContext, .prd, .planMode: return .slash
         case .yes, .no, .one, .two, .three: return .answer
-        case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput: return .keystroke
+        case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab: return .keystroke
         }
     }
 
@@ -2940,6 +2947,14 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return .quickAction("press_tab")
         case .backspace: return .quickAction("press_backspace")
         case .clearInput: return .quickAction("clear_input")
+        // Mac side reads the detected Claude mode for the target window and
+        // sends just enough Shift+Tab presses to reach plan mode (cycle order:
+        // normal → autoAccept → plan → normal). Falls back to an ErrorMessage
+        // toast on the phone when the mode isn't yet detected.
+        case .planMode: return .quickAction("set_plan_mode")
+        // Raw Shift+Tab — manual fallback when mode auto-detect is unreliable
+        // or the user wants to step through the cycle one mode at a time.
+        case .shiftTab: return .quickAction("press_shift_tab")
         }
     }
 
