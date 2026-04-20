@@ -475,6 +475,48 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(original, restored)
     }
 
+    func testWindowStateBackwardCompatWithoutClaudeMode() throws {
+        // Old Mac builds don't populate `claudeMode` — verify the decoder
+        // defaults it to nil and all other fields survive.
+        let json = """
+        {
+          "id": "w1",
+          "name": "Terminal",
+          "app": "Terminal",
+          "enabled": true,
+          "frame": { "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 },
+          "state": "neutral",
+          "color": "#FFFFFF",
+          "isThinking": false
+        }
+        """.data(using: .utf8)!
+
+        let state = try XCTUnwrap(MessageCoder.decode(WindowState.self, from: json))
+        XCTAssertNil(state.claudeMode, "claudeMode should default to nil when absent")
+    }
+
+    func testWindowStateRoundTripWithClaudeMode() throws {
+        let original = WindowState(
+            id: "w3", name: "claude", app: "iTerm2", folder: "Quip",
+            enabled: true,
+            frame: WindowFrame(x: 0, y: 0, width: 1, height: 1),
+            state: "neutral", color: "#00FF00", isThinking: true,
+            claudeMode: "plan"
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(WindowState.self, from: data))
+        XCTAssertEqual(restored.claudeMode, "plan")
+        XCTAssertEqual(original, restored)
+    }
+
+    func testClaudeModeRawValues() {
+        // Cross-platform JSON key stability — iOS, Mac, and Android all match
+        // on these raw strings, so changing them is a protocol break.
+        XCTAssertEqual(ClaudeMode.normal.rawValue, "normal")
+        XCTAssertEqual(ClaudeMode.plan.rawValue, "plan")
+        XCTAssertEqual(ClaudeMode.autoAccept.rawValue, "autoAccept")
+    }
+
     func testLayoutUpdateRoundTripWithScreenAspect() throws {
         let original = LayoutUpdate(
             monitor: "Built-in",

@@ -44,7 +44,7 @@ struct ManagedWindow: Identifiable, Sendable {
 
     /// Convert to shared WindowState for protocol messages.
     /// Frame is normalized to 0-1 relative to the given screen bounds.
-    func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false) -> WindowState {
+    func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false, claudeMode: String? = nil) -> WindowState {
         let frame: WindowFrame
         if let screen = screenBounds, screen.width > 0, screen.height > 0 {
             frame = WindowFrame(
@@ -70,7 +70,8 @@ struct ManagedWindow: Identifiable, Sendable {
             frame: frame,
             state: state,
             color: assignedColor,
-            isThinking: isThinking
+            isThinking: isThinking,
+            claudeMode: claudeMode
         )
     }
 }

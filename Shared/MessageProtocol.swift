@@ -37,16 +37,22 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     let color: String
     /// True when Claude/node processes are running in this window's terminal
     let isThinking: Bool
+    /// Claude Code mode scraped from terminal content. One of "normal", "plan",
+    /// "autoAccept", or nil if unknown / not yet detected / not a Claude window.
+    /// Optional for backward compat; old Mac builds just won't populate it.
+    let claudeMode: String?
 
     // Synthesized Equatable compares ALL fields including frame
 
-    /// Backward-compat: default isThinking to false if missing from JSON
+    /// Backward-compat: default isThinking to false and claudeMode to nil if missing from JSON
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
-         frame: WindowFrame, state: String, color: String, isThinking: Bool = false) {
+         frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
+         claudeMode: String? = nil) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
         self.isThinking = isThinking
+        self.claudeMode = claudeMode
     }
 
     init(from decoder: Decoder) throws {
@@ -60,11 +66,22 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         state = try c.decode(String.self, forKey: .state)
         color = try c.decode(String.self, forKey: .color)
         isThinking = (try? c.decode(Bool.self, forKey: .isThinking)) ?? false
+        claudeMode = try? c.decode(String.self, forKey: .claudeMode)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, app, folder, enabled, frame, state, color, isThinking
+        case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode
     }
+}
+
+// MARK: - Claude Code Mode
+
+/// Claude Code's three cyclable modes, scraped from terminal content by
+/// `ClaudeModeDetector` on the Mac. Cycle order (Shift+Tab): normal → autoAccept → plan → normal.
+enum ClaudeMode: String, Codable, Sendable {
+    case normal
+    case plan
+    case autoAccept
 }
 
 struct WindowFrame: Codable, Sendable, Equatable, Hashable {

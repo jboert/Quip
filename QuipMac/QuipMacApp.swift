@@ -24,6 +24,7 @@ struct QuipMacApp: App {
     @State private var webSocketServer = WebSocketServer()
     @State private var bonjourAdvertiser = BonjourAdvertiser()
     @State private var terminalStateDetector = TerminalStateDetector()
+    @State private var claudeModeDetector = ClaudeModeDetector()
     @State private var terminalColorManager = TerminalColorManager()
     @State private var keystrokeInjector = KeystrokeInjector()
     private let imageUploadHandler = ImageUploadHandler.defaultProduction()
@@ -222,6 +223,12 @@ struct QuipMacApp: App {
         }
 
         terminalStateDetector.startMonitoring()
+        // Mode detector needs to re-broadcast whenever a window flips mode so
+        // iOS clients see plan/autoAccept toggles land within one poll cycle.
+        claudeModeDetector.onModeChange = { [self] _, _, _ in
+            broadcastLayout()
+        }
+        claudeModeDetector.startMonitoring(keystrokeInjector: keystrokeInjector)
         windowManager.refreshDisplays()
         windowManager.refreshWindowList()
         syncTrackedWindows()
@@ -525,7 +532,8 @@ struct QuipMacApp: App {
             window.toWindowState(
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
                 screenBounds: screenBounds,
-                isThinking: thinkingWindows.contains(window.id)
+                isThinking: thinkingWindows.contains(window.id),
+                claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue
             )
         }
         let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
@@ -1317,6 +1325,21 @@ struct QuipMacApp: App {
             }
         }
 
+        // Mirror the tracked-window set into the mode detector. It polls the
+        // iTerm buffer via AppleScript so the set must include app/windowNumber/
+        // sessionId for each window; otherwise the detector can't target its reads.
+        var modeTracked: [ClaudeModeDetector.TrackedWindow] = []
+        let trackedIds = Set(terminalStateDetector.trackedWindows.keys)
+        for window in windowManager.windows where trackedIds.contains(window.id) {
+            modeTracked.append(.init(
+                windowId: window.id,
+                terminalApp: terminalAppForWindow(window),
+                windowNumber: window.windowNumber,
+                iterm2SessionId: window.iterm2SessionId
+            ))
+        }
+        claudeModeDetector.setTrackedWindows(modeTracked)
+
         // Prune per-window state for windows that no longer exist at all.
         // Without this, dicts like outputHighWaterMarks and sttBaselineContent
         // (each value holds tens of KB of terminal content) accumulate entries
@@ -1330,6 +1353,7 @@ struct QuipMacApp: App {
         ttsSessionIds = ttsSessionIds.filter { allCurrentIds.contains($0.key) }
         pendingInputForWindow = pendingInputForWindow.intersection(allCurrentIds)
         thinkingWindows = thinkingWindows.intersection(allCurrentIds)
+        claudeModeDetector.windowModes = claudeModeDetector.windowModes.filter { allCurrentIds.contains($0.key) }
         if let selected = clientSelectedWindowId, !allCurrentIds.contains(selected) {
             clientSelectedWindowId = nil
         }
