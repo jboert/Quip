@@ -82,6 +82,19 @@ enum ClaudeMode: String, Codable, Sendable {
     case normal
     case plan
     case autoAccept
+
+    /// The Shift+Tab cycle order Claude Code uses internally. Order matters —
+    /// `shiftTabPresses(from:to:)` derives press counts from these indices.
+    static let cycle: [ClaudeMode] = [.normal, .autoAccept, .plan]
+
+    /// How many Shift+Tab presses are needed to move from `from` mode to `to` mode
+    /// inside Claude Code's three-mode cycle. 0 if already there. Always returns
+    /// 0…2 (the cycle has length 3, so the longest forward path is 2 presses).
+    static func shiftTabPresses(from: ClaudeMode, to: ClaudeMode) -> Int {
+        guard let fromIdx = cycle.firstIndex(of: from),
+              let toIdx = cycle.firstIndex(of: to) else { return 0 }
+        return (toIdx - fromIdx + cycle.count) % cycle.count
+    }
 }
 
 struct WindowFrame: Codable, Sendable, Equatable, Hashable {

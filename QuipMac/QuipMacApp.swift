@@ -1153,6 +1153,19 @@ struct QuipMacApp: App {
             runAfterDelay {
                 keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
+        case "press_shift_tab":
+            // Single Shift+Tab press — manual override / fallback when the
+            // detected mode is unreliable. set_*_mode actions below use
+            // detected mode to compute exact press count.
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("shift+tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            }
+        case "set_plan_mode":
+            cycleClaudeMode(to: .plan, for: window)
+        case "set_auto_accept_mode":
+            cycleClaudeMode(to: .autoAccept, for: window)
+        case "set_normal_mode":
+            cycleClaudeMode(to: .normal, for: window)
         // Ctrl+U — readline "kill to start of line." Wipes the current
         // prompt input in one keystroke instead of holding backspace.
         case "clear_input":
@@ -1190,6 +1203,42 @@ struct QuipMacApp: App {
                 windowManager.markSessionDetached(sessionId: sid)
             }
         default: break
+        }
+    }
+
+    /// Send the right number of Shift+Tab presses to land Claude Code on `target`
+    /// in the cycle (normal → autoAccept → plan → normal). When the current mode
+    /// is unknown (detector hasn't found an indicator yet, or it's been pruned),
+    /// we send ZERO presses and broadcast an `ErrorMessage` to the phone — better
+    /// than blind-pressing and ending up in the wrong mode. The phone-side toast
+    /// tells the user to use the manual `press_shift_tab` action instead.
+    @MainActor
+    private func cycleClaudeMode(to target: ClaudeMode, for window: ManagedWindow) {
+        let current = claudeModeDetector.windowModes[window.id] ?? .normal
+        let knownMode = claudeModeDetector.windowModes[window.id] != nil
+
+        if !knownMode {
+            // No detected indicator yet — refuse to press blind. Tell the user.
+            let err = ErrorMessage(reason: "Can't detect current Claude mode for \(window.name) — press Shift+Tab manually until you see the right indicator.")
+            webSocketServer.broadcast(err)
+            return
+        }
+
+        let presses = ClaudeMode.shiftTabPresses(from: current, to: target)
+        if presses == 0 { return }
+
+        let termApp = terminalAppForWindow(window)
+        let wid = window.id
+        let wn = window.windowNumber
+        let sid = window.iterm2SessionId
+
+        // Stagger the presses by 80ms so Claude Code's TUI has time to redraw
+        // between each Shift+Tab. Without the gap, tightly-coupled presses can
+        // get coalesced and the cycle indicator skips a step.
+        for i in 0..<presses {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.08) { [keystrokeInjector] in
+                keystrokeInjector.sendKeystroke("shift+tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sid)
+            }
         }
     }
 

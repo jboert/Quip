@@ -517,6 +517,39 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(ClaudeMode.autoAccept.rawValue, "autoAccept")
     }
 
+    // MARK: - Claude Mode Cycle Math (#6)
+
+    func testShiftTabPressesNoMovementWhenAlreadyOnTarget() {
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .normal, to: .normal), 0)
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .plan, to: .plan), 0)
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .autoAccept, to: .autoAccept), 0)
+    }
+
+    func testShiftTabPressesForwardThroughCycle() {
+        // Cycle order: normal → autoAccept → plan → normal
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .normal, to: .autoAccept), 1)
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .autoAccept, to: .plan), 1)
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .plan, to: .normal), 1)
+    }
+
+    func testShiftTabPressesWrapsAround() {
+        // Two presses needed when target is one step "behind" current
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .normal, to: .plan), 2)
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .autoAccept, to: .normal), 2)
+        XCTAssertEqual(ClaudeMode.shiftTabPresses(from: .plan, to: .autoAccept), 2)
+    }
+
+    func testShiftTabPressesAlwaysInRange() {
+        // Cycle length is 3 — no path can ever require >2 presses.
+        for from in ClaudeMode.cycle {
+            for to in ClaudeMode.cycle {
+                let presses = ClaudeMode.shiftTabPresses(from: from, to: to)
+                XCTAssertGreaterThanOrEqual(presses, 0)
+                XCTAssertLessThanOrEqual(presses, 2, "Cycle of length 3 should never need >2 presses, got \(presses) for \(from) → \(to)")
+            }
+        }
+    }
+
     func testLayoutUpdateRoundTripWithScreenAspect() throws {
         let original = LayoutUpdate(
             monitor: "Built-in",
