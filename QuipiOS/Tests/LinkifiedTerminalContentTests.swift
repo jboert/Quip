@@ -64,6 +64,27 @@ final class LinkifiedTerminalContentTests: XCTestCase {
         XCTAssertTrue(linkRuns.isEmpty, "Quip.app must not be linkified")
     }
 
+    /// Bare email addresses — NSDataDetector returns them as `mailto:` URLs.
+    /// We accept those so a tap pops the system Mail compose sheet. Claude
+    /// prints contact addresses in commit-author lines + OAuth notices, so
+    /// this is a high-yield extension of the http(s) link path.
+    func test_bareEmail_isLinkedAsMailto() {
+        let raw = "contact noreply@anthropic.com for support"
+        let attr = linkifiedTerminalContent(raw)
+
+        let links = attr.runs.compactMap { $0.link?.absoluteString }
+        XCTAssertEqual(links, ["mailto:noreply@anthropic.com"])
+    }
+
+    /// Explicit `mailto:` URI in the text — should also link.
+    func test_explicitMailto_isLinked() {
+        let raw = "or use mailto:hi@example.com directly"
+        let attr = linkifiedTerminalContent(raw)
+
+        let links = attr.runs.compactMap { $0.link?.absoluteString }
+        XCTAssertEqual(links, ["mailto:hi@example.com"])
+    }
+
     func test_multipleURLs_allTagged() {
         let raw = "https://a.com and https://b.com/path?q=1"
         let attr = linkifiedTerminalContent(raw)
