@@ -110,7 +110,7 @@ final class WebSocketClient {
 
     var onLayoutUpdate: ((LayoutUpdate) -> Void)?
     var onStateChange: ((String, String) -> Void)?
-    var onTerminalContent: ((String, String, String?) -> Void)?  // (windowId, content, screenshot)
+    var onTerminalContent: ((String, String, String?, [String]?) -> Void)?  // (windowId, content, screenshot, urls)
     var onOutputDelta: ((String, String, String, Bool) -> Void)?  // (windowId, windowName, text, isFinal)
     // (windowId, windowName, sessionId, sequence, isFinal, wavData)
     var onTTSAudio: ((String, String, String, Int, Bool, Data) -> Void)?
@@ -444,7 +444,7 @@ final class WebSocketClient {
         case "terminal_content":
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(TerminalContentMessage.self, from: data) {
-                onTerminalContent?(msg.windowId, msg.content, msg.screenshot)
+                onTerminalContent?(msg.windowId, msg.content, msg.screenshot, msg.urls)
             }
         case "output_delta":
             guard isAuthenticated else { return }
