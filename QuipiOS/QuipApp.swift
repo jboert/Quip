@@ -2750,24 +2750,21 @@ struct InlineTerminalContent: View {
     /// flip the priority again.
     enum RenderBranch { case image, text, loading }
 
-    /// Priority: screenshot > loading. The `.text` branch is never selected
-    /// by this function in production — monospace plain text hides Claude
-    /// Code's TUI (alt-screen buffer) and loses ANSI colors, which is the
-    /// exact failure mode the user was seeing when Screen Recording got
-    /// revoked on a Mac rebuild. "Loading…" is a better empty state than
-    /// showing the scraped scrollback text.
+    /// Priority: image > text > loading. Image is the normal state and
+    /// the one the state layer works hard to preserve (last-good screenshot
+    /// caching so network blips don't kick us out). Text is the acceptable
+    /// fallback when no screenshot has ever been received — user's stated
+    /// preference is "plain text beats an empty Loading screen." Loading
+    /// is the truly-no-content state (first connect, between window switches).
     ///
     /// The URL tray above the content still renders regardless of branch,
     /// so tappable URLs remain available even while waiting for a screenshot.
-    ///
-    /// The `.text` enum case is kept so the render switch stays exhaustive
-    /// (defensive — if something external ever returns it, we render safely)
-    /// but `branch(...)` itself returns only `.image` or `.loading`.
     static func branch(content: String, screenshot: String?) -> RenderBranch {
         if let screenshot, let data = Data(base64Encoded: screenshot),
            UIImage(data: data) != nil {
             return .image
         }
+        if !content.isEmpty { return .text }
         return .loading
     }
 
