@@ -1632,21 +1632,37 @@ struct MainiOSView: View {
                     let yesNo = enabled.filter { $0 == .yes || $0 == .no }
                     let numbers = enabled.filter { $0 == .one || $0 == .two || $0 == .three }
                     let keystroke = enabled.filter { $0.category == .keystroke }
-                    HStack(spacing: 5) {
-                        ForEach(slash) { quickActionButton($0) }
-                        Spacer(minLength: 8)
-                        ForEach(yesNo) { quickActionButton($0) }
-                        // Small fixed gap between Y/N (confirmations) and
-                        // 1/2/3 (numbered choices) — both are "answers" but
-                        // visually distinct sub-groups.
-                        if !yesNo.isEmpty, !numbers.isEmpty {
-                            Spacer().frame(width: 10)
+                    // `ViewThatFits` tries the spacer-based cluster layout
+                    // first (slash-left / answers-center / keystroke-right,
+                    // aesthetic and aligned with the mic above) and falls
+                    // back to a horizontally-scrollable tight row when too
+                    // many buttons are enabled to fit the phone's width.
+                    // Before this, the cluster row silently overflowed —
+                    // rightmost keystroke buttons got clipped offscreen.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 5) {
+                            ForEach(slash) { quickActionButton($0) }
+                            Spacer(minLength: 8)
+                            ForEach(yesNo) { quickActionButton($0) }
+                            // Small fixed gap between Y/N (confirmations)
+                            // and 1/2/3 (numbered choices) — both are
+                            // "answers" but visually distinct sub-groups.
+                            if !yesNo.isEmpty, !numbers.isEmpty {
+                                Spacer().frame(width: 10)
+                            }
+                            ForEach(numbers) { quickActionButton($0) }
+                            Spacer(minLength: 8)
+                            ForEach(keystroke) { quickActionButton($0) }
                         }
-                        ForEach(numbers) { quickActionButton($0) }
-                        Spacer(minLength: 8)
-                        ForEach(keystroke) { quickActionButton($0) }
+                        .padding(.horizontal, 8)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                ForEach(enabled) { quickActionButton($0) }
+                            }
+                            .padding(.horizontal, 8)
+                        }
                     }
-                    .padding(.horizontal, 8)
                 }
             }
         }
