@@ -1938,7 +1938,8 @@ struct MainiOSView: View {
                         client.send(RequestContentMessage(windowId: wid))
                     }
                 }
-            }
+            },
+            onCycleWindow: { direction in cycleWindow(direction: direction) }
         )
     }
 
@@ -2700,6 +2701,10 @@ struct InlineTerminalContent: View {
     @Binding var isExpanded: Bool
     var onRefresh: () -> Void
     var onSendAction: (String) -> Void
+    /// Swipe handler — `direction` is +1 (swipe left = next window) or -1
+    /// (swipe right = previous window), matching `MainiOSView.cycleWindow`.
+    /// Optional for previews / non-swiping callers.
+    var onCycleWindow: ((Int) -> Void)? = nil
     @Environment(\.quipColors) private var colors
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     /// Toggle for the tap-to-open URL tray. Default on. Users who don't want
@@ -2714,6 +2719,20 @@ struct InlineTerminalContent: View {
     /// landscape views so cycling in one affects both.
     @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    /// Live horizontal offset applied to the content panel while a
+    /// window-cycle swipe is in progress. Dampened to 30% of the finger
+    /// travel + capped at ±80pt so the card feels physical without
+    /// yanking off-screen. Snaps back to 0 on gesture end if the threshold
+    /// isn't hit. Zero when idle.
+    @State private var swipeOffset: CGFloat = 0
+
+    /// 0…1 normalized swipe magnitude, derived from swipeOffset. Used to
+    /// drive the lift-off shadow and the scale-down so the card reads as
+    /// "coming off the top of the deck" rather than just a flat slide.
+    private var swipeProgress: CGFloat {
+        min(1, abs(swipeOffset) / 80)
+    }
 
     /// Which of the three render branches is active. Pinned by
     /// `InlineTerminalContentBranchTests` so future refactors don't silently
@@ -2898,8 +2917,57 @@ struct InlineTerminalContent: View {
                     lineWidth: 1.5
                 )
         )
+        // Deck-of-cards lift: Y-axis 3D flip + slight scale-down + shadow
+        // that grows with swipe magnitude. All three cues together read as
+        // "card being lifted off the top of a stack," not just "view being
+        // dragged sideways." Tuned subtle — max ~9° rotation, 3% shrink,
+        // soft shadow at full swipe.
+        .rotation3DEffect(
+            .degrees(Double(swipeOffset) * 0.22),
+            axis: (x: 0, y: 1, z: 0),
+            perspective: 0.6
+        )
+        .scaleEffect(1 - swipeProgress * 0.03)
+        .shadow(
+            color: .black.opacity(0.45 * swipeProgress),
+            radius: 14 * swipeProgress,
+            x: swipeOffset * 0.2,
+            y: 4 * swipeProgress
+        )
+        .offset(x: swipeOffset)
+        .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.75), value: swipeOffset)
         .onAppear { onRefresh() }
         .onReceive(refreshTimer) { _ in onRefresh() }
+        // Swipe left/right on the panel → cycle windows. Threshold 90pt +
+        // 2:1 horizontal-to-vertical ratio so vertical scroll inside the
+        // image ScrollView + pinch-zoom still work. `simultaneousGesture`
+        // so we don't block the screenshot's own gesture stack.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onChanged { value in
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    // Only show drag feedback when the motion is clearly
+                    // horizontal — otherwise the panel twitches sideways
+                    // when the user is trying to scroll the screenshot.
+                    guard abs(dx) > abs(dy) * 2 else {
+                        if swipeOffset != 0 { swipeOffset = 0 }
+                        return
+                    }
+                    let damped = dx * 0.35
+                    swipeOffset = max(-80, min(80, damped))
+                }
+                .onEnded { value in
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    swipeOffset = 0
+                    guard abs(dx) > 90, abs(dx) > abs(dy) * 2 else { return }
+                    // Left swipe (dx < 0) advances to the NEXT window,
+                    // matching the iOS convention of "content slides left
+                    // to reveal what comes next," like Photos or TabView.
+                    onCycleWindow?(dx < 0 ? 1 : -1)
+                }
+        )
     }
 
     private func keyButton(_ label: String, icon: String?, action: @escaping () -> Void) -> some View {
