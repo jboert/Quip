@@ -294,6 +294,21 @@ struct QuipMacApp: App {
         // from suppressing the very first send.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.broadcastPermissions(force: true)
+            // Screen Recording self-check. Every `QuipMac/` rebuild bumps the
+            // binary's cdhash, and macOS TCC revokes Screen Recording on any
+            // cdhash change even with our stable signing — so a fresh install
+            // frequently lands with screencapture silently denied and the
+            // iPhone falling back to text mode. Without this check, the user
+            // only notices minutes later when they look at the phone. Probe
+            // directly and pop the Screen Recording pane immediately so the
+            // re-grant step is in their face on the next launch after a
+            // rebuild. Skipped when iTerm automation or Accessibility are
+            // the only issues (those tend to survive cdhash changes and
+            // bothering the user with the wrong pane is noisier than the
+            // problem).
+            if !CGPreflightScreenCaptureAccess() {
+                self.openSettingsPane(.screenRecording)
+            }
         }
     }
 
