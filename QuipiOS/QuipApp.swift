@@ -353,7 +353,18 @@ struct QuipApp: App {
             DispatchQueue.main.async {
                 terminalContentWindowId = windowId
                 terminalContentText = content
-                terminalContentScreenshot = screenshot
+                // Preserve last-good screenshot when the new update doesn't
+                // carry one — happens on Mac Screen Recording revocation
+                // (cdhash change after a Mac rebuild), Tailscale reconnects,
+                // network switches, or momentary Mac CPU spikes where
+                // screencapture returns nil. Without this, the iOS panel
+                // would drop to "Loading…" on every bad refresh even though
+                // the window state hasn't actually changed. Window switches
+                // still clear via `selectedWindowId.onChange` so we never
+                // show stale content from the wrong window.
+                if let screenshot, !screenshot.isEmpty {
+                    terminalContentScreenshot = screenshot
+                }
                 terminalContentURLs = urls
             }
         }
@@ -2739,26 +2750,24 @@ struct InlineTerminalContent: View {
     /// flip the priority again.
     enum RenderBranch { case image, text, loading }
 
-    /// Priority: screenshot > text > loading.
+    /// Priority: screenshot > loading. The `.text` branch is never selected
+    /// by this function in production — monospace plain text hides Claude
+    /// Code's TUI (alt-screen buffer) and loses ANSI colors, which is the
+    /// exact failure mode the user was seeing when Screen Recording got
+    /// revoked on a Mac rebuild. "Loading…" is a better empty state than
+    /// showing the scraped scrollback text.
     ///
-    /// Screenshot wins because Claude Code renders its UI in the terminal's
-    /// alternate screen buffer (the bordered input box), and the Mac's
-    /// text scrape (`readContent` in QuipMacApp.swift) only returns the
-    /// main scrollback buffer — text mode would hide the thing users are
-    /// actually looking at. The screenshot captures pixels regardless of
-    /// buffer and preserves ANSI colors.
+    /// The URL tray above the content still renders regardless of branch,
+    /// so tappable URLs remain available even while waiting for a screenshot.
     ///
-    /// URLs in the image are pixels and can't be tapped in-situ. That's
-    /// why the header renders a tap-to-open URL tray from the Mac's
-    /// `TerminalURLExtractor` — Claude Code emits plenty of URLs in its
-    /// regular output (commit links, docs references, error URLs) and the
-    /// tray makes them openable without losing the screenshot.
+    /// The `.text` enum case is kept so the render switch stays exhaustive
+    /// (defensive — if something external ever returns it, we render safely)
+    /// but `branch(...)` itself returns only `.image` or `.loading`.
     static func branch(content: String, screenshot: String?) -> RenderBranch {
         if let screenshot, let data = Data(base64Encoded: screenshot),
            UIImage(data: data) != nil {
             return .image
         }
-        if !content.isEmpty { return .text }
         return .loading
     }
 
