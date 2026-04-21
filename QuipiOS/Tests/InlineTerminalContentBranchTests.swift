@@ -34,14 +34,19 @@ final class InlineTerminalContentBranchTests: XCTestCase {
         XCTAssertEqual(b, .image, "screenshot wins over text — Claude TUI is in alt-screen which text scrape misses")
     }
 
-    func test_screenshot_nil_with_text_takes_text_branch() {
+    func test_screenshot_nil_with_text_goes_to_loading() {
+        // Always-image rule: text content alone is never shown as monospace
+        // plain text — the user asked for image mode always. Missing screenshot
+        // means the panel shows "Loading…" until one arrives (or, in practice,
+        // the iOS state layer preserves the last-good screenshot through a
+        // bad refresh, so this case rarely materializes at runtime).
         let b = InlineTerminalContent.branch(content: "some terminal text", screenshot: nil)
-        XCTAssertEqual(b, .text)
+        XCTAssertEqual(b, .loading)
     }
 
-    func test_screenshot_non_decodable_falls_through_to_text() {
+    func test_screenshot_non_decodable_goes_to_loading() {
         let b = InlineTerminalContent.branch(content: "hi", screenshot: "not-base64-at-all!!!")
-        XCTAssertEqual(b, .text, "garbage screenshot payload must not strand the view in image branch")
+        XCTAssertEqual(b, .loading, "garbage screenshot payload must not strand the view in image branch, but we also don't drop to text")
     }
 
     func test_empty_content_no_screenshot_is_loading() {
@@ -55,9 +60,9 @@ final class InlineTerminalContentBranchTests: XCTestCase {
         XCTAssertEqual(b, .image, "screenshot-only windows (non-terminal apps) must render the image")
     }
 
-    func test_base64_that_is_not_an_image_falls_through() {
+    func test_base64_that_is_not_an_image_goes_to_loading() {
         // "hello" base64-encoded — valid base64, invalid PNG/JPEG.
         let b = InlineTerminalContent.branch(content: "body", screenshot: "aGVsbG8=")
-        XCTAssertEqual(b, .text, "base64 that doesn't decode to UIImage must not trap the view in image branch")
+        XCTAssertEqual(b, .loading, "base64 that doesn't decode to UIImage must not trap the view in image branch; always-image policy sends it to loading instead of text")
     }
 }
