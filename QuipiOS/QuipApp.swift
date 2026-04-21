@@ -1632,37 +1632,21 @@ struct MainiOSView: View {
                     let yesNo = enabled.filter { $0 == .yes || $0 == .no }
                     let numbers = enabled.filter { $0 == .one || $0 == .two || $0 == .three }
                     let keystroke = enabled.filter { $0.category == .keystroke }
-                    // `ViewThatFits` tries the spacer-based cluster layout
-                    // first (slash-left / answers-center / keystroke-right,
-                    // aesthetic and aligned with the mic above) and falls
-                    // back to a horizontally-scrollable tight row when too
-                    // many buttons are enabled to fit the phone's width.
-                    // Before this, the cluster row silently overflowed —
-                    // rightmost keystroke buttons got clipped offscreen.
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 5) {
-                            ForEach(slash) { quickActionButton($0) }
-                            Spacer(minLength: 8)
-                            ForEach(yesNo) { quickActionButton($0) }
-                            // Small fixed gap between Y/N (confirmations)
-                            // and 1/2/3 (numbered choices) — both are
-                            // "answers" but visually distinct sub-groups.
-                            if !yesNo.isEmpty, !numbers.isEmpty {
-                                Spacer().frame(width: 10)
-                            }
-                            ForEach(numbers) { quickActionButton($0) }
-                            Spacer(minLength: 8)
-                            ForEach(keystroke) { quickActionButton($0) }
+                    HStack(spacing: 3) {
+                        ForEach(slash) { quickActionButton($0) }
+                        Spacer(minLength: 6)
+                        ForEach(yesNo) { quickActionButton($0) }
+                        // Small fixed gap between Y/N (confirmations) and
+                        // 1/2/3 (numbered choices) — both are "answers" but
+                        // visually distinct sub-groups.
+                        if !yesNo.isEmpty, !numbers.isEmpty {
+                            Spacer().frame(width: 8)
                         }
-                        .padding(.horizontal, 8)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 4) {
-                                ForEach(enabled) { quickActionButton($0) }
-                            }
-                            .padding(.horizontal, 8)
-                        }
+                        ForEach(numbers) { quickActionButton($0) }
+                        Spacer(minLength: 6)
+                        ForEach(keystroke) { quickActionButton($0) }
                     }
+                    .padding(.horizontal, 6)
                 }
             }
         }
@@ -2416,11 +2400,11 @@ struct MainiOSView: View {
                 }
             }
             .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 7)
-            .frame(minWidth: 26)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 5)
+            .frame(minWidth: 20)
             .background(Color.white.opacity(0.15))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
     }
