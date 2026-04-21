@@ -2929,7 +2929,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
     //   Slash commands (sends "/foo"),
     //   Claude Code answers (Y/N and number choices),
     //   Terminal keystrokes (Esc, Ctrl-C, Ctrl-D, Tab, Backspace).
-    case plan, btw, compact, clearContext, prd
+    case slash, plan, btw, compact, clearContext, prd
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
     case planMode, shiftTab
@@ -2938,6 +2938,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
+        case .slash: return "/"
         case .plan: return "/plan"
         case .btw: return "/btw"
         case .compact: return "/compact"
@@ -2963,6 +2964,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
     /// which shows in Settings).
     var label: String {
         switch self {
+        case .slash: return "/"
         case .plan: return "/plan"
         case .btw: return "/btw"
         case .compact: return "/compact"
@@ -3015,7 +3017,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var category: Category {
         switch self {
-        case .plan, .btw, .compact, .clearContext, .prd, .planMode: return .slash
+        case .slash, .plan, .btw, .compact, .clearContext, .prd, .planMode: return .slash
         case .yes, .no, .one, .two, .three: return .answer
         case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab: return .keystroke
         }
@@ -3023,6 +3025,10 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var action: Action {
         switch self {
+        // Bare "/" — opens Claude Code's slash command palette so the user
+        // can pick one via autocomplete. No trailing space (unlike /plan,
+        // /btw, /prd) so Claude's Ink dropdown fires immediately.
+        case .slash: return .sendText("/", pressReturn: false)
         case .plan: return .sendText("/plan ", pressReturn: false)
         case .btw: return .sendText("/btw ", pressReturn: false)
         // /compact auto-submits because unlike /plan or /btw it doesn't
