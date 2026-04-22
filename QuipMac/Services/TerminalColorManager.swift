@@ -61,6 +61,9 @@ final class TerminalColorManager {
         let script: String
 
         switch terminalApp {
+        case .claudeDesktop:
+            return
+
         case .terminal:
             let color: String
             switch state {
@@ -101,6 +104,9 @@ final class TerminalColorManager {
         let script: String
 
         switch terminalApp {
+        case .claudeDesktop:
+            return
+
         case .terminal:
             // Reset to the default profile's background color
             script = """

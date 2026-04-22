@@ -236,6 +236,8 @@ struct WindowListSidebar: View {
         let script: String
 
         switch newTerminalApp {
+        case .claudeDesktop:
+            return
         case .terminal:
             script = """
             tell application "\(appName)"

@@ -5,6 +5,7 @@ import AppKit
 enum TerminalApp: String, Codable, CaseIterable, Identifiable, Sendable {
     case iterm2 = "iTerm2"
     case terminal = "Terminal"
+    case claudeDesktop = "Claude"
 
     var id: String { rawValue }
 
@@ -12,12 +13,14 @@ enum TerminalApp: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .terminal: "com.apple.Terminal"
         case .iterm2: "com.googlecode.iterm2"
+        case .claudeDesktop: "com.anthropic.Claude"
         }
     }
 
     static func fromBundleId(_ bundleId: String) -> TerminalApp {
         switch bundleId {
         case "com.apple.Terminal": return .terminal
+        case "com.anthropic.Claude": return .claudeDesktop
         default: return .iterm2
         }
     }

@@ -57,6 +57,36 @@ final class KeystrokeInjector {
 
         let script: String
         switch terminalApp {
+        case .claudeDesktop:
+            // Claude Desktop is an Electron app — clipboard paste is the
+            // only reliable text insertion method. Save/restore the user's
+            // clipboard so we don't clobber it.
+            let pb = NSPasteboard.general
+            let previousContents = pb.string(forType: .string)
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+
+            let returnCmd = pressReturn ? "\n                    key code 36" : ""
+            let pasteScript = """
+            tell application "Claude" to activate
+            delay 0.15
+            tell application "System Events"
+                tell process "Claude"
+                    keystroke "v" using command down\(returnCmd)
+                end tell
+            end tell
+            """
+            let result = executeAppleScript(pasteScript, context: "sendText to \(windowId) [Claude Desktop paste]")
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                if let prev = previousContents {
+                    pb.setString(prev, forType: .string)
+                }
+            }
+            return result
+
         case .terminal:
             // Always use System Events keystrokes for Terminal.app to avoid
             // shell command injection via 'do script'. Each line is typed as
@@ -314,6 +344,9 @@ final class KeystrokeInjector {
         let script: String
 
         switch terminalApp {
+        case .claudeDesktop:
+            return InjectionResult(success: false, error: "Cannot spawn a terminal inside Claude Desktop")
+
         case .terminal:
             script = """
             tell application "Terminal"
@@ -438,6 +471,8 @@ final class KeystrokeInjector {
     nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> String? {
         let script: String
         switch terminalApp {
+        case .claudeDesktop:
+            return nil
         case .terminal:
             script = """
             tell application "Terminal"
