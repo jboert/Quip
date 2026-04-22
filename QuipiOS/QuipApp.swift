@@ -3177,55 +3177,26 @@ struct SettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                // Mac Status — TCC permissions Quip needs on the Mac side.
-                // Tap a red row to pop the right System Settings pane open
-                // remotely so the user doesn't have to dig for it.
-                Section {
-                    if let perms = macPermissions {
-                        macPermRow(name: "Accessibility",
-                                   icon: "accessibility",
-                                   granted: perms.accessibility,
-                                   pane: .accessibility)
-                        macPermRow(name: "Automation (iTerm)",
-                                   icon: "terminal",
-                                   granted: perms.appleEvents,
-                                   pane: .automation)
-                        macPermRow(name: "Screen Recording",
-                                   icon: "rectangle.dashed",
-                                   granted: perms.screenRecording,
-                                   pane: .screenRecording)
-                    } else {
-                        // No snapshot yet — likely the Mac hasn't sent one
-                        // since the phone connected, or this Mac build
-                        // predates Phase 1. Show the placeholder explicitly
-                        // so the user (and we) can tell "missing" from
-                        // "all-granted-no-section".
-                        HStack {
-                            Image(systemName: "questionmark.circle")
-                                .foregroundStyle(.secondary)
-                            Text("Waiting for Mac…")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Mac Permissions")
-                } footer: {
-                    if let perms = macPermissions,
-                       !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
-                        Text("Tap a red row — Mac will pop the right System Settings pane open.")
-                    } else if macPermissions == nil {
-                        Text("If this never updates, the Mac may be on an older build that doesn't broadcast permission status.")
-                    }
-                }
+                // Mac Status — compact in the common all-granted case (single
+                // green row), expands to the three-row detail only when
+                // something's wrong or we're still waiting for the Mac to
+                // report in. Saves two rows and a paragraph of footer copy
+                // for the 99% of sessions where everything's fine.
+                macPermsSection
 
-                // Appearance — single-row section; footer goes away once the
-                // feature's self-explanatory so the page stops feeling padded.
+                // Appearance — tight single section. URL tray limit stepper
+                // sits inline behind the toggle so enabling the tray doesn't
+                // spawn a second row.
                 Section("Appearance") {
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
-                    Toggle("URL tray", isOn: $urlTrayEnabled)
-                    if urlTrayEnabled {
-                        Stepper("URL tray limit: \(urlTrayLimit)",
-                                value: $urlTrayLimit, in: 1...50)
+                    HStack {
+                        Toggle("URL tray", isOn: $urlTrayEnabled)
+                        if urlTrayEnabled {
+                            Stepper("\(urlTrayLimit)",
+                                    value: $urlTrayLimit, in: 1...50)
+                                .fixedSize()
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -3268,18 +3239,21 @@ struct SettingsSheet: View {
                 .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
                 .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
 
-                // Quick Buttons — multi-column grid of chip toggles instead
-                // of the one-toggle-per-row Form layout. Fits 2-3x the
-                // settings on screen at once, which matters once the enum
-                // starts pushing a dozen options.
-                Section("Quick Buttons") {
-                    let columns = [GridItem(.adaptive(minimum: 100, maximum: 180), spacing: 6)]
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
-                        ForEach(QuickButton.allCases) { button in
-                            quickButtonChip(button)
+                // Quick Buttons — moved behind a NavigationLink so the
+                // ~18-chip grid doesn't pile on at the bottom of the main
+                // Settings page. Enabled-count preview gives a one-glance
+                // read on how many are active without drilling in.
+                Section {
+                    NavigationLink {
+                        QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+                    } label: {
+                        HStack {
+                            Text("Quick Buttons")
+                            Spacer()
+                            Text("\(QuickButton.decode(enabledQuickButtonsRaw).count) enabled")
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.vertical, 4)
                 }
             }
             .listStyle(.insetGrouped)
@@ -3290,6 +3264,60 @@ struct SettingsSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+        }
+    }
+
+    /// Mac Permissions top section. Three states, rendered at very different
+    /// densities so the common case (everything green) doesn't eat rows:
+    ///   - Waiting for Mac to report → placeholder row + footer
+    ///   - All three granted → single "Mac permissions OK" row, no footer
+    ///   - Any missing → full expanded detail + footer prompting user to tap
+    /// The "tap a red row to open System Settings" pattern depends on the
+    /// detail rows being visible, which is why we only expand when needed.
+    @ViewBuilder
+    private var macPermsSection: some View {
+        Section {
+            if let perms = macPermissions {
+                let allGranted = perms.accessibility && perms.appleEvents && perms.screenRecording
+                if allGranted {
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.green)
+                        Text("Mac permissions OK")
+                        Spacer()
+                    }
+                } else {
+                    macPermRow(name: "Accessibility",
+                               icon: "accessibility",
+                               granted: perms.accessibility,
+                               pane: .accessibility)
+                    macPermRow(name: "Automation (iTerm)",
+                               icon: "terminal",
+                               granted: perms.appleEvents,
+                               pane: .automation)
+                    macPermRow(name: "Screen Recording",
+                               icon: "rectangle.dashed",
+                               granted: perms.screenRecording,
+                               pane: .screenRecording)
+                }
+            } else {
+                HStack {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                    Text("Waiting for Mac…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Mac Permissions")
+        } footer: {
+            if let perms = macPermissions,
+               !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
+                Text("Tap a red row — Mac will pop the right System Settings pane open.")
+            } else if macPermissions == nil {
+                Text("If this never updates, the Mac may be on an older build that doesn't broadcast permission status.")
             }
         }
     }
@@ -3325,11 +3353,63 @@ struct SettingsSheet: View {
         }
     }
 
-    /// Tappable chip for a QuickButton — lit when enabled, dim when off.
-    /// Dense enough that ~a dozen fit in the same space one Form row used
-    /// to take.
+    /// Send the current settings state to the Mac so it can honor them
+    /// at push-send time. Fires on every toggle change and from onAppear.
+    /// No-op when we don't yet have a device token (nothing to key on
+    /// from the Mac's perspective).
+    fileprivate func sendPrefs() {
+        guard let token = pushRegistration.deviceToken else { return }
+        let msg = PushPreferencesMessage(
+            deviceToken: token,
+            paused: pushPaused,
+            quietHoursStart: quietHoursEnabled ? quietHoursStart : nil,
+            quietHoursEnd: quietHoursEnabled ? quietHoursEnd : nil,
+            sound: pushSound,
+            foregroundBanner: pushForegroundBanner,
+            bannerEnabled: pushBannerEnabled,
+            timeZone: TimeZone.current.identifier
+        )
+        client.send(msg)
+    }
+
+    /// 13 → "1 PM", 0 → "12 AM", 22 → "10 PM". Plain string for Steppers.
+    fileprivate func formatHour(_ h: Int) -> String {
+        let hh = h % 24
+        let suffix = hh < 12 ? "AM" : "PM"
+        let display = hh == 0 ? 12 : (hh > 12 ? hh - 12 : hh)
+        return "\(display) \(suffix)"
+    }
+
+}
+
+/// Quick Buttons detail page — lives behind a NavigationLink in SettingsSheet
+/// instead of inlining the ~18-chip grid on the main Settings page. Keeps the
+/// top-level Settings list scannable without losing the density the chip grid
+/// provides here.
+struct QuickButtonsSheet: View {
+    @Binding var enabledQuickButtonsRaw: String
+
+    var body: some View {
+        List {
+            Section {
+                let columns = [GridItem(.adaptive(minimum: 100, maximum: 180), spacing: 6)]
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+                    ForEach(QuickButton.allCases) { button in
+                        chip(button)
+                    }
+                }
+                .padding(.vertical, 4)
+            } footer: {
+                Text("Tap a chip to toggle it on/off. Enabled buttons show up in the row above the keyboard.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Quick Buttons")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
     @ViewBuilder
-    private func quickButtonChip(_ button: QuickButton) -> some View {
+    private func chip(_ button: QuickButton) -> some View {
         let isOn = QuickButton.decode(enabledQuickButtonsRaw).contains(button)
         Button {
             toggle(button)
@@ -3363,34 +3443,6 @@ struct SettingsSheet: View {
         }
         enabledQuickButtonsRaw = QuickButton.encode(current)
     }
-
-    /// Send the current settings state to the Mac so it can honor them
-    /// at push-send time. Fires on every toggle change and from onAppear.
-    /// No-op when we don't yet have a device token (nothing to key on
-    /// from the Mac's perspective).
-    fileprivate func sendPrefs() {
-        guard let token = pushRegistration.deviceToken else { return }
-        let msg = PushPreferencesMessage(
-            deviceToken: token,
-            paused: pushPaused,
-            quietHoursStart: quietHoursEnabled ? quietHoursStart : nil,
-            quietHoursEnd: quietHoursEnabled ? quietHoursEnd : nil,
-            sound: pushSound,
-            foregroundBanner: pushForegroundBanner,
-            bannerEnabled: pushBannerEnabled,
-            timeZone: TimeZone.current.identifier
-        )
-        client.send(msg)
-    }
-
-    /// 13 → "1 PM", 0 → "12 AM", 22 → "10 PM". Plain string for Steppers.
-    fileprivate func formatHour(_ h: Int) -> String {
-        let hh = h % 24
-        let suffix = hh < 12 ? "AM" : "PM"
-        let display = hh == 0 ? 12 : (hh > 12 ? hh - 12 : hh)
-        return "\(display) \(suffix)"
-    }
-
 }
 
 /// Tab selection for the Spawn Window sheet. "New" is the original path —
