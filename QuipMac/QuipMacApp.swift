@@ -1429,7 +1429,11 @@ struct QuipMacApp: App {
     }
 
     private func terminalAppForWindow(_ window: ManagedWindow) -> TerminalApp {
-        window.bundleId == TerminalApp.iterm2.bundleIdentifier ? .iterm2 : .terminal
+        switch window.bundleId {
+        case TerminalApp.iterm2.bundleIdentifier: return .iterm2
+        case TerminalApp.claudeDesktop.bundleIdentifier: return .claudeDesktop
+        default: return .terminal
+        }
     }
 
     /// Find the 1-based window index in the terminal app by matching
