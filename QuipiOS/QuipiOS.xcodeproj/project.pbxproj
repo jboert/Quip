@@ -15,6 +15,7 @@
 		20FE94C556B5D03097FB0030 /* PreferencesSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D94647DAF2E9DB9470CB5FF5 /* PreferencesSyncService.swift */; };
 		216CB65B0E4953EF7B3C45BA /* LiveActivityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731E1A072569A16DBA76D9EB /* LiveActivityService.swift */; };
 		261C1C66A5F75E185F591DD1 /* KeystrokeFocusDelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A76C509CF77201B2EB8B5677 /* KeystrokeFocusDelayTests.swift */; };
+		27B8C39B88FB6144FECCDC55 /* PCMChunkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7A2E5808A455F967117889 /* PCMChunkerTests.swift */; };
 		2C52F265432CF7E5BFF28F68 /* QuipLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */; };
 		2E3F0351CC5E90C934E0F0B2 /* HardwareButtonHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A7D08ECBB0B1EFA3F77328 /* HardwareButtonHandler.swift */; };
 		2E6A08D65DF1E6DCC0BB7E79 /* ImageRecompressorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F37E465512A160C3F0FE0310 /* ImageRecompressorTests.swift */; };
@@ -37,6 +38,7 @@
 		6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE3FC3415A512C214E8D8D9 /* PTTWindowTracker.swift */; };
 		7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414AD810B644C175CFB73EE5 /* WindowInfo.swift */; };
 		7880A1510DE089958DF89CAA /* WindowRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */; };
+		81636C8A292C763A850701B8 /* PCMChunker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FC01677A64725213479F75E /* PCMChunker.swift */; };
 		90AC9E73F35BAD1CC1917C75 /* QuipLiveActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04067ECD7983ACC50844C82D /* QuipLiveActivityBundle.swift */; };
 		911B08CC263A882D5F10E54B /* QuipLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */; };
 		996767763A69068B0D1D8687 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EED90216075AC25A1EDB70 /* SpeechService.swift */; };
@@ -88,8 +90,10 @@
 		343D7EF269316EB5B3DCC796 /* MessageProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocolTests.swift; sourceTree = "<group>"; };
 		382370F0C983ABEC82E06430 /* KeychainDeviceID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainDeviceID.swift; sourceTree = "<group>"; };
 		38403BB3D3EAD614680767A6 /* dictation-vocab.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "dictation-vocab.txt"; sourceTree = "<group>"; };
+		3FC01677A64725213479F75E /* PCMChunker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMChunker.swift; sourceTree = "<group>"; };
 		414AD810B644C175CFB73EE5 /* WindowInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowInfo.swift; sourceTree = "<group>"; };
 		46181BEC707D4C04671D336E /* QuipMacPermsActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacPermsActivityWidget.swift; sourceTree = "<group>"; };
+		4B7A2E5808A455F967117889 /* PCMChunkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMChunkerTests.swift; sourceTree = "<group>"; };
 		591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalContentOverlay.swift; sourceTree = "<group>"; };
 		5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipLiveActivityAttributes.swift; sourceTree = "<group>"; };
 		5DED5CFC890EBB97FEDDAAFC /* ImageUploadMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageUploadMessageTests.swift; sourceTree = "<group>"; };
@@ -161,6 +165,7 @@
 				A76C509CF77201B2EB8B5677 /* KeystrokeFocusDelayTests.swift */,
 				343D7EF269316EB5B3DCC796 /* MessageProtocolTests.swift */,
 				9BAE6A8EDAED117D04D2161D /* MirrorDesktopFilterTests.swift */,
+				4B7A2E5808A455F967117889 /* PCMChunkerTests.swift */,
 				D1BB453F0473949D38101D3F /* PTTWindowTrackerTests.swift */,
 				0B827C2D030F43E7C9485615 /* SeamStitcherTests.swift */,
 				764505DC63C7C214558A63CC /* WindowManagerSessionIdTests.swift */,
@@ -247,6 +252,7 @@
 			children = (
 				30CED6C2881B9B0070767205 /* AudioRingBuffer.swift */,
 				FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */,
+				3FC01677A64725213479F75E /* PCMChunker.swift */,
 				6FE3FC3415A512C214E8D8D9 /* PTTWindowTracker.swift */,
 				ED7E3E6E78D3A418103DBD8C /* SeamStitcher.swift */,
 				08A9474D6D5321029019D972 /* Tests */,
@@ -423,6 +429,7 @@
 				D90497A715C2D1FEBC04B532 /* LinkifiedTerminalContentTests.swift in Sources */,
 				6D05492F589AA379C4DB67BA /* MessageProtocolTests.swift in Sources */,
 				CA62A184114B15E2FB535A95 /* MirrorDesktopFilterTests.swift in Sources */,
+				27B8C39B88FB6144FECCDC55 /* PCMChunkerTests.swift in Sources */,
 				D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */,
 				689A5ACEE675BEBE7608C903 /* PTTWindowTrackerTests.swift in Sources */,
 				A795C27D5F398A26647E2B49 /* SeamStitcherTests.swift in Sources */,
@@ -445,6 +452,7 @@
 				E15A8F5B7E6A925B33ECA315 /* KeychainDeviceID.swift in Sources */,
 				216CB65B0E4953EF7B3C45BA /* LiveActivityService.swift in Sources */,
 				2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */,
+				81636C8A292C763A850701B8 /* PCMChunker.swift in Sources */,
 				6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */,
 				046BFBEA924261A691A9EA3B /* PendingImagePreviewStrip.swift in Sources */,
 				F7B32FEF1E1A176C2710D831 /* PendingImageState.swift in Sources */,
