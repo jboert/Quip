@@ -59,6 +59,8 @@
 		F7B32FEF1E1A176C2710D831 /* PendingImageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 773DBA5F5449A8B4C8E7D1AE /* PendingImageState.swift */; };
 		F955600133754F7655E89EB6 /* AudioRingBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25530A43AA8DC90AF7ED2C57 /* AudioRingBufferTests.swift */; };
 		FD026502AE44AEC997D48C0B /* ContextMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1FAB05086E60FFC302C3E6 /* ContextMenuView.swift */; };
+		529BCDEBE6B7469FAA3109A5 /* WhisperAudioSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3E461CEC3F24655BF91813C /* WhisperAudioSender.swift */; };
+		336C15FC59A7464395DB2D46 /* WhisperAudioSenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E32B088311E64C438C38396F /* WhisperAudioSenderTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -129,6 +131,8 @@
 		F7EED90216075AC25A1EDB70 /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
 		FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocol.swift; sourceTree = "<group>"; };
 		FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTStressTests.swift; sourceTree = "<group>"; };
+		F3E461CEC3F24655BF91813C /* WhisperAudioSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSender.swift; sourceTree = "<group>"; };
+		E32B088311E64C438C38396F /* WhisperAudioSenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSenderTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -206,6 +210,7 @@
 				AD67F0481CA1F97EEB2F5D7C /* InlineTerminalContentBranchTests.swift */,
 				D6D5159A24459D33F4AE547B /* LinkifiedTerminalContentTests.swift */,
 				FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */,
+				E32B088311E64C438C38396F /* WhisperAudioSenderTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -275,6 +280,7 @@
 				DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */,
 				F7EED90216075AC25A1EDB70 /* SpeechService.swift */,
 				B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */,
+				F3E461CEC3F24655BF91813C /* WhisperAudioSender.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -433,6 +439,7 @@
 				D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */,
 				689A5ACEE675BEBE7608C903 /* PTTWindowTrackerTests.swift in Sources */,
 				A795C27D5F398A26647E2B49 /* SeamStitcherTests.swift in Sources */,
+				336C15FC59A7464395DB2D46 /* WhisperAudioSenderTests.swift in Sources */,
 				3C69E42DAC8E6515F9BC3F03 /* WindowManagerSessionIdTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -470,6 +477,7 @@
 				61BEA675BFFB5F8019D960F0 /* TTSNotificationOverlay.swift in Sources */,
 				545F466547A7823805966083 /* TerminalContentOverlay.swift in Sources */,
 				4DD215CB4746FD0FA6D82DD4 /* WebSocketClient.swift in Sources */,
+				529BCDEBE6B7469FAA3109A5 /* WhisperAudioSender.swift in Sources */,
 				7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */,
 				7880A1510DE089958DF89CAA /* WindowRectangle.swift in Sources */,
 			);
