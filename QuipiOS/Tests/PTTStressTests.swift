@@ -283,4 +283,14 @@ final class PTTStressTests: XCTestCase {
         XCTAssertFalse(handler.isPTTActive,
             "resumeAfterBackground must leave PTT idle")
     }
+
+    func testRouteChangeObserverIsInstalledOnStartMonitoring() {
+        let handler = HardwareButtonHandler()
+        handler.startMonitoring(windowCount: 3)
+        XCTAssertNotNil(handler._routeChangeObserverForTesting,
+            "startMonitoring must install a route-change observer")
+        handler.stopMonitoring()
+        XCTAssertNil(handler._routeChangeObserverForTesting,
+            "stopMonitoring must remove the route-change observer")
+    }
 }
