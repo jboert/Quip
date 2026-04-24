@@ -21,9 +21,14 @@ final class HardwareButtonHandler {
     var onPTTStop: (() -> Void)?
 
     private var volumeObservation: NSKeyValueObservation?
+    private var routeChangeObserver: NSObjectProtocol?
     private(set) var isPTTActive = false
     private var suppressUntil: Date = .distantPast
     private var savedVolume: Float?
+
+    #if DEBUG
+    var _routeChangeObserverForTesting: NSObjectProtocol? { routeChangeObserver }
+    #endif
 
     /// Suppress volume KVO events for `duration` seconds. Call when audio session
     /// is about to be reconfigured (e.g. TTS playback starting) so the phantom
@@ -102,6 +107,21 @@ final class HardwareButtonHandler {
                 }
             }
         }
+
+        if routeChangeObserver == nil {
+            routeChangeObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.routeChangeNotification,
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                guard UIApplication.shared.applicationState == .active else { return }
+                if self.isPTTActive {
+                    self.isPTTActive = false
+                    self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
+                    self.onPTTStop?()
+                }
+            }
+        }
     }
 
     /// Restore volume to the level captured when monitoring started
@@ -143,6 +163,10 @@ final class HardwareButtonHandler {
         }
         suppressUntil = .distantPast
         cancelStuckWatchdog()
+        if let observer = routeChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            routeChangeObserver = nil
+        }
     }
 
     private func cancelStuckWatchdog() {
