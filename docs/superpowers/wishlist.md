@@ -720,6 +720,31 @@ Skipped autonomous TCC revoke (would force user re-grant — explicitly painful 
 
 ## Completed
 
+### 37. PTT in-press pause wipes prior transcription
+
+**Status:** ✅ Done — verified on device with 3-utterance trace.
+
+Root cause: SFSpeechRecognizer on-device silently rolls over partial results mid-task when the speaker pauses — no `isFinal` fires, `bestTranscription.formattedString` just restarts. `AudioWorker` committed to `accumulatedText` only on `isFinal`, so `SeamStitcher.stitch(old: "", new: "Second")` replaced the pre-pause words with just the post-pause ones.
+
+Captured from device console (print→stdout via `devicectl --console`) on 2026-04-24 15:40:
+
+```
+text='First sentence' accum='' combined='First sentence'
+text='First sentence' accum='' combined='First sentence'    ← pause
+text='Second'         accum='' combined='Second'            ← rollover
+text='Second sentence' accum='' combined='Second sentence'
+```
+
+Fix: added `RecognizerRollover.detects(previous:current:)` + per-task `lastPartialText` high-water mark. When a partial is shorter AND its first token (case-insensitive) doesn't match the previous high-water mark's first token, commit `lastPartialText` into `accumulatedText` before stitching. Reset `lastPartialText` on task restart + session start.
+
+Device verify — 3 utterances × 2 pauses: "First sentence" + pause + "Second sentence" + pause + "First sentence" → phone shows "First sentence Second sentence First sentence". ✓
+
+**Diagnostic trail worth keeping:** `NSLog %{public}@` was still landing as `<private>` on this device (iOS 17/18 unified-logging redaction), and `os.Logger` with `privacy: .public` didn't reach `devicectl --console` because that only captures stdout. Only `print()` survived the chain. Kept the integer-only NSLogs in SpeechService + WebSocketClient (path flags, guard-failure tags, transcript arrival) since they provably reached the capture without leaking string content.
+
+**Related:** commit `eacca48`. Tests: `QuipiOS/Tests/RecognizerRolloverTests.swift` (8 cases — observed sequence, refinement, identical, empty previous/current, same-first-token-shorter, different-first-token-longer, case-insensitive).
+
+---
+
 ### 36. Allow more vertical scrolling in iPhone `InlineTerminalContent` (issue #7)
 
 **Status:** ✅ Done — picked option C (zoom-driven). Root cause was a dead property: `ContentZoomLevel.widthFraction` was defined and cycled via the header `textformat.size` button, but never actually read by the image branch. `scaledToFit` + `maxWidth: .infinity` always sized the screenshot to viewport width, so widescreen terminal captures had zero vertical scroll range and the zoom button did nothing.
