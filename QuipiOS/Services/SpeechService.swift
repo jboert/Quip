@@ -369,9 +369,7 @@ private class AudioWorker: @unchecked Sendable {
                 let hasError = error != nil
 
                 // Present accumulated previous chunks + current partial to caller.
-                let combined = self.accumulatedText.isEmpty
-                    ? text
-                    : (text.isEmpty ? self.accumulatedText : self.accumulatedText + " " + text)
+                let combined = SeamStitcher.stitch(old: self.accumulatedText, new: text)
 
                 if hasError {
                     self.onUpdateCallback?(combined.isEmpty ? nil : combined, true)
