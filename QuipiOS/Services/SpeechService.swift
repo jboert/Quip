@@ -82,6 +82,14 @@ final class SpeechService {
         return transcribedText
     }
 
+    /// Arm the long-lived audio engine so it is ready before the first PTT press.
+    /// Called by HardwareButtonHandler when monitoring starts.
+    func arm() { worker.arm() }
+
+    /// Disarm the audio engine when PTT monitoring stops.
+    /// Called by HardwareButtonHandler when monitoring stops.
+    func disarm() { worker.disarm() }
+
     /// Enqueue a WAV chunk for sequential playback. Chunks from different windows
     /// queue up and play one after another. A new sessionId for the same window drops
     /// that window's stale queued chunks (and stops playback if it's the active one).
@@ -231,6 +239,50 @@ private class AudioWorker: @unchecked Sendable {
     private let policy: FlushPolicy = .default
     private var onUpdateCallback: ((String?, Bool) -> Void)?
 
+    // Long-lived engine support: arm/disarm keep the engine + tap running
+    // continuously while PTT is being monitored, so there is no cold-start
+    // latency on each press. The ring captures the last 500ms of audio so
+    // every new recognition task can replay pre-roll and avoid first-word clip.
+    private let ring = AudioRingBuffer(window: 0.5)
+    private var isArmed = false
+
+    func arm() {
+        queue.async { [self] in
+            guard !self.isArmed else { return }
+            let session = AVAudioSession.sharedInstance()
+            try? session.setActive(true)
+
+            let input = self.audioEngine.inputNode
+            input.removeTap(onBus: 0)
+            let format = input.outputFormat(forBus: 0)
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                guard let self else { return }
+                let now = Date()
+                // Always forward to the live request when one is attached.
+                self.recognitionRequest?.append(buffer)
+                // Always retain last 500ms for pre-roll replay.
+                self.ring.append(buffer: buffer, at: now)
+            }
+            do {
+                self.audioEngine.prepare()
+                try self.audioEngine.start()
+                self.isArmed = true
+            } catch {
+                NSLog("[Quip][PTT] arm: engine start failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    func disarm() {
+        queue.async { [self] in
+            guard self.isArmed else { return }
+            self.audioEngine.stop()
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+            self.ring.clear()
+            self.isArmed = false
+        }
+    }
+
     func start(onUpdate: @escaping (String?, Bool) -> Void) {
         queue.async { [self] in
             self.accumulatedText = ""
@@ -243,34 +295,31 @@ private class AudioWorker: @unchecked Sendable {
                 return
             }
 
-            // Don't call setCategory here — HardwareButtonHandler owns that and
-            // changing it triggers phantom volume KVO events. Just make sure the
-            // session is active (cheap no-op if it already is) so the audio engine
-            // can grab the mic after TTS playback releases it.
-            let session = AVAudioSession.sharedInstance()
-            try? session.setActive(true)
-
-            // The tap reads from inputNode and forwards to whatever the current
-            // request is — so we can swap the request/task on restart without
-            // reinstalling the tap or stopping the engine.
-            let inputNode = audioEngine.inputNode
-            if !audioEngine.isRunning {
-                inputNode.removeTap(onBus: 0)
-                let format = inputNode.outputFormat(forBus: 0)
-                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            // Under the long-lived engine model, `arm()` has already installed the tap.
+            // If somehow we weren't armed (arm failed), fall back to cold-start.
+            if !self.isArmed {
+                let input = self.audioEngine.inputNode
+                input.removeTap(onBus: 0)
+                let format = input.outputFormat(forBus: 0)
+                input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                     self?.recognitionRequest?.append(buffer)
                 }
                 do {
-                    audioEngine.prepare()
-                    try audioEngine.start()
+                    self.audioEngine.prepare()
+                    try self.audioEngine.start()
                 } catch {
-                    inputNode.removeTap(onBus: 0)
                     onUpdate(nil, true)
                     return
                 }
             }
 
             self.beginRecognitionTask(recognizer: recognizer)
+
+            // Replay pre-roll into the request we just created.
+            let now = Date()
+            for entry in self.ring.entries(relativeTo: now) {
+                self.recognitionRequest?.append(entry.buffer)
+            }
         }
     }
 
@@ -331,10 +380,14 @@ private class AudioWorker: @unchecked Sendable {
             // into the request until we tear it down.
             self.recognitionRequest?.endAudio()
 
-            // 300ms later, remove the tap, stop engine, finish the task.
+            // 300ms later, finish the task. Under the arm/disarm model the engine
+            // + tap stay running — only tear them down if we were never armed
+            // (cold-start fallback path).
             self.queue.asyncAfter(deadline: .now() + self.policy.trailingWindow) { [weak self] in
                 guard let self else { return }
-                if self.audioEngine.isRunning {
+                // Engine + tap stay running under arm/disarm model. Only tear down the
+                // engine if we were never armed (cold-start fallback path).
+                if !self.isArmed, self.audioEngine.isRunning {
                     self.audioEngine.stop()
                     self.audioEngine.inputNode.removeTap(onBus: 0)
                 }

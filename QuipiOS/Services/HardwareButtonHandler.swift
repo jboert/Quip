@@ -19,6 +19,8 @@ final class HardwareButtonHandler {
     var onSelectionChanged: ((Int) -> Void)?
     var onPTTStart: (() -> Void)?
     var onPTTStop: (() -> Void)?
+    var onArm: (() -> Void)?
+    var onDisarm: (() -> Void)?
 
     private var volumeObservation: NSKeyValueObservation?
     private var routeChangeObserver: NSObjectProtocol?
@@ -137,6 +139,8 @@ final class HardwareButtonHandler {
                 }
             }
         }
+
+        onArm?()
     }
 
     /// Restore volume to the level captured when monitoring started
@@ -182,6 +186,8 @@ final class HardwareButtonHandler {
             NotificationCenter.default.removeObserver(observer)
             routeChangeObserver = nil
         }
+
+        onDisarm?()
     }
 
     private func armStuckWatchdog() {
