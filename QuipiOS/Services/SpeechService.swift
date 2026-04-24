@@ -235,6 +235,7 @@ private class AudioWorker: @unchecked Sendable {
         queue.async { [self] in
             self.accumulatedText = ""
             self.isStopping = false
+            self.isFlushing = false
             self.onUpdateCallback = onUpdate
 
             guard let recognizer = speechRecognizer, recognizer.isAvailable else {
@@ -293,6 +294,7 @@ private class AudioWorker: @unchecked Sendable {
 
                 if hasError {
                     self.onUpdateCallback?(combined.isEmpty ? nil : combined, true)
+                    self.isFlushing = false
                     return
                 }
 
@@ -348,8 +350,8 @@ private class AudioWorker: @unchecked Sendable {
                         self.recognitionTask = nil
                         self.recognitionRequest = nil
                         self.onUpdateCallback?(self.accumulatedText.isEmpty ? nil : self.accumulatedText, true)
+                        self.isFlushing = false
                     }
-                    self.isFlushing = false
                 }
             }
         }
