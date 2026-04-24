@@ -71,6 +71,18 @@ final class SpeechService {
     /// and must not mutate transcribedText / isRecording.
     @ObservationIgnored private var activeSessionToken: UUID?
 
+    @ObservationIgnored private var remoteSession: RemoteSpeechSession?
+    @ObservationIgnored weak var webSocket: WebSocketClient?
+
+    /// Wire up to the WebSocket client. Call once at app startup, before the
+    /// first press. Enables the remote Whisper path.
+    func attachWebSocket(_ client: WebSocketClient) {
+        webSocket = client
+        client.onTranscriptResult = { [weak self] sid, text, error in
+            self?.remoteSession?.handleTranscript(sessionId: sid, text: text, error: error)
+        }
+    }
+
     /// Wire up AVAudioSession interruption handling. Call once from the app's
     /// entry point (after the onArm/onDisarm callbacks are set). Idempotent.
     func startObservingInterruptions() {
@@ -131,23 +143,44 @@ final class SpeechService {
 
         let sessionToken = UUID()
         activeSessionToken = sessionToken
-        worker.start { [weak self] text, finished in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // Stale-session guard: if startRecording has been called again
-                // (new press while the prior session's trailing-flush was still
-                // in flight on the worker queue), this callback belongs to the
-                // OLD session and must not mutate state that now belongs to the
-                // new session. Fire pending completion if applicable, then bail.
-                let isCurrent = self.activeSessionToken == sessionToken
-                if finished {
-                    let pending = self.pendingStopCompletion
-                    self.pendingStopCompletion = nil
-                    pending?(text ?? "")
-                    if isCurrent { self.activeSessionToken = nil }
-                } else if isCurrent, let text {
-                    self.transcribedText = text
+
+        let path: PTTPath
+        if let ws = webSocket {
+            path = selectPTTPath(isConnected: ws.isConnected, whisperStatus: ws.whisperStatus)
+        } else {
+            path = .local
+        }
+
+        switch path {
+        case .local:
+            worker.start { [weak self] text, finished in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    // Stale-session guard: if startRecording has been called again
+                    // (new press while the prior session's trailing-flush was still
+                    // in flight on the worker queue), this callback belongs to the
+                    // OLD session and must not mutate state that now belongs to the
+                    // new session. Fire pending completion if applicable, then bail.
+                    let isCurrent = self.activeSessionToken == sessionToken
+                    if finished {
+                        let pending = self.pendingStopCompletion
+                        self.pendingStopCompletion = nil
+                        pending?(text ?? "")
+                        if isCurrent { self.activeSessionToken = nil }
+                    } else if isCurrent, let text {
+                        self.transcribedText = text
+                    }
                 }
+            }
+        case .remote:
+            guard let ws = webSocket else { isRecording = false; return }
+            let sender = WhisperAudioSender(sessionId: sessionToken) { chunk in
+                Task { @MainActor in ws.sendAudioChunk(chunk) }
+            }
+            let session = RemoteSpeechSession(sessionId: sessionToken, sender: sender)
+            remoteSession = session
+            worker.startForwarding { [weak session] buf in
+                session?.appendBuffer(buf)
             }
         }
     }
@@ -165,15 +198,34 @@ final class SpeechService {
             return transcribedText
         }
         pendingStopCompletion = completion
-        worker.stop()
-        isRecording = false
-        // Safety net: if the worker's trailing-flush never delivers a finished
-        // callback (e.g. recognizer stalls, interruption arrives mid-flush),
-        // fire the completion with whatever we have rather than stranding the text.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            guard let self, let pending = self.pendingStopCompletion else { return }
-            self.pendingStopCompletion = nil
-            pending(self.transcribedText)
+
+        if let session = remoteSession {
+            let sessionToken = activeSessionToken
+            Task { @MainActor [weak self] in
+                await session.stop { [weak self] text in
+                    guard let self, self.activeSessionToken == sessionToken else { return }
+                    let cb = self.pendingStopCompletion
+                    self.pendingStopCompletion = nil
+                    self.transcribedText = text
+                    self.activeSessionToken = nil
+                    self.remoteSession = nil
+                    cb?(text)
+                }
+            }
+            isRecording = false
+            // Ask the forwarding tap to stop, but leave the engine armed.
+            worker.stopForwarding()
+        } else {
+            worker.stop()
+            isRecording = false
+            // Safety net: if the worker's trailing-flush never delivers a finished
+            // callback (e.g. recognizer stalls, interruption arrives mid-flush),
+            // fire the completion with whatever we have rather than stranding the text.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                guard let self, let pending = self.pendingStopCompletion else { return }
+                self.pendingStopCompletion = nil
+                pending(self.transcribedText)
+            }
         }
         return transcribedText
     }
@@ -315,6 +367,17 @@ struct FlushPolicy {
     let finishHardCap: TimeInterval
 
     static let `default` = FlushPolicy(trailingWindow: 0.3, finishHardCap: 2.0)
+}
+
+/// Pure decision helper — tested in isolation so SpeechService doesn't need a
+/// mock WebSocketClient. Returns `.remote` when the Mac Whisper path should
+/// serve this press, `.local` otherwise.
+enum PTTPath: Equatable { case local, remote }
+
+func selectPTTPath(isConnected: Bool, whisperStatus: WhisperState) -> PTTPath {
+    guard isConnected else { return .local }
+    if case .ready = whisperStatus { return .remote }
+    return .local
 }
 
 /// Handles all audio/speech work off the main actor.
@@ -504,6 +567,37 @@ private class AudioWorker: @unchecked Sendable {
                         self.isFlushing = false
                     }
                 }
+            }
+        }
+    }
+
+    /// Remote-path variant: forward mic buffers to `onBuffer` but do not spin
+    /// up a local SFSpeechRecognizer. Engine + tap stay armed.
+    func startForwarding(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) {
+        queue.async { [self] in
+            guard self.isArmed else { return }
+            let input = self.audioEngine.inputNode
+            input.removeTap(onBus: 0)
+            let format = input.outputFormat(forBus: 0)
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                onBuffer(buffer)
+                self.ring.append(buffer: buffer, at: Date())
+            }
+        }
+    }
+
+    /// Stop remote-path forwarding. Re-installs the default tap that only
+    /// feeds the ring so subsequent local-path presses get pre-roll replay.
+    func stopForwarding() {
+        queue.async { [self] in
+            guard self.isArmed else { return }
+            let input = self.audioEngine.inputNode
+            input.removeTap(onBus: 0)
+            let format = input.outputFormat(forBus: 0)
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                guard let self else { return }
+                self.recognitionRequest?.append(buffer)
+                self.ring.append(buffer: buffer, at: Date())
             }
         }
     }
