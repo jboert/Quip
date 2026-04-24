@@ -1,4 +1,5 @@
 import SwiftUI
+import WhisperKit
 
 /// Append a line to `/tmp/quip-push.log`. Used to debug "I didn't get
 /// a notification" — print()/NSLog can't be seen by the user when the
@@ -33,6 +34,9 @@ struct QuipMacApp: App {
     @State private var pinManager = PINManager()
     @State private var connectionLog = ConnectionLog()
     @State private var pushNotificationService = PushNotificationService()
+    @State private var whisperService: WhisperDictationService?
+    @State private var whisperState: WhisperState = .preparing
+    @State private var whisperReaper: Timer?
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
     private var networkMode: NetworkMode {
@@ -168,8 +172,11 @@ struct QuipMacApp: App {
             DispatchQueue.main.async {
                 self.broadcastLayout()
                 self.broadcastPermissions(force: true)
+                self.broadcastWhisperStatus()
             }
         }
+
+        Task { await setupWhisper() }
 
         terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
             appendPushDiagnostic("state \(oldState.rawValue)→\(newState.rawValue) for \(windowId) (selected=\(clientSelectedWindowId ?? "nil"))")
@@ -952,6 +959,10 @@ struct QuipMacApp: App {
                 openSettingsPane(msg.pane)
             }
 
+        case "audio_chunk":
+            guard let msg = try? JSONDecoder().decode(AudioChunkMessage.self, from: data) else { break }
+            whisperService?.ingest(msg)
+
         default:
             break
         }
@@ -961,6 +972,56 @@ struct QuipMacApp: App {
     /// lives. Per-device so a household with two phones doesn't collide.
     private func phonePrefsKey(deviceID: String) -> String {
         "phonePrefs.\(deviceID)"
+    }
+
+    private func setupWhisper() async {
+        await MainActor.run {
+            self.whisperState = .preparing
+            self.broadcastWhisperStatus()
+        }
+
+        #if canImport(WhisperKit)
+        do {
+            let kit = try await WhisperKit(model: "openai_whisper-base")
+            let transcriber = WhisperKitTranscriber(kit: kit)
+            await MainActor.run {
+                self.whisperService = WhisperDictationService(transcriber: transcriber) { msg in
+                    // Hop back to Main to use the existing broadcast helper.
+                    DispatchQueue.main.async {
+                        if let m = msg as? TranscriptResultMessage {
+                            self.webSocketServer.broadcast(m)
+                        }
+                    }
+                }
+                self.whisperState = .ready
+                self.broadcastWhisperStatus()
+                self.startWhisperReaper()
+            }
+        } catch {
+            await MainActor.run {
+                self.whisperState = .failed(message: error.localizedDescription)
+                self.broadcastWhisperStatus()
+            }
+        }
+        #else
+        await MainActor.run {
+            self.whisperState = .failed(message: "WhisperKit not available")
+            self.broadcastWhisperStatus()
+        }
+        #endif
+    }
+
+    private func broadcastWhisperStatus() {
+        webSocketServer.broadcast(WhisperStatusMessage(state: whisperState))
+    }
+
+    private func startWhisperReaper() {
+        whisperReaper?.invalidate()
+        whisperReaper = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+            DispatchQueue.main.async {
+                self.whisperService?.purgeStaleSessions()
+            }
+        }
     }
 
     /// Enumerate every iTerm2 window (not just Quip-tracked ones), tag each
