@@ -718,28 +718,22 @@ Skipped autonomous TCC revoke (would force user re-grant — explicitly painful 
 
 ---
 
-### 36. Allow more vertical scrolling in iPhone `InlineTerminalContent`
+## Completed
 
-**Status:** Wishlist
-**Context:** On the iPhone remote, the inline terminal screenshot panel (`InlineTerminalContent` image branch, `QuipiOS/QuipApp.swift:2892-2905`) renders the Mac window screenshot with `Image.scaledToFit()` + `.frame(maxWidth: .infinity)` inside a vertical `ScrollView`. For typical widescreen terminal windows this sizes the image so its height ≤ viewport height, leaving no actual scroll range — the user can't pan past what's already visible. Widescreen caps look fine; tall captures still work because height exceeds viewport naturally. The ask is to give the user more vertical scroll room regardless of source aspect ratio.
+### 36. Allow more vertical scrolling in iPhone `InlineTerminalContent` (issue #7)
 
-**Likely shape:**
-- Option A: let the image render at a multiple of its fitted height (e.g. `.frame(minHeight: viewport * 1.5)`) so there's always scroll slack above/below, even on wide captures.
-- Option B: respect native pixel size — drop `scaledToFit`, use `scaledToFill` or a manual size derived from image intrinsic + current zoom level, and let the ScrollView be the only thing clipping.
-- Option C: couple this with the existing `contentZoomLevel` (`@AppStorage("contentZoomLevel")`, values 0/1/2) — higher zoom = larger rendered image = more vertical scroll range. Already wired via the `textformat.size` button in the header at ~line 2846; currently it cycles through presets but the image branch doesn't apply them.
-- Pair with the `ScrollViewReader` scroll-to-bottom already at line 2898 so new screenshots still land at the bottom.
+**Status:** ✅ Done — picked option C (zoom-driven). Root cause was a dead property: `ContentZoomLevel.widthFraction` was defined and cycled via the header `textformat.size` button, but never actually read by the image branch. `scaledToFit` + `maxWidth: .infinity` always sized the screenshot to viewport width, so widescreen terminal captures had zero vertical scroll range and the zoom button did nothing.
 
-**Open questions for /prd time:**
-- Which option matches user intent — "always scrollable" (A) vs "zoom-driven" (C)? C is more discoverable via the existing zoom button.
-- Should the screenshot be pinch-zoomable (gesture) in addition to the button cycler?
-- Interaction with the existing swipe-to-cycle-windows gesture (line 2956) — swipe handler already protects vertical drag via 2:1 dx/dy ratio; more scroll range may not disturb it, but worth verifying.
-- Landscape parity: `TerminalContentOverlay` has its own full-screen variant; does it need the same treatment?
+Fix, all in `QuipiOS/QuipApp.swift`:
+- `ContentZoomLevel` renamed `.fill/.medium/.small` → `.fit/.medium/.large` (raw values 0/1/2 unchanged so `@AppStorage` + `PreferencesSnapshot` migrations are free) and replaced `widthFraction` with `zoomScale` (1.0 / 1.5 / 2.5).
+- Image branch now wraps in `GeometryReader` and uses `ScrollView([.vertical, .horizontal], showsIndicators: false)`. Image width = `geo.size.width * zoom`, `scaledToFit` carries the height via aspect ratio. Both axes scroll when zoom > 1 so the user pans around the enlarged capture.
+- `ScrollViewReader.scrollTo("bottom", anchor: .bottom)` now fires on zoom change as well as screenshot change — stepping the zoom up/down still lands at the prompt instead of stranding the user mid-buffer.
 
-**Related:** `QuipiOS/QuipApp.swift:2892-2905` (image branch), `QuipiOS/QuipApp.swift:2846` (zoom button), `ContentZoomLevel` enum, `TerminalContentOverlay.swift` (landscape counterpart).
+Tests: `QuipiOS/Tests/InlineTerminalContentBranchTests.swift` — 5 new pin tests for `zoomScale` monotonicity, `from(raw:)` fallback on corrupt persisted values (e.g. -1 / 99 → `.fit`), and `next` wrap-around (`large → fit`). Full suite 11/11 green on iPhone 17 simulator.
+
+**Related:** commit `c5416e2`. GitHub issue https://github.com/jboert/Quip/issues/7. Follow-ups deferred: pinch-to-zoom gesture, interaction with swipe-to-cycle-windows at line 2956 (gesture is `simultaneousGesture` with 2:1 dx/dy guard so likely fine but untested on device yet).
 
 ---
-
-## Completed
 
 ### 31. iOS terminal URLs aren't tappable
 
