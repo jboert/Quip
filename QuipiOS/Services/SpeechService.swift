@@ -39,6 +39,11 @@ final class SpeechService {
 
     @ObservationIgnored nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
 
+    /// Fires once with the final transcribed text after the worker's trailing-flush
+    /// has completed (or a safety timeout has fired). Used by QuipApp so that
+    /// SendTextMessage goes out with the post-flush text, not the stale pre-flush snapshot.
+    @ObservationIgnored private var pendingStopCompletion: ((String) -> Void)?
+
     /// Wire up AVAudioSession interruption handling. Call once from the app's
     /// entry point (after the onArm/onDisarm callbacks are set). Idempotent.
     func startObservingInterruptions() {
@@ -101,16 +106,39 @@ final class SpeechService {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let text { self.transcribedText = text }
-                if finished { self.isRecording = false }
+                if finished {
+                    self.isRecording = false
+                    let pending = self.pendingStopCompletion
+                    self.pendingStopCompletion = nil
+                    pending?(self.transcribedText)
+                }
             }
         }
     }
 
+    /// Stop recording. If `completion` is supplied, it is invoked on the main
+    /// thread with the final post-flush transcription once the worker's 300ms
+    /// trailing window and any end-of-utterance recognizer callback have fired
+    /// (or after a 3s safety timeout). Callers that need the last-spoken word
+    /// to make it into their send path MUST use the completion; the synchronous
+    /// return value is the pre-flush snapshot.
     @discardableResult
-    func stopRecording() -> String {
-        guard isRecording else { return transcribedText }
+    func stopRecording(completion: ((String) -> Void)? = nil) -> String {
+        guard isRecording else {
+            completion?(transcribedText)
+            return transcribedText
+        }
+        pendingStopCompletion = completion
         worker.stop()
         isRecording = false
+        // Safety net: if the worker's trailing-flush never delivers a finished
+        // callback (e.g. recognizer stalls, interruption arrives mid-flush),
+        // fire the completion with whatever we have rather than stranding the text.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            guard let self, let pending = self.pendingStopCompletion else { return }
+            self.pendingStopCompletion = nil
+            pending(self.transcribedText)
+        }
         return transcribedText
     }
 
