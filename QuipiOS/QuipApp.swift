@@ -471,6 +471,7 @@ struct QuipApp: App {
 
         volumeHandler.onArm = { speech.arm() }
         volumeHandler.onDisarm = { speech.disarm() }
+        speech.startObservingInterruptions()
     }
 
     @MainActor

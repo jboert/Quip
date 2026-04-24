@@ -37,6 +37,38 @@ final class SpeechService {
     /// without actually making noise.
     @ObservationIgnored let silentModeDetector = SilentModeDetector()
 
+    @ObservationIgnored nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
+
+    /// Wire up AVAudioSession interruption handling. Call once from the app's
+    /// entry point (after the onArm/onDisarm callbacks are set). Idempotent.
+    func startObservingInterruptions() {
+        guard interruptionObserver == nil else { return }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            guard let typeRaw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+            switch type {
+            case .began:
+                self.worker.disarm()
+            case .ended:
+                if let optsRaw = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt {
+                    let options = AVAudioSession.InterruptionOptions(rawValue: optsRaw)
+                    if options.contains(.shouldResume) { self.worker.arm() }
+                }
+            @unknown default: break
+            }
+        }
+    }
+
+    deinit {
+        if let obs = interruptionObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         if speechStatus == .authorized {
