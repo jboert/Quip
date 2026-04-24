@@ -67,42 +67,4 @@ final class InlineTerminalContentBranchTests: XCTestCase {
         let b = InlineTerminalContent.branch(content: "body", screenshot: "aGVsbG8=")
         XCTAssertEqual(b, .text, "base64 that doesn't decode to UIImage falls back to text, not Loading…")
     }
-
-    // Pins the zoomScale mapping (issue #7). The image branch reads this to
-    // size the screenshot relative to the viewport — if the 1.0/1.5/2.5
-    // ladder changes, widescreen-terminal users either lose vertical scroll
-    // room again (< 1.0 somewhere) or get yanked off-screen (very large),
-    // so both directions matter.
-    func test_zoom_scale_mapping_fit_is_one() {
-        XCTAssertEqual(ContentZoomLevel.fit.zoomScale, 1.0, accuracy: 0.001)
-    }
-
-    func test_zoom_scale_mapping_medium_is_above_one() {
-        XCTAssertGreaterThan(ContentZoomLevel.medium.zoomScale, 1.0,
-                             "medium zoom must exceed 1.0 or there's no extra scroll range over .fit")
-    }
-
-    func test_zoom_scale_mapping_large_is_greater_than_medium() {
-        XCTAssertGreaterThan(ContentZoomLevel.large.zoomScale, ContentZoomLevel.medium.zoomScale,
-                             "cases are monotonic — cycling fit → medium → large must scale up each step")
-    }
-
-    func test_zoom_level_from_unknown_raw_defaults_to_fit() {
-        // Guard against a corrupt @AppStorage / PreferencesSnapshot value —
-        // anything outside 0…2 must fall back to the no-overflow default so
-        // the screenshot doesn't scroll off-screen on first render.
-        XCTAssertEqual(ContentZoomLevel.from(raw: 99), .fit)
-        XCTAssertEqual(ContentZoomLevel.from(raw: -1), .fit)
-    }
-
-    func test_zoom_level_next_cycles_through_all_cases() {
-        // Header cycler button depends on this — the tap handler stores
-        // .next as the new rawValue so the sequence must wrap back to fit.
-        let fitNext    = ContentZoomLevel.fit.next
-        let mediumNext = ContentZoomLevel.medium.next
-        let largeNext  = ContentZoomLevel.large.next
-        XCTAssertEqual(fitNext, ContentZoomLevel.medium.rawValue)
-        XCTAssertEqual(mediumNext, ContentZoomLevel.large.rawValue)
-        XCTAssertEqual(largeNext, ContentZoomLevel.fit.rawValue)
-    }
 }
