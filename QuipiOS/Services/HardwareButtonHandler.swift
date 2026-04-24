@@ -30,6 +30,18 @@ final class HardwareButtonHandler {
     var _routeChangeObserverForTesting: NSObjectProtocol? { routeChangeObserver }
     #endif
 
+    private static let stuckPressWatchdog: TimeInterval = 5.0
+    private var stuckWatchdog: DispatchWorkItem?
+
+    #if DEBUG
+    var _testWatchdogOverride: TimeInterval?
+    func _forceStartPTTForTesting() {
+        isPTTActive = true
+        onPTTStart?()
+    }
+    func _armStuckWatchdogForTesting() { armStuckWatchdog() }
+    #endif
+
     /// Suppress volume KVO events for `duration` seconds. Call when audio session
     /// is about to be reconfigured (e.g. TTS playback starting) so the phantom
     /// volume changes that result don't get mistaken for button presses.
@@ -93,6 +105,7 @@ final class HardwareButtonHandler {
                     self.isPTTActive = false
                     self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
                     self.onPTTStop?()
+                    self.cancelStuckWatchdog()
                     return
                 }
 
@@ -100,6 +113,7 @@ final class HardwareButtonHandler {
                     self.isPTTActive = true
                     self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
                     self.onPTTStart?()
+                    self.armStuckWatchdog()
                 } else {
                     guard self.windowCount > 0 else { return }
                     self.selectedIndex = (self.selectedIndex + 1) % self.windowCount
@@ -169,8 +183,29 @@ final class HardwareButtonHandler {
         }
     }
 
+    private func armStuckWatchdog() {
+        cancelStuckWatchdog()
+        let interval: TimeInterval = {
+            #if DEBUG
+            return _testWatchdogOverride ?? Self.stuckPressWatchdog
+            #else
+            return Self.stuckPressWatchdog
+            #endif
+        }()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isPTTActive else { return }
+            NSLog("[Quip][PTT] watchdog fired — forcing stop after %.1fs", interval)
+            self.isPTTActive = false
+            self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
+            self.onPTTStop?()
+        }
+        stuckWatchdog = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
     private func cancelStuckWatchdog() {
-        // Implemented in Task 1.4
+        stuckWatchdog?.cancel()
+        stuckWatchdog = nil
     }
 }
 
