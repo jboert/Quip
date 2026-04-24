@@ -44,6 +44,13 @@ final class SpeechService {
     /// SendTextMessage goes out with the post-flush text, not the stale pre-flush snapshot.
     @ObservationIgnored private var pendingStopCompletion: ((String) -> Void)?
 
+    /// Incremented on every startRecording. The worker's callback closure
+    /// captures the session token at the time it was registered; any callback
+    /// whose token no longer matches belongs to an obsolete session (e.g. the
+    /// trailing-flush from a prior press landing after a new press started)
+    /// and must not mutate transcribedText / isRecording.
+    @ObservationIgnored private var activeSessionToken: UUID?
+
     /// Wire up AVAudioSession interruption handling. Call once from the app's
     /// entry point (after the onArm/onDisarm callbacks are set). Idempotent.
     func startObservingInterruptions() {
@@ -102,15 +109,24 @@ final class SpeechService {
         isRecording = true
         transcribedText = ""
 
+        let sessionToken = UUID()
+        activeSessionToken = sessionToken
         worker.start { [weak self] text, finished in
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let text { self.transcribedText = text }
+                // Stale-session guard: if startRecording has been called again
+                // (new press while the prior session's trailing-flush was still
+                // in flight on the worker queue), this callback belongs to the
+                // OLD session and must not mutate state that now belongs to the
+                // new session. Fire pending completion if applicable, then bail.
+                let isCurrent = self.activeSessionToken == sessionToken
                 if finished {
-                    self.isRecording = false
                     let pending = self.pendingStopCompletion
                     self.pendingStopCompletion = nil
-                    pending?(self.transcribedText)
+                    pending?(text ?? "")
+                    if isCurrent { self.activeSessionToken = nil }
+                } else if isCurrent, let text {
+                    self.transcribedText = text
                 }
             }
         }
