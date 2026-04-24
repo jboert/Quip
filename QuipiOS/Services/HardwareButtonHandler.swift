@@ -32,7 +32,7 @@ final class HardwareButtonHandler {
     var _routeChangeObserverForTesting: NSObjectProtocol? { routeChangeObserver }
     #endif
 
-    private static let stuckPressWatchdog: TimeInterval = 5.0
+    private static let stuckPressWatchdog: TimeInterval = 30.0
     private var stuckWatchdog: DispatchWorkItem?
 
     #if DEBUG
