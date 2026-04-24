@@ -511,13 +511,14 @@ struct QuipApp: App {
         // Trim trailing whitespace/newlines: a stray \n typed into Claude's
         // box would get swallowed by the box as a newline rather than
         // treated as "submit," and it breaks the render.
-        let text = speech.stopRecording().trimmingCharacters(in: .whitespacesAndNewlines)
         let windowId = pttTracker.end()
-        NSLog("[Quip] stopRecording: windowId=%@, text='%@' (length=%d)", windowId ?? "nil", text, text.count)
-        if let windowId {
-            // Flush a queued image first — defer the STT-ended + dictated text
-            // until after the image actually hits the wire so the Mac processes
-            // them in order (path first, then dictated text).
+        // Defer SendTextMessage until the speech worker finishes its 300ms
+        // trailing flush — otherwise the user's last word (captured during
+        // the flush window) never makes it into the prompt.
+        speech.stopRecording { finalText in
+            let text = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+            NSLog("[Quip] stopRecording: windowId=%@, text='%@' (length=%d)", windowId ?? "nil", text, text.count)
+            guard let windowId else { return }
             flushPendingImage(windowId: windowId) { [client] in
                 client.send(STTStateMessage.ended(windowId: windowId))
                 if !text.isEmpty {
