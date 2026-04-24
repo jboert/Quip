@@ -320,4 +320,24 @@ final class PTTStressTests: XCTestCase {
         XCTAssertEqual(policy.trailingWindow, 0.3, accuracy: 0.001)
         XCTAssertEqual(policy.finishHardCap, 2.0, accuracy: 0.001)
     }
+
+    func testVocabLoaderCapsAtOneHundredAndNormalizes() {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("vocab.txt")
+        var lines: [String] = []
+        for i in 0..<150 { lines.append("term\(i)") }
+        lines.insert("", at: 10)
+        lines.insert("   padded   ", at: 20)
+        let content = lines.joined(separator: "\n")
+        try? content.write(to: tmp, atomically: true, encoding: .utf8)
+
+        let loaded = DictationVocab.load(from: tmp)
+        XCTAssertEqual(loaded.count, 100)
+        XCTAssertFalse(loaded.contains(""))
+        XCTAssertTrue(loaded.contains("padded"))
+    }
+
+    func testVocabLoaderReturnsEmptyOnMissingFile() {
+        let missing = URL(fileURLWithPath: "/tmp/nonexistent-\(UUID().uuidString).txt")
+        XCTAssertEqual(DictationVocab.load(from: missing), [])
+    }
 }

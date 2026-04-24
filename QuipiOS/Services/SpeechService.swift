@@ -3,6 +3,26 @@ import Observation
 import Speech
 import UIKit
 
+enum DictationVocab {
+    static let maxTerms = 100
+
+    static func load(from url: URL) -> [String] {
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let terms = raw.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return Array(terms.prefix(maxTerms))
+    }
+
+    static func loadBundled() -> [String] {
+        guard let url = Bundle.main.url(forResource: "dictation-vocab", withExtension: "txt") else {
+            NSLog("[Quip][PTT] dictation-vocab.txt not found in bundle")
+            return []
+        }
+        return load(from: url)
+    }
+}
+
 /// On-device speech-to-text. The audio engine and recognition run on a
 /// background queue to avoid Swift 6 @MainActor isolation issues.
 @Observable
@@ -305,6 +325,7 @@ private class AudioWorker: @unchecked Sendable {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let queue = DispatchQueue(label: "com.quip.speech", qos: .userInteractive)
+    private let cachedVocab: [String] = DictationVocab.loadBundled()
 
     // Dictation sessions naturally terminate at ~1 minute or on silence. To let
     // users talk longer, we stitch consecutive recognition tasks together and
@@ -403,6 +424,9 @@ private class AudioWorker: @unchecked Sendable {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = true
+        if !cachedVocab.isEmpty {
+            request.contextualStrings = cachedVocab
+        }
         self.recognitionRequest = request
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
