@@ -314,4 +314,10 @@ final class PTTStressTests: XCTestCase {
         service.stopRecording()  // must not crash or throw
         XCTAssertFalse(service.isRecording)
     }
+
+    func testFlushPolicyDefaults() {
+        let policy = FlushPolicy.default
+        XCTAssertEqual(policy.trailingWindow, 0.3, accuracy: 0.001)
+        XCTAssertEqual(policy.finishHardCap, 2.0, accuracy: 0.001)
+    }
 }

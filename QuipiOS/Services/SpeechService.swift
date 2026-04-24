@@ -205,6 +205,14 @@ private class PlayerDelegate: NSObject, AVAudioPlayerDelegate, @unchecked Sendab
     }
 }
 
+/// Pure policy object: decides whether a stop request should flush or be rejected as duplicate.
+struct FlushPolicy {
+    let trailingWindow: TimeInterval
+    let finishHardCap: TimeInterval
+
+    static let `default` = FlushPolicy(trailingWindow: 0.3, finishHardCap: 2.0)
+}
+
 /// Handles all audio/speech work off the main actor.
 /// This is a plain class (not @MainActor) so its closures don't trigger isolation checks.
 private class AudioWorker: @unchecked Sendable {
@@ -219,6 +227,8 @@ private class AudioWorker: @unchecked Sendable {
     // preserve the transcription across the seam.
     private var accumulatedText = ""
     private var isStopping = false
+    private var isFlushing = false
+    private let policy: FlushPolicy = .default
     private var onUpdateCallback: ((String?, Bool) -> Void)?
 
     func start(onUpdate: @escaping (String?, Bool) -> Void) {
@@ -296,6 +306,7 @@ private class AudioWorker: @unchecked Sendable {
 
                     if self.isStopping {
                         self.onUpdateCallback?(combined, true)
+                        self.isFlushing = false
                     } else {
                         // End-of-speech hit (silence or the ~1-minute ceiling)
                         // but user is still holding PTT — spin up a new task so
@@ -309,16 +320,38 @@ private class AudioWorker: @unchecked Sendable {
 
     func stop() {
         queue.async { [self] in
+            guard !self.isFlushing else { return }
+            guard !self.isStopping || self.recognitionTask != nil else { return }
             self.isStopping = true
-            recognitionRequest?.endAudio()
-            if audioEngine.isRunning {
-                audioEngine.stop()
-                audioEngine.inputNode.removeTap(onBus: 0)
+            self.isFlushing = true
+
+            // End audio input — tap keeps forwarding any already-buffered samples
+            // into the request until we tear it down.
+            self.recognitionRequest?.endAudio()
+
+            // 300ms later, remove the tap, stop engine, finish the task.
+            self.queue.asyncAfter(deadline: .now() + self.policy.trailingWindow) { [weak self] in
+                guard let self else { return }
+                if self.audioEngine.isRunning {
+                    self.audioEngine.stop()
+                    self.audioEngine.inputNode.removeTap(onBus: 0)
+                }
+                self.recognitionTask?.finish()
+
+                // Hard cap: if isFinal doesn't fire within finishHardCap, force-close.
+                let taskRef = self.recognitionTask
+                self.queue.asyncAfter(deadline: .now() + self.policy.finishHardCap) { [weak self] in
+                    guard let self else { return }
+                    if self.recognitionTask === taskRef, taskRef != nil {
+                        NSLog("[Quip][PTT] flush timeout at %.1fs — cancelling task", self.policy.finishHardCap)
+                        taskRef?.cancel()
+                        self.recognitionTask = nil
+                        self.recognitionRequest = nil
+                        self.onUpdateCallback?(self.accumulatedText.isEmpty ? nil : self.accumulatedText, true)
+                    }
+                    self.isFlushing = false
+                }
             }
-            // Use finish() instead of cancel() to get the final transcription
-            recognitionTask?.finish()
-            recognitionTask = nil
-            recognitionRequest = nil
         }
     }
 }
