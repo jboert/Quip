@@ -24,6 +24,7 @@
 		390A246B5D13F798E9B55E7B /* ImageRecompressor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6ED80C8277F668CC0B273C /* ImageRecompressor.swift */; };
 		3C69E42DAC8E6515F9BC3F03 /* WindowManagerSessionIdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764505DC63C7C214558A63CC /* WindowManagerSessionIdTests.swift */; };
 		413005C731BCDCED5438E47F /* InlineTerminalContentBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD67F0481CA1F97EEB2F5D7C /* InlineTerminalContentBranchTests.swift */; };
+		46B88647F52CB2FD8C378212 /* dictation-vocab.txt in Resources */ = {isa = PBXBuildFile; fileRef = 38403BB3D3EAD614680767A6 /* dictation-vocab.txt */; };
 		48F28455B8142325D6833C25 /* QuipTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE693F49CD672CFD1507FDC6 /* QuipTheme.swift */; };
 		4D0689B3D9653512F27A322D /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB84DC38B2B261AB78D9B78 /* BonjourBrowser.swift */; };
 		4DD215CB4746FD0FA6D82DD4 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */; };
@@ -86,6 +87,7 @@
 		3153F1300EF9EB3372F1EE7A /* PushNotificationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationCenter.swift; sourceTree = "<group>"; };
 		343D7EF269316EB5B3DCC796 /* MessageProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocolTests.swift; sourceTree = "<group>"; };
 		382370F0C983ABEC82E06430 /* KeychainDeviceID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainDeviceID.swift; sourceTree = "<group>"; };
+		38403BB3D3EAD614680767A6 /* dictation-vocab.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "dictation-vocab.txt"; sourceTree = "<group>"; };
 		414AD810B644C175CFB73EE5 /* WindowInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowInfo.swift; sourceTree = "<group>"; };
 		46181BEC707D4C04671D336E /* QuipMacPermsActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacPermsActivityWidget.swift; sourceTree = "<group>"; };
 		591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalContentOverlay.swift; sourceTree = "<group>"; };
@@ -132,6 +134,7 @@
 				E96781A6729F4AC1D1B88B16 /* Models */,
 				00C81D8E06C7AD6C80C65C66 /* Quip */,
 				758CAB7E405283D8A5CCF93C /* QuipLiveActivity */,
+				A09650EC2B05403F60FD86D4 /* Resources */,
 				B82A58177E51EF2234FD8D1C /* Services */,
 				538976D44E5C8716FFE3D88D /* Tests */,
 				625FB982606090F193D7CE93 /* Views */,
@@ -174,6 +177,7 @@
 				18AE69F5AEDB7F658B8657E8 /* QuipiOS.entitlements */,
 				B3398B602525378B861B9218 /* Signing.xcconfig */,
 				E96781A6729F4AC1D1B88B16 /* Models */,
+				A09650EC2B05403F60FD86D4 /* Resources */,
 				B82A58177E51EF2234FD8D1C /* Services */,
 				625FB982606090F193D7CE93 /* Views */,
 			);
@@ -228,6 +232,14 @@
 				FE7D4ADA99A2E83B8E27F724 /* Shared */,
 			);
 			path = QuipLiveActivity;
+			sourceTree = "<group>";
+		};
+		A09650EC2B05403F60FD86D4 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				38403BB3D3EAD614680767A6 /* dictation-vocab.txt */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		A32FE707D0B3E770D1E5A70E /* Shared */ = {
@@ -379,6 +391,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A977CCC72BA863A04F17FB77 /* Assets.xcassets in Resources */,
+				46B88647F52CB2FD8C378212 /* dictation-vocab.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
