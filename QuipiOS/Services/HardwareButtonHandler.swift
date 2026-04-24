@@ -133,6 +133,7 @@ final class HardwareButtonHandler {
                     self.isPTTActive = false
                     self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
                     self.onPTTStop?()
+                    self.cancelStuckWatchdog()
                 }
             }
         }
