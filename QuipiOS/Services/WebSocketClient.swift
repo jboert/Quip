@@ -134,6 +134,12 @@ final class WebSocketClient {
     var onImageUploadAck: ((String) -> Void)?
     /// Mac rejects an image upload; argument is a human-readable reason.
     var onImageUploadError: ((String) -> Void)?
+    /// Latest Whisper model lifecycle state from the Mac. Starts as .preparing
+    /// until the Mac broadcasts its status. SpeechService reads this at PTT-start
+    /// to decide between remote (Whisper) and local (SFSpeech) paths.
+    var whisperStatus: WhisperState = .preparing
+    /// Mac returned the final transcript for a session.
+    var onTranscriptResult: ((UUID, String, String?) -> Void)?
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -274,6 +280,18 @@ final class WebSocketClient {
         task.send(.string(string)) { error in
             if let error = error {
                 NSLog("[WebSocketClient] sendRaw error: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    /// Serialize and send an audio chunk. Safe to call from any thread;
+    /// uses the same URLSessionWebSocketTask.send path as other outbound messages.
+    func sendAudioChunk(_ msg: AudioChunkMessage) {
+        guard let data = MessageCoder.encode(msg),
+              let task = webSocketTask else { return }
+        task.send(.data(data)) { err in
+            if let err {
+                NSLog("[WebSocketClient] audio chunk send failed: %@", err.localizedDescription)
             }
         }
     }
@@ -499,6 +517,16 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(MacPermissionsMessage.self, from: data) {
                 onMacPermissions?(msg)
+            }
+        case "transcript_result":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(TranscriptResultMessage.self, from: data) {
+                onTranscriptResult?(msg.sessionId, msg.text, msg.error)
+            }
+        case "whisper_status":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(WhisperStatusMessage.self, from: data) {
+                whisperStatus = msg.state
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)
