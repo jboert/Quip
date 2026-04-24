@@ -147,8 +147,23 @@ final class SpeechService {
         let path: PTTPath
         if let ws = webSocket {
             path = selectPTTPath(isConnected: ws.isConnected, whisperStatus: ws.whisperStatus)
+            // Pure integer logs to avoid iOS NSLog %@ redaction
+            // pathRemote=1 remote, =0 local. wsReady=1 if ws.isConnected
+            // whisperReady=1 if state==.ready, 0=preparing, 2=downloading, 3=failed
+            let wsReady = ws.isConnected ? 1 : 0
+            let whisperReady: Int = {
+                switch ws.whisperStatus {
+                case .ready: return 1
+                case .preparing: return 0
+                case .downloading: return 2
+                case .failed: return 3
+                }
+            }()
+            NSLog("[Quip][PTT] startRecording pathRemote=%d wsReady=%d whisperReady=%d",
+                  path == .remote ? 1 : 0, wsReady, whisperReady)
         } else {
             path = .local
+            NSLog("[Quip][PTT] startRecording pathRemote=0 wsReady=-1 whisperReady=-1")
         }
 
         switch path {
@@ -193,6 +208,8 @@ final class SpeechService {
     /// return value is the pre-flush snapshot.
     @discardableResult
     func stopRecording(completion: ((String) -> Void)? = nil) -> String {
+        NSLog("[Quip][PTT] stopRecording entry isRecording=%d remoteSession=%d",
+              isRecording ? 1 : 0, remoteSession != nil ? 1 : 0)
         guard isRecording else {
             completion?(transcribedText)
             return transcribedText
@@ -200,15 +217,25 @@ final class SpeechService {
         pendingStopCompletion = completion
 
         if let session = remoteSession {
+            NSLog("[Quip][PTT] stopRecording taking REMOTE path")
             let sessionToken = activeSessionToken
             Task { @MainActor [weak self] in
                 await session.stop { [weak self] text in
-                    guard let self, self.activeSessionToken == sessionToken else { return }
+                    NSLog("[Quip][PTT] remote session.stop fired textLen=%d", text.count)
+                    guard let self else {
+                        NSLog("[Quip][PTT] remote completion guard FAILED selfNil")
+                        return
+                    }
+                    guard self.activeSessionToken == sessionToken else {
+                        NSLog("[Quip][PTT] remote completion guard FAILED tokenMismatch")
+                        return
+                    }
                     let cb = self.pendingStopCompletion
                     self.pendingStopCompletion = nil
                     self.transcribedText = text
                     self.activeSessionToken = nil
                     self.remoteSession = nil
+                    NSLog("[Quip][PTT] remote firing cb pendingNotNil=%d", cb != nil ? 1 : 0)
                     cb?(text)
                 }
             }
@@ -216,6 +243,7 @@ final class SpeechService {
             // Ask the forwarding tap to stop, but leave the engine armed.
             worker.stopForwarding()
         } else {
+            NSLog("[Quip][PTT] stopRecording taking LOCAL path")
             worker.stop()
             isRecording = false
             // Safety net: if the worker's trailing-flush never delivers a finished
@@ -380,6 +408,30 @@ func selectPTTPath(isConnected: Bool, whisperStatus: WhisperState) -> PTTPath {
     return .local
 }
 
+/// Detects the silent utterance-rollover SFSpeechRecognizer performs in
+/// on-device mode: after a speaker pause, partial results can restart from
+/// scratch without the task ever firing `isFinal`. When that happens the new
+/// partial is shorter than the pre-pause high-water mark and its first token
+/// no longer matches — the pattern we key off here. Captured from device log
+/// 2026-04-24: `text='First sentence' → text='Second'` with `accum=''` and no
+/// intervening isFinal, so the pre-pause words were dropped by `SeamStitcher`
+/// on the next partial.
+enum RecognizerRollover {
+    /// True when `current` looks like a reset of `previous`, not a refinement.
+    /// Both empty, previous empty, or current extending previous → false.
+    static func detects(previous: String, current: String) -> Bool {
+        let prev = previous.trimmingCharacters(in: .whitespaces)
+        let curr = current.trimmingCharacters(in: .whitespaces)
+        guard !prev.isEmpty, !curr.isEmpty else { return false }
+        guard curr.count < prev.count else { return false }
+
+        let prevFirst = prev.split(separator: " ").first.map(String.init) ?? ""
+        let currFirst = curr.split(separator: " ").first.map(String.init) ?? ""
+        guard !prevFirst.isEmpty, !currFirst.isEmpty else { return false }
+        return prevFirst.lowercased() != currFirst.lowercased()
+    }
+}
+
 /// Handles all audio/speech work off the main actor.
 /// This is a plain class (not @MainActor) so its closures don't trigger isolation checks.
 private class AudioWorker: @unchecked Sendable {
@@ -394,6 +446,14 @@ private class AudioWorker: @unchecked Sendable {
     // users talk longer, we stitch consecutive recognition tasks together and
     // preserve the transcription across the seam.
     private var accumulatedText = ""
+    // Longest partial bestTranscription seen inside the CURRENT recognition
+    // task. Used to detect silent utterance rollover: the on-device recognizer
+    // can restart partials mid-task when the speaker pauses (no isFinal is
+    // emitted), dropping everything spoken before the pause. When we see a
+    // partial that's shorter than this + starts with a different first token,
+    // we commit `lastPartialText` into `accumulatedText` before stitching so
+    // the pre-pause words survive instead of being overwritten.
+    private var lastPartialText = ""
     private var isStopping = false
     private var isFlushing = false
     private let policy: FlushPolicy = .default
@@ -446,6 +506,7 @@ private class AudioWorker: @unchecked Sendable {
     func start(onUpdate: @escaping (String?, Bool) -> Void) {
         queue.async { [self] in
             self.accumulatedText = ""
+            self.lastPartialText = ""
             self.isStopping = false
             self.isFlushing = false
             self.onUpdateCallback = onUpdate
@@ -499,6 +560,21 @@ private class AudioWorker: @unchecked Sendable {
                 let isFinal = result?.isFinal ?? false
                 let hasError = error != nil
 
+                // Silent-rollover guard: SFSpeechRecognizer on-device can drop
+                // prior partial content after a pause without firing isFinal,
+                // restarting bestTranscription mid-task. Confirmed via captured
+                // device log — "First sentence" partial was replaced by
+                // "Second" on a ~3s pause while accumulatedText stayed empty.
+                // If the new partial is shorter AND starts with a different
+                // first token than the previous high-water mark, commit the
+                // previous partial into accumulatedText so the pre-pause words
+                // survive the stitch.
+                if RecognizerRollover.detects(previous: self.lastPartialText, current: text) {
+                    self.accumulatedText = SeamStitcher.stitch(old: self.accumulatedText,
+                                                               new: self.lastPartialText)
+                }
+                self.lastPartialText = text
+
                 // Present accumulated previous chunks + current partial to caller.
                 let combined = SeamStitcher.stitch(old: self.accumulatedText, new: text)
 
@@ -513,6 +589,7 @@ private class AudioWorker: @unchecked Sendable {
                 if isFinal {
                     // Commit this chunk and decide whether to restart.
                     self.accumulatedText = combined
+                    self.lastPartialText = ""
                     self.recognitionTask = nil
                     self.recognitionRequest = nil
 
