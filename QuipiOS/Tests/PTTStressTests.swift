@@ -293,4 +293,16 @@ final class PTTStressTests: XCTestCase {
         XCTAssertNil(handler._routeChangeObserverForTesting,
             "stopMonitoring must remove the route-change observer")
     }
+
+    func testStuckWatchdogFiresAfterFiveSeconds() {
+        let expectation = XCTestExpectation(description: "watchdog fires")
+        let handler = HardwareButtonHandler()
+        handler.onPTTStop = { expectation.fulfill() }
+        handler._forceStartPTTForTesting()
+        // Shortened watchdog for tests — 0.3s instead of 5s
+        handler._testWatchdogOverride = 0.3
+        handler._armStuckWatchdogForTesting()
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertFalse(handler.isPTTActive)
+    }
 }
