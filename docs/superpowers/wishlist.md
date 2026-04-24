@@ -41,22 +41,51 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
-### 0b. PTT recognizer swap (D-scope) — Mac Whisper local with settings picker
+### 0b. PTT recognizer swap (D-scope) — Mac Whisper local, v1 thinnest slice
 
-**Status:** Wishlist — not yet brainstormed into a spec.
+**Status:** 🟡 Code landed on `eb-branch` (2026-04-24) — pending user acceptance on hardware before marking shipped.
 
-**Context:** The C-scope fixes above hit the ceiling of Apple's on-device `SFSpeechRecognizer` vocabulary. The next lever is swapping the recognizer. The user's priority is **privacy** and they run an **M2 Mac**; that steers to local Whisper on the Mac, streaming the iPhone mic audio over the existing WebSocket.
+**Spec:** `docs/superpowers/specs/2026-04-24-ptt-whisper-recognizer-design.md`
+**Plan:** `docs/superpowers/plans/2026-04-24-ptt-whisper-recognizer.md`
+**Commits (9):** `f1dec29` (messages) → `59cc271` (PCMChunker) → `c88fea4` (WhisperAudioSender) → `bd34ec5` (WebSocketClient) → `ddf82ca` (RemoteSpeechSession) → `52432db` (SpeechService path branching) → `c5da543` (WhisperKit SPM dep) → `a216533` (WhisperDictationService) → `37619c6` (QuipMacApp wiring)
 
-**Required sub-features:**
-- **Recognizer picker in Settings** — iPhone on-device (current), Mac Whisper local (default after shipping), Mac Apple Speech (cloud-free, uses macOS's server-class recognizer without `requiresOnDeviceRecognition`). Explicitly NOT: paid cloud APIs (OpenAI/Deepgram). Per-source diagnostics + vocab editor.
-- **Audio streaming iPhone → Mac over WebSocket.** Existing Bonjour socket; add `AudioChunkMessage` or similar. Respect the 16 MiB size caps already enforced on both ends.
-- **Mac Whisper integration.** `whisper.cpp` + Metal, small or base model for near-realtime on M2. Fallback to Mac Apple Speech if model not downloaded.
-- **Streaming transcription protocol.** Mac returns partials + final over existing WebSocket with a session id; iPhone updates `transcribedText` the same way it does today for local recognition.
-- **Graceful offline fallback.** If iPhone is not paired to Mac (or socket drops), fall back to iPhone on-device automatically.
+**What shipped (v1 scope A — thinnest slice):**
+- iPhone streams 100 ms PCM frames (int16 LE mono 16 kHz, base64 in a Codable envelope) over the existing Bonjour WS.
+- Mac runs WhisperKit 0.18.0 with `openai_whisper-base` (~150 MB, auto-downloaded first launch) and returns one `TranscriptResultMessage` per press.
+- Auto-fallback: if WS down OR `WhisperStatusMessage.state != .ready` at PTT-start → iPhone on-device `SFSpeech` path runs unchanged.
+- 147 iOS tests + 165 Mac tests green end-of-task 9.
 
-**Why deferred:** C-scope fixes are smaller and ship on the existing pipeline. D-scope introduces a new transport, a new recognizer, and a user-facing Settings surface — worth its own brainstorming round to decompose.
+**What was deliberately NOT built (explicit v1 non-goals):**
+- Settings recognizer picker (iPhone / Mac Whisper / Mac Apple Speech).
+- Model-size picker (tiny / base / small / medium / large) — user asked for "most performant options available"; follow-up in §0c below.
+- Per-source diagnostics panel.
+- Vocab editor UI.
+- Streaming partials mid-utterance (final-only on stop).
+- Mid-session recognizer cross-over.
+- Cloud STT.
 
-**Next step:** When the user is ready to start on this, run `/brainstorm` on "D-scope PTT recognizer swap" referencing the C-scope spec + this wishlist entry.
+**Pending acceptance tests (block shipped status):**
+1. Happy path: WS up, 5–10 s dictation with technical vocab ("SwiftUI WebSocket monospace Xcode") — Whisper transcribes cleanly where on-device SFSpeech garbles.
+2. Fallback at start: kill Mac → PTT still works via local SFSpeech.
+3. Mid-session drop: start PTT, `pkill -9 Quip` on Mac → toast within 3 s, no ghost recording.
+4. First-run model download: fresh Mac install → local SFSpeech handles presses until download finishes, then Whisper kicks in.
+
+When all four pass, flip status to ✅ and delete the "pending acceptance" list.
+
+---
+
+### 0c. PTT recognizer Settings picker + model-size selector (follow-up to §0b)
+
+**Status:** Wishlist
+**Depends on:** §0b acceptance passing
+
+**Context:** During the §0b brainstorm on 2026-04-24 the user explicitly asked for "the most performant options available" — meaning a Settings surface where they can pick tiny / base / small / medium / large Whisper models. v1 shipped with base hardcoded. This entry captures the follow-up.
+
+**Scope:**
+- Settings UI — recognizer source picker (iPhone on-device / Mac Whisper / Mac Apple Speech). Mac Apple Speech is the server-class `SFSpeechRecognizer` without `requiresOnDeviceRecognition` — free with macOS, no model download.
+- Model-size picker when source == Mac Whisper: tiny (~40 MB) / base (~150 MB, current default) / small (~500 MB) / medium (~1.5 GB) / large (~3 GB). Bigger models = better vocab + slower inference + longer first-run download.
+- Per-source diagnostics panel (last N transcripts, inference time, confidence).
+- Vocab editor — live-editable companion to the current bundled `dictation-vocab.txt`. Whisper supports `promptTokens` for vocab biasing.
 
 ---
 
@@ -686,6 +715,27 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 Skipped autonomous TCC revoke (would force user re-grant — explicitly painful per their saved feedback). Trusting the broadcast pipe verification + Phase 1's prior all-green test until the manual run-through.
 
 **Related:** commits `0f3a0be`, `90e8e1a`, `59cfb3a`. PR https://github.com/jboert/Quip/pull/6.
+
+---
+
+### 36. Allow more vertical scrolling in iPhone `InlineTerminalContent`
+
+**Status:** Wishlist
+**Context:** On the iPhone remote, the inline terminal screenshot panel (`InlineTerminalContent` image branch, `QuipiOS/QuipApp.swift:2892-2905`) renders the Mac window screenshot with `Image.scaledToFit()` + `.frame(maxWidth: .infinity)` inside a vertical `ScrollView`. For typical widescreen terminal windows this sizes the image so its height ≤ viewport height, leaving no actual scroll range — the user can't pan past what's already visible. Widescreen caps look fine; tall captures still work because height exceeds viewport naturally. The ask is to give the user more vertical scroll room regardless of source aspect ratio.
+
+**Likely shape:**
+- Option A: let the image render at a multiple of its fitted height (e.g. `.frame(minHeight: viewport * 1.5)`) so there's always scroll slack above/below, even on wide captures.
+- Option B: respect native pixel size — drop `scaledToFit`, use `scaledToFill` or a manual size derived from image intrinsic + current zoom level, and let the ScrollView be the only thing clipping.
+- Option C: couple this with the existing `contentZoomLevel` (`@AppStorage("contentZoomLevel")`, values 0/1/2) — higher zoom = larger rendered image = more vertical scroll range. Already wired via the `textformat.size` button in the header at ~line 2846; currently it cycles through presets but the image branch doesn't apply them.
+- Pair with the `ScrollViewReader` scroll-to-bottom already at line 2898 so new screenshots still land at the bottom.
+
+**Open questions for /prd time:**
+- Which option matches user intent — "always scrollable" (A) vs "zoom-driven" (C)? C is more discoverable via the existing zoom button.
+- Should the screenshot be pinch-zoomable (gesture) in addition to the button cycler?
+- Interaction with the existing swipe-to-cycle-windows gesture (line 2956) — swipe handler already protects vertical drag via 2:1 dx/dy ratio; more scroll range may not disturb it, but worth verifying.
+- Landscape parity: `TerminalContentOverlay` has its own full-screen variant; does it need the same treatment?
+
+**Related:** `QuipiOS/QuipApp.swift:2892-2905` (image branch), `QuipiOS/QuipApp.swift:2846` (zoom button), `ContentZoomLevel` enum, `TerminalContentOverlay.swift` (landscape counterpart).
 
 ---
 
