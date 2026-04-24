@@ -18,6 +18,48 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ## Active Wishlist
 
+### 0. PTT reliability — C-scope timing fixes (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — 17 commits landed 2026-04-23 (`1b5cba2` → `4a89731`). Five iterations plus three bonus fixes. Tests: 120 passing in `QuipiOSTests` (was 51 before this work). iphoneos build green.
+
+**What shipped (C-scope):**
+- Iter 1 — Button hygiene: `isPTTActive` resets on `stopMonitoring` / `resumeAfterBackground`, route-change observer force-stops on AirPods/BT swap, 30s stuck-press watchdog (was 5s, bumped because short thinking pauses were tripping it). Commits: `1b5cba2`, `ff9adf0`, `01f0d3c`, `15adac6`, `a2654f5`.
+- Iter 2 — Trailing flush: 300ms tap-keep-alive after `endAudio` + 2s hard-cap in `AudioWorker.stop()`, `isFlushing` reset on all completion paths (start / hard-cap with task-identity match / error branch). Commits: `cf1bb10`, `b44479b`, `9f57250`.
+- Iter 3 — Long-lived engine: `AudioRingBuffer` captures 500ms pre-roll, `arm()`/`disarm()` on `AudioWorker` wired via `HardwareButtonHandler.onArm`/`onDisarm` in `QuipApp.swift`, pre-roll replayed on each `start()`, interruption observer disarms/rearms on Siri/phone-call. Commits: `b356d2a`, `354e2aa`, `75b8905`.
+- Iter 4 — Seam stitching: `SeamStitcher.stitch(old:, new:)` dedups 1–3 word overlap case-insensitively between consecutive recognizer tasks (e.g. at the ~1-minute recognizer-restart boundary or mid-press silence-triggered isFinal). Replaces the blind `accumulated + " " + text` concat. Commits: `491dc3a`, `b2d0c23`.
+- Iter 5 — Contextual vocab: `QuipiOS/Resources/dictation-vocab.txt` (20 terms) bundled and applied via `request.contextualStrings` on every recognition request. Commits: `c4793bd`, `4a89731`.
+
+**Bonus fixes caught during execution:**
+- **Async `stopRecording` with completion handler** (`d1c43b9`). The prior synchronous return of `transcribedText` was a pre-flush snapshot — the last spoken words captured in the 300ms trailing window never reached `SendTextMessage`. `speech.stopRecording(completion:)` now fires the completion on the worker's `finished=true` callback (or a 3s safety timeout). `QuipApp.stopRecording` defers its send into that completion.
+- **Session-token guard** (`8c63cd1`). Old session's trailing-flush callback was overwriting `transcribedText` and flipping `isRecording=false` on a NEW press that started within ~300ms of release. Each `startRecording` now mints a UUID; stale callbacks fire pending completions but do not mutate current-session state.
+
+**Iter 5 ceiling observation (device acceptance):** `SwiftUI` transcribed correctly (Apple brand in training data), but `Xcode`, `monospace`, `WebSocket` still split/dropped. `contextualStrings` nudges the on-device model, doesn't override. This is the ceiling of `requiresOnDeviceRecognition = true` and the motivation for D-scope below.
+
+**Artifacts:**
+- Spec: `docs/superpowers/specs/2026-04-23-ptt-reliability-design.md`
+- Plan: `docs/superpowers/plans/2026-04-23-ptt-reliability.md`
+
+---
+
+### 0b. PTT recognizer swap (D-scope) — Mac Whisper local with settings picker
+
+**Status:** Wishlist — not yet brainstormed into a spec.
+
+**Context:** The C-scope fixes above hit the ceiling of Apple's on-device `SFSpeechRecognizer` vocabulary. The next lever is swapping the recognizer. The user's priority is **privacy** and they run an **M2 Mac**; that steers to local Whisper on the Mac, streaming the iPhone mic audio over the existing WebSocket.
+
+**Required sub-features:**
+- **Recognizer picker in Settings** — iPhone on-device (current), Mac Whisper local (default after shipping), Mac Apple Speech (cloud-free, uses macOS's server-class recognizer without `requiresOnDeviceRecognition`). Explicitly NOT: paid cloud APIs (OpenAI/Deepgram). Per-source diagnostics + vocab editor.
+- **Audio streaming iPhone → Mac over WebSocket.** Existing Bonjour socket; add `AudioChunkMessage` or similar. Respect the 16 MiB size caps already enforced on both ends.
+- **Mac Whisper integration.** `whisper.cpp` + Metal, small or base model for near-realtime on M2. Fallback to Mac Apple Speech if model not downloaded.
+- **Streaming transcription protocol.** Mac returns partials + final over existing WebSocket with a session id; iPhone updates `transcribedText` the same way it does today for local recognition.
+- **Graceful offline fallback.** If iPhone is not paired to Mac (or socket drops), fall back to iPhone on-device automatically.
+
+**Why deferred:** C-scope fixes are smaller and ship on the existing pipeline. D-scope introduces a new transport, a new recognizer, and a user-facing Settings surface — worth its own brainstorming round to decompose.
+
+**Next step:** When the user is ready to start on this, run `/brainstorm` on "D-scope PTT recognizer swap" referencing the C-scope spec + this wishlist entry.
+
+---
+
 ### 1. `/plan` shortcut button on iPhone
 
 **Status:** ✅ Done (upstream) — shipped by jboert across commits `68fdb04`, `87f6e16`, `aa3ab2e`, `5fd0bf6` on `main`. The `/plan` button lives in the configurable `QuickButton` enum, appears in both portrait and landscape controls, and sends `/plan ` via `SendTextMessage` with `pressReturn: false`.
