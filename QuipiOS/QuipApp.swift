@@ -468,6 +468,9 @@ struct QuipApp: App {
         volumeHandler.onPTTStop = {
             DispatchQueue.main.async { stopRecording() }
         }
+
+        volumeHandler.onArm = { speech.arm() }
+        volumeHandler.onDisarm = { speech.disarm() }
     }
 
     @MainActor
