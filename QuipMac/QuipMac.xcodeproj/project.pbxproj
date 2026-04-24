@@ -37,6 +37,7 @@
 		776B6808FFB2C42DE93FF535 /* TerminalURLExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792D57DC8FC3B11646E7AA24 /* TerminalURLExtractorTests.swift */; };
 		7893732742065279CC924FCF /* ImageUploadMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BDEBA5C1FF3ADA484633B4B /* ImageUploadMessageTests.swift */; };
 		7DE0BC0A1355E4517B96429A /* WhisperDictationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E95B5D735BD68D7B185A9E1 /* WhisperDictationService.swift */; };
+		E220A3E42AB5D1FCB387DB39 /* WhisperStatusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02DCCC03C74A5FBFE2A31E86 /* WhisperStatusStore.swift */; };
 		82C001C2D1E751B52E9323D6 /* WindowManagerSessionIdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2FC54EF7BE5384458CC160 /* WindowManagerSessionIdTests.swift */; };
 		864A7798EAC351C8B5E8E39F /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B19559A6253B0E85D5C581 /* Color+Hex.swift */; };
 		879115E516EAFBE69CFC6E51 /* SeamStitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E62E57A20864587E11C9636 /* SeamStitcher.swift */; };
@@ -97,6 +98,7 @@
 		5B283E1205AA8D907541BB47 /* QuipMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuipMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5BDEBA5C1FF3ADA484633B4B /* ImageUploadMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageUploadMessageTests.swift; sourceTree = "<group>"; };
 		5E95B5D735BD68D7B185A9E1 /* WhisperDictationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperDictationService.swift; sourceTree = "<group>"; };
+		02DCCC03C74A5FBFE2A31E86 /* WhisperStatusStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperStatusStore.swift; sourceTree = "<group>"; };
 		6789468087C0DADB2E58869D /* AudioRingBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBufferTests.swift; sourceTree = "<group>"; };
 		682D1CC11B830E8D9F079FB7 /* SeamStitcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamStitcherTests.swift; sourceTree = "<group>"; };
 		68BD4937C2DB6DD04A719C32 /* kokoro_tts.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = kokoro_tts.py; sourceTree = "<group>"; };
@@ -195,6 +197,7 @@
 				73FCC8550866B2D7A72DE1C5 /* TerminalURLExtractor.swift */,
 				3EC90466A8AD9BEAE5A07DDC /* WebSocketServer.swift */,
 				5E95B5D735BD68D7B185A9E1 /* WhisperDictationService.swift */,
+				02DCCC03C74A5FBFE2A31E86 /* WhisperStatusStore.swift */,
 				3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */,
 			);
 			path = Services;
@@ -461,6 +464,7 @@
 				AF54B4FBF351780F625437CA /* TerminalURLExtractor.swift in Sources */,
 				A81002D85A2BC5AA5976AFCF /* WebSocketServer.swift in Sources */,
 				7DE0BC0A1355E4517B96429A /* WhisperDictationService.swift in Sources */,
+				E220A3E42AB5D1FCB387DB39 /* WhisperStatusStore.swift in Sources */,
 				44D85DED79B8403CA7AE7459 /* WindowInfo.swift in Sources */,
 				D771CA86FD23E660375CC1AC /* WindowListSidebar.swift in Sources */,
 				EB8C0145B42599AFC038A801 /* WindowManager.swift in Sources */,

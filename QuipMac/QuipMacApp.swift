@@ -35,7 +35,7 @@ struct QuipMacApp: App {
     @State private var connectionLog = ConnectionLog()
     @State private var pushNotificationService = PushNotificationService()
     @State private var whisperService: WhisperDictationService?
-    @State private var whisperState: WhisperState = .preparing
+    @State private var whisperStatusStore = WhisperStatusStore()
     @State private var whisperReaper: Timer?
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
@@ -112,6 +112,7 @@ struct QuipMacApp: App {
                 .environment(pinManager)
                 .environment(connectionLog)
                 .environment(pushNotificationService)
+                .environment(whisperStatusStore)
         }
     }
 
@@ -976,7 +977,7 @@ struct QuipMacApp: App {
 
     private func setupWhisper() async {
         await MainActor.run {
-            self.whisperState = .preparing
+            self.whisperStatusStore.state = .preparing
             self.broadcastWhisperStatus()
         }
 
@@ -993,26 +994,26 @@ struct QuipMacApp: App {
                         }
                     }
                 }
-                self.whisperState = .ready
+                self.whisperStatusStore.state = .ready
                 self.broadcastWhisperStatus()
                 self.startWhisperReaper()
             }
         } catch {
             await MainActor.run {
-                self.whisperState = .failed(message: error.localizedDescription)
+                self.whisperStatusStore.state = .failed(message: error.localizedDescription)
                 self.broadcastWhisperStatus()
             }
         }
         #else
         await MainActor.run {
-            self.whisperState = .failed(message: "WhisperKit not available")
+            self.whisperStatusStore.state = .failed(message: "WhisperKit not available")
             self.broadcastWhisperStatus()
         }
         #endif
     }
 
     private func broadcastWhisperStatus() {
-        webSocketServer.broadcast(WhisperStatusMessage(state: whisperState))
+        webSocketServer.broadcast(WhisperStatusMessage(state: whisperStatusStore.state))
     }
 
     private func startWhisperReaper() {
