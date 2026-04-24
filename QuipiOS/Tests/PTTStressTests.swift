@@ -305,4 +305,13 @@ final class PTTStressTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
         XCTAssertFalse(handler.isPTTActive)
     }
+
+    func testDoubleStopIsIdempotent_AudioWorker() {
+        let service = SpeechService()
+        // Don't require authorization for this — just exercise the guard path.
+        // Starting without auth is already a no-op per SpeechService.startRecording.
+        service.stopRecording()
+        service.stopRecording()  // must not crash or throw
+        XCTAssertFalse(service.isRecording)
+    }
 }
