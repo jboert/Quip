@@ -521,12 +521,27 @@ final class WebSocketClient {
         case "transcript_result":
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(TranscriptResultMessage.self, from: data) {
+                NSLog("[Quip][PTT] transcript_result arrived textLen=%d errNil=%d",
+                      msg.text.count, msg.error == nil ? 1 : 0)
                 onTranscriptResult?(msg.sessionId, msg.text, msg.error)
+            } else {
+                NSLog("[Quip][PTT] transcript_result DECODE FAILED")
             }
         case "whisper_status":
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(WhisperStatusMessage.self, from: data) {
+                let tag: Int = {
+                    switch msg.state {
+                    case .preparing: return 0
+                    case .ready: return 1
+                    case .downloading: return 2
+                    case .failed: return 3
+                    }
+                }()
+                NSLog("[Quip][PTT] whisper_status arrived stateTag=%d (0prep 1ready 2dl 3fail)", tag)
                 whisperStatus = msg.state
+            } else {
+                NSLog("[Quip][PTT] whisper_status DECODE FAILED")
             }
         default:
             NSLog("[WebSocketClient] Unknown message type: %@", peek.type)
