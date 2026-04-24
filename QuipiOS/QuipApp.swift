@@ -2890,16 +2890,29 @@ struct InlineTerminalContent: View {
             case .image:
                 if let screenshot, let imageData = Data(base64Encoded: screenshot),
                    let uiImage = UIImage(data: imageData) {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: .infinity)
-                                .id("bottom")
-                        }
-                        .onChange(of: screenshot) { _, _ in
-                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    // Viewport width is read via GeometryReader so the zoom
+                    // multiplier can scale the image relative to whatever
+                    // space the split layout gave us. Both axes scroll when
+                    // zoom > 1 so the user can pan around the enlarged
+                    // capture — widescreen terminals now have vertical
+                    // scroll range instead of being height-capped by
+                    // scaledToFit.
+                    let zoom = ContentZoomLevel.from(raw: contentZoomLevel).zoomScale
+                    GeometryReader { geo in
+                        ScrollViewReader { proxy in
+                            ScrollView([.vertical, .horizontal], showsIndicators: false) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: geo.size.width * zoom)
+                                    .id("bottom")
+                            }
+                            .onChange(of: screenshot) { _, _ in
+                                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                            }
+                            .onChange(of: zoom) { _, _ in
+                                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -3494,28 +3507,28 @@ private enum ConnectionProbeError: Error {
     case timeout(TimeInterval)
 }
 
-/// Three-way zoom control for the terminal content screenshot. Shared by
-/// portrait InlineTerminalContent and landscape TerminalContentOverlay so
-/// cycling in one carries over to the other.
-///
-/// Percentage-based (of container width) rather than fixed point padding —
-/// landscape is >2x as wide as portrait, so a fixed 24pt margin in portrait
-/// is barely visible in landscape and text still renders huge.
+/// Three-way zoom control for the terminal content screenshot in
+/// `InlineTerminalContent`. Drives how large the image renders relative to
+/// its ScrollView viewport — anything above 1.0× forces the image wider than
+/// the viewport, giving the user both horizontal AND vertical scroll room to
+/// pan around enlarged terminal content (the previous fitted-to-width
+/// behavior left widescreen captures with zero vertical scroll range).
 enum ContentZoomLevel: Int, CaseIterable {
-    case fill = 0, medium = 1, small = 2
+    case fit = 0, medium = 1, large = 2
 
-    /// Fraction of the container width the image should fill. Remaining
-    /// space becomes evenly-split horizontal margin.
-    var widthFraction: CGFloat {
+    /// Multiplier applied to the ScrollView's viewport width to compute the
+    /// image's rendered width; height follows aspect ratio via scaledToFit.
+    /// 1.0 = fit (no overflow), > 1.0 = zoomed (both axes scroll).
+    var zoomScale: CGFloat {
         switch self {
-        case .fill: return 1.0
-        case .medium: return 0.82
-        case .small: return 0.62
+        case .fit:    return 1.0
+        case .medium: return 1.5
+        case .large:  return 2.5
         }
     }
 
     static func from(raw: Int) -> ContentZoomLevel {
-        ContentZoomLevel(rawValue: raw) ?? .fill
+        ContentZoomLevel(rawValue: raw) ?? .fit
     }
 
     var next: Int {
