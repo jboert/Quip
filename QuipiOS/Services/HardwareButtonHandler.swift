@@ -130,6 +130,16 @@ final class HardwareButtonHandler {
         volumeObservation?.invalidate()
         volumeObservation = nil
         windowCount = 0
+        if isPTTActive {
+            isPTTActive = false
+            onPTTStop?()
+        }
+        suppressUntil = .distantPast
+        cancelStuckWatchdog()
+    }
+
+    private func cancelStuckWatchdog() {
+        // Implemented in Task 1.4
     }
 }
 
