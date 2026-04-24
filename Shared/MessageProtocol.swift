@@ -666,6 +666,97 @@ struct OpenMacSettingsPaneMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Whisper PTT Messages
+
+/// iPhone → Mac. One frame of audio from a PTT session. `pcmBase64` is standard
+/// base64 of int16 little-endian mono 16 kHz PCM — nominally 100 ms (3200 bytes
+/// decoded), shorter on the final frame. `isFinal == true` signals end-of-utterance
+/// and triggers Whisper transcription on the Mac.
+struct AudioChunkMessage: Codable, Sendable {
+    let type: String
+    let sessionId: UUID
+    let seq: Int
+    let pcmBase64: String
+    let isFinal: Bool
+
+    init(sessionId: UUID, seq: Int, pcmBase64: String, isFinal: Bool) {
+        self.type = "audio_chunk"
+        self.sessionId = sessionId
+        self.seq = seq
+        self.pcmBase64 = pcmBase64
+        self.isFinal = isFinal
+    }
+}
+
+/// Mac → iPhone. Final transcription result for a completed PTT session.
+/// `text` is empty when `error` is set; otherwise `error` is nil.
+struct TranscriptResultMessage: Codable, Sendable {
+    let type: String
+    let sessionId: UUID
+    let text: String
+    let error: String?
+
+    init(sessionId: UUID, text: String, error: String? = nil) {
+        self.type = "transcript_result"
+        self.sessionId = sessionId
+        self.text = text
+        self.error = error
+    }
+}
+
+/// Whisper model lifecycle state on the Mac. Broadcast by Mac → iPhone so the
+/// phone knows whether the remote recognizer path is viable at PTT-start.
+enum WhisperState: Codable, Sendable, Equatable {
+    case preparing
+    case downloading(progress: Double)
+    case ready
+    case failed(message: String)
+
+    private enum CodingKeys: String, CodingKey { case tag, progress, message }
+    private enum Tag: String, Codable { case preparing, downloading, ready, failed }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .preparing:
+            try c.encode(Tag.preparing, forKey: .tag)
+        case .downloading(let progress):
+            try c.encode(Tag.downloading, forKey: .tag)
+            try c.encode(progress, forKey: .progress)
+        case .ready:
+            try c.encode(Tag.ready, forKey: .tag)
+        case .failed(let message):
+            try c.encode(Tag.failed, forKey: .tag)
+            try c.encode(message, forKey: .message)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let tag = try c.decode(Tag.self, forKey: .tag)
+        switch tag {
+        case .preparing: self = .preparing
+        case .downloading:
+            let p = try c.decode(Double.self, forKey: .progress)
+            self = .downloading(progress: p)
+        case .ready: self = .ready
+        case .failed:
+            let m = try c.decode(String.self, forKey: .message)
+            self = .failed(message: m)
+        }
+    }
+}
+
+struct WhisperStatusMessage: Codable, Sendable {
+    let type: String
+    let state: WhisperState
+
+    init(state: WhisperState) {
+        self.type = "whisper_status"
+        self.state = state
+    }
+}
+
 // MARK: - Message Encoding/Decoding Helpers
 
 enum MessageCoder {

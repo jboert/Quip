@@ -743,4 +743,81 @@ final class MessageProtocolTests: XCTestCase {
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
     }
+
+    // MARK: - Whisper PTT Messages
+
+    func testAudioChunkMessageRoundTrip() throws {
+        let sessionId = UUID()
+        let pcm = Data([0x01, 0x02, 0x03, 0x04])
+        let original = AudioChunkMessage(
+            sessionId: sessionId, seq: 7, pcmBase64: pcm.base64EncodedString(), isFinal: false
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["type"] as? String, "audio_chunk")
+        XCTAssertEqual(dict["sessionId"] as? String, sessionId.uuidString)
+        XCTAssertEqual(dict["seq"] as? Int, 7)
+        XCTAssertEqual(dict["isFinal"] as? Bool, false)
+
+        let decoded = try XCTUnwrap(MessageCoder.decode(AudioChunkMessage.self, from: data))
+        XCTAssertEqual(decoded.sessionId, sessionId)
+        XCTAssertEqual(decoded.seq, 7)
+        XCTAssertEqual(Data(base64Encoded: decoded.pcmBase64), pcm)
+        XCTAssertEqual(decoded.isFinal, false)
+    }
+
+    func testAudioChunkMessageFinalMarker() throws {
+        let msg = AudioChunkMessage(sessionId: UUID(), seq: 99, pcmBase64: "", isFinal: true)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(AudioChunkMessage.self, from: data))
+        XCTAssertTrue(decoded.isFinal)
+        XCTAssertEqual(decoded.pcmBase64, "")
+    }
+
+    func testTranscriptResultMessageRoundTrip() throws {
+        let sessionId = UUID()
+        let original = TranscriptResultMessage(sessionId: sessionId, text: "hello SwiftUI", error: nil)
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let decoded = try XCTUnwrap(MessageCoder.decode(TranscriptResultMessage.self, from: data))
+        XCTAssertEqual(decoded.sessionId, sessionId)
+        XCTAssertEqual(decoded.text, "hello SwiftUI")
+        XCTAssertNil(decoded.error)
+    }
+
+    func testTranscriptResultMessageErrorPath() throws {
+        let msg = TranscriptResultMessage(sessionId: UUID(), text: "", error: "whisperkit load failed")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(TranscriptResultMessage.self, from: data))
+        XCTAssertEqual(decoded.text, "")
+        XCTAssertEqual(decoded.error, "whisperkit load failed")
+    }
+
+    func testWhisperStatusMessageReadyRoundTrip() throws {
+        let msg = WhisperStatusMessage(state: .ready)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(WhisperStatusMessage.self, from: data))
+        XCTAssertEqual(decoded.state, .ready)
+    }
+
+    func testWhisperStatusMessageDownloadingRoundTrip() throws {
+        let msg = WhisperStatusMessage(state: .downloading(progress: 0.42))
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(WhisperStatusMessage.self, from: data))
+        if case .downloading(let p) = decoded.state {
+            XCTAssertEqual(p, 0.42, accuracy: 0.001)
+        } else {
+            XCTFail("expected .downloading")
+        }
+    }
+
+    func testWhisperStatusMessageFailedRoundTrip() throws {
+        let msg = WhisperStatusMessage(state: .failed(message: "no network"))
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(WhisperStatusMessage.self, from: data))
+        if case .failed(let m) = decoded.state {
+            XCTAssertEqual(m, "no network")
+        } else {
+            XCTFail("expected .failed")
+        }
+    }
 }
