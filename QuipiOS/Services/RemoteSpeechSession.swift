@@ -23,7 +23,7 @@ final class RemoteSpeechSession {
 
     /// Forward a mic buffer to this session's sender. Caller is responsible for
     /// installing / removing the tap — `AudioWorker` already handles lifecycle.
-    func appendBuffer(_ buffer: AVAudioPCMBuffer) {
+    nonisolated func appendBuffer(_ buffer: AVAudioPCMBuffer) {
         sender.appendBuffer(buffer)
     }
 

@@ -237,6 +237,7 @@ struct QuipApp: App {
 
     private func setup() {
         speech.requestAuthorization()
+        speech.attachWebSocket(client)
 
         client.onLayoutUpdate = { update in
             DispatchQueue.main.async {
