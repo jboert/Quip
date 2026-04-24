@@ -206,6 +206,7 @@ private struct NotificationsTab: View {
 // MARK: - General Tab
 
 private struct GeneralTab: View {
+    @Environment(WhisperStatusStore.self) private var whisperStatus
     @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.iterm2.rawValue
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("showInMenuBar") private var showInMenuBar = true
@@ -255,8 +256,64 @@ private struct GeneralTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Dictation Recognizer") {
+                whisperStatusRow()
+                Text("Phone auto-selects Mac Whisper when the model is ready, otherwise falls back to on-device SFSpeech.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func whisperStatusRow() -> some View {
+        // Mirror the macPermRow look: status glyph + label + tail detail. No
+        // action buttons — retrying model load is a relaunch-level concern,
+        // wiring a manual retry is follow-up work.
+        let state = whisperStatus.state
+        HStack(spacing: 8) {
+            Image(systemName: whisperIcon(for: state))
+                .foregroundStyle(whisperColor(for: state))
+            Text("Mac Whisper")
+            Spacer()
+            Text(whisperDetail(for: state))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func whisperIcon(for state: WhisperState) -> String {
+        switch state {
+        case .ready:            return "checkmark.circle.fill"
+        case .preparing:        return "hourglass"
+        case .downloading:      return "arrow.down.circle"
+        case .failed:           return "xmark.circle.fill"
+        }
+    }
+
+    private func whisperColor(for state: WhisperState) -> Color {
+        switch state {
+        case .ready:            return .green
+        case .preparing:        return .secondary
+        case .downloading:      return .blue
+        case .failed:           return .red
+        }
+    }
+
+    private func whisperDetail(for state: WhisperState) -> String {
+        switch state {
+        case .ready:
+            return "ready — phone will use remote path"
+        case .preparing:
+            return "loading model…"
+        case .downloading(let progress):
+            return "downloading \(Int(progress * 100))%"
+        case .failed(let message):
+            return message
+        }
     }
 
     /// One TCC perm row. Granted = green check. Denied = red ✗ + a "Grant"
