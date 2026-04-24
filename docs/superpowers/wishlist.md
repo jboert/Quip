@@ -745,18 +745,38 @@ Device verify — 3 utterances × 2 pauses: "First sentence" + pause + "Second s
 
 ---
 
-### 36. Allow more vertical scrolling in iPhone `InlineTerminalContent` (issue #7)
+### 36. Allow more vertical scrolling in iPhone `InlineTerminalContent` (issue #7) — rolled back, scope mismatch
 
-**Status:** ✅ Done — picked option C (zoom-driven). Root cause was a dead property: `ContentZoomLevel.widthFraction` was defined and cycled via the header `textformat.size` button, but never actually read by the image branch. `scaledToFit` + `maxWidth: .infinity` always sized the screenshot to viewport width, so widescreen terminal captures had zero vertical scroll range and the zoom button did nothing.
+**Status:** ⏪ Reverted. Shipped `c5416e2` as "zoom the screenshot + pan around it," reverted in `cfcfb6c` after device testing. User's actual ask is **iTerm scrollback navigation** — see lines that scrolled off the top on the Mac — not panning around the current screenshot. The zoom-and-pan mechanic solved a problem the user didn't have ("it just lets me move the window around... I don't want to do that"). Issue #7 reopened with corrected scope; the real implementation is tracked as §38 below.
 
-Fix, all in `QuipiOS/QuipApp.swift`:
-- `ContentZoomLevel` renamed `.fill/.medium/.small` → `.fit/.medium/.large` (raw values 0/1/2 unchanged so `@AppStorage` + `PreferencesSnapshot` migrations are free) and replaced `widthFraction` with `zoomScale` (1.0 / 1.5 / 2.5).
-- Image branch now wraps in `GeometryReader` and uses `ScrollView([.vertical, .horizontal], showsIndicators: false)`. Image width = `geo.size.width * zoom`, `scaledToFit` carries the height via aspect ratio. Both axes scroll when zoom > 1 so the user pans around the enlarged capture.
-- `ScrollViewReader.scrollTo("bottom", anchor: .bottom)` now fires on zoom change as well as screenshot change — stepping the zoom up/down still lands at the prompt instead of stranding the user mid-buffer.
+Lessons worth keeping in the next attempt:
+- `ContentZoomLevel.widthFraction` is still dead code — nothing reads it. If zoom gets repurposed in the future, re-verify before assuming it's wired.
+- Raw @AppStorage values 0/1/2 are persisted; case renames are free, semantics changes are NOT (old values still point at the same ordinal).
+- `GeometryReader { ScrollView { ... } }` works; `ScrollView { GeometryReader { ... } }` does not (GR has no intrinsic height inside a ScrollView).
 
-Tests: `QuipiOS/Tests/InlineTerminalContentBranchTests.swift` — 5 new pin tests for `zoomScale` monotonicity, `from(raw:)` fallback on corrupt persisted values (e.g. -1 / 99 → `.fit`), and `next` wrap-around (`large → fit`). Full suite 11/11 green on iPhone 17 simulator.
+**Related:** commits `c5416e2` (fix), `542aff9` (wishlist Done — now stale), `cfcfb6c` (revert). Issue https://github.com/jboert/Quip/issues/7.
 
-**Related:** commit `c5416e2`. GitHub issue https://github.com/jboert/Quip/issues/7. Follow-ups deferred: pinch-to-zoom gesture, interaction with swipe-to-cycle-windows at line 2956 (gesture is `simultaneousGesture` with 2:1 dx/dy guard so likely fine but untested on device yet).
+---
+
+### 38. iTerm scrollback navigation from the iPhone
+
+**Status:** Wishlist (replaces the misread half of #7).
+**Context:** User wants to pan up/down on the iPhone terminal panel to reveal lines that have already scrolled off the visible iTerm window on the Mac — not to pan around a zoomed screenshot. Today the Mac captures only the visible viewport of the selected window; anything in iTerm's scrollback is invisible to the phone.
+
+**Likely shape:**
+- New `scroll_event` message in `Shared/MessageProtocol.swift`: `{ sessionId, windowId, direction: .up|.down, lines: Int }`.
+- Phone: vertical drag on `InlineTerminalContent` image branch → throttled `scroll_event` per ~20pt of drag travel. Release = stop. Momentum scroll optional. Keep the existing swipe-to-cycle-windows gesture (currently guarded by 2:1 horizontal-to-vertical dx/dy ratio) intact — a pure-vertical drag is unambiguous scroll.
+- Mac: on `scroll_event`, post `CGEventScrollWheel` targeted at the iTerm window (or AppleScript `tell iTerm2 to scroll` if available — AppleScript is more reliable across iTerm versions, CG is lower-level). Scroll by `lines × 1 line`. Screenshot loop already re-captures every 2s, so the new viewport flows back naturally; could also force a capture on scroll_event for snap responsiveness.
+- Add a small "scrolled up by N lines" indicator on phone + a snap-to-bottom button (arrow-down icon in header) so users can get back to the live prompt with one tap.
+
+**Open questions for /prd time:**
+- Gesture: plain vertical drag (competes with swipe-cycle's perpendicular guard) vs explicit two-finger drag vs dedicated scroll thumb on the right edge of the panel?
+- iTerm vs CGEventScrollWheel: iTerm AppleScript exposes `scroll horizontally by N lines` but not a clean "up N lines" verb; may need to send scroll-wheel CGEvents.
+- Keyboard: should Cmd+Shift+Up / Cmd+Shift+Down (iTerm's built-in scrollback bindings) work instead? Simpler, but they're window-relative, so need focus on the right window.
+- How to handle the "no more scrollback" edge — do we report back? Or let phone just stop showing new content?
+- Parity: landscape `TerminalContentOverlay` is currently a stub, but a future full-screen variant should wire the same gesture.
+
+**Related:** `QuipiOS/QuipApp.swift:~2892` (image branch — where the gesture attaches), `QuipiOS/Services/WebSocketClient.swift` + `Shared/MessageProtocol.swift` (new message), Mac-side `keystrokeInjector` / whatever owns CGEvent posting. Reopened from https://github.com/jboert/Quip/issues/7.
 
 ---
 
