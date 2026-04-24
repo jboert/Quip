@@ -116,6 +116,13 @@ final class HardwareButtonHandler {
     /// The OS deactivates the session when backgrounded, killing volume KVO.
     func resumeAfterBackground() {
         guard volumeObservation != nil else { return }
+        // If a press was in flight when we backgrounded, deliver the stop now —
+        // volume KVO was paused, so there was no natural release event.
+        if isPTTActive {
+            isPTTActive = false
+            onPTTStop?()
+        }
+        cancelStuckWatchdog()
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default,

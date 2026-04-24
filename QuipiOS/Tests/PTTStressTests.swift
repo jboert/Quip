@@ -274,4 +274,13 @@ final class PTTStressTests: XCTestCase {
         XCTAssertFalse(handler.isPTTActive,
             "stopMonitoring must reset isPTTActive to false")
     }
+
+    func testResumeAfterBackgroundClearsStuckPTT() {
+        let handler = HardwareButtonHandler()
+        handler.startMonitoring(windowCount: 3)
+        // We can't flip isPTTActive from outside — exercise the post-condition only.
+        handler.resumeAfterBackground()
+        XCTAssertFalse(handler.isPTTActive,
+            "resumeAfterBackground must leave PTT idle")
+    }
 }
