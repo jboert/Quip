@@ -366,7 +366,13 @@ struct QuipApp: App {
                 if let screenshot, !screenshot.isEmpty {
                     terminalContentScreenshot = screenshot
                 }
-                terminalContentURLs = urls
+                // Same preservation rule as screenshot: Mac sends urls=nil when
+                // extraction returns empty (transient iTerm scrape miss, brief
+                // window blur, throttle gap). Don't wipe a good tray on a bad
+                // refresh — selectedWindowId.onChange clears on real switches.
+                if let urls, !urls.isEmpty {
+                    terminalContentURLs = urls
+                }
             }
         }
 
