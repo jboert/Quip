@@ -114,6 +114,7 @@ struct QuipMacApp: App {
                 .environment(pushNotificationService)
                 .environment(whisperStatusStore)
         }
+        .windowResizability(.contentSize)
     }
 
     @State private var servicesStarted = false
