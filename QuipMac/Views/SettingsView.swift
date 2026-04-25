@@ -47,7 +47,13 @@ struct SettingsView: View {
                     Label("Notifications", systemImage: "bell.badge")
                 }
         }
-        .frame(width: 520, height: 460)
+        // Vertical resize is the common ask (long tabs like Connection
+        // overflow). Width stays fixed at 520 so content doesn't get spread
+        // out across a stretched gutter. `.top` alignment so extra vertical
+        // space falls below content rather than centering it.
+        .frame(minHeight: 460, idealHeight: 460, maxHeight: .infinity,
+               alignment: .top)
+        .frame(width: 520)
     }
 }
 
@@ -219,8 +225,34 @@ private struct GeneralTab: View {
     /// see it. TimelineView is the cheapest reactive timer in SwiftUI.
     private let permissionProbe = PermissionProbeService()
 
+    private var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build)) — built \(buildTimestamp)"
+    }
+
+    /// Mtime of the compiled binary. Bumps every rebuild without needing
+    /// a project-level version bump — useful for "did my reinstall land".
+    private var buildTimestamp: String {
+        guard let path = Bundle.main.executablePath,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let date = attrs[.modificationDate] as? Date else { return "?" }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f.string(from: date)
+    }
+
     var body: some View {
         Form {
+            Section("About") {
+                LabeledContent("Version") {
+                    Text(versionString)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+
             Section("Permissions") {
                 TimelineView(.periodic(from: .now, by: 3.0)) { _ in
                     let perms = permissionProbe.probe()
