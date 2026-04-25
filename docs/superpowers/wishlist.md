@@ -791,3 +791,48 @@ Diagnosed autonomously via a Node.js fake-iOS-client (`/tmp/quip-content-probe.j
 ### 32. `mailto:` link support in terminal content
 
 **Status:** ✅ Done — extended the scheme filter in `linkifiedTerminalContent` to accept `mailto:` substring matches AND any URL whose `scheme` is "mailto" (NSDataDetector returns bare emails like `noreply@anthropic.com` as `mailto:noreply@anthropic.com` URLs natively, so both cases are covered). Two new unit tests: bare-email-as-mailto + explicit-mailto-uri. Tap pops the system Mail compose sheet via the standard URL handler.
+
+---
+
+### 39. Auto-arrange phone windows on open + manual realign button
+
+**Status:** Wishlist (run `/prd` to shape the chooser before coding).
+**Context:** When the iPhone Quip app opens and the windows list arrives from the Mac, cards land at the Mac's raw frame fractions. With ≥3 windows on a wide Mac display, the phone preview reads as cramped/overlapping rectangles even though the Mac arrangement is fine. User wants a sensible default phone-side layout to kick in automatically, plus a button to re-run it ("realign") whenever the auto-pick stops feeling right.
+
+**Likely shape:**
+- New default for `phoneLayoutOverride` (currently `nil` = use Mac's frames). On first non-empty windows snapshot per session, set it to a chooser-picked value (`"horizontal"` for ≤3 windows wide-orientation, `"vertical"` otherwise — exact heuristic TBD).
+- Add a "realign" button in the header — distinct from the existing arrange tri-state cycle button. Realign re-invokes the chooser; cycle keeps its current "step through modes" behavior. Or unify them — open question.
+- Persist last-used override per device count? Or reset every cold launch? `/prd` decides.
+- Likely needs a third layout mode: `"grid"` for 4+ windows (today only `horizontal` and `vertical` are wired in `phoneLayoutFrame` at QuipiOS/QuipApp.swift:2105).
+
+**Open questions for /prd:**
+- Auto-pick on every windows-list change, or only first one per session? (Latter avoids flicker when Mac side adds a window mid-session.)
+- Should the override be remembered across launches (`@AppStorage`) or always re-derived?
+- Does "realign" reset to the chooser pick, or open a chooser sheet (horizontal / vertical / grid / off)?
+- Interaction with §40 (drag-to-move): does realigning wipe per-window manual positions?
+
+**Related:** `QuipiOS/QuipApp.swift:655` (`phoneLayoutOverride` state), `:1526` (existing arrange-button cycle), `:2105` (`phoneLayoutFrame` chooser).
+
+---
+
+### 40. Drag-to-move windows on the iPhone layout
+
+**Status:** Wishlist (run `/prd` to lock semantics — phone-only vs Mac-mirror — before coding).
+**Context:** User wants to grab a window card on the iPhone preview and drop it somewhere else. Today every card's position comes from `phoneLayoutFrame` (auto-arrange override) or `window.frame` (Mac's raw frame). There's no per-window phone-side override, no drag gesture on `WindowRectangle`, no conflict resolution between dragged positions and auto-arrange.
+
+**Likely shape:**
+- New `@State` (or `@AppStorage` keyed by Mac UUID + windowId) `phoneFrameOverrides: [String: WindowFrame]`. Drag-end writes here; lookup in `windowLayout` ForEach checks it before `phoneLayoutFrame` and Mac frame.
+- DragGesture on the `WindowRectangle` view at QuipiOS/QuipApp.swift:2039. Translate fingertip delta into normalized fraction of the host-screen rect.
+- Snap behavior: free-drop, snap-to-grid (1/2 / 1/3 thirds), or swap-with-target-on-overlap. Last is most "discoverable for resizing the layout" but most code.
+- Visual feedback during drag: lift shadow, ghost the original position, target highlight if swap mode.
+- Coexistence with §39 auto-arrange: dragging clears the override mode (so user gets the manual frame instead of the auto pick) — or auto-arrange treats overridden windows as fixed and arranges the rest around them. Open Q.
+- Mac mirroring: does dragging on the phone also reposition the Mac window via AppleScript, or is this purely a phone-side preview tweak? `/prd` call.
+
+**Open questions for /prd:**
+- Phone-only preview, or mirror to Mac (heavier; needs Mac-side `set bounds of window` + reflow)?
+- Snap mode: free / grid / swap?
+- Resize-with-drag too, or just move? (Today Mac sets size; phone never resizes anything.)
+- How does this interact with §39's "realign" button — does realign wipe overrides or honor them?
+- What about cross-display moves on the Mac? Phone has no notion of multiple displays in the layout view.
+
+**Related:** `QuipiOS/QuipApp.swift:2036` (`ForEach` placing `WindowRectangle`), `:2105` (`phoneLayoutFrame`), `:2119` (`windowRect` — coord conversion); `Shared/MessageProtocol.swift` (would need a new `set_window_frame` message if Mac mirroring is in scope).
