@@ -246,6 +246,12 @@ struct QuipApp: App {
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
+                // Auto-arrange (FR-2) — fire on every list change unless the
+                // user has explicitly taken control via cycle button or drag.
+                // Auto-arrange chooser fires from MainiOSView via
+                // `.onChange(of: windows)` since the relevant @AppStorage
+                // and `phoneFrameOverrides` state lives there. We just
+                // refresh the windows binding here and the View reacts.
                 // Allow all orientations once we have windows, suggest landscape
                 if wasEmpty && !update.windows.isEmpty {
                     AppOrientationDelegate.allowAllOrientations = true
@@ -632,6 +638,16 @@ struct MainiOSView: View {
     // command, the Y/N confirmations that Claude asks for, Esc to dismiss,
     // and Ctrl+C to abort. Everything else is opt-in from Settings.
     @AppStorage("enabledQuickButtons") private var enabledQuickButtonsRaw: String = "plan,yes,no,esc,ctrlC"
+    // Per-button toggles for the main control row (chevrons, spawn, arrange,
+    // photo, keyboard, return). PTT mic and the row itself stay mandatory.
+    // Default ON — existing users keep their current button set.
+    @AppStorage("mainRow.cycleLeft") private var mainRowCycleLeft: Bool = true
+    @AppStorage("mainRow.cycleRight") private var mainRowCycleRight: Bool = true
+    @AppStorage("mainRow.spawn") private var mainRowSpawn: Bool = true
+    @AppStorage("mainRow.arrange") private var mainRowArrange: Bool = true
+    @AppStorage("mainRow.photo") private var mainRowPhoto: Bool = true
+    @AppStorage("mainRow.keyboard") private var mainRowKeyboard: Bool = true
+    @AppStorage("mainRow.return") private var mainRowReturn: Bool = true
     @State private var showSettings = false
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
@@ -648,11 +664,42 @@ struct MainiOSView: View {
     @State private var testResultAutoDismiss: Task<Void, Never>?
     /// Which layout the next tap on the arrange button will send. The icon
     /// shown on the button reflects this so the user can predict the outcome.
-    /// Phone-only display layout for window rectangles. `nil` = show whatever
-    /// layout the Mac reports; `"horizontal"` = columns side-by-side on the
+    /// Phone-only display layout for window rectangles. `""` = show whatever
+    /// the auto-chooser picks (or Mac's frames if both this and per-window
+    /// overrides are empty); `"horizontal"` = columns side-by-side on the
     /// phone; `"vertical"` = rows top-to-bottom. **Does not** touch the
     /// Mac's actual window positions — just reorganizes the preview here.
-    @State private var phoneLayoutOverride: String? = nil
+    /// Persisted across launches; @AppStorage so a returning user keeps
+    /// their last mode without a flash of unstyled layout on cold launch.
+    @AppStorage("phoneLayoutOverride") private var phoneLayoutOverrideRaw: String = ""
+    /// True once the user has explicitly cycled the arrange button or
+    /// dragged a window — auto-chooser stops firing on subsequent
+    /// windows-list arrivals so we don't fight the user's choice.
+    /// Realign button (US-002) clears this flag back to false.
+    @AppStorage("phoneLayoutManualSticky") private var manualLayoutSticky: Bool = false
+    /// Per-window manual position overrides written by drag-to-move (US-005).
+    /// JSON-encoded `[String: WindowFrame]` keyed by `windowId`. Lookup wins
+    /// over auto-arrange in `phoneLayoutFrame`. Pruned on every windows-list
+    /// arrival so closed windows don't leak entries.
+    @AppStorage("phoneFrameOverridesJSON") private var phoneFrameOverridesJSON: String = "{}"
+    /// In-memory cache of decoded overrides — rebuilt from JSON on appear,
+    /// written back to JSON on every mutation. Avoids a JSON round-trip per
+    /// `phoneLayoutFrame` call inside the layout `ForEach`.
+    @State private var phoneFrameOverrides: [String: WindowFrame] = [:]
+    /// Active drag state: which window is being dragged + accumulated
+    /// translation. Nil when no drag is in flight.
+    @State private var draggingWindowId: String? = nil
+    @State private var dragTranslation: CGSize = .zero
+    /// Last device-detected windows count + orientation snapshot used to
+    /// short-circuit the chooser when nothing relevant changed.
+    @State private var lastChooserCount: Int = -1
+
+    /// Computed view of the persisted raw string. `""` ↔ nil so callers
+    /// can keep working in the "no override" mental model without seeing
+    /// the @AppStorage encoding artifact.
+    private var phoneLayoutOverride: String? {
+        phoneLayoutOverrideRaw.isEmpty ? nil : phoneLayoutOverrideRaw
+    }
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.
     @State private var isTerminalExpanded = false
@@ -806,6 +853,27 @@ struct MainiOSView: View {
         .environment(\.quipColors, colors)
         .onAppear {
             updateOrientation()
+            // Restore persisted phone-side window overrides so a returning
+            // user sees their drag layout before the first windows-list
+            // arrives. No-op on first launch (empty JSON → empty dict).
+            loadOverrides()
+            // Initial chooser pass for the case where windows already
+            // populated before this view appeared (rare but possible on
+            // reconnect). Real subsequent fires happen via .onChange below.
+            if !windows.isEmpty {
+                pruneOverrides(activeWindowIds: Set(windows.map(\.id)))
+                runAutoChooser(count: windows.count)
+            }
+        }
+        .onChange(of: windows) { _, newValue in
+            // FR-2 + FR-8: every windows-list change re-fires the chooser
+            // (skipped when manualLayoutSticky is set) and prunes stale
+            // override entries for closed windows.
+            pruneOverrides(activeWindowIds: Set(newValue.map(\.id)))
+            runAutoChooser(count: newValue.count)
+        }
+        .onAppear {
+            // Companion onAppear for the rest of the legacy hookup below.
             // Register image upload result callbacks. These are idempotent
             // reassignments so re-firing onAppear is harmless.
             client.onImageUploadAck = { [weak pendingImage] _ in
@@ -1475,46 +1543,67 @@ struct MainiOSView: View {
             // Pending image thumbnail — only takes space when an image is attached.
             PendingImagePreviewStrip(state: pendingImage)
 
+            // Cluster gating — small gap (10pt) appears between adjacent
+            // clusters when both have visible buttons. PTT mic is always
+            // visible and stays geometrically centered via flexible
+            // Spacers on each side. Adding/removing buttons recenters
+            // automatically because the Spacers absorb the slack.
+            let leftNavOn = mainRowCycleLeft || mainRowCycleRight
+            let leftMgmtOn = mainRowSpawn || mainRowArrange
+            let rightSendOn = mainRowKeyboard || mainRowReturn
+
             // Control buttons
-            HStack(spacing: 6) {
-                // Previous window — slimmer than the main input buttons so
-                // the PTT/keyboard/Return trio visually dominates the row.
-                Button {
-                    cycleWindow(direction: -1)
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: navW, height: navH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+            HStack(spacing: 0) {
+                // LEFT cluster 1: window nav (chevrons)
+                HStack(spacing: 6) {
+                    if mainRowCycleLeft {
+                        Button {
+                            cycleWindow(direction: -1)
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                                .frame(width: navW, height: navH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .disabled(windows.count <= 1)
+                    }
+                    if mainRowCycleRight {
+                        Button {
+                            cycleWindow(direction: 1)
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                                .frame(width: navW, height: navH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .disabled(windows.count <= 1)
+                    }
                 }
-                .disabled(windows.count <= 1)
 
-                // Next window
-                Button {
-                    cycleWindow(direction: 1)
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: navW, height: navH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                // Visual gap between nav cluster and window-mgmt cluster.
+                // Only present when both clusters have at least one button.
+                if leftNavOn && leftMgmtOn {
+                    Spacer().frame(width: 10)
                 }
-                .disabled(windows.count <= 1)
 
-                // Spawn new window from project directory
-                Button {
-                    showSpawnPicker = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(colors.textPrimary)
-                        .frame(width: auxW, height: auxH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
+                // LEFT cluster 2: window mgmt (spawn, arrange)
+                HStack(spacing: 6) {
+                    if mainRowSpawn {
+                        Button {
+                            showSpawnPicker = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(colors.textPrimary)
+                                .frame(width: auxW, height: auxH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
 
                 // Arrange — phone-only display toggle. Cycles through
                 // Mac-layout (default, shows real Mac positions), columns
@@ -1522,37 +1611,51 @@ struct MainiOSView: View {
                 // NOT move windows on the Mac; just reorganizes the preview
                 // here so overlapping/off-screen windows become distinct
                 // cards when you need 'em.
-                Button {
-                    switch phoneLayoutOverride {
-                    case nil: phoneLayoutOverride = "horizontal"
-                    case "horizontal": phoneLayoutOverride = "vertical"
-                    default: phoneLayoutOverride = nil
-                    }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                } label: {
-                    let icon: String = {
+                // Single button — tap cycles horizontal/vertical, long-press
+                // realigns (clears manual drag overrides + re-fires the
+                // auto-chooser). Combined into one slot per `feedback_compact_ui`
+                // so the row doesn't overflow. nil isn't a tap-cycle step
+                // anymore; the auto-chooser owns "no override" now.
+                if mainRowArrange {
+                    Button {
                         switch phoneLayoutOverride {
-                        case "horizontal": return "rectangle.split.3x1"
-                        case "vertical": return "rectangle.split.1x3"
-                        default: return "rectangle.3.group"
+                        case "horizontal": phoneLayoutOverrideRaw = "vertical"
+                        default: phoneLayoutOverrideRaw = "horizontal"
                         }
-                    }()
-                    Image(systemName: icon)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: auxW, height: auxH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        manualLayoutSticky = true
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } label: {
+                        let icon: String = {
+                            switch phoneLayoutOverride {
+                            case "horizontal": return "rectangle.split.3x1"
+                            case "vertical": return "rectangle.split.1x3"
+                            default: return "rectangle.3.group"
+                            }
+                        }()
+                        Image(systemName: icon)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
+                            .frame(width: auxW, height: auxH)
+                            .background(colors.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .disabled(windows.filter(\.enabled).count < 2)
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                            realignWindows()
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        }
+                    )
                 }
-                .disabled(windows.filter(\.enabled).count < 2)
+                } // close LEFT cluster 2 HStack
+
+                // Big flexible spacer pinning mic to geometric center.
+                Spacer(minLength: 12)
 
                 // Push to talk — icon-only. Red mic when idle; when live, the
                 // pill keeps its surface fill but gains a red stroke so it
                 // reads as "recording" without scorching the eyeballs with a
                 // solid-red rectangle. Icon switches to a red stop square.
-                // Symmetric spacers pin the mic to geometric center of the
-                // row regardless of how many buttons sit on either side.
-                Spacer()
                 Button {
                     if isRecording {
                         onStopRecording()
@@ -1571,60 +1674,65 @@ struct MainiOSView: View {
                                 .strokeBorder(Color.red.opacity(0.7), lineWidth: isRecording ? 2 : 0)
                         )
                 }
-                Spacer()
+                Spacer(minLength: 12)
 
-                // Attach image — sits adjacent to the PTT mic since both are
-                // primary input actions (drop in media vs. speak). Tapping
-                // opens source picker (library / camera).
-                Button {
-                    showingImageSourceSheet = true
-                } label: {
-                    Image(systemName: pendingImage.hasPendingImage ? "photo.fill" : "photo")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(pendingImage.hasPendingImage ? colors.buttonPrimary : colors.textPrimary)
-                        .frame(width: btnW, height: btnH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .accessibilityLabel("Attach image")
-
-                // Type — toggles the text input bar above the terminal
-                // content. Sized down to the secondary tier (matches `+`
-                // and Arrange) since it's a mode toggle, not a send action.
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showTextInput.toggle()
-                        if !showTextInput { textInputValue = "" }
+                // RIGHT cluster 1: photo (input attach)
+                HStack(spacing: 6) {
+                    if mainRowPhoto {
+                        Button {
+                            showingImageSourceSheet = true
+                        } label: {
+                            Image(systemName: pendingImage.hasPendingImage ? "photo.fill" : "photo")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(pendingImage.hasPendingImage ? colors.buttonPrimary : colors.textPrimary)
+                                .frame(width: btnW, height: btnH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .accessibilityLabel("Attach image")
                     }
-                } label: {
-                    Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(colors.textPrimary)
-                        .frame(width: auxW, height: auxH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                // Press Return — flushes any pending image first AND defers the
-                // press_return until the image has actually been dispatched, so
-                // the Mac receives them in the correct order (path first, then
-                // Enter) rather than racing and pressing Enter before the path
-                // types.
-                Button {
-                    if let wid = selectedWindowId {
-                        sendPendingImageIfNeeded(windowId: wid) {
-                            client.send(QuickActionMessage(windowId: wid, action: "press_return"))
+                // Visual gap between photo and send-cluster (keyboard/return).
+                if mainRowPhoto && rightSendOn {
+                    Spacer().frame(width: 10)
+                }
+
+                // RIGHT cluster 2: send (keyboard, return)
+                HStack(spacing: 6) {
+                    if mainRowKeyboard {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showTextInput.toggle()
+                                if !showTextInput { textInputValue = "" }
+                            }
+                        } label: {
+                            Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(colors.textPrimary)
+                                .frame(width: auxW, height: auxH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                     }
-                } label: {
-                    Image(systemName: "return")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
-                        .frame(width: btnW, height: btnH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    if mainRowReturn {
+                        Button {
+                            if let wid = selectedWindowId {
+                                sendPendingImageIfNeeded(windowId: wid) {
+                                    client.send(QuickActionMessage(windowId: wid, action: "press_return"))
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "return")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
+                                .frame(width: btnW, height: btnH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .disabled(selectedWindowId == nil)
+                    }
                 }
-                .disabled(selectedWindowId == nil)
 
                 // In landscape, fold the quick-button row INTO this main row
                 // — saves a whole row of vertical space and keeps everything
@@ -2036,6 +2144,20 @@ struct MainiOSView: View {
                         ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
                             let effectiveFrame = phoneLayoutFrame(for: window, index: index, total: windows.count) ?? window.frame
                             let rect = windowRect(frame: effectiveFrame, in: mac.size, inset: 3)
+                            let isDragging = draggingWindowId == window.id
+
+                            // Ghost — faint placeholder at the original
+                            // position so the user can see where the card
+                            // came from while dragging it elsewhere.
+                            if isDragging {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .strokeBorder(Color(hex: window.color).opacity(0.3),
+                                                  style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                                    .frame(width: rect.width, height: rect.height)
+                                    .position(x: rect.midX, y: rect.midY)
+                                    .allowsHitTesting(false)
+                            }
+
                             WindowRectangle(
                                 window: window,
                                 isSelected: window.id == selectedWindowId,
@@ -2058,7 +2180,11 @@ struct MainiOSView: View {
                                 }
                             )
                             .frame(width: rect.width, height: rect.height)
+                            .scaleEffect(isDragging ? 1.05 : 1.0)
+                            .shadow(color: .black.opacity(isDragging ? 0.35 : 0),
+                                    radius: isDragging ? 8 : 0, y: isDragging ? 4 : 0)
                             .position(x: rect.midX, y: rect.midY)
+                            .offset(isDragging ? dragTranslation : .zero)
                             // Pulsing yellow dot overlay when this window's
                             // waiting for user input. Drawn in the top-right
                             // of the rect so it doesn't cover the window
@@ -2072,7 +2198,37 @@ struct MainiOSView: View {
                                         .offset(x: -4, y: 4)
                                 }
                             }
-                            .zIndex(attentionCenter.windowsNeedingAttention.contains(window.id) ? 10 : 0)
+                            // Active drag floats above neighbors; otherwise
+                            // attention dot wins (existing behavior).
+                            .zIndex(isDragging ? 100
+                                    : attentionCenter.windowsNeedingAttention.contains(window.id) ? 10 : 0)
+                            // Drag-to-move (US-005). minimumDistance keeps
+                            // single taps reaching `onSelect` — only sustained
+                            // 10pt+ travel activates the drag.
+                            .gesture(
+                                DragGesture(minimumDistance: 10)
+                                    .onChanged { value in
+                                        if draggingWindowId != window.id {
+                                            draggingWindowId = window.id
+                                            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                                        }
+                                        dragTranslation = value.translation
+                                    }
+                                    .onEnded { value in
+                                        let inset: CGFloat = 3
+                                        let usableW = mac.size.width - inset * 2
+                                        let usableH = mac.size.height - inset * 2
+                                        let droppedX = (rect.midX + value.translation.width - inset) / usableW
+                                        let droppedY = (rect.midY + value.translation.height - inset) / usableH
+                                        let dropCenter = CGPoint(
+                                            x: max(0, min(1, droppedX)),
+                                            y: max(0, min(1, droppedY))
+                                        )
+                                        handleDrop(windowId: window.id, dropCenter: dropCenter)
+                                        draggingWindowId = nil
+                                        dragTranslation = .zero
+                                    }
+                            )
                         }
                     }
                 }
@@ -2098,12 +2254,22 @@ struct MainiOSView: View {
         }
     }
 
-    /// Phone-only override frame when the user has toggled the arrange
-    /// button — lays out windows as clean columns or rows on the phone
-    /// preview without touching the Mac. Returns `nil` when the Mac's real
-    /// layout should be used.
+    /// Phone-only override frame for a window. Priority:
+    ///   1. Per-window manual drag override (FR-16) — wins over everything.
+    ///   2. Auto-arrange mode (`phoneLayoutOverride` set by chooser or
+    ///      cycle button) — clean grid laid out via `gridFrame`.
+    ///   3. `nil` → caller falls back to the Mac's real frame.
     private func phoneLayoutFrame(for window: WindowState, index: Int, total: Int) -> WindowFrame? {
+        if let manual = phoneFrameOverrides[window.id] { return manual }
         guard let mode = phoneLayoutOverride, total > 0 else { return nil }
+        return Self.gridFrame(mode: mode, index: index, total: total)
+    }
+
+    /// Grid cell for a given mode + position. Pure fn for unit tests
+    /// (PhoneLayoutChooserTests). Returns `nil` for unknown modes so callers
+    /// can fall through to the Mac frame.
+    static func gridFrame(mode: String, index: Int, total: Int) -> WindowFrame? {
+        guard total > 0, index >= 0, index < total else { return nil }
         switch mode {
         case "horizontal":
             let w = 1.0 / Double(total)
@@ -2114,6 +2280,133 @@ struct MainiOSView: View {
         default:
             return nil
         }
+    }
+
+    /// Auto-arrange chooser. Pure fn — picks `"horizontal"` for ≤2 windows,
+    /// `"vertical"` for ≥3. Heuristic is documented in the PRD §9.1 and
+    /// expected to evolve based on device testing.
+    static func chooseAutoLayout(count: Int) -> String {
+        count <= 2 ? "horizontal" : "vertical"
+    }
+
+    /// Re-fire the auto-chooser given the current windows count. Called from
+    /// `onLayoutUpdate` and from the Realign button. Skips when the user has
+    /// engaged the manual-sticky flag UNLESS `force` is true (Realign path).
+    private func runAutoChooser(count: Int, force: Bool = false) {
+        guard count > 0 else { return }
+        if !force && manualLayoutSticky { return }
+        // Don't re-pick if neither the count nor the mode would change —
+        // avoids needless @AppStorage writes on every windows-list arrival.
+        if !force && count == lastChooserCount { return }
+        let pick = Self.chooseAutoLayout(count: count)
+        if phoneLayoutOverrideRaw != pick {
+            phoneLayoutOverrideRaw = pick
+        }
+        lastChooserCount = count
+    }
+
+    /// Realign button action — wipes manual drag overrides, clears the
+    /// sticky flag so the chooser is allowed to fire again, and re-runs
+    /// the chooser immediately so the user sees the auto layout right away.
+    private func realignWindows() {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+            phoneFrameOverrides = [:]
+            persistOverrides()
+            manualLayoutSticky = false
+            lastChooserCount = -1
+            runAutoChooser(count: windows.count, force: true)
+        }
+    }
+
+    /// Re-encode `phoneFrameOverrides` into JSON and write to @AppStorage.
+    /// Called after every mutation so a force-quit doesn't lose drag work.
+    private func persistOverrides() {
+        if let data = try? JSONEncoder().encode(phoneFrameOverrides),
+           let json = String(data: data, encoding: .utf8) {
+            phoneFrameOverridesJSON = json
+        }
+    }
+
+    /// Decode the persisted override JSON into the in-memory dictionary.
+    /// Called on view appear so a returning user sees their last positions
+    /// before the first windows-list arrives — no flash of unstyled layout.
+    private func loadOverrides() {
+        guard let data = phoneFrameOverridesJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: WindowFrame].self, from: data)
+        else { return }
+        phoneFrameOverrides = decoded
+    }
+
+    /// Drop closed windows from the override dictionary so it doesn't grow
+    /// forever. Called from `onLayoutUpdate` whenever the list arrives.
+    private func pruneOverrides(activeWindowIds: Set<String>) {
+        let filtered = phoneFrameOverrides.filter { activeWindowIds.contains($0.key) }
+        if filtered.count != phoneFrameOverrides.count {
+            phoneFrameOverrides = filtered
+            persistOverrides()
+        }
+    }
+
+    /// Drag-end handler. `dropCenter` is the dropped card's center in
+    /// normalized 0–1 coordinates within the host-screen rect. Decides
+    /// between swap-on-overlap (FR-15) and snap-to-grid (FR-14), writes
+    /// the result to `phoneFrameOverrides`, and flips the user out of
+    /// auto-arrange so the manual frame actually takes effect (FR-13).
+    private func handleDrop(windowId: String, dropCenter: CGPoint) {
+        let total = windows.count
+        guard total > 0,
+              let droppedIdx = windows.firstIndex(where: { $0.id == windowId }) else { return }
+
+        // Find a candidate swap target: any other window whose effective
+        // center is within 0.05 of dropped center (~30pt on a typical phone
+        // host-screen rect of 600pt wide).
+        let swapThreshold: CGFloat = 0.05
+        let target = windows.enumerated().first { (idx, w) -> Bool in
+            guard w.id != windowId else { return false }
+            let frame = phoneLayoutFrame(for: w, index: idx, total: total) ?? w.frame
+            let cx = frame.x + frame.width / 2
+            let cy = frame.y + frame.height / 2
+            let dx = CGFloat(cx) - dropCenter.x
+            let dy = CGFloat(cy) - dropCenter.y
+            return abs(dx) < swapThreshold && abs(dy) < swapThreshold
+        }
+
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
+            if let (targetIdx, targetWin) = target {
+                // Swap: both windows' effective frames trade places.
+                let droppedFrame = phoneLayoutFrame(for: windows[droppedIdx], index: droppedIdx, total: total) ?? windows[droppedIdx].frame
+                let targetFrame = phoneLayoutFrame(for: targetWin, index: targetIdx, total: total) ?? targetWin.frame
+                phoneFrameOverrides[windowId] = targetFrame
+                phoneFrameOverrides[targetWin.id] = droppedFrame
+            } else {
+                // Snap-to-grid: pick the auto-mode's nearest cell.
+                let mode = phoneLayoutOverride ?? Self.chooseAutoLayout(count: total)
+                let nearestIdx = Self.nearestGridIndex(mode: mode, total: total, dropCenter: dropCenter)
+                if let cell = Self.gridFrame(mode: mode, index: nearestIdx, total: total) {
+                    phoneFrameOverrides[windowId] = cell
+                }
+            }
+            // First completed drag of a session disengages auto-arrange so
+            // the manual frame actually wins. Subsequent drags don't need to
+            // re-set the flag (idempotent).
+            manualLayoutSticky = true
+            persistOverrides()
+        }
+    }
+
+    /// Pure-fn nearest-cell finder for snap-to-grid. Returns the index whose
+    /// `gridFrame` center is closest to `dropCenter` in normalized space.
+    static func nearestGridIndex(mode: String, total: Int, dropCenter: CGPoint) -> Int {
+        var bestIdx = 0
+        var bestDist = CGFloat.greatestFiniteMagnitude
+        for i in 0..<total {
+            guard let cell = gridFrame(mode: mode, index: i, total: total) else { continue }
+            let cx = CGFloat(cell.x + cell.width / 2)
+            let cy = CGFloat(cell.y + cell.height / 2)
+            let d = hypot(cx - dropCenter.x, cy - dropCenter.y)
+            if d < bestDist { bestDist = d; bestIdx = i }
+        }
+        return bestIdx
     }
 
     private func windowRect(frame: WindowFrame, in size: CGSize, inset: CGFloat) -> CGRect {
@@ -3266,6 +3559,11 @@ struct SettingsSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    NavigationLink {
+                        MainRowButtonsSheet()
+                    } label: {
+                        Text("Main Row Buttons")
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -3398,6 +3696,39 @@ struct SettingsSheet: View {
 /// instead of inlining the ~18-chip grid on the main Settings page. Keeps the
 /// top-level Settings list scannable without losing the density the chip grid
 /// provides here.
+/// Settings sheet for toggling each button in the main control row.
+/// PTT mic stays mandatory (core function); everything else can be hidden
+/// to keep the row from overflowing on smaller phones or to reduce
+/// per-thumb visual noise. @AppStorage-backed so toggles persist.
+struct MainRowButtonsSheet: View {
+    @AppStorage("mainRow.cycleLeft") private var cycleLeft: Bool = true
+    @AppStorage("mainRow.cycleRight") private var cycleRight: Bool = true
+    @AppStorage("mainRow.spawn") private var spawn: Bool = true
+    @AppStorage("mainRow.arrange") private var arrange: Bool = true
+    @AppStorage("mainRow.photo") private var photo: Bool = true
+    @AppStorage("mainRow.keyboard") private var keyboard: Bool = true
+    @AppStorage("mainRow.return") private var pressReturn: Bool = true
+
+    var body: some View {
+        List {
+            Section {
+                Toggle(isOn: $cycleLeft) { Label("Previous Window", systemImage: "chevron.left") }
+                Toggle(isOn: $cycleRight) { Label("Next Window", systemImage: "chevron.right") }
+                Toggle(isOn: $spawn) { Label("Spawn New Window", systemImage: "plus") }
+                Toggle(isOn: $arrange) { Label("Arrange Layout", systemImage: "rectangle.3.group") }
+                Toggle(isOn: $photo) { Label("Attach Image", systemImage: "photo") }
+                Toggle(isOn: $keyboard) { Label("Keyboard Toggle", systemImage: "keyboard") }
+                Toggle(isOn: $pressReturn) { Label("Press Return", systemImage: "return") }
+            } footer: {
+                Text("PTT mic always shows. Hide buttons you don't use to keep the row uncluttered. Long-press the Arrange button to realign auto-layout.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Main Row Buttons")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 struct QuickButtonsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
 
