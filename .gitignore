@@ -42,6 +42,10 @@ QuipiOS/Info.plist
 .build/
 .swiftpm/
 
+# Coverage / profiling artifacts
+*.profraw
+*.profdata
+
 # Machine-local / planning scripts — not for the public repo
 scripts/
 tasks/
