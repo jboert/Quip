@@ -372,7 +372,9 @@ final class WebSocketServer {
             connectionLog?.record(.authSucceeded, remote: remoteStr, detail: nil)
             onClientAuthenticated?()
         } else {
-            KokoroTTSDebug.log("auth: PIN mismatch (got '\(authMsg.pin)', expected '\(expectedPIN)')")
+            // Never log either PIN — the file is world-readable in /tmp.
+            // Lengths only, so we can still spot a misconfigured client.
+            KokoroTTSDebug.log("auth: PIN mismatch (got len=\(authMsg.pin.count), expected len=\(expectedPIN.count))")
             send(AuthResultMessage(success: false, error: "Incorrect PIN"), to: connection)
             print("[WebSocketServer] Authentication failed: incorrect PIN")
             connectionLog?.record(.authFailed, remote: remoteStr, detail: "incorrect PIN")

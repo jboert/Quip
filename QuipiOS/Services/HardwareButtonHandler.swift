@@ -73,7 +73,9 @@ final class HardwareButtonHandler {
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.mixWithOthers, .defaultToSpeaker])
             try session.setActive(true)
-        } catch {}
+        } catch {
+            NSLog("[Quip][HW] Audio session setup failed: %@", error.localizedDescription)
+        }
 
         // Preserve the user's current volume (and any audio another app like
         // YouTube is driving). Only nudge if we're parked on a rail where a
@@ -171,7 +173,9 @@ final class HardwareButtonHandler {
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.mixWithOthers, .defaultToSpeaker])
             try session.setActive(true)
-        } catch {}
+        } catch {
+            NSLog("[Quip][HW] Audio session setup failed: %@", error.localizedDescription)
+        }
         primeRailIfNeeded(session: session)
     }
 
