@@ -13,6 +13,11 @@ final class HardwareButtonHandler {
     private static let volumeRestoreSuppression: TimeInterval = 0.3
     private static let pttTransitionSuppression: TimeInterval = 0.25
 
+    // iOS volume buttons step by 1/16. Stay one step away from each rail so
+    // KVO can always see motion in both directions.
+    private static let lowRail: Float = 0.0625
+    private static let highRail: Float = 0.9375
+
     var selectedIndex = 0
     private(set) var windowCount = 0
 
@@ -70,11 +75,10 @@ final class HardwareButtonHandler {
             try session.setActive(true)
         } catch {}
 
-        // Force volume to midpoint so both up and down always have room to change.
-        // We restore this midpoint after every button press.
-        savedVolume = 0.5
-        suppressUntil = Date().addingTimeInterval(Self.volumeRestoreSuppression)
-        HiddenVolumeView.setVolume(0.5)
+        // Preserve the user's current volume (and any audio another app like
+        // YouTube is driving). Only nudge if we're parked on a rail where a
+        // button press wouldn't produce a KVO delta.
+        primeRailIfNeeded(session: session)
 
         volumeObservation = session.observe(\.outputVolume, options: [.new, .old]) {
             [weak self] _, change in
@@ -168,8 +172,26 @@ final class HardwareButtonHandler {
                                     options: [.mixWithOthers, .defaultToSpeaker])
             try session.setActive(true)
         } catch {}
-        suppressUntil = Date().addingTimeInterval(Self.volumeRestoreSuppression)
-        HiddenVolumeView.setVolume(0.5)
+        primeRailIfNeeded(session: session)
+    }
+
+    /// Capture the user's current output volume into `savedVolume`. Only
+    /// override the system volume if it sits on a rail (≤low or ≥high) where
+    /// a button press wouldn't yield a KVO delta. Otherwise leave whatever
+    /// the user — or another foreground audio app — has set alone.
+    private func primeRailIfNeeded(session: AVAudioSession) {
+        let current = session.outputVolume
+        if current <= Self.lowRail {
+            savedVolume = Self.lowRail
+            suppressUntil = Date().addingTimeInterval(Self.volumeRestoreSuppression)
+            HiddenVolumeView.setVolume(Self.lowRail)
+        } else if current >= Self.highRail {
+            savedVolume = Self.highRail
+            suppressUntil = Date().addingTimeInterval(Self.volumeRestoreSuppression)
+            HiddenVolumeView.setVolume(Self.highRail)
+        } else {
+            savedVolume = current
+        }
     }
 
     func stopMonitoring() {
