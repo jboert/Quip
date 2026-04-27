@@ -27,6 +27,10 @@ static PATTERNS: LazyLock<Vec<RedactPattern>> = LazyLock::new(|| {
         (r"(?i)(Bearer\s+)[A-Za-z0-9._\-+/=]{20,}", "${1}[REDACTED]"),
         // Generic token: / token= patterns
         (r"(?i)(token\s*[=:]\s*)[A-Za-z0-9._\-+/=]{20,}", "${1}[REDACTED]"),
+        // PIN inside an auth WebSocket envelope. Mirrors Mac commit b6a8498 —
+        // ws_server logs the first 200 chars of every message; without this
+        // the PIN landed in plaintext on every auth attempt.
+        (r#""pin"\s*:\s*"[^"]*""#, r#""pin":"[REDACTED]""#),
     ];
 
     defs.into_iter()
@@ -43,4 +47,35 @@ pub fn redact(text: &str) -> String {
         result = p.regex.replace_all(&result, p.replacement).into_owned();
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_auth_pin_in_websocket_envelope() {
+        let red = redact(r#"{"type":"auth","pin":"123456"}"#);
+        assert!(!red.contains("123456"), "PIN leaked: {red}");
+        assert!(red.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redacts_auth_pin_with_spaces() {
+        let red = redact(r#"{"pin" : "abcdef"}"#);
+        assert!(!red.contains("abcdef"));
+    }
+
+    #[test]
+    fn passes_through_non_secret_text() {
+        let s = "no secrets here, just terminal output";
+        assert_eq!(redact(s), s);
+    }
+
+    #[test]
+    fn redacts_bearer_token() {
+        let red = redact("authorization: Bearer abcdefghijklmnopqrstuvwxyz");
+        assert!(red.contains("[REDACTED]"));
+        assert!(!red.contains("abcdefghijklmnopqrstuvwxyz"));
+    }
 }

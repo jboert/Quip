@@ -76,6 +76,11 @@ pub struct GeneralSettings {
     /// on load and pruned on save.
     #[serde(default)]
     pub enabled_window_ids: Vec<String>,
+    /// When true, broadcast every terminal window the host can see (dimmed if
+    /// disabled) so the phone can tap-to-enable instead of being blindsided
+    /// by host activity. Mirrors Mac's mirrorDesktop setting.
+    #[serde(default)]
+    pub mirror_desktop: bool,
 }
 
 impl Default for GeneralSettings {
@@ -94,6 +99,7 @@ impl Default for GeneralSettings {
             tailscale_hostname_override: String::new(),
             require_pin_for_local: false,
             enabled_window_ids: Vec::new(),
+            mirror_desktop: false,
         }
     }
 }
@@ -123,6 +129,57 @@ impl Default for DirectorySettings {
         Self {
             projects: vec![],
         }
+    }
+}
+
+impl DirectorySettings {
+    /// Expand each configured top-level directory into its immediate
+    /// subdirectories so the phone's "+ new window" picker shows actual
+    /// projects, not just the parent folders. Mirrors Mac commit 24fee2d.
+    ///
+    /// If a configured path is itself a project (no subdirectories visible
+    /// or unreadable), it stays in the list as-is so single-project setups
+    /// don't break.
+    pub fn expanded(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for parent in &self.projects {
+            let path = std::path::Path::new(parent);
+            if !path.is_dir() {
+                continue;
+            }
+            let entries = match std::fs::read_dir(path) {
+                Ok(e) => e,
+                Err(_) => {
+                    // Unreadable — fall back to keeping the parent as a
+                    // single entry so the phone still sees something.
+                    out.push(parent.clone());
+                    continue;
+                }
+            };
+            let mut subs: Vec<String> = Vec::new();
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_dir() {
+                    continue;
+                }
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') {
+                        continue; // skip dotdirs (.git, .cache, etc.)
+                    }
+                }
+                if let Some(s) = p.to_str() {
+                    subs.push(s.to_string());
+                }
+            }
+            if subs.is_empty() {
+                // No subdirectories — keep the parent as the single project.
+                out.push(parent.clone());
+            } else {
+                subs.sort();
+                out.extend(subs);
+            }
+        }
+        out
     }
 }
 

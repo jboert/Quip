@@ -1,13 +1,24 @@
+pub mod apns_client;
+pub mod apns_key_store;
 pub mod audit_logger;
+pub mod claude_mode;
 pub mod cloudflare_tunnel;
+pub mod connection_log;
+pub mod image_upload;
 pub mod kokoro_tts;
 pub mod mdns_advertiser;
 pub mod message_router;
+pub mod permission_probe;
 pub mod pin_manager;
+pub mod preferences_store;
+pub mod push_service;
+pub mod settings_pane_opener;
 pub mod secret_redactor;
 pub mod state_detector;
 pub mod tailscale;
 pub mod terminal_color;
+pub mod terminal_url_extractor;
+pub mod whisper_service;
 pub mod ws_server;
 
 pub use cloudflare_tunnel::CloudflareTunnel;
