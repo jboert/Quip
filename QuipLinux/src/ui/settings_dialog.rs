@@ -5,9 +5,13 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::models::settings::NetworkMode;
+use crate::services::connection_log::ConnectionLog;
 use crate::services::pin_manager::PINManager;
+use crate::services::push_service::PushService;
+use crate::services::whisper_service::WhisperService;
 use crate::state::SharedState;
 use glib;
+use std::sync::Arc;
 
 use super::main_window::RuntimeCommand;
 
@@ -17,6 +21,9 @@ pub fn show_settings(
     shared_state: &SharedState,
     pin_manager: &PINManager,
     runtime_cmd_tx: &async_channel::Sender<RuntimeCommand>,
+    whisper: &Arc<WhisperService>,
+    push: &Arc<PushService>,
+    connection_log: &Arc<ConnectionLog>,
 ) {
     let prefs = adw::PreferencesWindow::builder()
         .title("Quip Settings")
@@ -86,8 +93,84 @@ pub fn show_settings(
     });
     windows_group.add(&show_all_row);
 
+    // Mirror Desktop — broadcast every terminal window dimmed even when
+    // disabled, so the phone can tap-to-enable. Mirrors Mac's mirrorDesktop
+    // setting.
+    let mirror_switch = gtk4::Switch::new();
+    mirror_switch.set_active(state.settings.general.mirror_desktop);
+    mirror_switch.set_valign(gtk4::Align::Center);
+    let mirror_row = adw::ActionRow::builder()
+        .title("Mirror Desktop")
+        .subtitle("Show every terminal on the phone (dimmed if disabled)")
+        .build();
+    mirror_row.add_suffix(&mirror_switch);
+    mirror_row.set_activatable_widget(Some(&mirror_switch));
+    let ss_mirror = shared_state.clone();
+    mirror_switch.connect_state_set(move |_, active| {
+        let mut state = ss_mirror.write().unwrap();
+        state.settings.general.mirror_desktop = active;
+        state.settings.save();
+        glib::Propagation::Proceed
+    });
+    windows_group.add(&mirror_row);
+
     general_page.add(&terminal_group);
     general_page.add(&windows_group);
+
+    // PTT recognizer status — read once on dialog open so the user can see
+    // whether whisper.cpp loaded its model. Mirrors Mac's "Whisper recognizer"
+    // row on Settings → General.
+    let ptt_group = adw::PreferencesGroup::builder().title("Push-to-Talk").build();
+    let whisper_state_text = match whisper.current_state() {
+        crate::protocol::messages::WhisperState::Preparing => "Preparing…".to_string(),
+        crate::protocol::messages::WhisperState::Downloading { progress } => {
+            format!("Downloading model ({}%)", (progress * 100.0).round() as i32)
+        }
+        crate::protocol::messages::WhisperState::Ready => "Ready".to_string(),
+        crate::protocol::messages::WhisperState::Failed { message } => format!("Failed: {message}"),
+    };
+    let whisper_row = adw::ActionRow::builder()
+        .title("Whisper Recognizer")
+        .subtitle(&whisper_state_text)
+        .build();
+    ptt_group.add(&whisper_row);
+    general_page.add(&ptt_group);
+
+    // Permissions — mirrors the Mac perms group on Settings → General.
+    // Reads PermissionProbe live so the user can see what the iOS perms
+    // Live Activity is reading without grabbing the phone.
+    let perms = crate::services::permission_probe::PermissionProbe::probe();
+    let perms_group = adw::PreferencesGroup::builder()
+        .title("Permissions")
+        .description("What the host can do for the iOS app right now.")
+        .build();
+    perms_group.add(&adw::ActionRow::builder()
+        .title("Input injection")
+        .subtitle(if perms.accessibility {
+            "Available — ydotool / wtype / xdotool / Konsole D-Bus detected"
+        } else {
+            "Missing — install ydotool, wtype, or xdotool to enable PTT and quick buttons"
+        })
+        .build());
+    perms_group.add(&adw::ActionRow::builder()
+        .title("Screen recording")
+        .subtitle(if perms.screen_recording {
+            "Available"
+        } else {
+            "Not available — Wayland portal denied or X11 capture failing"
+        })
+        .build());
+    general_page.add(&perms_group);
+
+    // About — shows the binary's compiled version, mirroring Mac's
+    // Settings → General → About → Version row.
+    let about_group = adw::PreferencesGroup::builder().title("About").build();
+    let version_row = adw::ActionRow::builder()
+        .title("Version")
+        .subtitle(env!("CARGO_PKG_VERSION"))
+        .build();
+    about_group.add(&version_row);
+    general_page.add(&about_group);
 
     // Colors page
     let colors_page = adw::PreferencesPage::builder()
@@ -460,11 +543,318 @@ pub fn show_settings(
 
     projects_page.add(&projects_group);
 
+    // Notifications page — APNs configuration so the phone gets buzzed when
+    // Claude transitions to waiting. Mirrors Mac's Notifications tab.
+    let notifications_page = build_notifications_page(push, parent);
+
+    // Diagnostics page — every URL the phone could try, plus a recent
+    // connection log so the user can debug "phone says it can't reach me".
+    let diagnostics_page = build_diagnostics_page(shared_state, connection_log);
+
     prefs.add(&general_page);
     prefs.add(&projects_page);
     prefs.add(&colors_page);
     prefs.add(&security_page);
+    prefs.add(&notifications_page);
+    prefs.add(&diagnostics_page);
     prefs.present();
+}
+
+/// Build the Diagnostics page: every URL the phone could try (LAN IPs,
+/// Cloudflare tunnel, Tailscale) with a one-tap copy button, plus the
+/// recent connection log. Mirrors Mac commit a108ef2.
+fn build_diagnostics_page(
+    shared_state: &SharedState,
+    connection_log: &Arc<ConnectionLog>,
+) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::builder()
+        .title("Diagnostics")
+        .icon_name("dialog-information-symbolic")
+        .build();
+
+    // -- URLs --
+    let urls_group = adw::PreferencesGroup::builder()
+        .title("Connection URLs")
+        .description("Every URL the phone might be able to reach this daemon at.")
+        .build();
+
+    let mut urls: Vec<(String, String)> = Vec::new();
+    {
+        let state = shared_state.read().unwrap();
+        let port = state.settings.general.websocket_port;
+        // LAN — every non-loopback IPv4 we can see.
+        if let Ok(ifaces) = if_addrs::get_if_addrs() {
+            for iface in ifaces {
+                if iface.is_loopback() {
+                    continue;
+                }
+                let ip = iface.addr.ip();
+                if ip.is_ipv4() {
+                    urls.push((
+                        format!("LAN ({})", iface.name),
+                        format!("ws://{ip}:{port}"),
+                    ));
+                }
+            }
+        }
+        if !state.tunnel_ws_url.is_empty() {
+            urls.push(("Cloudflare".into(), state.tunnel_ws_url.clone()));
+        }
+        if !state.tailscale_ws_url.is_empty() {
+            urls.push(("Tailscale".into(), state.tailscale_ws_url.clone()));
+        }
+    }
+
+    if urls.is_empty() {
+        urls_group.add(
+            &adw::ActionRow::builder()
+                .title("(none)")
+                .subtitle("Network mode not yet started.")
+                .build(),
+        );
+    } else {
+        for (label, url) in urls {
+            let row = adw::ActionRow::builder().title(&label).subtitle(&url).build();
+            let copy_btn = gtk4::Button::from_icon_name("edit-copy-symbolic");
+            copy_btn.add_css_class("flat");
+            copy_btn.set_valign(gtk4::Align::Center);
+            let url_for_click = url.clone();
+            copy_btn.connect_clicked(move |_| {
+                if let Some(display) = gdk4::Display::default() {
+                    display.clipboard().set_text(&url_for_click);
+                }
+            });
+            row.add_suffix(&copy_btn);
+            urls_group.add(&row);
+        }
+    }
+    page.add(&urls_group);
+
+    // -- Recent connection log --
+    let log_group = adw::PreferencesGroup::builder()
+        .title("Recent Connections")
+        .description("Last 20 events. Helps debug why the phone says it can't connect.")
+        .build();
+
+    let events = connection_log.snapshot();
+    if events.is_empty() {
+        log_group.add(
+            &adw::ActionRow::builder()
+                .title("(none yet)")
+                .subtitle("Phone connections will appear here.")
+                .build(),
+        );
+    } else {
+        for ev in events {
+            // SystemTime → "HH:MM:SS" via duration since UNIX epoch is
+            // good enough for diagnostics; chrono would be overkill.
+            let secs = ev
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let h = (secs / 3600) % 24;
+            let m = (secs / 60) % 60;
+            let s = secs % 60;
+            let stamp = format!("{h:02}:{m:02}:{s:02} UTC");
+            let kind = ev.kind.as_str();
+            let detail = ev.detail.as_deref().unwrap_or("");
+            let subtitle = if detail.is_empty() {
+                format!("{stamp} • {kind}")
+            } else {
+                format!("{stamp} • {kind} • {detail}")
+            };
+            log_group.add(
+                &adw::ActionRow::builder()
+                    .title(&ev.remote)
+                    .subtitle(&subtitle)
+                    .build(),
+            );
+        }
+    }
+    page.add(&log_group);
+
+    page
+}
+
+/// Build the Notifications preferences page: APNs key file picker, the
+/// three identifiers (key id, team id, bundle id), an Apply button that
+/// installs an `ApnsClient` onto the push service, a Test Push button,
+/// and a list of registered iOS devices.
+fn build_notifications_page(
+    push: &Arc<PushService>,
+    parent: &adw::ApplicationWindow,
+) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::builder()
+        .title("Notifications")
+        .icon_name("preferences-system-notifications-symbolic")
+        .build();
+
+    // -- APNs key + identifiers --
+    let apns_group = adw::PreferencesGroup::builder()
+        .title("APNs")
+        .description("Apple Push key and identifiers from Apple Developer. The .p8 file is stored in ~/.config/quip with mode 0600.")
+        .build();
+
+    let key_status_row = adw::ActionRow::builder()
+        .title("Auth Key (.p8)")
+        .subtitle(if crate::services::apns_key_store::ApnsKeyStore::has_key() {
+            "Stored"
+        } else {
+            "Not configured"
+        })
+        .build();
+
+    let upload_btn = gtk4::Button::with_label("Upload .p8");
+    upload_btn.add_css_class("flat");
+    upload_btn.set_valign(gtk4::Align::Center);
+    {
+        let parent_ref = parent.clone();
+        let row_ref = key_status_row.clone();
+        upload_btn.connect_clicked(move |_| {
+            let chooser = gtk4::FileChooserNative::new(
+                Some("Select Apple .p8 Key"),
+                Some(&parent_ref),
+                gtk4::FileChooserAction::Open,
+                Some("Open"),
+                Some("Cancel"),
+            );
+            let row_for_response = row_ref.clone();
+            chooser.connect_response(move |c, resp| {
+                if resp == gtk4::ResponseType::Accept {
+                    if let Some(file) = c.file().and_then(|f| f.path()) {
+                        match std::fs::read(&file) {
+                            Ok(bytes) => {
+                                match crate::services::apns_key_store::ApnsKeyStore::set(&bytes) {
+                                    Ok(()) => row_for_response.set_subtitle("Stored"),
+                                    Err(e) => row_for_response
+                                        .set_subtitle(&format!("Save failed: {e}")),
+                                }
+                            }
+                            Err(e) => row_for_response.set_subtitle(&format!("Read failed: {e}")),
+                        }
+                    }
+                }
+            });
+            chooser.show();
+        });
+    }
+    key_status_row.add_suffix(&upload_btn);
+    apns_group.add(&key_status_row);
+
+    let key_id_entry = gtk4::Entry::new();
+    key_id_entry.set_placeholder_text(Some("ABC1234DEF"));
+    key_id_entry.set_valign(gtk4::Align::Center);
+    let key_id_row = adw::ActionRow::builder().title("Key ID").build();
+    key_id_row.add_suffix(&key_id_entry);
+    apns_group.add(&key_id_row);
+
+    let team_id_entry = gtk4::Entry::new();
+    team_id_entry.set_placeholder_text(Some("TEAMID12AB"));
+    team_id_entry.set_valign(gtk4::Align::Center);
+    let team_id_row = adw::ActionRow::builder().title("Team ID").build();
+    team_id_row.add_suffix(&team_id_entry);
+    apns_group.add(&team_id_row);
+
+    let bundle_id_entry = gtk4::Entry::new();
+    bundle_id_entry.set_placeholder_text(Some("com.example.app"));
+    bundle_id_entry.set_valign(gtk4::Align::Center);
+    let bundle_id_row = adw::ActionRow::builder().title("Bundle ID").build();
+    bundle_id_row.add_suffix(&bundle_id_entry);
+    apns_group.add(&bundle_id_row);
+
+    let status_label = gtk4::Label::new(Some(""));
+    status_label.add_css_class("caption");
+    status_label.add_css_class("dim-label");
+    status_label.set_xalign(0.0);
+    status_label.set_margin_start(12);
+    status_label.set_margin_end(12);
+
+    let apply_btn = gtk4::Button::with_label("Apply");
+    apply_btn.add_css_class("suggested-action");
+
+    let test_btn = gtk4::Button::with_label("Send Test Push");
+    test_btn.add_css_class("flat");
+    test_btn.set_sensitive(false);
+
+    {
+        let push = Arc::clone(push);
+        let key_id = key_id_entry.clone();
+        let team_id = team_id_entry.clone();
+        let bundle_id = bundle_id_entry.clone();
+        let status = status_label.clone();
+        let test = test_btn.clone();
+        apply_btn.connect_clicked(move |_| {
+            let kid = key_id.text().trim().to_string();
+            let tid = team_id.text().trim().to_string();
+            let bid = bundle_id.text().trim().to_string();
+            if kid.is_empty() || tid.is_empty() || bid.is_empty() {
+                status.set_text("Fill in all three identifiers before applying.");
+                return;
+            }
+            match crate::services::apns_client::ApnsClient::new(kid, tid, bid) {
+                Ok(client) => {
+                    push.set_apns_client(client);
+                    status.set_text("APNs client configured. Push test or wait for next claude-waiting transition.");
+                    test.set_sensitive(true);
+                }
+                Err(e) => {
+                    status.set_text(&format!("Apply failed: {e}"));
+                    test.set_sensitive(false);
+                }
+            }
+        });
+    }
+
+    {
+        let push = Arc::clone(push);
+        let status = status_label.clone();
+        test_btn.connect_clicked(move |_| {
+            let n =
+                push.send_for_window_state("test-window", "Quip", "Test push from Linux");
+            status.set_text(&format!(
+                "Sent to {n} device(s). If 0, no devices registered yet — connect the iPhone first.",
+            ));
+        });
+    }
+
+    let buttons = gtk4::Box::new(Orientation::Horizontal, 8);
+    buttons.set_halign(gtk4::Align::Center);
+    buttons.set_margin_top(8);
+    buttons.append(&apply_btn);
+    buttons.append(&test_btn);
+    apns_group.add(&buttons);
+    apns_group.add(&status_label);
+
+    page.add(&apns_group);
+
+    // -- Registered devices --
+    let devices_group = adw::PreferencesGroup::builder()
+        .title("Registered Devices")
+        .description("iOS devices currently registered to receive pushes from this Quip Linux daemon.")
+        .build();
+
+    let devices = push.devices();
+    if devices.is_empty() {
+        let empty_row = adw::ActionRow::builder()
+            .title("(none)")
+            .subtitle("Open the Quip iOS app and authenticate to register a device.")
+            .build();
+        devices_group.add(&empty_row);
+    } else {
+        for d in &devices {
+            // Show first 12 chars of token + environment.
+            let short = d.token.chars().take(12).collect::<String>();
+            let row = adw::ActionRow::builder()
+                .title(&format!("{short}…"))
+                .subtitle(&format!("environment: {}", d.environment))
+                .build();
+            devices_group.add(&row);
+        }
+    }
+    page.add(&devices_group);
+
+    page
 }
 
 fn set_mode_caption(label: &gtk4::Label, mode: NetworkMode) {

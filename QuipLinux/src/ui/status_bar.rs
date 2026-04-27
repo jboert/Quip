@@ -146,14 +146,19 @@ impl StatusBar {
         });
         self.status_dot.queue_draw();
 
+        // Status text now includes the binary version after the connection
+        // status — same as Mac's menu-bar drawer (commit d01244c). Lets the
+        // user tell at a glance which Quip build is running without opening
+        // Settings → About.
+        let version = env!("CARGO_PKG_VERSION");
         if state.ws_client_count > 0 {
             let n = state.ws_client_count;
             let s = if n == 1 { "" } else { "s" };
-            self.status_label.set_text(&format!("{n} client{s}"));
+            self.status_label.set_text(&format!("{n} client{s} • v{version}"));
         } else if state.ws_running {
-            self.status_label.set_text("Listening");
+            self.status_label.set_text(&format!("Listening • v{version}"));
         } else {
-            self.status_label.set_text("Offline");
+            self.status_label.set_text(&format!("Offline • v{version}"));
         }
 
         // ── URL display (right side) ───────────────────────────────────

@@ -179,10 +179,15 @@ pub fn build_ui(app: &adw::Application) {
     );
 
     // --- Start background services ---
-    let (broadcast_tx, runtime_cmd_tx) = start_services(
-        shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone(),
-        client_selected_window.clone(), pending_input.clone(), tts_session_ids.clone(),
-    );
+    let (broadcast_tx, runtime_cmd_tx, push_service, whisper_service, connection_log) =
+        start_services(
+            shared_state.clone(), window_backend.clone(), input_backend.clone(), pin_manager.clone(),
+            client_selected_window.clone(), pending_input.clone(), tts_session_ids.clone(),
+        );
+    let push_for_timer = Arc::clone(&push_service);
+    let push_for_settings = Arc::clone(&push_service);
+    let whisper_for_settings = Arc::clone(&whisper_service);
+    let connection_log_for_settings = Arc::clone(&connection_log);
 
     // Wire the settings button now that we have the runtime command channel
     let ss_settings = shared_state.clone();
@@ -190,7 +195,10 @@ pub fn build_ui(app: &adw::Application) {
     let pin_for_settings = pin_manager.clone();
     let cmd_tx_for_settings = runtime_cmd_tx.clone();
     settings_button.connect_clicked(move |_| {
-        super::settings_dialog::show_settings(&win_ref, &ss_settings, &pin_for_settings, &cmd_tx_for_settings);
+        super::settings_dialog::show_settings(
+            &win_ref, &ss_settings, &pin_for_settings, &cmd_tx_for_settings,
+            &whisper_for_settings, &push_for_settings, &connection_log_for_settings,
+        );
     });
 
     // --- Periodic refresh ---
@@ -239,6 +247,24 @@ pub fn build_ui(app: &adw::Application) {
             );
             if let Some(json) = encode_message(&msg) {
                 let _ = broadcast_tx_timer.try_send(json);
+            }
+
+            // Fire APNs push when Claude transitions to waiting. This is the
+            // "claude is waiting on you" buzz on the iPhone. The push service
+            // honors per-device prefs (paused / quiet hours / banner toggle)
+            // and 30s debounces per (window, device) so oscillations don't
+            // pile up. No-ops when no APNs client is configured.
+            if matches!(new_state, crate::protocol::types::TerminalState::WaitingForInput) {
+                let state = ss_timer.read().unwrap();
+                if let Some(w) = state.windows.iter().find(|w| w.id == *window_id) {
+                    let title = if !w.subtitle.is_empty() { w.subtitle.clone() } else { w.name.clone() };
+                    drop(state);
+                    let svc = Arc::clone(&push_for_timer);
+                    let wid = window_id.clone();
+                    std::thread::spawn(move || {
+                        svc.send_for_window_state(&wid, &title, "is waiting for you");
+                    });
+                }
             }
 
             // On transition to waiting_for_input, send output delta + TTS
@@ -352,6 +378,60 @@ pub fn build_ui(app: &adw::Application) {
                     }
                 }
             }
+        }
+
+        // Claude-mode scan. Read the terminal-content tail for every window
+        // we've identified as running Claude and stash the detected mode in
+        // shared state. build_layout_update reads from there, so the iOS app
+        // sees mode pips on the next layout broadcast.
+        {
+            let state = ss_timer.read().unwrap();
+            let claude_windows: Vec<(String, u64, u32, String, String)> = state
+                .windows
+                .iter()
+                .filter(|w| w.is_enabled && state.state_detector.windows_with_claude.contains(&w.id))
+                .map(|w| (w.id.clone(), w.window_id, w.pid, w.name.clone(), w.app_class.clone()))
+                .collect();
+            drop(state);
+
+            let mut detected: Vec<(String, Option<crate::protocol::messages::ClaudeMode>)> = Vec::new();
+            for (id, wid, pid, title, app_class) in &claude_windows {
+                if let Ok(content) = ib_timer.read_content_with_hints(*wid, *pid, title, app_class) {
+                    let mode = crate::services::claude_mode::detect_default(&content);
+                    detected.push((id.clone(), mode));
+                }
+            }
+            if !detected.is_empty() {
+                let mut state = ss_timer.write().unwrap();
+                for (id, mode) in detected {
+                    match mode {
+                        Some(m) => { state.claude_modes.insert(id, m); }
+                        None => { state.claude_modes.remove(&id); }
+                    }
+                }
+            }
+        }
+
+        // Periodic permissions probe — feeds the iOS perms Live Activity and
+        // the in-app perms sheet. Mirrors PermissionProbeService on Mac. Cheap
+        // (which/dbus-send), so running every 2s is fine.
+        if let Some(json) = encode_message(
+            &crate::services::permission_probe::PermissionProbe::probe(),
+        ) {
+            let _ = broadcast_tx_timer.try_send(json);
+        }
+
+        // Project-directories broadcast — phone's "+" picker shows the
+        // expanded project list. We broadcast every tick (cheap, ~µs) so
+        // freshly-connected clients see it within 2s without us needing
+        // any new "client-authenticated" plumbing.
+        let directories = {
+            let state = ss_timer.read().unwrap();
+            state.settings.directories.expanded()
+        };
+        let proj_msg = crate::protocol::messages::ProjectDirectoriesMessage::new(directories);
+        if let Some(json) = encode_message(&proj_msg) {
+            let _ = broadcast_tx_timer.try_send(json);
         }
 
         sidebar_refresh.refresh();
@@ -514,7 +594,13 @@ fn start_services(
     client_selected_window: Rc<RefCell<Option<String>>>,
     pending_input: Rc<RefCell<HashSet<String>>>,
     tts_session_ids: Rc<RefCell<HashMap<String, String>>>,
-) -> (async_channel::Sender<String>, async_channel::Sender<RuntimeCommand>) {
+) -> (
+    async_channel::Sender<String>,
+    async_channel::Sender<RuntimeCommand>,
+    Arc<crate::services::push_service::PushService>,
+    Arc<crate::services::whisper_service::WhisperService>,
+    Arc<crate::services::connection_log::ConnectionLog>,
+) {
     let port = {
         let state = shared_state.read().unwrap();
         state.settings.general.websocket_port
@@ -558,6 +644,18 @@ fn start_services(
             let ws_clone = ws_server.clone();
             tokio::spawn(async move {
                 ws_clone.run().await;
+            });
+
+            // 10s heartbeat ping. Phones notice a dead daemon within ~15s
+            // (one ping interval + send timeout). Mirrors Mac's heartbeat.
+            let ws_heartbeat = ws_server.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+                interval.tick().await; // skip the immediate first tick
+                loop {
+                    interval.tick().await;
+                    ws_heartbeat.heartbeat_ping().await;
+                }
             });
 
             {
@@ -718,16 +816,88 @@ fn start_services(
     let csw_handler = client_selected_window;
     let pi_handler = pending_input;
     let tts_handler = tts_session_ids;
+    // Whisper PTT — local transcription. Lazily downloads + loads its model
+    // on first audio chunk; broadcasts whisper_status updates so the iPhone
+    // knows whether the remote-recognizer path is viable.
+    let whisper = crate::services::whisper_service::WhisperService::new(broadcast_tx.clone());
+    whisper.ensure_model_async();
+    let whisper_handler = Arc::clone(&whisper);
+    let whisper_returned = whisper;
+
+    // Push service — APNs registry + per-device prefs. Pushes don't fire
+    // until set_apns_client is called from the settings UI with a valid
+    // .p8 + key/team/bundle ids.
+    let push_service = crate::services::push_service::PushService::new();
+    let push_handler = Arc::clone(&push_service);
+    let push_returned = Arc::clone(&push_service);
+
+    // Phone-prefs registry — receives preferences_snapshot, replies to
+    // preferences_request. Persists to ~/.config/quip/phone-prefs.json.
+    let prefs_store = std::sync::Arc::new(
+        crate::services::preferences_store::PreferencesStore::default_production(),
+    );
+    let prefs_handler = Arc::clone(&prefs_store);
+
     glib::spawn_future_local(async move {
         while let Ok(json) = gtk_rx.recv().await {
             handle_incoming_message(
                 &json, &ss_handler, &*wb_handler, &*ib_handler, &btx_handler, &al_handler,
-                &csw_handler, &pi_handler, &tts_handler,
+                &csw_handler, &pi_handler, &tts_handler, &whisper_handler, &push_handler,
+                &prefs_handler,
             );
         }
     });
 
-    (broadcast_tx, runtime_cmd_tx)
+    let connection_log_returned = Arc::clone(&ws_server.connection_log);
+    (broadcast_tx, runtime_cmd_tx, push_returned, whisper_returned, connection_log_returned)
+}
+
+/// Trim trailing whitespace-only lines from a terminal-content scrape.
+/// Mirrors Mac's `while let last = lines.last, last.trimmingCharacters
+/// (in: .whitespaces).isEmpty` strip from the request_content path.
+fn strip_trailing_blank_lines(content: &str) -> String {
+    let mut lines: Vec<&str> = content.split('\n').collect();
+    while lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod scrape_tests {
+    use super::strip_trailing_blank_lines;
+
+    #[test]
+    fn strips_trailing_blanks() {
+        let input = "first\nsecond\n   \n\n  \n";
+        assert_eq!(strip_trailing_blank_lines(input), "first\nsecond");
+    }
+
+    #[test]
+    fn preserves_internal_blanks() {
+        let input = "first\n\nsecond\n";
+        assert_eq!(strip_trailing_blank_lines(input), "first\n\nsecond");
+    }
+
+    #[test]
+    fn handles_all_blanks() {
+        assert_eq!(strip_trailing_blank_lines("\n\n\n"), "");
+    }
+
+    #[test]
+    fn handles_empty() {
+        assert_eq!(strip_trailing_blank_lines(""), "");
+    }
+}
+
+/// Broadcast an ErrorMessage so the phone shows a red toast instead of
+/// the action silently no-oping. Used on dead-window targets and other
+/// recoverable failures during message handling.
+fn return_error(broadcast_tx: &async_channel::Sender<String>, reason: String) {
+    let msg = crate::protocol::messages::ErrorMessage::new(reason);
+    if let Some(json) = encode_message(&msg) {
+        let _ = broadcast_tx.try_send(json);
+    }
 }
 
 fn handle_incoming_message(
@@ -740,6 +910,9 @@ fn handle_incoming_message(
     client_selected_window: &Rc<RefCell<Option<String>>>,
     pending_input: &Rc<RefCell<HashSet<String>>>,
     tts_session_ids: &Rc<RefCell<HashMap<String, String>>>,
+    whisper: &Arc<crate::services::whisper_service::WhisperService>,
+    push: &Arc<crate::services::push_service::PushService>,
+    prefs_store: &Arc<crate::services::preferences_store::PreferencesStore>,
 ) {
     use message_router::IncomingAction;
 
@@ -787,11 +960,13 @@ fn handle_incoming_message(
                         wid, &text, press_return, pid, &title, &app_class,
                     ) {
                         tracing::warn!("Failed to send text to {window_id}: {e}");
+                        return_error(broadcast_tx, format!("send_text failed: {e}"));
                     } else {
                         tracing::info!("Text sent successfully");
                     }
                 } else {
                     tracing::warn!("Window not found for id: {window_id}");
+                    return_error(broadcast_tx, format!("send_text: window {window_id} not found"));
                 }
                 None
             }
@@ -800,6 +975,12 @@ fn handle_incoming_message(
                 let hint = state.windows.iter().find(|w| w.id == window_id).map(|w| {
                     (w.window_id, w.pid, w.name.clone(), w.app_class.clone(), w.is_enabled)
                 });
+                if hint.is_none() {
+                    return_error(
+                        broadcast_tx,
+                        format!("quick_action '{action}': window {window_id} not found"),
+                    );
+                }
                 if let Some((wid, pid, title, app_class, enabled)) = hint {
                     // Same reasoning as SendText — let the input backend
                     // decide whether it needs focus, so the D-Bus path stays
@@ -814,13 +995,37 @@ fn handle_incoming_message(
                             tracing::warn!("send_text failed for window {wid}: {e}");
                         }
                     };
+                    // Claude Code mode cycling — read current mode from the
+                    // shared state's claude_modes map, compute press count,
+                    // send Shift+Tab that many times. Mac wires this the same
+                    // way (QuipMacApp.swift cycleClaudeMode).
+                    let cycle_to = |target: crate::protocol::messages::ClaudeMode| {
+                        let current = state
+                            .claude_modes
+                            .get(&window_id)
+                            .copied()
+                            .unwrap_or(crate::protocol::messages::ClaudeMode::Normal);
+                        let presses = crate::protocol::messages::ClaudeMode::shift_tab_presses(
+                            current, target,
+                        );
+                        for _ in 0..presses {
+                            key("shift+tab");
+                        }
+                    };
+
                     match action.as_str() {
                         "press_return" => key("return"),
                         "press_ctrl_c" => key("ctrl+c"),
                         "press_ctrl_d" => key("ctrl+d"),
                         "press_escape" => key("escape"),
                         "press_tab" => key("tab"),
+                        "press_shift_tab" => key("shift+tab"),
                         "press_backspace" => key("backspace"),
+                        // Ctrl+U — readline "kill to start of line"; wipes prompt.
+                        "clear_input" => key("ctrl+u"),
+                        "set_plan_mode" => cycle_to(crate::protocol::messages::ClaudeMode::Plan),
+                        "set_auto_accept_mode" => cycle_to(crate::protocol::messages::ClaudeMode::AutoAccept),
+                        "set_normal_mode" => cycle_to(crate::protocol::messages::ClaudeMode::Normal),
                         "press_y" => key("y"),
                         "press_n" => key("n"),
                         "clear_terminal" => txt("/clear", true),
@@ -872,16 +1077,168 @@ fn handle_incoming_message(
                 encode_message(&msg)
             }
             IncomingAction::DuplicateWindow(source_window_id) => {
-                tracing::info!(
-                    "duplicate_window requested for {source_window_id} — not implemented on Linux yet"
-                );
+                // Spawn a fresh terminal in the same directory as the source.
+                let source_dir = state
+                    .windows
+                    .iter()
+                    .find(|w| w.id == source_window_id)
+                    .map(|w| w.subtitle.clone())
+                    .filter(|s| !s.is_empty());
+                let terminal = state.settings.general.default_terminal.clone();
+                drop(state);
+                match source_dir {
+                    Some(dir) => {
+                        if let Err(e) = input_backend.spawn_terminal(&terminal, &dir) {
+                            tracing::warn!("duplicate_window: spawn failed: {e}");
+                            return_error(broadcast_tx, format!("spawn failed: {e}"));
+                        }
+                    }
+                    None => {
+                        return_error(
+                            broadcast_tx,
+                            format!("duplicate_window: source window {source_window_id} not found"),
+                        );
+                    }
+                }
+                state = shared_state.write().unwrap();
                 None
             }
             IncomingAction::CloseWindow(window_id) => {
-                tracing::info!(
-                    "close_window requested for {window_id} — not implemented on Linux yet"
-                );
+                // Send SIGTERM to the terminal app's PID. There's no portable
+                // "close this window" gesture on Linux for arbitrary apps —
+                // killing the process is what "Close Terminal" means here.
+                audit_logger.log("close_window", "ws-client", &window_id);
+                let pid = state.windows.iter().find(|w| w.id == window_id).map(|w| w.pid);
+                match pid {
+                    Some(p) => {
+                        match nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(p as i32),
+                            nix::sys::signal::Signal::SIGTERM,
+                        ) {
+                            Ok(()) => tracing::info!("close_window: SIGTERM sent to pid {p}"),
+                            Err(e) => {
+                                tracing::warn!("close_window: kill({p}) failed: {e}");
+                                return_error(broadcast_tx, format!("close failed: {e}"));
+                            }
+                        }
+                    }
+                    None => {
+                        return_error(
+                            broadcast_tx,
+                            format!("close_window: window {window_id} not found"),
+                        );
+                    }
+                }
                 None
+            }
+            IncomingAction::SpawnWindow(directory) => {
+                let terminal = state.settings.general.default_terminal.clone();
+                drop(state);
+                if let Err(e) = input_backend.spawn_terminal(&terminal, &directory) {
+                    tracing::warn!("spawn_window: spawn failed: {e}");
+                    return_error(broadcast_tx, format!("spawn failed: {e}"));
+                }
+                state = shared_state.write().unwrap();
+                None
+            }
+            IncomingAction::ArrangeWindows(layout) => {
+                use crate::models::layout::LayoutMode;
+                let mode = match layout.as_str() {
+                    "horizontal" => LayoutMode::Columns,
+                    "vertical" => LayoutMode::Rows,
+                    other => {
+                        return_error(broadcast_tx, format!("arrange_windows: unknown layout '{other}'"));
+                        return;
+                    }
+                };
+                drop(state);
+                // Custom-template arg is unused for Columns/Rows; pass any variant.
+                arrange_windows(
+                    shared_state,
+                    window_backend,
+                    &mode,
+                    &crate::models::layout::CustomLayoutTemplate::LargeLeftSmallRight,
+                );
+                state = shared_state.write().unwrap();
+                None
+            }
+            IncomingAction::OpenSettingsPane(msg) => {
+                tracing::info!("open_mac_settings_pane: {:?}", msg.pane);
+                crate::services::settings_pane_opener::open_pane(msg.pane);
+                None
+            }
+            IncomingAction::PreferencesSnapshot(msg) => {
+                prefs_store.put(msg.device_id.clone(), msg.preferences);
+                None
+            }
+            IncomingAction::PreferencesRequest(msg) => {
+                let snapshot = prefs_store.get(&msg.device_id);
+                let restore =
+                    crate::protocol::messages::PreferenceRestoreMessage::new(snapshot);
+                encode_message(&restore)
+            }
+            IncomingAction::AudioChunk(msg) => {
+                whisper.handle_chunk(msg);
+                None
+            }
+            IncomingAction::RegisterPushDevice(msg) => {
+                tracing::info!("push register: token={} env={}", &msg.device_token[..8.min(msg.device_token.len())], msg.environment);
+                push.register(msg);
+                None
+            }
+            IncomingAction::PushPreferences(msg) => {
+                tracing::info!("push prefs: paused={} banner={:?} qh={:?}-{:?}",
+                    msg.paused, msg.banner_enabled, msg.quiet_hours_start, msg.quiet_hours_end);
+                push.apply_preferences(msg);
+                None
+            }
+            IncomingAction::ImageUpload(msg) => {
+                use crate::services::image_upload::ImageUploadHandler;
+                let image_id = msg.image_id.clone();
+                let window_id = msg.window_id.clone();
+                let hint = state.windows.iter().find(|w| w.id == window_id).map(|w| {
+                    (w.window_id, w.pid, w.name.clone(), w.app_class.clone())
+                });
+
+                let handler = ImageUploadHandler::default_production();
+                let response_json = match handler.save(&msg) {
+                    Ok(saved) => {
+                        let saved_path = saved.to_string_lossy().to_string();
+                        audit_logger.log("image_upload", "ws-client", &saved_path);
+
+                        // Paste " <path> " into the focused terminal so it joins
+                        // any existing user text. No press_return — the phone
+                        // sends a separate send_text/press_return after the ack
+                        // (see CLAUDE.md photo-upload-spinner rule about
+                        // ordering).
+                        if let Some((wid, pid, title, app_class)) = hint {
+                            let pasted = format!(" {saved_path} ");
+                            if let Err(e) = input_backend.send_text_with_hints(
+                                wid, &pasted, false, pid, &title, &app_class,
+                            ) {
+                                tracing::warn!("Failed to paste image path into {window_id}: {e}");
+                            }
+                        } else {
+                            tracing::warn!("image_upload: window {window_id} not found, file saved but not pasted");
+                        }
+
+                        let ack = crate::protocol::messages::ImageUploadAckMessage::new(
+                            image_id,
+                            saved_path,
+                        );
+                        encode_message(&ack)
+                    }
+                    Err(e) => {
+                        tracing::warn!("image_upload save failed: {e}");
+                        let err = crate::protocol::messages::ImageUploadErrorMessage::new(
+                            image_id,
+                            e.to_string(),
+                        );
+                        encode_message(&err)
+                    }
+                };
+
+                response_json
             }
             IncomingAction::RequestContent(window_id) => {
                 if let Some(w) = state.windows.iter().find(|w| w.id == window_id) {
@@ -893,11 +1250,22 @@ fn handle_incoming_message(
                     let text_content = input_backend
                         .read_content_with_hints(wid, pid, &title, &app_class)
                         .unwrap_or_default();
+                    // Strip trailing whitespace-only rows. Claude Code pads
+                    // its prompt box with blank cells to wipe stale text;
+                    // sent raw, those rows land at the bottom of the phone's
+                    // scroll view and push the prompt off-screen.
+                    let text_content = strip_trailing_blank_lines(&text_content);
                     let text_content = crate::services::secret_redactor::redact(&text_content);
 
                     let msg = if !text_content.is_empty() {
-                        // Got text from tmux — send text only (scrollable on iOS)
-                        crate::protocol::messages::TerminalContentMessage::new(window_id, text_content)
+                        // Got text from tmux — send text only (scrollable on iOS).
+                        // Extract URLs so iOS can render the tap-to-open tray.
+                        let urls = crate::services::terminal_url_extractor::extract(&text_content);
+                        let mut m = crate::protocol::messages::TerminalContentMessage::new(window_id, text_content);
+                        if !urls.is_empty() {
+                            m = m.with_urls(urls);
+                        }
+                        m
                     } else {
                         // No tmux — fall back to screenshot
                         match input_backend.capture_screenshot(wid) {

@@ -113,6 +113,10 @@ impl WaylandWindowBackend {
                     width: w,
                     height: h,
                 },
+                // Wayland compositors generally hide off-workspace windows
+                // from list APIs already; default true and let the filter
+                // logic on the broadcast side trust that.
+                is_on_visible_screen: true,
             });
         }
 
@@ -203,6 +207,7 @@ impl WaylandWindowBackend {
                     width: w,
                     height: h,
                 },
+                is_on_visible_screen: true,
             });
         }
 
@@ -360,6 +365,7 @@ impl WaylandWindowBackend {
                 app_class: class,
                 pid,
                 bounds,
+                is_on_visible_screen: true,
             });
         }
 
@@ -488,6 +494,7 @@ impl WaylandWindowBackend {
                 app_class: class,
                 pid,
                 bounds,
+                is_on_visible_screen: true,
             });
         }
 
@@ -613,6 +620,7 @@ impl WaylandWindowBackend {
                 app_class: class,
                 pid,
                 bounds,
+                is_on_visible_screen: true,
             });
         }
 

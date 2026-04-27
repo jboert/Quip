@@ -10,6 +10,12 @@ pub struct RawWindowInfo {
     pub app_class: String,
     pub pid: u32,
     pub bounds: Rect,
+    /// True if the window is on the current desktop / workspace and would
+    /// be visible if it weren't covered. Used by the mirror-desktop filter
+    /// to drop disabled terminals on other workspaces from the broadcast.
+    /// Wayland compositors usually omit windows on other workspaces from
+    /// xdg-output anyway, so the Wayland backend defaults this to `true`.
+    pub is_on_visible_screen: bool,
 }
 
 /// Information about a display/monitor

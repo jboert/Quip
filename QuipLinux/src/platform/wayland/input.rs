@@ -243,8 +243,10 @@ impl WaylandInputBackend {
         const KEY_TAB: u32 = 15;
         const KEY_ENTER: u32 = 28;
         const KEY_LEFTCTRL: u32 = 29;
+        const KEY_LEFTSHIFT: u32 = 42;
         const KEY_C: u32 = 46;
         const KEY_D: u32 = 32;
+        const KEY_U: u32 = 22;
         const KEY_Y: u32 = 21;
         const KEY_N: u32 = 49;
         const KEY_LEFT: u32 = 105;
@@ -268,6 +270,11 @@ impl WaylandInputBackend {
             "n" => press(KEY_N),
             "ctrl+c" => combo(KEY_LEFTCTRL, KEY_C),
             "ctrl+d" => combo(KEY_LEFTCTRL, KEY_D),
+            // Ctrl+U — readline "kill to start of line"; wipes the prompt input
+            // in one keystroke. Mac wires this as the `clear_input` quick action.
+            "ctrl+u" => combo(KEY_LEFTCTRL, KEY_U),
+            // Shift+Tab — Claude Code plan-mode cycle.
+            "shift+tab" => combo(KEY_LEFTSHIFT, KEY_TAB),
             // Last-resort fallback: a single a-z character maps to its KEY_ code.
             // Anything else is passed through as-is so ydotool will at least log
             // "non-interpretable value" instead of us silently swallowing it.
@@ -304,6 +311,8 @@ impl WaylandInputBackend {
         let lower = key.to_lowercase();
         let special = match lower.as_str() {
             "return" | "enter" => return vec!["-k".into(), "Return".into()],
+            // wtype uses XKB key names; Tab is capitalized.
+            "shift+tab" => return vec!["-M".into(), "shift".into(), "-k".into(), "Tab".into()],
             _ => &lower,
         };
 
@@ -631,13 +640,18 @@ impl WaylandInputBackend {
     /// Map a keystroke name to a Konsole sendText payload, if supported.
     fn konsole_key_to_text(key: &str) -> Option<&'static str> {
         match key.to_lowercase().as_str() {
-            "return" | "enter" => Some("\n"),
+            // CR, not LF — Claude Code's TUI only submits on 0x0D.
+            "return" | "enter" => Some("\r"),
             "tab" => Some("\t"),
             "backspace" => Some("\x7f"),
             "escape" => Some("\x1b"),
             "ctrl+c" => Some("\x03"),
             "ctrl+d" => Some("\x04"),
+            "ctrl+u" => Some("\x15"), // NAK — readline "kill to start of line"
             "ctrl+z" => Some("\x1a"),
+            // CSI back-tab — the standard escape sequence terminals send
+            // for Shift+Tab. Used for Claude Code mode cycling.
+            "shift+tab" => Some("\x1b[Z"),
             "y" => Some("y"),
             "n" => Some("n"),
             _ => None,
@@ -648,12 +662,15 @@ impl WaylandInputBackend {
     fn konsole_send_keystroke(&self, window_id: u64, key: &str) -> PlatformResult<()> {
         // Map key names to actual characters/escape sequences for sendText
         let text = match key.to_lowercase().as_str() {
-            "return" | "enter" => "\n",
+            // CR, not LF — Claude Code's TUI only submits on 0x0D.
+            "return" | "enter" => "\r",
             "tab" => "\t",
             "escape" => "\x1b",
             "ctrl+c" => "\x03",
             "ctrl+d" => "\x04",
+            "ctrl+u" => "\x15",
             "ctrl+z" => "\x1a",
+            "shift+tab" => "\x1b[Z",
             "y" => "y",
             "n" => "n",
             _ => {

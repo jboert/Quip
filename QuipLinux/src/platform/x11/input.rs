@@ -26,7 +26,10 @@ fn map_key_name(key: &str) -> &str {
         "down" => "Down",
         "left" => "Left",
         "right" => "Right",
-        // Pass through combos like "ctrl+c" and already-correct names unchanged.
+        // xdotool wants the `Tab` keysym capitalized even inside a combo.
+        // `ctrl+u` works as-is since `u` is its own keysym.
+        "shift+tab" => "shift+Tab",
+        // Pass through combos like "ctrl+c" / "ctrl+u" and already-correct names unchanged.
         other => other,
     }
 }

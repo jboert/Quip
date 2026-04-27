@@ -77,6 +77,39 @@ fn parse_window_id(s: &str) -> Option<u64> {
     u64::from_str_radix(s, 16).ok()
 }
 
+/// Current desktop number, or None if `wmctrl -d` is unavailable. Output
+/// of `wmctrl -d` flags the active desktop with a `*` in column 2.
+fn current_x11_desktop() -> Option<i32> {
+    let output = Command::new("wmctrl").arg("-d").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 2 && fields[1] == "*" {
+            return fields[0].parse().ok();
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_wm_class_two_values() {
+        assert_eq!(parse_wm_class(r#"WM_CLASS(STRING) = "konsole", "konsole""#), "konsole");
+    }
+
+    #[test]
+    fn parses_wm_class_one_value() {
+        // Some apps only set one value; we fall back to it.
+        assert_eq!(parse_wm_class(r#"WM_CLASS(STRING) = "kitty""#), "kitty");
+    }
+}
+
 impl WindowBackend for X11WindowBackend {
     fn list_windows(&self) -> PlatformResult<Vec<RawWindowInfo>> {
         let output = Command::new("wmctrl")
@@ -91,6 +124,13 @@ impl WindowBackend for X11WindowBackend {
             )));
         }
 
+        // Active desktop number — used to flag which windows are on the
+        // current workspace. wmctrl prints it with `*` next to the active
+        // line; -1 means "sticky" (visible on every desktop) and counts as
+        // visible too. Best-effort — falls back to "everything visible"
+        // if wmctrl -d is unavailable.
+        let active_desktop = current_x11_desktop();
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut windows = Vec::new();
 
@@ -104,7 +144,7 @@ impl WindowBackend for X11WindowBackend {
             let Some(window_id) = parse_window_id(fields[0]) else {
                 continue;
             };
-            let _desktop = fields[1];
+            let desktop: i32 = fields[1].parse().unwrap_or(-1);
             let pid: u32 = fields[2].parse().unwrap_or(0);
             let x: i32 = fields[3].parse().unwrap_or(0);
             let y: i32 = fields[4].parse().unwrap_or(0);
@@ -122,6 +162,13 @@ impl WindowBackend for X11WindowBackend {
                 Err(_) => continue,
             };
 
+            // Visible iff sticky (desktop == -1) or on the active desktop.
+            // If we couldn't determine the active desktop, default to true.
+            let is_on_visible_screen = match active_desktop {
+                Some(active) => desktop == -1 || desktop == active,
+                None => true,
+            };
+
             windows.push(RawWindowInfo {
                 window_id,
                 title,
@@ -134,6 +181,7 @@ impl WindowBackend for X11WindowBackend {
                     width: w,
                     height: h,
                 },
+                is_on_visible_screen,
             });
         }
 

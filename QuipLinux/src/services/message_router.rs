@@ -1,6 +1,9 @@
 use crate::protocol::messages::{
-    message_type, CloseWindowMessage, DuplicateWindowMessage, QuickActionMessage,
-    RequestContentMessage, SelectWindowMessage, SendTextMessage, SttStateMessage,
+    message_type, ArrangeWindowsMessage, AudioChunkMessage, CloseWindowMessage,
+    DuplicateWindowMessage, ImageUploadMessage, OpenMacSettingsPaneMessage,
+    PreferenceRequestMessage, PreferenceSnapshotMessage, PushPreferencesMessage,
+    QuickActionMessage, RegisterPushDeviceMessage, RequestContentMessage, SelectWindowMessage,
+    SendTextMessage, SpawnWindowMessage, SttStateMessage,
 };
 use tracing::warn;
 
@@ -22,6 +25,15 @@ pub enum IncomingAction {
     RequestContent(String),
     DuplicateWindow(String),
     CloseWindow(String),
+    ImageUpload(ImageUploadMessage),
+    AudioChunk(AudioChunkMessage),
+    RegisterPushDevice(RegisterPushDeviceMessage),
+    PushPreferences(PushPreferencesMessage),
+    SpawnWindow(String),
+    ArrangeWindows(String),
+    OpenSettingsPane(OpenMacSettingsPaneMessage),
+    PreferencesSnapshot(PreferenceSnapshotMessage),
+    PreferencesRequest(PreferenceRequestMessage),
 }
 
 /// Parse a JSON message from a client into a typed action.
@@ -67,6 +79,42 @@ pub fn parse_incoming(json: &str) -> Option<IncomingAction> {
         "close_window" => {
             let msg: CloseWindowMessage = serde_json::from_str(json).ok()?;
             Some(IncomingAction::CloseWindow(msg.window_id))
+        }
+        "image_upload" => {
+            let msg: ImageUploadMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::ImageUpload(msg))
+        }
+        "audio_chunk" => {
+            let msg: AudioChunkMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::AudioChunk(msg))
+        }
+        "register_push_device" => {
+            let msg: RegisterPushDeviceMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::RegisterPushDevice(msg))
+        }
+        "push_preferences" => {
+            let msg: PushPreferencesMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::PushPreferences(msg))
+        }
+        "spawn_window" => {
+            let msg: SpawnWindowMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::SpawnWindow(msg.directory))
+        }
+        "arrange_windows" => {
+            let msg: ArrangeWindowsMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::ArrangeWindows(msg.layout))
+        }
+        "open_mac_settings_pane" => {
+            let msg: OpenMacSettingsPaneMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::OpenSettingsPane(msg))
+        }
+        "preferences_snapshot" => {
+            let msg: PreferenceSnapshotMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::PreferencesSnapshot(msg))
+        }
+        "preferences_request" => {
+            let msg: PreferenceRequestMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::PreferencesRequest(msg))
         }
         other => {
             warn!("Unknown message type: {other}");

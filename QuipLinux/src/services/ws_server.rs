@@ -13,6 +13,7 @@ use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, warn};
 
 use crate::protocol::messages::{encode_message, message_type, AuthMessage, AuthResultMessage};
+use crate::services::connection_log::{ConnectionEventKind, ConnectionLog};
 use crate::services::pin_manager::PINManager;
 
 type WsSink = SplitSink<WebSocketStream<TcpStream>, Message>;
@@ -51,6 +52,7 @@ pub struct WsServer {
     message_tx: mpsc::UnboundedSender<String>,
     pin_manager: PINManager,
     require_auth: Arc<AtomicBool>,
+    pub connection_log: Arc<ConnectionLog>,
 }
 
 impl WsServer {
@@ -67,6 +69,7 @@ impl WsServer {
             message_tx,
             pin_manager,
             require_auth: Arc::new(AtomicBool::new(require_auth)),
+            connection_log: ConnectionLog::new(),
         }
     }
 
@@ -106,17 +109,20 @@ impl WsServer {
             let message_tx = self.message_tx.clone();
             let pin_manager = self.pin_manager.clone();
             let require_auth = self.require_auth.load(Ordering::Relaxed);
+            let connection_log = Arc::clone(&self.connection_log);
 
             tokio::spawn(async move {
                 let ws_stream = match tokio_tungstenite::accept_async(stream).await {
                     Ok(ws) => ws,
                     Err(e) => {
                         warn!("WebSocket handshake failed for {peer}: {e}");
+                        connection_log.record(ConnectionEventKind::Failed, peer.to_string(), Some(e.to_string()));
                         return;
                     }
                 };
 
                 info!("WebSocket connection established with {peer}");
+                connection_log.record(ConnectionEventKind::Connected, peer.to_string(), None);
                 let (write, mut read) = ws_stream.split();
 
                 let client_id = next_id.fetch_add(1, Ordering::Relaxed);
@@ -144,14 +150,22 @@ impl WsServer {
                             if msg.is_text() {
                                 let text = msg.into_text().unwrap_or_default();
 
-                                // Message size limit: 64KB max
-                                const MAX_MESSAGE_SIZE: usize = 65_536;
+                                // App-level size cap. Mirrors QuipMac/Services/WebSocketServer.swift,
+                                // which enforces 16 MiB to fit base64-encoded image uploads.
+                                // Tungstenite's default protocol-level max_message_size is 64 MiB
+                                // and max_frame_size is 16 MiB, both ≥ this app cap.
+                                const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
                                 if text.len() > MAX_MESSAGE_SIZE {
                                     info!("Dropping oversized message ({} bytes) from {peer}", text.len());
                                     continue;
                                 }
 
-                                info!("WS recv from {peer}: {}", &text[..text.len().min(200)]);
+                                // Redact before logging — auth messages carry the PIN
+                                // and would otherwise land in plaintext logs.
+                                let preview = crate::services::secret_redactor::redact(
+                                    &text[..text.len().min(200)],
+                                );
+                                info!("WS recv from {peer}: {preview}");
 
                                 // Rate limit check (before auth, to prevent unauthenticated floods)
                                 {
@@ -196,6 +210,7 @@ impl WsServer {
                                         if let Some(auth) = auth_msg {
                                             if pin_manager.verify(&auth.pin) {
                                                 info!("Client {peer} authenticated successfully");
+                                                connection_log.record(ConnectionEventKind::AuthSucceeded, peer.to_string(), None);
                                                 let result_msg = AuthResultMessage::success();
                                                 let json = encode_message(&result_msg).unwrap_or_default();
 
@@ -206,6 +221,7 @@ impl WsServer {
                                                 }
                                             } else {
                                                 warn!("Client {peer} auth failed: incorrect PIN");
+                                                connection_log.record(ConnectionEventKind::AuthFailed, peer.to_string(), Some("incorrect PIN".into()));
                                                 let result_msg = AuthResultMessage::failure("Incorrect PIN".into());
                                                 let json = encode_message(&result_msg).unwrap_or_default();
 
@@ -237,6 +253,7 @@ impl WsServer {
 
                 // Remove client on disconnect
                 info!("Client {peer} (id={client_id}) disconnected");
+                connection_log.record(ConnectionEventKind::Disconnected, peer.to_string(), None);
                 let mut locked = clients.lock().await;
                 locked.remove(&client_id);
                 client_count.store(locked.len(), Ordering::Relaxed);
@@ -290,5 +307,36 @@ impl WsServer {
 
     pub fn client_count(&self) -> usize {
         self.client_count.load(Ordering::Relaxed)
+    }
+
+    /// Send a WebSocket Ping to every authenticated client. Tungstenite
+    /// auto-replies with Pong on the receiver, so we just rely on send
+    /// failing to detect a half-closed connection. Mirrors Mac's 10s
+    /// heartbeat. Drop unresponsive clients via the same pattern as
+    /// `broadcast`.
+    pub async fn heartbeat_ping(&self) {
+        const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
+        let mut clients = self.clients.lock().await;
+        let mut dead_ids = Vec::new();
+        for (id, client) in clients.iter_mut() {
+            if !client.authenticated {
+                continue;
+            }
+            let send_fut = client.sink.send(Message::Ping(Vec::new().into()));
+            match timeout(SEND_TIMEOUT, send_fut).await {
+                Ok(Ok(())) => {}
+                _ => {
+                    warn!("Dropping unresponsive WebSocket client id={id} on heartbeat");
+                    dead_ids.push(*id);
+                }
+            }
+        }
+        for id in &dead_ids {
+            if let Some(mut client) = clients.remove(id) {
+                let _ = client.sink.close().await;
+            }
+        }
+        self.client_count.store(clients.len(), Ordering::Relaxed);
     }
 }

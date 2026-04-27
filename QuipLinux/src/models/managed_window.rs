@@ -24,12 +24,27 @@ pub struct ManagedWindow {
     pub window_id: u64,
     /// Current window bounds in absolute pixels
     pub bounds: Rect,
+    /// True if the window is on the active workspace / desktop. Used by
+    /// the mirror-desktop filter to drop disabled terminals on other
+    /// workspaces from the broadcast — the iPhone shouldn't see "ghost"
+    /// terminals it can't actually interact with right now.
+    pub is_on_visible_screen: bool,
 }
 
 impl ManagedWindow {
     /// Convert to WindowState for protocol messages.
     /// Frame is normalized to 0-1 relative to the given screen bounds.
     pub fn to_window_state(&self, state: &str, screen_bounds: &Rect, is_thinking: bool) -> WindowState {
+        self.to_window_state_with_mode(state, screen_bounds, is_thinking, None)
+    }
+
+    pub fn to_window_state_with_mode(
+        &self,
+        state: &str,
+        screen_bounds: &Rect,
+        is_thinking: bool,
+        claude_mode: Option<String>,
+    ) -> WindowState {
         let frame = self.bounds.to_normalized(screen_bounds);
         WindowState {
             id: self.id.clone(),
@@ -45,6 +60,7 @@ impl ManagedWindow {
             state: state.to_string(),
             color: self.assigned_color.clone(),
             is_thinking,
+            claude_mode,
         }
     }
 }

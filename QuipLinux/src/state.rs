@@ -4,9 +4,127 @@ use std::sync::{Arc, RwLock};
 use crate::models::managed_window::{ManagedWindow, COLOR_PALETTE};
 use crate::models::settings::AppSettings;
 use crate::platform::traits::{is_terminal_class, DisplayInfo, InputBackend, RawWindowInfo, WindowBackend};
-use crate::protocol::messages::{LayoutUpdate, WindowState};
+use crate::protocol::messages::{ClaudeMode, LayoutUpdate, WindowState};
 use crate::protocol::types::{Rect, TerminalState};
 use crate::services::state_detector::StateDetector;
+
+/// Mirror-desktop visibility filter — mirrors Shared/MirrorDesktopFilterTests.swift.
+///
+/// Off: only enabled windows are broadcast.
+/// On: every enabled window (regardless of visibility) plus every terminal
+///     window currently on the active workspace. Disabled terminals on
+///     other workspaces are dropped — the phone shouldn't see "ghost"
+///     terminals it can't actually interact with right now.
+pub fn windows_for_broadcast_filter(w: &ManagedWindow, mirror_desktop: bool) -> bool {
+    if !mirror_desktop {
+        return w.is_enabled;
+    }
+    if w.is_enabled {
+        return true;
+    }
+    crate::platform::traits::is_terminal_class(&w.app_class) && w.is_on_visible_screen
+}
+
+#[cfg(test)]
+mod mirror_desktop_tests {
+    use super::*;
+    use crate::protocol::types::Rect;
+
+    fn mw(id: &str, app_class: &str, enabled: bool) -> ManagedWindow {
+        mw_full(id, app_class, enabled, true)
+    }
+
+    fn mw_full(id: &str, app_class: &str, enabled: bool, visible: bool) -> ManagedWindow {
+        ManagedWindow {
+            id: id.into(),
+            name: id.into(),
+            app: app_class.into(),
+            subtitle: String::new(),
+            app_class: app_class.into(),
+            is_enabled: enabled,
+            assigned_color: "#F5A623".into(),
+            pid: 1,
+            window_id: 0,
+            bounds: Rect { x: 0, y: 0, width: 100, height: 100 },
+            is_on_visible_screen: visible,
+        }
+    }
+
+    fn ids(windows: &[ManagedWindow], mirror: bool) -> Vec<String> {
+        windows
+            .iter()
+            .filter(|w| windows_for_broadcast_filter(w, mirror))
+            .map(|w| w.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn off_shows_only_enabled_windows() {
+        let all = vec![
+            mw("a", "kitty", true),
+            mw("b", "kitty", false),
+            mw("c", "firefox", true),
+        ];
+        let visible = ids(&all, false);
+        assert_eq!(visible, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn on_shows_all_terminals_plus_enabled_non_terminals() {
+        let all = vec![
+            mw("a", "kitty", true),
+            mw("b", "kitty", false),
+            mw("c", "konsole", false),
+            mw("d", "firefox", false),
+            mw("e", "firefox", true),
+        ];
+        let visible = ids(&all, true);
+        assert_eq!(visible, vec!["a", "b", "c", "e"]);
+        assert!(!visible.contains(&"d".to_string()));
+    }
+
+    #[test]
+    fn on_with_no_terminals_still_shows_enabled_non_terminals() {
+        let all = vec![mw("x", "firefox", true)];
+        assert_eq!(ids(&all, true), vec!["x"]);
+    }
+
+    #[test]
+    fn off_ignores_terminal_class() {
+        let all = vec![
+            mw("a", "kitty", true),
+            mw("b", "kitty", false),
+            mw("c", "firefox", false),
+        ];
+        // Off path is still pure enabled-only; class doesn't leak.
+        assert_eq!(ids(&all, false), vec!["a"]);
+    }
+
+    #[test]
+    fn on_drops_disabled_terminal_when_off_screen() {
+        let all = vec![
+            mw_full("a", "kitty", true, true),    // enabled visible — keep
+            mw_full("b", "kitty", false, true),   // disabled but visible — keep
+            mw_full("c", "konsole", false, false), // disabled off-screen — DROP
+        ];
+        let visible = ids(&all, true);
+        assert_eq!(visible, vec!["a", "b"]);
+        assert!(!visible.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn on_keeps_enabled_off_screen() {
+        // Enabled wins over visibility — user activated the window
+        // explicitly; we don't quietly hide it just because they
+        // switched workspaces.
+        let all = vec![
+            mw_full("browser", "firefox", true, false),
+            mw_full("term", "kitty", false, false),
+        ];
+        let visible = ids(&all, true);
+        assert_eq!(visible, vec!["browser"]);
+    }
+}
 
 /// Shared application state, accessible from both tokio tasks and the GTK UI thread.
 pub struct AppState {
@@ -17,6 +135,10 @@ pub struct AppState {
 
     // --- Terminal state detection ---
     pub state_detector: StateDetector,
+    /// Last detected Claude Code mode per window. Populated by the main-window
+    /// poll loop's terminal-content scan; consumed by build_layout_update so
+    /// the iOS app can render mode pips and route set_*_mode actions.
+    pub claude_modes: HashMap<String, ClaudeMode>,
 
     // --- Connection state ---
     pub ws_running: bool,
@@ -46,6 +168,7 @@ impl AppState {
             custom_order: Vec::new(),
             displays: Vec::new(),
             state_detector: StateDetector::new(5.0),
+            claude_modes: HashMap::new(),
             ws_running: false,
             ws_client_count: 0,
             mdns_advertising: false,
@@ -103,6 +226,7 @@ impl AppState {
                     pid: raw.pid,
                     window_id: raw.window_id,
                     bounds: raw.bounds,
+                    is_on_visible_screen: raw.is_on_visible_screen,
                 });
             } else {
                 // First time seeing this window — check the persisted set so
@@ -124,6 +248,7 @@ impl AppState {
                     pid: raw.pid,
                     window_id: raw.window_id,
                     bounds: raw.bounds,
+                    is_on_visible_screen: raw.is_on_visible_screen,
                 });
             }
         }
@@ -175,8 +300,9 @@ impl AppState {
             .unwrap_or(Rect { x: 0, y: 0, width: 1920, height: 1080 });
 
         tracing::info!("Screen bounds: {:?}", screen_bounds);
+        let mirror = self.settings.general.mirror_desktop;
         let states: Vec<WindowState> = self.windows.iter()
-            .filter(|w| w.is_enabled)
+            .filter(|w| windows_for_broadcast_filter(w, mirror))
             .map(|w| {
                 tracing::info!("Window '{}' raw bounds: {:?}", w.name, w.bounds);
                 let state = self.state_detector.get_state(&w.id)
@@ -184,7 +310,8 @@ impl AppState {
                 // isThinking = claude process exists AND is actively busy (not idle)
                 let is_thinking = self.state_detector.windows_with_claude.contains(&w.id)
                     && state == TerminalState::Neutral;
-                let ws = w.to_window_state(state.as_str(), &screen_bounds, is_thinking);
+                let claude_mode = self.claude_modes.get(&w.id).map(|m| m.as_str().to_string());
+                let ws = w.to_window_state_with_mode(state.as_str(), &screen_bounds, is_thinking, claude_mode);
                 tracing::info!("Window '{}' normalized: x={:.3} y={:.3} w={:.3} h={:.3}", w.name, ws.frame.x, ws.frame.y, ws.frame.width, ws.frame.height);
                 ws
             })
