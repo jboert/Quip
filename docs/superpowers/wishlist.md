@@ -836,3 +836,66 @@ Diagnosed autonomously via a Node.js fake-iOS-client (`/tmp/quip-content-probe.j
 - What about cross-display moves on the Mac? Phone has no notion of multiple displays in the layout view.
 
 **Related:** `QuipiOS/QuipApp.swift:2036` (`ForEach` placing `WindowRectangle`), `:2105` (`phoneLayoutFrame`), `:2119` (`windowRect` — coord conversion); `Shared/MessageProtocol.swift` (would need a new `set_window_frame` message if Mac mirroring is in scope).
+
+---
+
+### 41. Volume-button KVO must not clobber other-app audio (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `1f5254c` (2026-04-26). Bug: opening Quip while YouTube/Spotify/etc. was playing slammed system volume to 0.5, "shooting up" any app with a lower-set volume.
+
+**What shipped:** `HardwareButtonHandler.startMonitoring` and `resumeAfterBackground` now call `primeRailIfNeeded(session:)` instead of unconditionally `setVolume(0.5)`. The helper reads `session.outputVolume`; if it's already in (0.0625, 0.9375) — i.e. button-press detection has headroom both directions — `savedVolume` is set to the user's actual level and the system volume is left alone. Only at the rails (≤0.0625 or ≥0.9375) does Quip nudge to the rail value so KVO can see motion.
+
+**Acceptance test:** Play YouTube at ~30 % volume, foreground Quip → volume stays at 30 %. Press volume up/down → cycle/PTT works, returns to 30 % after.
+
+**Related:** `QuipiOS/Services/HardwareButtonHandler.swift:62-81,158-176`.
+
+---
+
+### 42. Hardening audit 2026-04-26 — backlog (🟡 GitHub-tracked)
+
+**Status:** Filed as GitHub issues `jboert/Quip#10`–`#26` under label `audit-2026-04`. This wishlist entry is the index — the per-item detail lives in the issues. Tracker: [#26](https://github.com/jboert/Quip/issues/26).
+
+**Grades:** iOS security C+, iOS code quality A−, Mac security C, Mac robustness B+, build/signing B−, protocol design B+, repo hygiene B+, tests B−, docs B. **Overall B−.**
+
+**Critical (transport + sandboxing):**
+- §A `#10` — Re-enable TLS pinning in `WebSocketClient.swift:312-314`. Verify Cloudflare SPKI hashes first.
+- §B `#11` — Replace `NSAllowsArbitraryLoads: true` (`QuipiOS/project.yml:79`) with `NSExceptionDomains` allow-list (trycloudflare.com + `NSAllowsLocalNetworking`).
+- §C `#12` — Enable `com.apple.security.app-sandbox` in `QuipMac.entitlements`. Will trigger TCC re-prompts (Accessibility, Screen Recording) — schedule for a maintenance window.
+- §D `#13` — `ENABLE_HARDENED_RUNTIME: true` + `DEVELOPMENT_TEAM: D2PM6R797Q` in `QuipMac/project.yml`. Without these, notarization is impossible.
+
+**High (credentials + protocol):**
+- `#14` — Migrate Mac PIN from UserDefaults plaintext to Keychain (`PINManager.swift`); raise to 8+ alphanumeric.
+- `#15` — Audit `CloudflareTunnel.swift:80` Process spawn for `sh -c` shell injection; switch to argv array.
+- `#16` — Remove the 37 MB `cloudflared` Mach-O binary from git; fetch + checksum-verify in build script.
+- `#17` — Add per-message HMAC-SHA256 over WS (HKDF from PIN + nonces). Closes the post-auth-trust gap.
+
+**Medium (correctness + ops):**
+- `#18` — Idempotency keys (`requestId: UUID`) on `SendTextMessage` + `ImageUploadMessage`. Reconnect retries currently double-paste.
+- `#19` — Mac→iOS app-level heartbeat (5 s). Today only iOS pings; Mac crash leaves iOS in stale "connected" for ~13 s.
+- `#20` — Tighten message types: `arrange_windows.layout` → enum; consistent `(try? c.decode(...)) ?? nil` for optional fields.
+- `#21` — Lock `requireAuth` in `WebSocketServer.swift:27` (currently `nonisolated(unsafe)` — main writes, network queue reads).
+- `#22` — Move APNs `keyId` / `teamId` / `bundleId` from UserDefaults to Keychain (private key already there).
+- `#23` — Add CI: `xcodebuild test` for QuipiOS + QuipMac, `cargo test` for QuipLinux.
+- `#24` — Test gaps: WebSocket auth handshake, Mac message-handler dispatch, Bonjour discovery.
+
+**Low:**
+- `#25` — Expand `docs/protocol.md`: heartbeat, idempotency, Bonjour TXT, error envelope, "adding a new message" checklist.
+
+**Already shipped from this audit (commit `b6a8498`, eb-branch):**
+- `WebSocketServer.swift:375` — PIN values redacted from `/tmp` debug log (lengths only).
+- `HardwareButtonHandler.swift:76,174` — empty audio-session catches now `NSLog` the error.
+- `.gitignore` — `*.profraw` / `*.profdata` ignored.
+
+**Wins worth not breaking:**
+- `ImageUploadHandler.swift:13-71` — symlink resolution + prefix check + atomic write.
+- `WebSocketServer.swift:87,262-265` — two-layer 16 MiB cap (NWProtocolWebSocket + app-level guard).
+- iOS concurrency discipline: `@MainActor`, consistent `[weak self]`, `@ObservationIgnored` on background buffers.
+
+**Order of attack (suggested):**
+1. `#16` (cloudflared binary) and `#23` (CI) — pure ops, no runtime risk.
+2. `#15` (shell-injection check) — cheap investigation, may close as no-op.
+3. `#14` + `#22` (Keychain migrations) — one-shot, reversible.
+4. `#13` (team + hardened runtime) — flips one knob, blocks notarization until done.
+5. `#10` + `#11` together (transport hardening) — verify pins first, ship as one PR.
+6. `#12` (sandbox) — last because it's the TCC-prompting one.
+7. Protocol items (`#17`, `#18`, `#19`, `#20`) — bump protocol version once, ship together.
