@@ -67,4 +67,50 @@ final class InlineTerminalContentBranchTests: XCTestCase {
         let b = InlineTerminalContent.branch(content: "body", screenshot: "aGVsbG8=")
         XCTAssertEqual(b, .text, "base64 that doesn't decode to UIImage falls back to text, not Loading…")
     }
+
+    // MARK: - Explicit mode override (Settings → Appearance → Content mode)
+
+    func test_image_mode_with_screenshot_renders_image() {
+        let png = pngBase64()
+        let b = InlineTerminalContent.branch(content: "text here", screenshot: png, mode: .image)
+        XCTAssertEqual(b, .image)
+    }
+
+    func test_image_mode_without_screenshot_stays_loading_not_text() {
+        // The whole point of the override: never silently flip to text when
+        // the user has explicitly asked for image mode. Loading instead so
+        // they see the panel waiting rather than auto-falling back.
+        let b = InlineTerminalContent.branch(content: "text here", screenshot: nil, mode: .image)
+        XCTAssertEqual(b, .loading)
+    }
+
+    func test_image_mode_with_undecodable_screenshot_stays_loading() {
+        let b = InlineTerminalContent.branch(content: "text", screenshot: "not-base64-at-all!!!", mode: .image)
+        XCTAssertEqual(b, .loading)
+    }
+
+    func test_text_mode_with_content_renders_text_even_when_screenshot_present() {
+        // Inverse override: user wants text, screenshot is irrelevant.
+        let png = pngBase64()
+        let b = InlineTerminalContent.branch(content: "terminal output", screenshot: png, mode: .text)
+        XCTAssertEqual(b, .text)
+    }
+
+    func test_text_mode_without_content_is_loading() {
+        let b = InlineTerminalContent.branch(content: "", screenshot: nil, mode: .text)
+        XCTAssertEqual(b, .loading)
+    }
+
+    func test_auto_mode_matches_legacy_behavior() {
+        // Sanity: passing .auto explicitly == calling without the parameter.
+        let png = pngBase64()
+        XCTAssertEqual(
+            InlineTerminalContent.branch(content: "x", screenshot: png, mode: .auto),
+            InlineTerminalContent.branch(content: "x", screenshot: png)
+        )
+        XCTAssertEqual(
+            InlineTerminalContent.branch(content: "", screenshot: nil, mode: .auto),
+            InlineTerminalContent.branch(content: "", screenshot: nil)
+        )
+    }
 }

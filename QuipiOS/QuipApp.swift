@@ -3005,6 +3005,22 @@ func linkifiedTerminalContent(_ raw: String) -> AttributedString {
     return attr
 }
 
+/// User preference for how window content renders. `.auto` keeps the
+/// historic image > text > loading priority; `.image` and `.text` are
+/// hard overrides that stop the panel flickering between modes when the
+/// Mac's screenshot stream is unstable.
+enum ContentRenderMode: String, CaseIterable, Identifiable {
+    case auto, image, text
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto: return "Auto"
+        case .image: return "Image"
+        case .text: return "Text"
+        }
+    }
+}
+
 struct InlineTerminalContent: View {
     let content: String
     let screenshot: String?
@@ -3034,6 +3050,15 @@ struct InlineTerminalContent: View {
     /// user's pick survives relaunch, and shared between portrait and
     /// landscape views so cycling in one affects both.
     @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
+    /// `auto` (default) preserves the image > text > loading priority and
+    /// last-good-screenshot caching. `image` and `text` are hard overrides
+    /// that lock the renderer to one branch — useful when the Mac screenshot
+    /// stream is intermittently empty and the auto path keeps bouncing
+    /// between image and text. Stored as the enum's rawValue.
+    @AppStorage("contentRenderMode") private var contentRenderModeRaw: String = ContentRenderMode.auto.rawValue
+    private var contentRenderMode: ContentRenderMode {
+        ContentRenderMode(rawValue: contentRenderModeRaw) ?? .auto
+    }
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     /// Live horizontal offset applied to the content panel while a
@@ -3055,26 +3080,52 @@ struct InlineTerminalContent: View {
     /// flip the priority again.
     enum RenderBranch { case image, text, loading }
 
-    /// Priority: image > text > loading. Image is the normal state and
-    /// the one the state layer works hard to preserve (last-good screenshot
-    /// caching so network blips don't kick us out). Text is the acceptable
-    /// fallback when no screenshot has ever been received — user's stated
-    /// preference is "plain text beats an empty Loading screen." Loading
-    /// is the truly-no-content state (first connect, between window switches).
+    /// Priority for `.auto`: image > text > loading. Image is the normal
+    /// state and the one the state layer works hard to preserve (last-good
+    /// screenshot caching so network blips don't kick us out). Text is the
+    /// acceptable fallback when no screenshot has ever been received — user's
+    /// stated preference is "plain text beats an empty Loading screen."
+    /// Loading is the truly-no-content state (first connect, window switches).
+    ///
+    /// `.image` mode locks to the screenshot branch — if the screenshot is
+    /// missing or undecodable, fall through to `.loading` rather than `.text`,
+    /// so the panel never silently revert to text mid-session.
+    /// `.text` mode locks to the text branch the same way.
     ///
     /// The URL tray above the content still renders regardless of branch,
     /// so tappable URLs remain available even while waiting for a screenshot.
-    static func branch(content: String, screenshot: String?) -> RenderBranch {
-        if let screenshot, let data = Data(base64Encoded: screenshot),
-           UIImage(data: data) != nil {
-            return .image
+    static func branch(content: String, screenshot: String?, mode: ContentRenderMode = .auto) -> RenderBranch {
+        let imageReady: Bool = {
+            guard let screenshot, let data = Data(base64Encoded: screenshot),
+                  UIImage(data: data) != nil else { return false }
+            return true
+        }()
+        switch mode {
+        case .image:
+            return imageReady ? .image : .loading
+        case .text:
+            return content.isEmpty ? .loading : .text
+        case .auto:
+            if imageReady { return .image }
+            if !content.isEmpty { return .text }
+            return .loading
         }
-        if !content.isEmpty { return .text }
-        return .loading
     }
 
     private var currentBranch: RenderBranch {
-        Self.branch(content: content, screenshot: screenshot)
+        Self.branch(content: content, screenshot: screenshot, mode: contentRenderMode)
+    }
+
+    /// Copy shown in the loading branch — distinguishes "auto / first
+    /// connect" from "you forced image/text and the corresponding payload
+    /// hasn't arrived yet" so the user knows it's waiting on data, not a
+    /// crashed renderer.
+    private var loadingPlaceholder: String {
+        switch contentRenderMode {
+        case .image: return "Waiting for screenshot…"
+        case .text:  return "Waiting for terminal text…"
+        case .auto:  return "Loading…"
+        }
     }
 
     /// Tiny pill in the header showing which render branch is live.
@@ -3207,7 +3258,7 @@ struct InlineTerminalContent: View {
                 LinkableTerminalText(content: content)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loading:
-                Text("Loading…")
+                Text(loadingPlaceholder)
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.4))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -3466,6 +3517,7 @@ struct SettingsSheet: View {
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
+    @AppStorage("contentRenderMode") private var contentRenderModeRaw: String = ContentRenderMode.auto.rawValue
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -3492,7 +3544,7 @@ struct SettingsSheet: View {
                 // Appearance — tight single section. URL tray limit stepper
                 // sits inline behind the toggle so enabling the tray doesn't
                 // spawn a second row.
-                Section("Appearance") {
+                Section {
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
                     HStack {
                         Toggle("URL tray", isOn: $urlTrayEnabled)
@@ -3503,6 +3555,16 @@ struct SettingsSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    Picker("Content mode", selection: $contentRenderModeRaw) {
+                        ForEach(ContentRenderMode.allCases) { mode in
+                            Text(mode.label).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
                 }
 
                 // Notifications — one section. Kill switch on top; the
