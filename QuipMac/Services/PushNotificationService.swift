@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import AppKit
 
-/// Append a timestamped line to `/tmp/quip-push.log` AND route through
+/// Append a timestamped line to `LogPaths.pushPath` AND route through
 /// NSLog. print()/NSLog disappear when the .app is launched via `open`
 /// (stderr goes nowhere user-visible), so for the push pipeline — which
 /// is what users actually want to debug when "I didn't get a
@@ -12,7 +12,7 @@ private func quipPushLog(_ message: String) {
     NSLog("[PushNotif] %@", message)
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
-        let path = "/tmp/quip-push.log"
+        let path = LogPaths.pushPath
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)

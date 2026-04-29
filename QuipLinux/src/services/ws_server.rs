@@ -150,12 +150,9 @@ impl WsServer {
                             if msg.is_text() {
                                 let text = msg.into_text().unwrap_or_default();
 
-                                // App-level size cap. Mirrors QuipMac/Services/WebSocketServer.swift,
-                                // which enforces 16 MiB to fit base64-encoded image uploads.
-                                // Tungstenite's default protocol-level max_message_size is 64 MiB
-                                // and max_frame_size is 16 MiB, both ≥ this app cap.
-                                const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
-                                if text.len() > MAX_MESSAGE_SIZE {
+                                // App-level size cap. See `crate::protocol::limits` —
+                                // mirrors WSLimits.maxMessageBytes from Shared/Constants.swift.
+                                if text.len() > crate::protocol::limits::MAX_MESSAGE_BYTES {
                                     info!("Dropping oversized message ({} bytes) from {peer}", text.len());
                                     continue;
                                 }

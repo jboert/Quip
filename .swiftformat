@@ -1,0 +1,29 @@
+# Config for SwiftFormat by Nick Lockwood (`brew install swiftformat`).
+# Apple's `swift-format` reads `.swift-format` (JSON); this file is for the
+# more widely-used third-party tool. Run `swiftformat .` from the repo root.
+#
+# Conservative settings — match what the existing code already does. We're
+# not trying to mass-reformat the tree right now; the goal is to give every
+# editor the same rules so future diffs don't carry whitespace noise.
+
+--swiftversion 6.0
+--indent 4
+--maxwidth 120
+
+# Don't reflow what's already wrapped — the code base has plenty of
+# carefully-laid-out signatures and switch statements that auto-wrapping
+# would scramble.
+--wraparguments preserve
+--wrapparameters preserve
+--wrapcollections preserve
+
+# Leave headers alone. Some files have multi-line context comments at top
+# (CLAUDE.md-style breadcrumbs) that the default header rule would strip.
+--header ignore
+
+# `self.` insertion is a style argument we don't need to litigate via the
+# formatter — let humans pick.
+--self init-only
+
+# Skip generated artefacts and vendored binaries.
+--exclude **/build, **/Build, **/DerivedData, **/.build, **/Pods, **/Resources/cloudflared

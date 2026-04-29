@@ -6,6 +6,7 @@ pub mod cloudflare_tunnel;
 pub mod connection_log;
 pub mod image_upload;
 pub mod kokoro_tts;
+pub mod log_paths;
 pub mod mdns_advertiser;
 pub mod message_router;
 pub mod permission_probe;

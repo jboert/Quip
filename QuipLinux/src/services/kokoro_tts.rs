@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 
-/// Debug log to /tmp/quip-kokoro.log (mirrors Mac behaviour).
+/// Debug log to `LogPaths::kokoro()` (mirrors Mac behaviour).
 fn debug_log(msg: &str) {
     use std::io::Write as _;
     let line = format!("[{}] {}\n", chrono_stamp(), msg);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/quip-kokoro.log")
+        .open(crate::services::log_paths::kokoro())
     {
         let _ = f.write_all(line.as_bytes());
     }

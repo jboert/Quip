@@ -625,7 +625,7 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 4. **Error-handling gaps (silent failures).** Repo-wide audit of `try?`, `if let ... { } else { return }` with no log, empty `catch { }` blocks, and `guard` statements that swallow failures. Triage each: some are legitimately "don't care" (framework quirks), others are real bugs-in-waiting. Convert the real ones to either loud logs or typed errors.
 
-5. **Notification triage in-app (originally bucketed as UX).** Today you have to `tail /tmp/quip-push.log` on the Mac to see why a push didn't fire. Surface recent push attempts + skip reasons in Mac Settings → Notifications. With the weekend budget, a stripped-down version is feasible: a `List` in SettingsView that reads the last N lines from `/tmp/quip-push.log`. Anything fancier (structured events, iOS-side mirror) defers to a later iteration.
+5. **Notification triage in-app (originally bucketed as UX).** Today you have to `tail ~/Library/Logs/Quip/push.log` on the Mac to see why a push didn't fire. Surface recent push attempts + skip reasons in Mac Settings → Notifications. With the weekend budget, a stripped-down version is feasible: a `List` in SettingsView that reads the last N lines from `LogPaths.pushPath`. Anything fancier (structured events, iOS-side mirror) defers to a later iteration.
 
 **Decisions already made in the paused session:**
 
