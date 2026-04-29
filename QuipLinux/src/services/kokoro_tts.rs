@@ -181,10 +181,14 @@ fn ensure_daemon(daemon: &mut Option<DaemonHandle>) -> bool {
         }
     };
 
-    debug_log(&format!("launching daemon: {} {} --daemon --voice af_heart", python.display(), script.display()));
+    // QUIP_TTS_VOICE lets you A/B Kokoro voices without recompiling.
+    // Strong candidates (plan 2026-04-28 §4A): af_heart (default), bf_isabella,
+    // af_sarah, af_nova, am_puck.
+    let voice = std::env::var("QUIP_TTS_VOICE").unwrap_or_else(|_| "af_heart".to_string());
+    debug_log(&format!("launching daemon: {} {} --daemon --voice {}", python.display(), script.display(), voice));
 
     let mut child = match Command::new(&python)
-        .args([script.to_str().unwrap(), "--daemon", "--voice", "af_heart"])
+        .args([script.to_str().unwrap(), "--daemon", "--voice", &voice])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

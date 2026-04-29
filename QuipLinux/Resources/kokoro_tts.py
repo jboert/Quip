@@ -125,6 +125,46 @@ def _describe_tool_permission(text):
     return f"I want to use the {spoken} tool. Approve, deny, or always allow?"
 
 
+# Common code-file extensions worth dropping in prose (e.g. "main_window.rs" →
+# "main_window"). Tail-anchored at a word boundary so we only drop trailing
+# extensions and don't mangle dotted module references like "foo.bar".
+_CODE_EXT_RE = re.compile(
+    r"(\b[A-Za-z][\w]*?)\.(?:rs|py|swift|ts|tsx|js|jsx|go|cpp|hpp|java|kt|md|"
+    r"json|yaml|yml|toml|sh|cc|hh|rb|sql|css|scss|html|xml|c|h)\b"
+)
+
+# 7-12 contiguous lowercase-hex chars containing at least one digit (commit
+# SHAs always do). The digit gate avoids rewriting real English words that
+# happen to be all-hex, e.g. "defaced", "facaded". Word boundaries on both
+# sides keep this from chopping into longer identifiers.
+_HEX_HASH_RE = re.compile(r"(?<![\w.])(?=[0-9a-f]*[0-9])[0-9a-f]{7,12}(?![\w.])")
+
+
+def _split_identifier(tok: str) -> str:
+    """Make snake_case / CamelCase identifiers more pronounceable.
+
+    No-op on normal English words and short tokens. Splits when:
+      * 2+ underscores, OR a single underscore in a token of length ≥ 8
+      * 3+ uppercase letters mixed with at least one lowercase
+
+    Examples:
+        portal_client            → "portal client"
+        TrackingTokensConfigured → "Tracking Tokens Configured"
+        XMLParser                → "XML Parser"
+        iOS                      → "iOS"      (only 2 uppercase, untouched)
+        Anthropomorphism         → unchanged  (only 1 uppercase)
+    """
+    if "_" in tok and (tok.count("_") >= 2 or len(tok) >= 8):
+        tok = tok.replace("_", " ")
+    upper = sum(1 for c in tok if c.isupper())
+    if upper >= 3 and any(c.islower() for c in tok):
+        # Insert space before each interior capital that follows a lower/digit.
+        tok = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", tok)
+        # Also handle ALLCAPS->Word transitions, e.g. XMLParser → XML Parser.
+        tok = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", tok)
+    return tok
+
+
 def filter_text(text: str) -> str:
     """Strip Claude Code TUI chrome, code, diffs, prompts, markdown. Keep prose."""
     # ANSI escape codes
@@ -166,9 +206,10 @@ def filter_text(text: str) -> str:
     text = re.sub(r"```[^\n]*\n.*?```", "", text, flags=re.DOTALL)
 
     # Leading symbols that just decorate a response line — strip them, keep the text
-    STRIP_SYMBOLS = "⏺●✻✳✢✔✓✗⚡⚠◆◇◈◉○◎◐◑◒◓⏵⏴▶◀►◄▲▼▸▹▾▿⟦⟧⌁⌂⌃⌄⌇✦✧✩✪✫✶✴✷✸✹✺✻★☆"
-    # Leading symbols that mean "drop the whole line" (tool result output, etc.)
-    DROP_LINE_SYMBOLS = "⎿⊢⊣⊤⊥"
+    STRIP_SYMBOLS = "⏺●✻✳✢⚡⚠◆◇◈◉○◎◐◑◒◓⏵⏴▶◀►◄▲▼▸▹▾▿⟦⟧⌁⌂⌃⌄⌇✦✧✩✪✫✶✴✷✸✹✺✻★☆"
+    # Leading symbols that mean "drop the whole line" (tool result output,
+    # checklist items from TaskCreate/TodoWrite, etc.)
+    DROP_LINE_SYMBOLS = "⎿⊢⊣⊤⊥✔✓✗◼◻◾◽"
 
     kept = []
     for line in text.split("\n"):
@@ -213,10 +254,31 @@ def filter_text(text: str) -> str:
         # Works for Claude Code's "Thought for", "Cogitated for"/"Churned for", etc.
         if re.search(r"\b\w{4,}(ed|ing)\s+for\s+\d+\s*[mhs]", stripped):
             continue
-        # Bare "-ing..." thinking indicators (e.g., "Skedaddling…", "Pondering...")
-        if re.match(r"^\w{4,}ing\s*[…\.]{1,3}\s*$", stripped):
+        # Bare "-ing..." thinking indicators, optionally followed by a
+        # parenthetical aside e.g. "Fiddle-faddling… (almost done thinking …)".
+        if re.match(r"^[\w\-]{4,}ing\s*[…\.]+(\s*\([^)]*\))?\s*$", stripped):
             continue
         if re.match(r"^(thinking|pondering|mulling|musing|considering|cogitating|ruminating|crunching|working|processing|analyzing|churning|cogitated|churned|skedaddling)\b", low):
+            continue
+
+        # Compiler/build diagnostic prefixes (rustc / clang / gcc / cargo).
+        # Catches "warning: unused import: …", "error: …", "note: …", "help: …".
+        if re.match(r"^(warning|error|note|help)\s*:", low):
+            continue
+        # Cargo-style "unused …" continuations of the prior diagnostic.
+        if re.match(r"^unused\s+(import|imports|variable|variables)\b", low):
+            continue
+        # rustc/clang code-context line: "118 | pub fn …", optionally with a
+        # caret/squiggle annotation row like "    | ^^^^^".
+        if re.match(r"^\s*\d{1,5}\s*\|", line):
+            continue
+        if re.match(r"^\s*\|", line) and ("^" in stripped or "~" in stripped):
+            continue
+        # git log --oneline: "037780a Wishlist: §41 volume KVO fix done…"
+        if re.match(r"^[0-9a-f]{7,12}\s+\S", stripped):
+            continue
+        # HEREDOC delimiter lines: "<<EOF", "<<'EOF'", "<<-PYTHON".
+        if re.match(r"^<<-?['\"]?\w+['\"]?\s*$", stripped):
             continue
 
         # Shell status: "N shells", "accept edits on · 3 shells"
@@ -245,6 +307,11 @@ def filter_text(text: str) -> str:
         if len(re.findall(r"\b\d+[:.]\s*\w", stripped)) >= 3:
             continue
         if re.match(r"^(searched|read|edited|wrote|created|deleted|moved|copied|found|listed|ran|executed|updated|modified)\s+(\d+|file|files|for|the|a|an)\b", low):
+            continue
+
+        # Task-list headers from TaskCreate/TodoWrite summaries
+        # e.g. "7 tasks (2 done, 1 in progress, 4 open)"
+        if re.match(r"^\d+\s+tasks?\s*\(\d+\s+(done|completed|in\s*progress|open|pending)", low):
             continue
 
         # tmux/terminal status bar pattern: contains multiple │ separators
@@ -313,6 +380,15 @@ def filter_text(text: str) -> str:
     text = text.replace("–", ", ")
     text = text.replace("…", "...")
 
+    # Drop common code-file extensions: "main_window.rs" → "main_window".
+    # Without this, the word.word transform below would emit "main_window rs"
+    # and Kokoro would say "R S" — awkward in prose contexts.
+    text = _CODE_EXT_RE.sub(r"\1", text)
+
+    # Replace 7-12 char hex tokens (commit SHAs) with a spoken word so Kokoro
+    # doesn't try to pronounce "037780a" letter by letter.
+    text = _HEX_HASH_RE.sub("the commit", text)
+
     # Code-like patterns → natural speech:
     #   "dht.toArray()" → "dht toArray"
     #   "dht.table.toArray()" → "dht table toArray"
@@ -325,6 +401,13 @@ def filter_text(text: str) -> str:
     text = re.sub(r"\b(\d+)\.(\d+)(?:\.(\d+))?\b",
                   lambda m: m.group(1) + " point " + m.group(2) + (" point " + m.group(3) if m.group(3) else ""),
                   text)
+
+    # Split CamelCase / snake_case identifiers so Kokoro pronounces them as
+    # words instead of letter blobs. Limited to multi-word identifiers — single
+    # English words are untouched because the helper gates on length and case
+    # transitions.
+    text = re.sub(r"\b[A-Za-z][A-Za-z0-9_]+\b",
+                  lambda m: _split_identifier(m.group(0)), text)
 
     # Strip any remaining TTS-unfriendly symbols that Kokoro would read by name
     # (e.g. ⏺ → "record button", ⎿ → "bottom left corner", etc.)
@@ -431,15 +514,14 @@ def _synth_with_cached(text: str, voice: str, speed: float, lang: str) -> bytes:
     kokoro = _get_kokoro()
     samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang=lang)
 
-    # Loudness boost: peak-normalize then soft-clip with tanh for extra perceived loudness.
-    # Kokoro's raw output is quiet (~0.3 peak); this gets it much louder without
-    # harsh clipping. tanh acts as a smooth compressor on peaks.
+    # Loudness: peak-normalize, then a gentle soft-knee instead of heavy
+    # compression. The previous 3.5× tanh squashed the natural dynamic range
+    # and was the main reason the voice sounded flat — this preserves
+    # prosody while still landing close to full scale.
     peak = float(np.abs(samples).max()) if samples.size else 0.0
     if peak > 1e-6:
         samples = samples * (0.95 / peak)  # peak normalize to near-full
-    # Apply soft compression/limiting — higher gain lifts quieter content
-    # (tanh naturally limits peaks, so no harsh clipping even at 3.5x)
-    samples = np.tanh(samples * 3.5) * 0.98
+    samples = np.tanh(samples * 1.6) * 0.95
 
     pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
     buf = io.BytesIO()
@@ -460,13 +542,31 @@ def _add_prosody_hints(text: str) -> str:
     # Add comma after common introductory words at start of clause
     text = re.sub(r"(?:^|(?<=\. ))(Also|Additionally|However|Meanwhile|Finally|Overall|Instead|Basically|Essentially) ",
                   r"\1, ", text)
+    # Parenthetical asides: "text (aside) more" → "text, aside, more". Helps
+    # Kokoro breathe around interjections instead of barreling through.
+    # Cap aside length so we don't fold long parentheses onto the main clause.
+    text = re.sub(r"\s*\(([^()\n]{2,80})\)\s*", r", \1, ", text)
+    # Collapse double-commas the substitution may have created.
+    text = re.sub(r",(\s*,)+", ",", text)
     return text
+
+
+# Chunk size limits for streaming synthesis. Kokoro's prosody improves with
+# longer inputs, so we use a generous 250-char cap for everything *except* the
+# very first chunk, which we keep short to minimize first-audio latency.
+_CHUNK_MAX_CHARS = 250
+_FIRST_CHUNK_MAX_CHARS = 80
 
 
 def _split_sentences(text: str):
     """Split text into sentences for streaming synthesis.
-    Keeps chunks short (under 150 chars) for better prosody — Kokoro sounds
-    more natural with shorter inputs that represent single thoughts.
+
+    Strategy:
+      * 250-char cap on every chunk for better Kokoro prosody than the old 150.
+      * First chunk is force-split to ≤ 80 chars so first-audio latency stays
+        roughly the same as before — subsequent chunks overlap with playback.
+      * Each chunk gets terminal punctuation if it lacks any, since Kokoro
+        inflects ends-of-sentence downward, which sounds more natural.
     """
     text = _add_prosody_hints(text)
 
@@ -481,7 +581,7 @@ def _split_sentences(text: str):
     # Then split long parts at clause boundaries (semicolons, colons, dashes)
     clause_split = []
     for p in parts:
-        if len(p) > 150:
+        if len(p) > _CHUNK_MAX_CHARS:
             # Split at semicolons, colons, em-dashes, and " - " as clause boundaries
             sub = re.split(r"(?<=[;:])\s+|(?<=,)\s+(?=and |or |but |so |yet )|(?:\s+-\s+)", p)
             clause_split.extend(s.strip() for s in sub if s.strip())
@@ -499,15 +599,15 @@ def _split_sentences(text: str):
         else:
             merged.append(p)
 
-    # Break up anything still over 150 chars at comma boundaries
+    # Break up anything still over the cap at comma boundaries
     final = []
     for p in merged:
-        while len(p) > 150:
-            cut = p.rfind(", ", 60, 150)
+        while len(p) > _CHUNK_MAX_CHARS:
+            cut = p.rfind(", ", 60, _CHUNK_MAX_CHARS)
             if cut < 40:
-                cut = p.rfind(" ", 100, 150)
+                cut = p.rfind(" ", 100, _CHUNK_MAX_CHARS)
             if cut < 40:
-                cut = 150
+                cut = _CHUNK_MAX_CHARS
             final.append(p[:cut].strip())
             p = p[cut:].strip()
             # Strip leading comma from remainder
@@ -515,6 +615,26 @@ def _split_sentences(text: str):
                 p = p[2:]
         if p:
             final.append(p)
+
+    # Force-split the first chunk if it's longer than _FIRST_CHUNK_MAX_CHARS:
+    # take the first sentence boundary, comma, or word boundary we can find.
+    # This keeps first-audio fast even though the cap above is larger.
+    if final and len(final[0]) > _FIRST_CHUNK_MAX_CHARS:
+        first = final[0]
+        cut = first.find(". ", 30, _FIRST_CHUNK_MAX_CHARS)
+        if cut < 0:
+            cut = first.rfind(", ", 30, _FIRST_CHUNK_MAX_CHARS)
+        if cut < 0:
+            cut = first.rfind(" ", 30, _FIRST_CHUNK_MAX_CHARS)
+        if cut < 0:
+            cut = _FIRST_CHUNK_MAX_CHARS
+        head = first[:cut + 1].strip().rstrip(",")
+        tail = first[cut + 1:].strip()
+        final = [head] + ([tail] if tail else []) + final[1:]
+
+    # Ensure each chunk ends with terminal punctuation so Kokoro inflects down.
+    final = [(c if c[-1:] in ".!?,;:" else c + ".") for c in final if c]
+
     return final
 
 
