@@ -1,9 +1,10 @@
 use crate::protocol::messages::{
-    message_type, ArrangeWindowsMessage, AudioChunkMessage, CloseWindowMessage,
-    DuplicateWindowMessage, ImageUploadMessage, OpenMacSettingsPaneMessage,
+    message_type, ArrangeWindowsMessage, AttachITermWindowMessage, AudioChunkMessage,
+    CloseWindowMessage, DuplicateWindowMessage, ImageUploadMessage, OpenMacSettingsPaneMessage,
     PreferenceRequestMessage, PreferenceSnapshotMessage, PushPreferencesMessage,
-    QuickActionMessage, RegisterPushDeviceMessage, RequestContentMessage, SelectWindowMessage,
-    SendTextMessage, SpawnWindowMessage, SttStateMessage,
+    QuickActionMessage, RegisterPushDeviceMessage, RequestContentMessage,
+    ScanITermWindowsMessage, SelectWindowMessage, SendTextMessage, SpawnWindowMessage,
+    SttStateMessage,
 };
 use tracing::warn;
 
@@ -34,6 +35,8 @@ pub enum IncomingAction {
     OpenSettingsPane(OpenMacSettingsPaneMessage),
     PreferencesSnapshot(PreferenceSnapshotMessage),
     PreferencesRequest(PreferenceRequestMessage),
+    ScanITermWindows,
+    AttachITermWindow(AttachITermWindowMessage),
 }
 
 /// Parse a JSON message from a client into a typed action.
@@ -115,6 +118,14 @@ pub fn parse_incoming(json: &str) -> Option<IncomingAction> {
         "preferences_request" => {
             let msg: PreferenceRequestMessage = serde_json::from_str(json).ok()?;
             Some(IncomingAction::PreferencesRequest(msg))
+        }
+        "scan_iterm_windows" => {
+            let _msg: ScanITermWindowsMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::ScanITermWindows)
+        }
+        "attach_iterm_window" => {
+            let msg: AttachITermWindowMessage = serde_json::from_str(json).ok()?;
+            Some(IncomingAction::AttachITermWindow(msg))
         }
         other => {
             warn!("Unknown message type: {other}");

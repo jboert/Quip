@@ -1286,6 +1286,69 @@ fn handle_incoming_message(
                     crate::protocol::messages::encode_message(&msg)
                 }
             }
+            IncomingAction::ScanITermWindows => {
+                // Linux equivalent of Mac's iTerm scan: list every terminal
+                // window the backend can see. is_enabled mirrors Mac's
+                // "already tracked" — disabled terminals are the ones the
+                // user can adopt by tapping. sessionId is the Quip composite
+                // id ("{class}.{wid}"); windowNumber is the X11/Wayland id.
+                let infos: Vec<crate::protocol::messages::ITermWindowInfo> = state
+                    .windows
+                    .iter()
+                    .filter(|w| crate::platform::traits::is_terminal_class(&w.app_class))
+                    .map(|w| crate::protocol::messages::ITermWindowInfo {
+                        window_number: w.window_id as i64,
+                        title: w.name.clone(),
+                        session_id: w.id.clone(),
+                        cwd: w.subtitle.clone(),
+                        is_already_tracked: w.is_enabled,
+                        is_miniaturized: !w.is_on_visible_screen,
+                    })
+                    .collect();
+                tracing::info!(
+                    "scan_iterm_windows: returning {} windows ({} already tracked)",
+                    infos.len(),
+                    infos.iter().filter(|i| i.is_already_tracked).count()
+                );
+                let msg = crate::protocol::messages::ITermWindowListMessage::new(infos);
+                encode_message(&msg)
+            }
+            IncomingAction::AttachITermWindow(msg) => {
+                // Match by sessionId first (Quip's composite id, exact); fall
+                // back to windowNumber if the phone is talking to a slightly
+                // older snapshot. Toggle enabled=true so the window starts
+                // broadcasting; toggle_window persists the enabled set.
+                let target_id = state
+                    .windows
+                    .iter()
+                    .find(|w| w.id == msg.session_id)
+                    .or_else(|| {
+                        state
+                            .windows
+                            .iter()
+                            .find(|w| w.window_id as i64 == msg.window_number)
+                    })
+                    .map(|w| w.id.clone());
+
+                if let Some(id) = target_id {
+                    state.toggle_window(&id, true);
+                    tracing::info!("attach_iterm_window: enabled {id}");
+                    // Push a fresh layout immediately so the phone sees the
+                    // newly-attached window without waiting on the 2s timer.
+                    encode_message(&state.build_layout_update())
+                } else {
+                    tracing::warn!(
+                        "attach_iterm_window: no window matched sessionId={} windowNumber={}",
+                        msg.session_id,
+                        msg.window_number
+                    );
+                    return_error(
+                        broadcast_tx,
+                        format!("attach_iterm_window: window not found"),
+                    );
+                    None
+                }
+            }
         }
     }; // state lock dropped here
 
