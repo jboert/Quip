@@ -74,10 +74,21 @@ final class CloudflareTunnel {
         // Clear old log with private permissions
         fm.createFile(atPath: Self.logPath, contents: Data(), attributes: [.posixPermissions: 0o600])
 
+        // Run cloudflared directly (no shell wrapper) — avoids shell-quoting
+        // hazards on paths with spaces, and lets us redirect output via the
+        // child's --logfile flag rather than `> file 2>&1`. `--log-format json`
+        // gives us per-line atomic records we can parse instead of grepping
+        // formatted text that could change between cloudflared releases.
         let shell = Process()
-        shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // Point cloudflared to the proxy port
-        shell.arguments = ["-c", "\(cfPath) tunnel --url http://localhost:\(proxyPort) > \(Self.logPath) 2>&1"]
+        shell.executableURL = URL(fileURLWithPath: cfPath)
+        shell.arguments = [
+            "tunnel",
+            "--url", "http://localhost:\(proxyPort)",
+            "--logfile", Self.logPath,
+            "--log-format", "json",
+            "--loglevel", "info",
+            "--no-autoupdate",
+        ]
 
         shell.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
@@ -146,10 +157,47 @@ final class CloudflareTunnel {
 
     private func checkLogForURL() {
         guard let content = try? String(contentsOfFile: Self.logPath, encoding: .utf8) else { return }
-        guard let range = content.range(of: "https://[a-zA-Z0-9\\-]+\\.trycloudflare\\.com", options: .regularExpression) else { return }
-        let url = String(content[range])
-        publicURL = url
-        webSocketURL = url.replacingOccurrences(of: "https://", with: "wss://")
+        for raw in content.split(separator: "\n", omittingEmptySubsequences: true) {
+            if let url = Self.extractTunnelURL(from: String(raw)) {
+                publicURL = url
+                webSocketURL = url.replacingOccurrences(of: "https://", with: "wss://")
+                return
+            }
+        }
+    }
+
+    /// Extract a `*.trycloudflare.com` URL from a single cloudflared log line.
+    /// With `--log-format json` the line is a JSON object; we look inside the
+    /// `message` field. If JSON parsing fails (e.g. older cloudflared, or a
+    /// pre-init crash line) we fall back to scanning the raw line so we don't
+    /// regress when bundling a different binary. The host must strictly end in
+    /// `.trycloudflare.com` (not just contain it) so an upstream log line
+    /// quoting `https://attacker.com/?ref=foo.trycloudflare.com` can't fool us.
+    static func extractTunnelURL(from line: String) -> String? {
+        // JSON path first.
+        if let data = line.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let message = obj["message"] as? String,
+           let url = matchTunnelURL(in: message) {
+            return url
+        }
+        // Raw text fallback.
+        return matchTunnelURL(in: line)
+    }
+
+    private static func matchTunnelURL(in haystack: String) -> String? {
+        guard let range = haystack.range(of: "https://[a-zA-Z0-9\\-]+\\.trycloudflare\\.com",
+                                         options: .regularExpression) else {
+            return nil
+        }
+        let candidate = String(haystack[range])
+        guard let parsed = URL(string: candidate),
+              let host = parsed.host?.lowercased(),
+              host.hasSuffix(".trycloudflare.com"),
+              host.count > ".trycloudflare.com".count else {
+            return nil
+        }
+        return candidate
     }
 
     private func killOrphanedCloudflared() {

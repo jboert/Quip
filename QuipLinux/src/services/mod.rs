@@ -1,6 +1,7 @@
 pub mod apns_client;
 pub mod apns_key_store;
 pub mod audit_logger;
+pub mod auth_throttle;
 pub mod claude_mode;
 pub mod cloudflare_tunnel;
 pub mod connection_log;

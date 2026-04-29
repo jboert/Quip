@@ -349,6 +349,9 @@ final class WebSocketServer {
         }
     }
 
+    /// Per-host auth throttle. See AuthThrottle.swift for policy.
+    private let authThrottle = AuthThrottle()
+
     private func handleAuthMessage(_ data: Data, from connection: NWConnection) {
         KokoroTTSDebug.log("handleAuthMessage: \(data.count) bytes from \(connection.endpoint)")
         guard let authMsg = MessageCoder.decode(AuthMessage.self, from: data) else {
@@ -364,20 +367,46 @@ final class WebSocketServer {
         }
 
         let remoteStr = String(describing: connection.endpoint)
+        let host = AuthThrottle.host(from: remoteStr)
+
+        // Reject locked-out hosts BEFORE comparing the PIN — there's nothing
+        // they can send during a lockout window that we want to act on.
+        if case .locked(let remaining) = authThrottle.check(host: host) {
+            let secs = Int(remaining.rounded(.up))
+            KokoroTTSDebug.log("auth: host \(host) locked, \(secs)s remaining")
+            send(AuthResultMessage(success: false,
+                                   error: "Too many attempts; try again in \(secs)s"),
+                 to: connection)
+            connectionLog?.record(.authFailed, remote: remoteStr,
+                                  detail: "locked (\(secs)s remaining)")
+            return
+        }
+
         if authMsg.pin == expectedPIN {
             KokoroTTSDebug.log("auth: PIN matched, sending success")
+            authThrottle.recordSuccess(host: host)
             setAuthenticated(connection)
             send(AuthResultMessage(success: true, error: nil), to: connection)
             print("[WebSocketServer] Client authenticated successfully")
             connectionLog?.record(.authSucceeded, remote: remoteStr, detail: nil)
             onClientAuthenticated?()
         } else {
-            // Never log either PIN — the file is world-readable in /tmp.
-            // Lengths only, so we can still spot a misconfigured client.
+            // Never log either PIN. Lengths only, so we can still spot a
+            // misconfigured client.
             KokoroTTSDebug.log("auth: PIN mismatch (got len=\(authMsg.pin.count), expected len=\(expectedPIN.count))")
-            send(AuthResultMessage(success: false, error: "Incorrect PIN"), to: connection)
-            print("[WebSocketServer] Authentication failed: incorrect PIN")
-            connectionLog?.record(.authFailed, remote: remoteStr, detail: "incorrect PIN")
+            authThrottle.recordFailure(host: host)
+            // Schedule the response after a brief delay so a brute-force
+            // script bottlenecks at one attempt per few seconds rather than
+            // racing the network. Lower bound 0 means the first wrong PIN
+            // gets answered immediately — typo tolerance.
+            let delayMs: Int
+            if case .proceed(let d) = authThrottle.check(host: host) { delayMs = d } else { delayMs = 0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+                guard let self else { return }
+                self.send(AuthResultMessage(success: false, error: "Incorrect PIN"), to: connection)
+                print("[WebSocketServer] Authentication failed: incorrect PIN")
+                self.connectionLog?.record(.authFailed, remote: remoteStr, detail: "incorrect PIN")
+            }
         }
     }
 
