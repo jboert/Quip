@@ -82,9 +82,9 @@ final class WebSocketServer {
         wsOptions.autoReplyPing = true
         // Default max message size is ~1 MiB, which rejects image uploads
         // (base64 of a full-resolution phone photo is ~7-10 MB). Match the
-        // iOS client's 16 MiB ceiling so large images don't trigger the
-        // connection reset we were seeing after ~30s of "receiving."
-        wsOptions.maximumMessageSize = 16 * 1024 * 1024
+        // iOS client's ceiling so large images don't trigger the connection
+        // reset we were seeing after ~30s of "receiving." See WSLimits.
+        wsOptions.maximumMessageSize = WSLimits.maxMessageBytes
         parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
         // Bind to IPv4 localhost only
@@ -313,7 +313,7 @@ final class WebSocketServer {
     private nonisolated static func wslog(_ msg: String) {
         let ts = ISO8601DateFormatter().string(from: Date())
         let line = "[\(ts)] \(msg)\n"
-        let path = "/tmp/quip_ws_debug.log"
+        let path = LogPaths.webSocketPath
         if let fh = FileHandle(forWritingAtPath: path) {
             fh.seekToEndOfFile()
             fh.write(Data(line.utf8))
@@ -397,13 +397,13 @@ final class WebSocketServer {
             }
 
             if let data = content, !data.isEmpty {
-                // Application-layer drop: 16 MiB matches the WebSocket protocol's
+                // Application-layer drop: matches the WebSocket protocol's
                 // maximumMessageSize above. Image uploads from the phone are
                 // commonly 1-10 MiB (base64-encoded JPEG/PNG). The previous 64KB
                 // cap silently murdered every image_upload, leaving the phone's
                 // spinner hanging forever. TTS audio chunks run 300-700 KB so
-                // they comfortably fit under the new ceiling.
-                if data.count > 16 * 1024 * 1024 {
+                // they comfortably fit under the ceiling. See WSLimits.
+                if data.count > WSLimits.maxMessageBytes {
                     KokoroTTSDebug.log("WS: dropping oversized msg \(data.count) bytes")
                     print("[WebSocketServer] Dropping oversized message (\(data.count) bytes)")
                     self.receiveMessage(on: connection)

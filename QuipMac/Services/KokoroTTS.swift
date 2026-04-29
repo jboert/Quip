@@ -1,15 +1,16 @@
 import Foundation
 
-/// Shared debug logger to /tmp/quip-kokoro.log (append-only).
+/// Shared debug logger (append-only). Path resolved from `LogPaths.kokoroPath`.
 /// Uses the throwing `write(contentsOf:)` API so write failures surface as
 /// Swift errors instead of NSExceptions that would crash the app.
 enum KokoroTTSDebug {
-    static let path = "/tmp/quip-kokoro.log"
+    static var path: String { LogPaths.kokoroPath }
     private static let lock = NSLock()
 
     static func log(_ msg: String) {
         let line = "[\(Date())] \(msg)\n"
         guard let data = line.data(using: .utf8) else { return }
+        let path = self.path
         lock.lock()
         defer { lock.unlock() }
         do {

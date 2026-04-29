@@ -1737,10 +1737,10 @@ Run the acceptance flows from the spec. Do not rebuild Mac until Task 9 is the t
 
 Follow `reference_quip_install_recipe` (stable dev cert `SHA E511A12C76...` → ditto into `/Applications`). Do not `rm -rf` the existing bundle.
 
-Expect the Mac to pull the `openai_whisper-base` model on first launch (~150 MB). Watch `/tmp/quip-mac.log`:
+Expect the Mac to pull the `openai_whisper-base` model on first launch (~150 MB). Watch the WebSocket diagnostics log:
 
 ```
-tail -f /tmp/quip-mac.log | grep -i whisper
+tail -f ~/Library/Logs/Quip/websocket.log | grep -i whisper
 ```
 
 - [ ] **Step 10.2: Install iOS build on default device**

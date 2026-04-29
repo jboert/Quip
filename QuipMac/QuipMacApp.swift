@@ -1,14 +1,14 @@
 import SwiftUI
 import WhisperKit
 
-/// Append a line to `/tmp/quip-push.log`. Used to debug "I didn't get
+/// Append a line to `LogPaths.pushPath`. Used to debug "I didn't get
 /// a notification" — print()/NSLog can't be seen by the user when the
 /// app is launched via `open`, but this file is trivial to `tail -f`.
 /// Mirrors the helper inside PushNotificationService.
 fileprivate func appendPushDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
-        let path = "/tmp/quip-push.log"
+        let path = LogPaths.pushPath
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)

@@ -316,8 +316,9 @@ final class WebSocketClient {
         session = urlSession
 
         let task = urlSession.webSocketTask(with: url)
-        // Allow up to 16MB messages for base64-encoded TTS audio payloads (default is 1MB)
-        task.maximumMessageSize = 16 * 1024 * 1024
+        // Allow large messages for base64-encoded image uploads and TTS audio
+        // payloads (URLSession default is 1 MB). See Shared/Constants.swift.
+        task.maximumMessageSize = WSLimits.maxMessageBytes
         webSocketTask = task
         task.resume()
 

@@ -1,0 +1,4 @@
+# Run `cargo fmt` from QuipLinux/. Defaults are mostly fine; we only
+# pin the things the existing code already follows so a fresh contributor
+# running rustfmt doesn't churn 200 files.
+edition = "2021"
