@@ -13,6 +13,7 @@ use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, warn};
 
 use crate::protocol::messages::{encode_message, message_type, AuthMessage, AuthResultMessage};
+use crate::services::auth_throttle::{AuthDecision, AuthThrottle};
 use crate::services::connection_log::{ConnectionEventKind, ConnectionLog};
 use crate::services::pin_manager::PINManager;
 
@@ -53,6 +54,7 @@ pub struct WsServer {
     pin_manager: PINManager,
     require_auth: Arc<AtomicBool>,
     pub connection_log: Arc<ConnectionLog>,
+    auth_throttle: Arc<AuthThrottle>,
 }
 
 impl WsServer {
@@ -70,6 +72,7 @@ impl WsServer {
             pin_manager,
             require_auth: Arc::new(AtomicBool::new(require_auth)),
             connection_log: ConnectionLog::new(),
+            auth_throttle: Arc::new(AuthThrottle::new()),
         }
     }
 
@@ -110,6 +113,7 @@ impl WsServer {
             let pin_manager = self.pin_manager.clone();
             let require_auth = self.require_auth.load(Ordering::Relaxed);
             let connection_log = Arc::clone(&self.connection_log);
+            let auth_throttle = Arc::clone(&self.auth_throttle);
 
             tokio::spawn(async move {
                 let ws_stream = match tokio_tungstenite::accept_async(stream).await {
@@ -203,9 +207,30 @@ impl WsServer {
                                     // Only accept auth messages
                                     let msg_type = message_type(&text);
                                     if msg_type.as_deref() == Some("auth") {
+                                        // Reject hard-locked hosts before doing any PIN work.
+                                        let peer_ip = peer.ip();
+                                        if let AuthDecision::Locked { remaining } = auth_throttle.check(peer_ip) {
+                                            let secs = remaining.as_secs();
+                                            warn!("Client {peer} locked, {secs}s remaining");
+                                            connection_log.record(
+                                                ConnectionEventKind::AuthFailed,
+                                                peer.to_string(),
+                                                Some(format!("locked ({secs}s remaining)")),
+                                            );
+                                            let result_msg = AuthResultMessage::failure(
+                                                format!("Too many attempts; try again in {secs}s"),
+                                            );
+                                            let json = encode_message(&result_msg).unwrap_or_default();
+                                            let mut locked = clients.lock().await;
+                                            if let Some(client) = locked.get_mut(&client_id) {
+                                                let _ = client.sink.send(Message::Text(json.into())).await;
+                                            }
+                                            continue;
+                                        }
                                         let auth_msg: Option<AuthMessage> = serde_json::from_str(&text).ok();
                                         if let Some(auth) = auth_msg {
                                             if pin_manager.verify(&auth.pin) {
+                                                auth_throttle.record_success(peer_ip);
                                                 info!("Client {peer} authenticated successfully");
                                                 connection_log.record(ConnectionEventKind::AuthSucceeded, peer.to_string(), None);
                                                 let result_msg = AuthResultMessage::success();
@@ -217,8 +242,18 @@ impl WsServer {
                                                     let _ = client.sink.send(Message::Text(json.into())).await;
                                                 }
                                             } else {
-                                                warn!("Client {peer} auth failed: incorrect PIN");
+                                                auth_throttle.record_failure(peer_ip);
+                                                let delay_ms = match auth_throttle.check(peer_ip) {
+                                                    AuthDecision::Proceed { delay_ms } => delay_ms,
+                                                    // record_failure may have just tripped the lockout — fall
+                                                    // through to a tiny delay so the response still goes out.
+                                                    AuthDecision::Locked { .. } => 0,
+                                                };
+                                                warn!("Client {peer} auth failed: incorrect PIN (delaying {delay_ms}ms)");
                                                 connection_log.record(ConnectionEventKind::AuthFailed, peer.to_string(), Some("incorrect PIN".into()));
+                                                if delay_ms > 0 {
+                                                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                                                }
                                                 let result_msg = AuthResultMessage::failure("Incorrect PIN".into());
                                                 let json = encode_message(&result_msg).unwrap_or_default();
 

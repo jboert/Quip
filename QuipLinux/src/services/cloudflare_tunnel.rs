@@ -3,7 +3,80 @@ use std::io::{BufRead, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
+use std::sync::OnceLock;
 use tracing::{error, info, warn};
+
+/// Extract a `*.trycloudflare.com` URL from one cloudflared log line.
+///
+/// With `--log-format json` the line is a JSON object — the URL appears inside
+/// the `message` string. If JSON parsing fails (older cloudflared, or a
+/// pre-init crash line), we fall back to scanning the raw line so we don't
+/// regress when bundling a different binary. The host must strictly end in
+/// `.trycloudflare.com` so an upstream log line quoting
+/// `https://attacker.com/?ref=foo.trycloudflare.com` can't fool us.
+fn extract_tunnel_url(line: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+        if let Some(message) = value.get("message").and_then(|m| m.as_str()) {
+            if let Some(url) = match_tunnel_url(message) {
+                return Some(url);
+            }
+        }
+    }
+    match_tunnel_url(line)
+}
+
+fn match_tunnel_url(haystack: &str) -> Option<String> {
+    // The regex itself is the host-validation: it requires `https://` +
+    // one-or-more alnum/hyphen chars + a literal `.trycloudflare.com`. A
+    // candidate like `https://attacker.com/?ref=foo.trycloudflare.com` doesn't
+    // match because the regex anchors after the literal `.trycloudflare.com`
+    // — there's no `https://` immediately before the legitimate-looking
+    // suffix.
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com").expect("valid regex")
+    });
+    re.find(haystack).map(|m| m.as_str().to_string())
+}
+
+#[cfg(test)]
+mod tunnel_url_tests {
+    use super::extract_tunnel_url;
+
+    #[test]
+    fn extracts_from_json_message() {
+        let line = r#"{"level":"info","time":"2026-04-29T01:00:00Z","message":"|  https://abcd-1234.trycloudflare.com  |"}"#;
+        assert_eq!(
+            extract_tunnel_url(line),
+            Some("https://abcd-1234.trycloudflare.com".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_from_raw_text_fallback() {
+        let line = "INF Your quick Tunnel: https://foo-bar.trycloudflare.com";
+        assert_eq!(
+            extract_tunnel_url(line),
+            Some("https://foo-bar.trycloudflare.com".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_lookalike_host() {
+        // The regex requires `https://` immediately before the subdomain, so
+        // an attacker-controlled host that just *contains* trycloudflare.com
+        // can't sneak through.
+        let line = r#"{"level":"info","message":"https://attacker.com/?ref=foo.trycloudflare.com"}"#;
+        assert_eq!(extract_tunnel_url(line), None);
+    }
+
+    #[test]
+    fn rejects_no_url() {
+        assert_eq!(extract_tunnel_url(""), None);
+        assert_eq!(extract_tunnel_url("nothing here"), None);
+        assert_eq!(extract_tunnel_url(r#"{"level":"info","message":"connected"}"#), None);
+    }
+}
 
 pub struct CloudflareTunnel {
     process: Option<Child>,
@@ -52,11 +125,18 @@ impl CloudflareTunnel {
 
         info!("Starting cloudflared tunnel via {binary}");
 
+        // `--log-format json` gives us per-line atomic JSON records on stderr
+        // that we can parse instead of grepping formatted text that could
+        // change between cloudflared releases. The URL still appears inside
+        // the `message` field — we extract it with the same regex but
+        // anchored to the message rather than the whole line.
         let mut child = Command::new(&binary)
             .args([
                 "tunnel",
                 "--url", &format!("http://localhost:{local_port}"),
                 "--protocol", "http2",
+                "--log-format", "json",
+                "--loglevel", "info",
                 "--no-autoupdate",
             ])
             .stderr(Stdio::piped())
@@ -76,7 +156,6 @@ impl CloudflareTunnel {
             .ok_or_else(|| "Failed to capture cloudflared stderr".to_string())?;
 
         let (tx, rx) = mpsc::channel::<String>();
-        let url_regex = Regex::new(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com").expect("valid regex");
 
         std::thread::Builder::new()
             .name("cloudflared-stderr".into())
@@ -95,8 +174,8 @@ impl CloudflareTunnel {
                                 let _ = writeln!(f, "{line}");
                             }
                             if !sent {
-                                if let Some(m) = url_regex.find(&line) {
-                                    let _ = tx.send(m.as_str().to_string());
+                                if let Some(url) = extract_tunnel_url(&line) {
+                                    let _ = tx.send(url);
                                     sent = true;
                                     info!("Tunnel URL found, continuing to drain stderr");
                                 }

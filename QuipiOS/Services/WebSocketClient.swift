@@ -13,27 +13,83 @@ import UIKit
 /// Pins Cloudflare's certificate chain for wss://*.trycloudflare.com connections.
 /// Local ws:// connections bypass pinning entirely.
 ///
-/// To update pins when Cloudflare rotates certificates:
-///   openssl s_client -connect trycloudflare.com:443 -showcerts < /dev/null 2>/dev/null \
-///     | openssl x509 -noout -pubkey | openssl pkey -pubin -outform DER \
-///     | openssl dgst -sha256 -binary | base64
-/// Run for each certificate in the chain and update the hashes below.
+/// Pin set is loaded from a manifest at runtime so a Cloudflare CA rotation
+/// doesn't require an app update — the resolution order is:
+///
+///   1. `~/Documents/quip-cert-pins.json` in the app's Documents container
+///      (user/MDM override; lets a sysadmin patch pins without rebuilding).
+///   2. `CertPins.json` in the app bundle (the canonical default; ships with
+///      the app — edit `QuipiOS/Resources/CertPins.json` to update).
+///   3. Hardcoded fallback baked into source so unit tests with no bundle
+///      and no Documents file still pin against a known set.
+///
+/// Manifest shape (both override and bundled):
+///   { "spkiHashes": ["base64...", "base64..."] }
+///
+/// To produce new SPKI hashes when Cloudflare rotates: see
+/// `docs/protocol.md` → "Certificate Pinning (Cloudflare Tunnel)" for the
+/// openssl recipe.
 final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
 
-    /// Base64-encoded SHA-256 hashes of Subject Public Key Info (SPKI) for
-    /// certificates in the trycloudflare.com chain.
-    /// Pinning intermediate + root CAs (not the leaf, which rotates frequently).
+    /// Manifest JSON shape. Extra fields in the file (commentary, chain
+    /// notes) are ignored, so the JSON can carry inline documentation
+    /// without breaking decoding.
+    private struct PinManifest: Decodable {
+        let spkiHashes: [String]
+    }
+
+    /// Lazily-resolved pin set. Computed (not `let`) so a user can drop a
+    /// new override file at runtime and the next connection picks it up
+    /// without restarting the app.
+    static var pinnedSPKIHashes: Set<String> {
+        if let override = loadFromDocuments(), !override.isEmpty {
+            return override
+        }
+        if let bundled = loadFromBundle(), !bundled.isEmpty {
+            return bundled
+        }
+        return Self.hardcodedFallback
+    }
+
+    /// Hardcoded SPKI hashes used when no manifest is loadable. Mirrors the
+    /// bundled `CertPins.json` so test targets without the resource still
+    /// pin to the same chain — keep the two in sync if you rotate.
     ///
     /// Current chain (as of 2026-04):
     ///   Leaf:         CN=trycloudflare.com       (issued by WE1) — NOT pinned
     ///   Intermediate: CN=WE1                     (Google Trust Services)
     ///   Root:         CN=GTS Root R4             (cross-signed by GlobalSign)
-    static let pinnedSPKIHashes: Set<String> = [
-        // Google Trust Services WE1 (intermediate)
+    private static let hardcodedFallback: Set<String> = [
         "kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",
-        // GTS Root R4
         "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=",
     ]
+
+    /// Override path inside the app's Documents container. iOS sandboxes mean
+    /// only the user (via Files.app or sharing) or an MDM profile can drop
+    /// a file here, so the trust boundary matches the existing app data.
+    private static var documentsOverrideURL: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("quip-cert-pins.json")
+    }
+
+    private static func loadFromDocuments() -> Set<String>? {
+        guard let url = documentsOverrideURL,
+              let data = try? Data(contentsOf: url),
+              let manifest = try? JSONDecoder().decode(PinManifest.self, from: data) else {
+            return nil
+        }
+        NSLog("[CertPin] Using Documents override (%d pin(s))", manifest.spkiHashes.count)
+        return Set(manifest.spkiHashes)
+    }
+
+    private static func loadFromBundle() -> Set<String>? {
+        guard let url = Bundle.main.url(forResource: "CertPins", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let manifest = try? JSONDecoder().decode(PinManifest.self, from: data) else {
+            return nil
+        }
+        return Set(manifest.spkiHashes)
+    }
 
     func urlSession(
         _ session: URLSession,
@@ -309,8 +365,14 @@ final class WebSocketClient {
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 10
 
-        // Certificate pinning disabled — the hardcoded SPKI hashes need
-        // to be verified against Cloudflare's current cert chain before enabling
+        // Certificate pinning disabled by default. Pin set lives in
+        // QuipiOS/Resources/CertPins.json (verify it matches Cloudflare's
+        // current chain via docs/protocol.md → "Updating Pins" before
+        // flipping this on). Users can additionally drop their own
+        // override at ~/Documents/quip-cert-pins.json — see
+        // CloudflareCertificatePinningDelegate for the resolution order.
+        // To enable, replace this line with:
+        //   pinningDelegate = CloudflareCertificatePinningDelegate()
         pinningDelegate = nil
         let urlSession = URLSession(configuration: config)
         session = urlSession

@@ -1,0 +1,12 @@
+{
+  "_comment": "Quip Cloudflare-tunnel cert pins. Edit this JSON to ship updated pins without touching Swift. Each entry is Base64(SHA-256(SPKI DER)) for one cert in the trycloudflare.com chain. Pin intermediate + root CAs (not the leaf — it rotates frequently). To rotate, see docs/protocol.md → 'Updating Pins' for the openssl recipe. Users can override locally by dropping a file with the same shape at ~/Documents/quip-cert-pins.json (the iOS app's Documents container).",
+  "_chain_2026_04": [
+    "Leaf:         CN=trycloudflare.com (NOT pinned — rotates often)",
+    "Intermediate: CN=WE1 (Google Trust Services)",
+    "Root:         CN=GTS Root R4 (cross-signed by GlobalSign)"
+  ],
+  "spkiHashes": [
+    "kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",
+    "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c="
+  ]
+}

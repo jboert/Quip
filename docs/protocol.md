@@ -544,10 +544,14 @@ for i, cert in enumerate(certs):
 ```
 
 Update the pinned hashes in:
-- **iOS:** `QuipiOS/Services/WebSocketClient.swift` → `CloudflareCertificatePinningDelegate.pinnedSPKIHashes`
-- **Android:** `QuipAndroid/.../services/WebSocketClient.kt` → `CertificatePinner` configuration
+- **iOS:** `QuipiOS/Resources/CertPins.json` (`spkiHashes` array). The Swift code in `WebSocketClient.swift` reads this file at runtime — no Swift edit needed for a rotation.
+- **Android:** `QuipAndroid/.../services/WebSocketClient.kt` → `CertificatePinner` configuration.
 
 Pin the **intermediate** and **root** CA hashes (not the leaf).
+
+### iOS override file
+
+iOS users can ship a hot-fix without an app update by dropping a JSON file with the same shape as `CertPins.json` at `~/Documents/quip-cert-pins.json` inside the Quip app's Documents container (Files.app → "On My iPhone" → Quip → drag-and-drop, or push via MDM). The override completely replaces the bundled set on the next connection. To revert, delete the override file. Resolution order is documented in `CloudflareCertificatePinningDelegate` (Documents override → bundled `CertPins.json` → hardcoded fallback).
 
 ## Implementations
 
