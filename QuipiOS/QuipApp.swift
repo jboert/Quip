@@ -4067,7 +4067,30 @@ struct SettingsSheet: View {
                     Text("Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
                 }
 
-                // Notifications — moved behind a NavigationLink so the main
+                // Keyboard — both keyboard-row customizers behind one
+                // section header so the Settings page reads in three
+                // logical groups: Appearance, Keyboard, Notifications.
+                Section {
+                    NavigationLink {
+                        QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+                    } label: {
+                        HStack {
+                            Text("Quick Buttons")
+                            Spacer()
+                            Text(quickButtonsSummary)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    NavigationLink {
+                        MainRowButtonsSheet()
+                    } label: {
+                        Text("Main Row Buttons")
+                    }
+                } header: {
+                    Text("Keyboard")
+                }
+
+                // Notifications — behind a NavigationLink so the main
                 // Settings page stays scannable. Inline summary on the right
                 // gives a one-glance read on whether push is on, paused, or
                 // currently quiet without drilling in.
@@ -4086,28 +4109,8 @@ struct SettingsSheet: View {
                                 .lineLimit(1)
                         }
                     }
-                }
-
-                // Quick Buttons — moved behind a NavigationLink so the
-                // ~18-chip grid doesn't pile on at the bottom of the main
-                // Settings page. Enabled-count preview gives a one-glance
-                // read on how many are active without drilling in.
-                Section {
-                    NavigationLink {
-                        QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
-                    } label: {
-                        HStack {
-                            Text("Quick Buttons")
-                            Spacer()
-                            Text(quickButtonsSummary)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    NavigationLink {
-                        MainRowButtonsSheet()
-                    } label: {
-                        Text("Main Row Buttons")
-                    }
+                } header: {
+                    Text("Notifications")
                 }
             }
             .listStyle(.insetGrouped)
@@ -4415,8 +4418,30 @@ struct QuickButtonsSheet: View {
         Dictionary(uniqueKeysWithValues: customs.map { ($0.id, $0) })
     }
 
+    /// Set of built-in QuickButton rawValues already placed in the slot
+    /// list — used to disable duplicate adds in the "+" menu so the user
+    /// can't end up with two `Esc` pills by accident.
+    private var placedBuiltins: Set<String> {
+        Set(slots.compactMap { slot -> String? in
+            if case .builtin(let b) = slot { return b.rawValue }
+            return nil
+        })
+    }
+
     var body: some View {
         List {
+            // Live preview — shows the actual rendered row exactly as it
+            // will appear above the keyboard, on the same dark surface.
+            // Updates immediately on any reorder / add / delete because
+            // it reads the same @AppStorage the keyboard does.
+            Section {
+                rowPreview
+                    .listRowInsets(EdgeInsets(top: 8, leading: 6, bottom: 8, trailing: 6))
+                    .listRowBackground(Color.clear)
+            } header: {
+                Text("Preview")
+            }
+
             Section {
                 if slots.isEmpty {
                     Text("No buttons yet. Tap + to add one.")
@@ -4430,7 +4455,13 @@ struct QuickButtonsSheet: View {
                     .onDelete(perform: deleteSlots)
                 }
             } header: {
-                Text("Row Order")
+                HStack {
+                    Text("Row Order")
+                    Spacer()
+                    Text("\(slots.count)")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
             } footer: {
                 Text("Drag the handle to reorder. Swipe to remove. Spacers add fixed gaps between buttons.")
             }
@@ -4442,11 +4473,7 @@ struct QuickButtonsSheet: View {
                             editingCustomID = c.id
                         } label: {
                             HStack {
-                                if let sym = c.systemImage, !sym.isEmpty {
-                                    Image(systemName: sym)
-                                        .frame(width: 22)
-                                        .foregroundStyle(.secondary)
-                                }
+                                customPillPreview(c)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(c.label).foregroundStyle(.primary)
                                     Text(payloadSummary(c.payload))
@@ -4464,7 +4491,13 @@ struct QuickButtonsSheet: View {
                     }
                     .onDelete(perform: deleteCustomDefs)
                 } header: {
-                    Text("Custom Buttons")
+                    HStack {
+                        Text("Custom Buttons")
+                        Spacer()
+                        Text("\(customs.count)")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
                 } footer: {
                     Text("Tap to edit. Deleting here removes it from the row too.")
                 }
@@ -4478,35 +4511,7 @@ struct QuickButtonsSheet: View {
                 EditButton()
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Section("Add Built-in") {
-                        ForEach(QuickButton.allCases) { btn in
-                            Button {
-                                addBuiltin(btn)
-                            } label: {
-                                if let sym = btn.systemImage {
-                                    Label(btn.displayName, systemImage: sym)
-                                } else {
-                                    Text(btn.displayName)
-                                }
-                            }
-                        }
-                    }
-                    Section {
-                        Button {
-                            addingCustom = true
-                        } label: {
-                            Label("Custom Button…", systemImage: "plus.square.dashed")
-                        }
-                        Button {
-                            addSpacer()
-                        } label: {
-                            Label("Spacer", systemImage: "arrow.left.and.right")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                }
+                addMenu
             }
         }
         .sheet(isPresented: $addingCustom) {
@@ -4543,41 +4548,203 @@ struct QuickButtonsSheet: View {
     private func slotRow(_ slot: QuickSlot) -> some View {
         switch slot {
         case .builtin(let b):
-            HStack(spacing: 10) {
-                if let sym = b.systemImage {
-                    Image(systemName: sym)
-                        .frame(width: 22)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text(b.label)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .frame(width: 22, alignment: .leading)
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                builtinPillPreview(b)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(b.displayName)
+                    Text("Built-in")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
                 }
-                Text(b.displayName)
                 Spacer()
-                Text("Built-in").font(.caption).foregroundStyle(.tertiary)
             }
         case .custom(let id):
-            let def = customsByID[id]
-            HStack(spacing: 10) {
-                Image(systemName: def?.systemImage?.isEmpty == false ? def!.systemImage! : "person.crop.circle")
-                    .frame(width: 22)
-                    .foregroundStyle(.secondary)
-                Text(def?.label ?? "Custom (deleted)")
-                Spacer()
-                Text("Custom").font(.caption).foregroundStyle(.tertiary)
+            if let def = customsByID[id] {
+                HStack(spacing: 12) {
+                    customPillPreview(def)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(def.label)
+                        Text("Custom · \(payloadSummary(def.payload))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                }
+            } else {
+                HStack(spacing: 12) {
+                    Image(systemName: "questionmark.square.dashed")
+                        .frame(width: 36, height: 28)
+                        .foregroundStyle(.tertiary)
+                    Text("Custom (deleted)").foregroundStyle(.secondary)
+                    Spacer()
+                }
             }
         case .spacer:
-            HStack {
-                Image(systemName: "arrow.left.and.right")
-                    .frame(width: 22)
-                    .foregroundStyle(.secondary)
-                Text("— Spacer —")
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.15))
+                    .frame(width: 36, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        Image(systemName: "arrow.left.and.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    )
+                Text("Spacer")
                     .foregroundStyle(.secondary)
                 Spacer()
             }
         }
+    }
+
+    /// Live preview of the actual quick-button row, rendered on the dark
+    /// keyboard surface so users see exactly what they'll get without
+    /// dismissing the editor. Horizontally scrolls when the row gets long.
+    @ViewBuilder
+    private var rowPreview: some View {
+        let items = previewRowItems
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 3) {
+                if items.isEmpty {
+                    Text("Empty — add a button below")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.horizontal, 12)
+                } else {
+                    ForEach(items, id: \.0) { _, view in
+                        view
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        }
+        .background(Color.black.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Build the preview items as `(id, AnyView)` pairs so SwiftUI's
+    /// ForEach has stable identity even though the items are a mix of
+    /// builtin pills, custom pills, and spacers. Mirrors the same render
+    /// logic as the live keyboard row, minus the disable-when-disconnected
+    /// styling (the editor doesn't need to grey out its preview).
+    private var previewRowItems: [(String, AnyView)] {
+        var result: [(String, AnyView)] = []
+        for slot in slots {
+            switch slot {
+            case .builtin(let b):
+                result.append((slot.id, AnyView(builtinPillPreview(b))))
+            case .custom(let id):
+                if let def = customsByID[id] {
+                    result.append((slot.id, AnyView(customPillPreview(def))))
+                }
+            case .spacer:
+                result.append((slot.id, AnyView(
+                    Color.clear.frame(width: 12, height: 1)
+                )))
+            }
+        }
+        return result
+    }
+
+    /// Pill mock that matches the keyboard's `quickActionButton` chrome.
+    /// Intentionally non-interactive in the editor — just a visual proxy.
+    @ViewBuilder
+    private func builtinPillPreview(_ b: QuickButton) -> some View {
+        Group {
+            if let sym = b.systemImage {
+                Image(systemName: sym)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16, height: 16)
+            } else {
+                Text(b.label)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 5)
+        .frame(minWidth: 20, minHeight: 28)
+        .background(Color.white.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    @ViewBuilder
+    private func customPillPreview(_ c: CustomButton) -> some View {
+        Group {
+            if let sym = c.systemImage, !sym.isEmpty {
+                Image(systemName: sym)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16, height: 16)
+            } else {
+                Text(c.label)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 5)
+        .frame(minWidth: 20, minHeight: 28)
+        .background(Color.white.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    /// "+" toolbar menu, categorized so the long QuickButton list isn't a
+    /// flat scroll-of-doom. Built-ins already in the slot list are
+    /// disabled to prevent accidental duplicates.
+    @ViewBuilder
+    private var addMenu: some View {
+        Menu {
+            Section("Slash") {
+                ForEach(QuickButton.allCases.filter { $0.category == .slash }) { btn in
+                    builtinAddRow(btn)
+                }
+            }
+            Section("Answers") {
+                ForEach(QuickButton.allCases.filter { $0.category == .answer }) { btn in
+                    builtinAddRow(btn)
+                }
+            }
+            Section("Keystrokes") {
+                ForEach(QuickButton.allCases.filter { $0.category == .keystroke }) { btn in
+                    builtinAddRow(btn)
+                }
+            }
+            Section {
+                Button {
+                    addingCustom = true
+                } label: {
+                    Label("Custom Button…", systemImage: "plus.square.dashed")
+                }
+                Button {
+                    addSpacer()
+                } label: {
+                    Label("Spacer", systemImage: "arrow.left.and.right")
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+        }
+    }
+
+    @ViewBuilder
+    private func builtinAddRow(_ btn: QuickButton) -> some View {
+        let placed = placedBuiltins.contains(btn.rawValue)
+        Button {
+            addBuiltin(btn)
+        } label: {
+            if let sym = btn.systemImage {
+                Label(btn.displayName + (placed ? " · added" : ""), systemImage: sym)
+            } else {
+                Text(btn.displayName + (placed ? " · added" : ""))
+            }
+        }
+        .disabled(placed)
     }
 
     private func payloadSummary(_ p: CustomPayload) -> String {
