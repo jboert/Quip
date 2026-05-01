@@ -214,6 +214,7 @@ pub fn build_ui(app: &adw::Application) {
     let pi_timer = pending_input.clone();
     let tts_sid_timer = tts_session_ids.clone();
     let kokoro_timer = kokoro_tts.clone();
+    let whisper_for_timer = Arc::clone(&whisper_service);
     glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
         let changes = {
             let mut state = ss_timer.write().unwrap();
@@ -431,6 +432,18 @@ pub fn build_ui(app: &adw::Application) {
         };
         let proj_msg = crate::protocol::messages::ProjectDirectoriesMessage::new(directories);
         if let Some(json) = encode_message(&proj_msg) {
+            let _ = broadcast_tx_timer.try_send(json);
+        }
+
+        // Whisper status — same rebroadcast pattern. Without this, a freshly
+        // connected iPhone never sees the Ready transition (model usually
+        // loads before the phone connects), so selectPTTPath stays on the
+        // local recognizer and the Linux-side whisper transcription is never
+        // exercised.
+        let ws_msg = crate::protocol::messages::WhisperStatusMessage::new(
+            whisper_for_timer.current_state(),
+        );
+        if let Some(json) = encode_message(&ws_msg) {
             let _ = broadcast_tx_timer.try_send(json);
         }
 

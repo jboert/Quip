@@ -19,6 +19,23 @@ fn main() {
 
     tracing::info!("Quip Linux starting");
 
+    // Refuse to run as a second daemon for the same user. Two instances
+    // racing on port 8765 leaves one with the WS bind and one without — but
+    // both have a working GTK UI, so toggling a window in the wrong instance
+    // produces "iOS shows No windows while desktop says it's selected". The
+    // flock is per-user (XDG_RUNTIME_DIR) and auto-releases on process exit.
+    match services::single_instance::acquire_or_report() {
+        services::single_instance::AcquireOutcome::Acquired => {}
+        services::single_instance::AcquireOutcome::AlreadyHeldBy(pid) => {
+            let pid_str = pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into());
+            eprintln!(
+                "Quip is already running (pid {pid_str}). Use the existing window, or `kill {pid_str}` to replace it."
+            );
+            tracing::error!("single-instance: another quip-linux is running (pid {pid_str}); exiting");
+            std::process::exit(1);
+        }
+    }
+
     // Detect display server
     let session = platform::detect_session_type();
     tracing::info!("Session type: {:?}", session);
