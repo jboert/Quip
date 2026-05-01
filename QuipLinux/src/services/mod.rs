@@ -16,6 +16,7 @@ pub mod preferences_store;
 pub mod push_service;
 pub mod settings_pane_opener;
 pub mod secret_redactor;
+pub mod single_instance;
 pub mod state_detector;
 pub mod tailscale;
 pub mod terminal_color;
