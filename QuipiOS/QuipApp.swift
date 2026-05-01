@@ -3668,7 +3668,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .compact: return "/compact"
         case .clearContext: return "/clear"
         case .prd: return "/prd"
-        case .commitPushPr: return "/commit-push-pr"
+        case .commitPushPr: return "/commit-commands:commit-push-pr"
         case .caveman: return "/caveman"
         case .ultraReview: return "/ultrareview"
         case .yes: return "Y"
@@ -3771,7 +3771,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         // pattern as /plan and /btw.
         case .prd: return .sendText("/prd ", pressReturn: false)
         // Standalone commands — auto-submit.
-        case .commitPushPr: return .sendText("/commit-push-pr", pressReturn: true)
+        case .commitPushPr: return .sendText("/commit-commands:commit-push-pr", pressReturn: true)
         case .caveman: return .sendText("/caveman", pressReturn: true)
         case .ultraReview: return .sendText("/ultrareview", pressReturn: true)
         case .yes: return .quickAction("press_y")
