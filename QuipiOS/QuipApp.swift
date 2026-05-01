@@ -638,6 +638,13 @@ struct MainiOSView: View {
     // command, the Y/N confirmations that Claude asks for, Esc to dismiss,
     // and Ctrl+C to abort. Everything else is opt-in from Settings.
     @AppStorage("enabledQuickButtons") private var enabledQuickButtonsRaw: String = "plan,yes,no,esc,ctrlC"
+    // New ordered slot list — supersedes the CSV above. JSON-encoded
+    // `[QuickSlot]`. Empty string triggers migration from the CSV on first
+    // read (see `effectiveQuickSlots` in MainiOSView).
+    @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
+    // User-defined custom buttons. JSON-encoded `[CustomButton]`. Defaults
+    // to "[]". Slots reference these by UUID via `.custom(id)`.
+    @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -853,6 +860,14 @@ struct MainiOSView: View {
         .environment(\.quipColors, colors)
         .onAppear {
             updateOrientation()
+            // One-shot migration of the legacy CSV `enabledQuickButtons`
+            // representation to the new ordered slot list. Empty JSON =
+            // never migrated; running version puts `quickSlotsJSON` in a
+            // valid state so `effectiveQuickSlots` stays a pure read.
+            if quickSlotsJSON.isEmpty {
+                let migrated = QuickSlotStore.migrate(fromCSV: enabledQuickButtonsRaw)
+                quickSlotsJSON = QuickSlotStore.encode(migrated)
+            }
             // Restore persisted phone-side window overrides so a returning
             // user sees their drag layout before the first windows-list
             // arrives. No-op on first launch (empty JSON → empty dict).
@@ -1632,12 +1647,27 @@ struct MainiOSView: View {
                             default: return "rectangle.3.group"
                             }
                         }()
-                        Image(systemName: icon)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
-                            .frame(width: auxW, height: auxH)
-                            .background(colors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        // ZStack with a text fallback so the button is never
+                        // blank if the SF Symbol fails to draw — which has
+                        // happened when the icon name churns mid-redraw
+                        // (cycling between rectangle.split.3x1/1x3/group).
+                        // The text sits behind the icon, hidden when the icon
+                        // renders correctly.
+                        ZStack {
+                            Text("⊞")
+                                .font(.system(size: 14, weight: .semibold))
+                            Image(systemName: icon)
+                                .font(.system(size: 16, weight: .semibold))
+                                // Stable identity per icon name forces a clean
+                                // redraw instead of a partial swap that can
+                                // leave the symbol blank.
+                                .id("arrange-\(icon)")
+                                .accessibilityLabel("Arrange windows")
+                        }
+                        .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
+                        .frame(width: auxW, height: auxH)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     .disabled(windows.filter(\.enabled).count < 2)
                     .simultaneousGesture(
@@ -1739,43 +1769,22 @@ struct MainiOSView: View {
                 // reachable in one thumb-sweep. Portrait keeps the 2-row
                 // layout below because there isn't width to spare.
                 if !isPortrait {
-                    let enabled = QuickButton.decode(enabledQuickButtonsRaw)
-                    if !enabled.isEmpty {
+                    let slots = effectiveQuickSlots
+                    if !slots.isEmpty {
                         Spacer().frame(width: 8)
-                        ForEach(Array(enabled.enumerated()), id: \.element.id) { index, button in
-                            if index > 0, enabled[index - 1].isSlashCommand != button.isSlashCommand {
-                                Spacer().frame(width: 6)
-                            }
-                            quickActionButton(button)
-                        }
+                        slotRowView(slots)
                     }
                 }
             }
 
-            // Portrait-only secondary command-shortcut row. Buttons are
-            // grouped left/center/right by category so the center group
-            // (answers — Y/N/1/2/3) lines up vertically with the mic
-            // above, which is also Spacer-pinned to the row's center.
+            // Portrait-only secondary command-shortcut row. Slots render in
+            // user-controlled order — they place `.spacer` slots themselves
+            // via the editor (Apple-toolbar-style customization).
             if isPortrait {
-                let enabled = QuickButton.decode(enabledQuickButtonsRaw)
-                if !enabled.isEmpty {
-                    let slash = enabled.filter { $0.category == .slash }
-                    let yesNo = enabled.filter { $0 == .yes || $0 == .no }
-                    let numbers = enabled.filter { $0 == .one || $0 == .two || $0 == .three }
-                    let keystroke = enabled.filter { $0.category == .keystroke }
+                let slots = effectiveQuickSlots
+                if !slots.isEmpty {
                     HStack(spacing: 3) {
-                        ForEach(slash) { quickActionButton($0) }
-                        Spacer(minLength: 6)
-                        ForEach(yesNo) { quickActionButton($0) }
-                        // Small fixed gap between Y/N (confirmations) and
-                        // 1/2/3 (numbered choices) — both are "answers" but
-                        // visually distinct sub-groups.
-                        if !yesNo.isEmpty, !numbers.isEmpty {
-                            Spacer().frame(width: 8)
-                        }
-                        ForEach(numbers) { quickActionButton($0) }
-                        Spacer(minLength: 6)
-                        ForEach(keystroke) { quickActionButton($0) }
+                        slotRowView(slots)
                     }
                     .padding(.horizontal, 6)
                 }
@@ -2676,40 +2685,324 @@ struct MainiOSView: View {
 
     // MARK: - Configurable Quick Buttons
 
-    @ViewBuilder
-    private func quickActionButton(_ button: QuickButton) -> some View {
-        Button {
-            guard let wid = selectedWindowId else { return }
-            switch button.action {
-            case .sendText(let text, let pressReturn):
-                // Auto-submitting text is a "submit" — flush any pending image
-                // first and defer the text send until after the image hits the
-                // wire so the Mac processes them in order.
-                if pressReturn {
-                    sendPendingImageIfNeeded(windowId: wid) { [client] in
-                        client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
-                    }
-                } else {
+    /// Fire the wire action for a QuickButton — extracted from `quickActionButton`
+    /// so the slash-letter Menu items (which trigger from a Menu, not a Button
+    /// label) can share the same image-flush + send semantics.
+    private func fireQuickButton(_ button: QuickButton) {
+        guard let wid = selectedWindowId else { return }
+        switch button.action {
+        case .sendText(let text, let pressReturn):
+            // Auto-submitting text is a "submit" — flush any pending image
+            // first and defer the text send until after the image hits the
+            // wire so the Mac processes them in order.
+            if pressReturn {
+                sendPendingImageIfNeeded(windowId: wid) { [client] in
                     client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
                 }
-            case .quickAction(let action):
-                if action == "press_return" {
-                    sendPendingImageIfNeeded(windowId: wid) { [client] in
-                        client.send(QuickActionMessage(windowId: wid, action: action))
+            } else {
+                client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
+            }
+        case .quickAction(let action):
+            if action == "press_return" {
+                sendPendingImageIfNeeded(windowId: wid) { [client] in
+                    client.send(QuickActionMessage(windowId: wid, action: action))
+                }
+            } else {
+                client.send(QuickActionMessage(windowId: wid, action: action))
+            }
+        }
+    }
+
+    /// Decoded custom-button definitions table. Read from JSON @AppStorage
+    /// each call — cheap (single decode) and avoids stale snapshots when the
+    /// editor mutates the table.
+    private var customButtonDefs: [CustomButton] {
+        CustomButtonStore.decode(customButtonsJSON)
+    }
+
+    /// The user's slot list with one-shot CSV→JSON migration handled in
+    /// `.onAppear`. Custom slots whose definition was deleted out from
+    /// under them are filtered out so the row doesn't render orphan pills.
+    private var effectiveQuickSlots: [QuickSlot] {
+        let raw = QuickSlotStore.decode(quickSlotsJSON)
+        let validIds = Set(customButtonDefs.map(\.id))
+        return raw.filter { slot in
+            if case .custom(let id) = slot { return validIds.contains(id) }
+            return true
+        }
+    }
+
+    /// First letter after the leading "/" of a slash command (e.g. "c" for
+    /// "/clear"). nil for non-slash entries or the bare "/".
+    private func slashLetter(ofText text: String) -> Character? {
+        guard text.count >= 2, text.first == "/" else { return nil }
+        return text[text.index(after: text.startIndex)].lowercased().first
+    }
+
+    /// "/foo" prefix string for a built-in's slash command, or nil for
+    /// non-slash. Wraps the QuickButton-specific check.
+    private func slashLetter(of button: QuickButton) -> Character? {
+        guard button.isSlashCommand, button != .slash else { return nil }
+        return slashLetter(ofText: button.displayName)
+    }
+
+    /// First letter of a custom button's slash payload. nil if it's not a
+    /// slash payload (raw text / keystroke customs don't get grouped).
+    private func slashLetter(of custom: CustomButton) -> Character? {
+        if case .slash(let text, _) = custom.payload {
+            return slashLetter(ofText: text)
+        }
+        return nil
+    }
+
+    /// Member of a "/x…" group menu — either a built-in or a custom button.
+    /// Identifiable so the Menu's ForEach has stable identity even when a
+    /// group mixes the two kinds.
+    enum SlashGroupMember: Identifiable {
+        case builtin(QuickButton)
+        case custom(CustomButton)
+
+        var id: String {
+            switch self {
+            case .builtin(let b): return "b:\(b.rawValue)"
+            case .custom(let c): return "c:\(c.id.uuidString)"
+            }
+        }
+
+        var displayName: String {
+            switch self {
+            case .builtin(let b): return b.displayName
+            case .custom(let c): return c.label
+            }
+        }
+    }
+
+    /// One renderable item in the slot row. Spacers carry their UUID so
+    /// SwiftUI keeps stable identity when the user has multiple in a row.
+    enum RowItem: Identifiable {
+        case builtinButton(QuickButton)
+        case customButton(CustomButton)
+        case spacer(width: CGFloat, uid: UUID)
+        case slashGroup(letter: Character, members: [SlashGroupMember])
+
+        var id: String {
+            switch self {
+            case .builtinButton(let b): return "b:\(b.rawValue)"
+            case .customButton(let c): return "c:\(c.id.uuidString)"
+            case .spacer(_, let uid): return "s:\(uid.uuidString)"
+            case .slashGroup(let l, _): return "g:\(l)"
+            }
+        }
+    }
+
+    /// Walk the slot list and produce a render plan. Slash builtins and
+    /// custom-slash buttons that share a first letter collapse into a single
+    /// `.slashGroup` so the row stays compact when the user has many. Order
+    /// preserved; only the first member of a multi-member letter emits the
+    /// group pill.
+    private func rowItems(_ slots: [QuickSlot], defs: [CustomButton]) -> [RowItem] {
+        let defsById = Dictionary(uniqueKeysWithValues: defs.map { ($0.id, $0) })
+
+        // Pre-pass: count slash-letter occurrences across builtins + customs
+        // visible in this slot list, so we know which letters need grouping.
+        var letterCount: [Character: Int] = [:]
+        for slot in slots {
+            switch slot {
+            case .builtin(let b):
+                if let key = slashLetter(of: b) { letterCount[key, default: 0] += 1 }
+            case .custom(let id):
+                if let c = defsById[id], let key = slashLetter(of: c) {
+                    letterCount[key, default: 0] += 1
+                }
+            case .spacer:
+                break
+            }
+        }
+
+        // Collect group members in slot-order so menu order matches the
+        // user's row order.
+        var members: [Character: [SlashGroupMember]] = [:]
+        for slot in slots {
+            switch slot {
+            case .builtin(let b):
+                if let key = slashLetter(of: b), (letterCount[key] ?? 0) > 1 {
+                    members[key, default: []].append(.builtin(b))
+                }
+            case .custom(let id):
+                if let c = defsById[id], let key = slashLetter(of: c), (letterCount[key] ?? 0) > 1 {
+                    members[key, default: []].append(.custom(c))
+                }
+            case .spacer:
+                break
+            }
+        }
+
+        var items: [RowItem] = []
+        var emitted = Set<Character>()
+        for slot in slots {
+            switch slot {
+            case .spacer(let uid):
+                items.append(.spacer(width: 12, uid: uid))
+            case .builtin(let b):
+                if let key = slashLetter(of: b), let group = members[key], group.count > 1 {
+                    if emitted.insert(key).inserted {
+                        items.append(.slashGroup(letter: key, members: group))
                     }
                 } else {
-                    client.send(QuickActionMessage(windowId: wid, action: action))
+                    items.append(.builtinButton(b))
+                }
+            case .custom(let id):
+                guard let c = defsById[id] else { continue }
+                if let key = slashLetter(of: c), let group = members[key], group.count > 1 {
+                    if emitted.insert(key).inserted {
+                        items.append(.slashGroup(letter: key, members: group))
+                    }
+                } else {
+                    items.append(.customButton(c))
+                }
+            }
+        }
+        return items
+    }
+
+    /// Pill that matches `quickActionButton`'s shape but opens an iOS Menu
+    /// when tapped. The Menu auto-positions to avoid overlapping the keys
+    /// around it (system handles edge clipping + the dismiss-on-outside-tap),
+    /// so the keyboard stays tidy until the user actually drills in.
+    @ViewBuilder
+    private func slashGroupMenuButton(letter: Character, members: [SlashGroupMember]) -> some View {
+        Menu {
+            ForEach(members) { member in
+                Button {
+                    switch member {
+                    case .builtin(let b): fireQuickButton(b)
+                    case .custom(let c): fireCustomButton(c)
+                    }
+                } label: {
+                    Text(member.displayName)
                 }
             }
         } label: {
+            Text("/\(String(letter))…")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 5)
+                .frame(minWidth: 20)
+                .background(Color.white.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .disabled(selectedWindowId == nil)
+    }
+
+    /// Render the full slot row — built-ins, customs, spacers, and grouped
+    /// `/x…` menus — in the user's chosen order.
+    @ViewBuilder
+    private func slotRowView(_ slots: [QuickSlot]) -> some View {
+        let items = rowItems(slots, defs: customButtonDefs)
+        ForEach(items) { item in
+            switch item {
+            case .builtinButton(let b):
+                quickActionButton(b)
+            case .customButton(let c):
+                customQuickButton(c)
+            case .spacer(let w, _):
+                Spacer().frame(width: w)
+            case .slashGroup(let letter, let members):
+                slashGroupMenuButton(letter: letter, members: members)
+            }
+        }
+    }
+
+    /// Wire-side dispatch for a custom button. Mirrors `fireQuickButton` so
+    /// image-flush + auto-submit semantics stay identical between built-ins
+    /// and customs.
+    private func fireCustomButton(_ btn: CustomButton) {
+        guard let wid = selectedWindowId else { return }
+        switch btn.payload {
+        case .slash(let text, let auto):
+            sendCustomText(text, autoSubmit: auto, windowId: wid)
+        case .rawText(let text, let auto):
+            sendCustomText(text, autoSubmit: auto, windowId: wid)
+        case .keystroke(let action):
+            if action == "press_return" {
+                sendPendingImageIfNeeded(windowId: wid) { [client] in
+                    client.send(QuickActionMessage(windowId: wid, action: action))
+                }
+            } else {
+                client.send(QuickActionMessage(windowId: wid, action: action))
+            }
+        }
+    }
+
+    /// Shared text-send helper for custom slash + raw-text payloads. Auto-
+    /// submitting payloads flush the pending image first so the Mac
+    /// processes attachments before the prompt — same race rule as the
+    /// built-in slash buttons.
+    private func sendCustomText(_ text: String, autoSubmit: Bool, windowId wid: String) {
+        if autoSubmit {
+            sendPendingImageIfNeeded(windowId: wid) { [client] in
+                client.send(SendTextMessage(windowId: wid, text: text, pressReturn: autoSubmit))
+            }
+        } else {
+            client.send(SendTextMessage(windowId: wid, text: text, pressReturn: autoSubmit))
+        }
+    }
+
+    /// Pill rendering for a custom button. Uses the same outer chrome as
+    /// `quickActionButton` so customs visually match built-ins.
+    @ViewBuilder
+    private func customQuickButton(_ btn: CustomButton) -> some View {
+        Button {
+            fireCustomButton(btn)
+        } label: {
+            Group {
+                if let symbol = btn.systemImage, !symbol.isEmpty {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 16, height: 16)
+                        .id("custom-icon-\(btn.id.uuidString)-\(symbol)")
+                        .accessibilityLabel(btn.label)
+                } else {
+                    Text(btn.label)
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
+                }
+            }
+            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 5)
+            .frame(minWidth: 20)
+            .background(Color.white.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .disabled(selectedWindowId == nil)
+    }
+
+    @ViewBuilder
+    private func quickActionButton(_ button: QuickButton) -> some View {
+        Button {
+            fireQuickButton(button)
+        } label: {
+            // Render EITHER the symbol OR the text label, never both. A prior
+            // ZStack-with-fallback approach drew Text behind Image, but for
+            // buttons whose `label` is wider than the 16x16 icon frame
+            // (e.g. "Ctrl+C", "⌫"), the Text bled out past the icon edges
+            // and looked like a second smaller pill nested inside the outer
+            // pill — the keystroke-cluster "collision" artifact. The stable
+            // `.id` per symbol is what prevents the intermittent
+            // icon-disappearance, not the text fallback.
             Group {
                 if let symbol = button.systemImage {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 16, height: 16)
+                        .id("qb-icon-\(symbol)")
+                        .accessibilityLabel(button.displayName)
                 } else {
-                    // Single-line with auto-shrink so a row of 8-10 buttons
-                    // fits on the phone without `/compact` wrapping to two
-                    // lines mid-word.
                     Text(button.label)
                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .lineLimit(1)
@@ -3360,9 +3653,10 @@ enum QuickButton: String, CaseIterable, Identifiable {
     //   Claude Code answers (Y/N and number choices),
     //   Terminal keystrokes (Esc, Ctrl-C, Ctrl-D, Tab, Backspace).
     case slash, plan, btw, compact, clearContext, prd
+    case commitPushPr, caveman, ultraReview
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
-    case planMode, shiftTab
+    case shiftTab
 
     var id: String { rawValue }
 
@@ -3374,6 +3668,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .compact: return "/compact"
         case .clearContext: return "/clear"
         case .prd: return "/prd"
+        case .commitPushPr: return "/commit-commands:commit-push-pr"
+        case .caveman: return "/caveman:caveman"
+        case .ultraReview: return "/ultrareview"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -3385,7 +3682,6 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return "Tab"
         case .backspace: return "Backspace"
         case .clearInput: return "Clear input"
-        case .planMode: return "→Plan mode"
         case .shiftTab: return "Shift+Tab"
         }
     }
@@ -3400,6 +3696,11 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .compact: return "/compact"
         case .clearContext: return "/clear"
         case .prd: return "/prd"
+        // Long slash commands shortened to fit the phone button row.
+        // Settings still lists the full command.
+        case .commitPushPr: return "/ship"
+        case .caveman: return "/cave"
+        case .ultraReview: return "/ultra"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -3409,9 +3710,10 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlC: return "Ctrl+C"
         case .ctrlD: return "Ctrl+D"
         case .tab: return "Tab"
+        // Icon-only buttons — the SF Symbol carries the meaning. Empty label
+        // keeps the button compact.
         case .backspace: return ""
         case .clearInput: return ""
-        case .planMode: return ""
         case .shiftTab: return ""
         }
     }
@@ -3424,7 +3726,6 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlD: return "eject"
         case .tab: return "arrow.right.to.line"
         case .clearInput: return "delete.left.fill"
-        case .planMode: return "wand.and.stars"
         case .shiftTab: return "arrow.left.to.line"
         default: return nil
         }
@@ -3447,7 +3748,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var category: Category {
         switch self {
-        case .slash, .plan, .btw, .compact, .clearContext, .prd, .planMode: return .slash
+        case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview: return .slash
         case .yes, .no, .one, .two, .three: return .answer
         case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab: return .keystroke
         }
@@ -3469,6 +3770,10 @@ enum QuickButton: String, CaseIterable, Identifiable {
         // /prd takes a follow-up description, so don't auto-submit — same
         // pattern as /plan and /btw.
         case .prd: return .sendText("/prd ", pressReturn: false)
+        // Standalone commands — auto-submit.
+        case .commitPushPr: return .sendText("/commit-commands:commit-push-pr", pressReturn: true)
+        case .caveman: return .sendText("/caveman:caveman", pressReturn: true)
+        case .ultraReview: return .sendText("/ultrareview", pressReturn: true)
         case .yes: return .quickAction("press_y")
         case .no: return .quickAction("press_n")
         case .one: return .sendText("1", pressReturn: true)
@@ -3480,13 +3785,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return .quickAction("press_tab")
         case .backspace: return .quickAction("press_backspace")
         case .clearInput: return .quickAction("clear_input")
-        // Mac side reads the detected Claude mode for the target window and
-        // sends just enough Shift+Tab presses to reach plan mode (cycle order:
-        // normal → autoAccept → plan → normal). Falls back to an ErrorMessage
-        // toast on the phone when the mode isn't yet detected.
-        case .planMode: return .quickAction("set_plan_mode")
-        // Raw Shift+Tab — manual fallback when mode auto-detect is unreliable
-        // or the user wants to step through the cycle one mode at a time.
+        // Raw Shift+Tab — cycles Claude mode (normal → autoAccept → plan).
         case .shiftTab: return .quickAction("press_shift_tab")
         }
     }
@@ -3497,6 +3796,207 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     static func encode(_ buttons: [QuickButton]) -> String {
         buttons.map(\.rawValue).joined(separator: ",")
+    }
+}
+
+// MARK: - Custom Buttons + Slot Ordering
+
+/// Action a user-defined button performs when tapped. Mirrors the three
+/// `QuickButton.Action` shapes so render + send code can route customs
+/// through the same `fireQuickButton`-style path.
+enum CustomPayload: Hashable {
+    /// Send "/foo[ ]" — autoSubmit controls whether to press Return after.
+    /// Slash commands like /clear / /compact auto-submit; /plan / /btw
+    /// don't (they take a follow-up argument).
+    case slash(text: String, autoSubmit: Bool)
+    /// Send arbitrary text (no leading slash). autoSubmit toggles Return.
+    case rawText(text: String, autoSubmit: Bool)
+    /// Send a `quick_action` to the Mac (press_y / press_n / press_escape /
+    /// press_ctrl_c / press_ctrl_d / press_tab / press_backspace /
+    /// clear_input / press_shift_tab).
+    case keystroke(action: String)
+}
+
+// Hand-rolled Codable for the same reason as QuickSlot — synthesis fails
+// under our build settings. Wire format: `kind` discriminator + payload
+// fields. `kind` strings are persisted, don't rename without a migration.
+extension CustomPayload: Codable {
+    private enum CodingKeys: String, CodingKey { case kind, text, autoSubmit, action }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(String.self, forKey: .kind)
+        switch kind {
+        case "slash":
+            self = .slash(
+                text: try c.decode(String.self, forKey: .text),
+                autoSubmit: try c.decode(Bool.self, forKey: .autoSubmit)
+            )
+        case "rawText":
+            self = .rawText(
+                text: try c.decode(String.self, forKey: .text),
+                autoSubmit: try c.decode(Bool.self, forKey: .autoSubmit)
+            )
+        case "keystroke":
+            self = .keystroke(action: try c.decode(String.self, forKey: .action))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind, in: c,
+                debugDescription: "Unknown CustomPayload kind: \(kind)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .slash(let text, let auto):
+            try c.encode("slash", forKey: .kind)
+            try c.encode(text, forKey: .text)
+            try c.encode(auto, forKey: .autoSubmit)
+        case .rawText(let text, let auto):
+            try c.encode("rawText", forKey: .kind)
+            try c.encode(text, forKey: .text)
+            try c.encode(auto, forKey: .autoSubmit)
+        case .keystroke(let action):
+            try c.encode("keystroke", forKey: .kind)
+            try c.encode(action, forKey: .action)
+        }
+    }
+}
+
+/// User-defined button. Persisted as JSON in `customButtonsJSON` and
+/// referenced from `QuickSlot.custom(id)` so the slot list and the
+/// definitions table stay independent (re-ordering doesn't mutate
+/// definitions; deleting from definitions removes any slots pointing at
+/// that id at next render).
+struct CustomButton: Codable, Hashable, Identifiable {
+    let id: UUID
+    var label: String
+    /// Optional SF Symbol name. Empty / unknown falls back to text label.
+    var systemImage: String?
+    var payload: CustomPayload
+}
+
+/// One entry in the user's quick-button row. The row renders these in
+/// declaration order (no auto-clustering — the user controls position by
+/// inserting `.spacer` slots, Apple-toolbar-style).
+enum QuickSlot: Hashable, Identifiable {
+    case builtin(QuickButton)
+    case custom(UUID)
+    /// Fixed-width gap between adjacent slots. Multiple spacers in a row
+    /// stack their widths. Carries a UUID so SwiftUI lists can identify
+    /// each spacer separately when there's more than one.
+    case spacer(UUID)
+
+    var id: String {
+        switch self {
+        case .builtin(let b): return "b:\(b.rawValue)"
+        case .custom(let uid): return "c:\(uid.uuidString)"
+        case .spacer(let uid): return "s:\(uid.uuidString)"
+        }
+    }
+}
+
+// Codable hand-rolled — Swift's automatic synthesis chokes on this enum
+// shape under our build settings. Stable wire format: `kind` discriminator
+// + a value field per case. `kind` strings are part of the persistence
+// format — don't rename without a migration.
+extension QuickSlot: Codable {
+    private enum CodingKeys: String, CodingKey { case kind, button, customID, spacerID }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(String.self, forKey: .kind)
+        switch kind {
+        case "builtin":
+            let raw = try c.decode(String.self, forKey: .button)
+            guard let button = QuickButton(rawValue: raw) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .button, in: c,
+                    debugDescription: "Unknown QuickButton raw value: \(raw)"
+                )
+            }
+            self = .builtin(button)
+        case "custom":
+            self = .custom(try c.decode(UUID.self, forKey: .customID))
+        case "spacer":
+            self = .spacer(try c.decode(UUID.self, forKey: .spacerID))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind, in: c,
+                debugDescription: "Unknown QuickSlot kind: \(kind)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .builtin(let b):
+            try c.encode("builtin", forKey: .kind)
+            try c.encode(b.rawValue, forKey: .button)
+        case .custom(let id):
+            try c.encode("custom", forKey: .kind)
+            try c.encode(id, forKey: .customID)
+        case .spacer(let id):
+            try c.encode("spacer", forKey: .kind)
+            try c.encode(id, forKey: .spacerID)
+        }
+    }
+}
+
+/// Encode/decode + legacy-CSV migration for the slot list. Kept as a
+/// caseless enum (namespace) so the helpers don't accidentally get
+/// instantiated.
+enum QuickSlotStore {
+    static func decode(_ raw: String) -> [QuickSlot] {
+        guard let data = raw.data(using: .utf8),
+              let slots = try? JSONDecoder().decode([QuickSlot].self, from: data)
+        else { return [] }
+        return slots
+    }
+
+    static func encode(_ slots: [QuickSlot]) -> String {
+        guard let data = try? JSONEncoder().encode(slots),
+              let str = String(data: data, encoding: .utf8)
+        else { return "[]" }
+        return str
+    }
+
+    /// Migrate the legacy CSV `enabledQuickButtons` representation to the
+    /// new ordered slot list. Inserts a `.spacer` whenever the category
+    /// changes between adjacent built-ins, so the migrated row visually
+    /// matches the old auto-cluster layout (slash | answers | keystrokes).
+    static func migrate(fromCSV csv: String) -> [QuickSlot] {
+        let buttons = QuickButton.decode(csv)
+        var slots: [QuickSlot] = []
+        var lastCategory: QuickButton.Category?
+        for btn in buttons {
+            if let last = lastCategory, last != btn.category {
+                slots.append(.spacer(UUID()))
+            }
+            slots.append(.builtin(btn))
+            lastCategory = btn.category
+        }
+        return slots
+    }
+}
+
+/// Encode/decode the custom-button definitions table.
+enum CustomButtonStore {
+    static func decode(_ raw: String) -> [CustomButton] {
+        guard let data = raw.data(using: .utf8),
+              let buttons = try? JSONDecoder().decode([CustomButton].self, from: data)
+        else { return [] }
+        return buttons
+    }
+
+    static func encode(_ buttons: [CustomButton]) -> String {
+        guard let data = try? JSONEncoder().encode(buttons),
+              let str = String(data: data, encoding: .utf8)
+        else { return "[]" }
+        return str
     }
 }
 
@@ -3567,49 +4067,9 @@ struct SettingsSheet: View {
                     Text("Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
                 }
 
-                // Notifications — one section. Kill switch on top; the
-                // usual sub-toggles only matter if Pause All is off, so we
-                // gate them behind it to cut visual noise. Quiet Hours
-                // steppers only show when the toggle is on, same deal.
-                // Kept tight: no secondary "status" footer unless the OS
-                // hasn't granted permission — that's the one case worth
-                // surfacing because push won't work at all.
-                Section {
-                    Toggle("Pause All", isOn: $pushPaused)
-                    if !pushPaused {
-                        Toggle("Banner", isOn: $pushBannerEnabled)
-                        if pushBannerEnabled {
-                            Toggle("Sound", isOn: $pushSound)
-                            Toggle("Banner When App Open", isOn: $pushForegroundBanner)
-                        }
-                        Toggle("Live Activities", isOn: $liveActivitiesEnabled)
-                        Toggle("Quiet Hours", isOn: $quietHoursEnabled)
-                        if quietHoursEnabled {
-                            Stepper("From \(formatHour(quietHoursStart))",
-                                    value: $quietHoursStart, in: 0...23)
-                            Stepper("Until \(formatHour(quietHoursEnd))",
-                                    value: $quietHoursEnd, in: 0...23)
-                        }
-                    }
-                } header: {
-                    Text("Notifications")
-                } footer: {
-                    if pushRegistration.deviceToken == nil {
-                        Text("Notification permission not granted. Reconnect or check iOS Settings → Quip.")
-                    }
-                }
-                .onChange(of: pushPaused) { _, _ in sendPrefs() }
-                .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
-                .onChange(of: pushSound) { _, _ in sendPrefs() }
-                .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
-                .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
-                .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
-                .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
-
-                // Quick Buttons — moved behind a NavigationLink so the
-                // ~18-chip grid doesn't pile on at the bottom of the main
-                // Settings page. Enabled-count preview gives a one-glance
-                // read on how many are active without drilling in.
+                // Keyboard — both keyboard-row customizers behind one
+                // section header so the Settings page reads in three
+                // logical groups: Appearance, Keyboard, Notifications.
                 Section {
                     NavigationLink {
                         QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
@@ -3617,7 +4077,7 @@ struct SettingsSheet: View {
                         HStack {
                             Text("Quick Buttons")
                             Spacer()
-                            Text("\(QuickButton.decode(enabledQuickButtonsRaw).count) enabled")
+                            Text(quickButtonsSummary)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -3626,6 +4086,31 @@ struct SettingsSheet: View {
                     } label: {
                         Text("Main Row Buttons")
                     }
+                } header: {
+                    Text("Keyboard")
+                }
+
+                // Notifications — behind a NavigationLink so the main
+                // Settings page stays scannable. Inline summary on the right
+                // gives a one-glance read on whether push is on, paused, or
+                // currently quiet without drilling in.
+                Section {
+                    NavigationLink {
+                        NotificationsSettingsSheet(
+                            client: client,
+                            pushRegistration: pushRegistration
+                        )
+                    } label: {
+                        HStack {
+                            Text("Notifications")
+                            Spacer()
+                            Text(notificationsSummary)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                } header: {
+                    Text("Notifications")
                 }
             }
             .listStyle(.insetGrouped)
@@ -3752,6 +4237,129 @@ struct SettingsSheet: View {
         return "\(display) \(suffix)"
     }
 
+    /// One-line state summary shown next to the Notifications NavigationLink
+    /// on the main Settings page. Priority: Paused beats everything; then a
+    /// quiet-now flag; otherwise just "On" or "Banner off". Kept short so it
+    /// doesn't fight the disclosure chevron for row space.
+    fileprivate var notificationsSummary: String {
+        if pushPaused { return "Paused" }
+        if !pushBannerEnabled { return "Banner off" }
+        if quietHoursEnabled {
+            return "Quiet \(formatHour(quietHoursStart))–\(formatHour(quietHoursEnd))"
+        }
+        return "On"
+    }
+
+    /// Compact summary shown next to the Quick Buttons NavigationLink. Slot
+    /// count covers built-ins + customs + spacers, which is the size of the
+    /// rendered row — what the user actually cares about.
+    fileprivate var quickButtonsSummary: String {
+        let slots = QuickSlotStore.decode(
+            UserDefaults.standard.string(forKey: "quickSlotsJSON") ?? ""
+        )
+        let count = slots.count
+        return "\(count) item\(count == 1 ? "" : "s")"
+    }
+
+}
+
+/// Notifications detail page — push toggles + Quiet Hours window. Pushed
+/// behind a NavigationLink in `SettingsSheet` so the main settings list
+/// stays short. Reads the same @AppStorage keys (single source of truth in
+/// UserDefaults), so changes here flow back to the parent automatically.
+struct NotificationsSettingsSheet: View {
+    var client: WebSocketClient
+    var pushRegistration: PushRegistrationService
+    @AppStorage("pushPaused") private var pushPaused = false
+    @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
+    @AppStorage("pushSound") private var pushSound = true
+    @AppStorage("pushForegroundBanner") private var pushForegroundBanner = false
+    @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
+    @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
+    @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
+    @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
+
+    var body: some View {
+        List {
+            Section {
+                Toggle("Pause All", isOn: $pushPaused)
+                if !pushPaused {
+                    Toggle("Banner", isOn: $pushBannerEnabled)
+                    if pushBannerEnabled {
+                        Toggle("Sound", isOn: $pushSound)
+                        Toggle("Banner When App Open", isOn: $pushForegroundBanner)
+                    }
+                    Toggle("Live Activities", isOn: $liveActivitiesEnabled)
+
+                    // Quiet Hours kept to two rows max:
+                    //   row 1: "Quiet Hours" toggle
+                    //   row 2: "From [pill] to [pill]" range picker (only visible
+                    //          when the toggle is on)
+                    // Compact Menu pickers replace the old pair of full-width
+                    // Steppers — those took two rows by themselves and pushed the
+                    // section unnecessarily long.
+                    Toggle("Quiet Hours", isOn: $quietHoursEnabled)
+                    if quietHoursEnabled {
+                        HStack {
+                            Text("From")
+                            Spacer()
+                            hourMenu(value: $quietHoursStart)
+                            Text("to")
+                                .foregroundStyle(.secondary)
+                            hourMenu(value: $quietHoursEnd)
+                        }
+                    }
+                }
+            } footer: {
+                if pushRegistration.deviceToken == nil {
+                    Text("Notification permission not granted. Reconnect or check iOS Settings → Quip.")
+                }
+            }
+            .onChange(of: pushPaused) { _, _ in sendPrefs() }
+            .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
+            .onChange(of: pushSound) { _, _ in sendPrefs() }
+            .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
+            .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
+            .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
+            .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
+        }
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Compact 24-hour Menu picker. Renders the selected hour as a small pill
+    /// (e.g. "10 PM") which expands to a 24-row scrollable menu on tap. Way
+    /// tighter than a Stepper — fits two side-by-side on one row.
+    @ViewBuilder
+    private func hourMenu(value: Binding<Int>) -> some View {
+        Menu(formatHour(value.wrappedValue)) {
+            ForEach(0..<24, id: \.self) { h in
+                Button(formatHour(h)) { value.wrappedValue = h }
+            }
+        }
+    }
+
+    private func formatHour(_ h: Int) -> String {
+        let hh = h % 24
+        let suffix = hh < 12 ? "AM" : "PM"
+        let display = hh == 0 ? 12 : (hh > 12 ? hh - 12 : hh)
+        return "\(display) \(suffix)"
+    }
+
+    private func sendPrefs() {
+        guard let token = pushRegistration.deviceToken else { return }
+        let msg = PushPreferencesMessage(
+            deviceToken: token,
+            paused: pushPaused,
+            quietHoursStart: quietHoursEnabled ? quietHoursStart : nil,
+            quietHoursEnd: quietHoursEnabled ? quietHoursEnd : nil,
+            sound: pushSound,
+            foregroundBanner: pushForegroundBanner,
+            bannerEnabled: pushBannerEnabled,
+            timeZone: TimeZone.current.identifier
+        )
+        client.send(msg)
+    }
 }
 
 /// Quick Buttons detail page — lives behind a NavigationLink in SettingsSheet
@@ -3791,62 +4399,547 @@ struct MainRowButtonsSheet: View {
     }
 }
 
+/// Apple-toolbar-style editor for the quick-button row. Slots render in
+/// user-controlled order; the "Add" toolbar menu inserts built-ins,
+/// custom buttons, or fixed-width spacers. Drag to reorder; swipe to
+/// delete. The legacy CSV `enabledQuickButtons` is kept in sync on every
+/// edit so a downgrade-and-restart still reads a sensible row.
 struct QuickButtonsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
+    @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
+    @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
+
+    @State private var editingCustomID: UUID?
+    @State private var addingCustom: Bool = false
+
+    private var slots: [QuickSlot] { QuickSlotStore.decode(quickSlotsJSON) }
+    private var customs: [CustomButton] { CustomButtonStore.decode(customButtonsJSON) }
+    private var customsByID: [UUID: CustomButton] {
+        Dictionary(uniqueKeysWithValues: customs.map { ($0.id, $0) })
+    }
+
+    /// Set of built-in QuickButton rawValues already placed in the slot
+    /// list — used to disable duplicate adds in the "+" menu so the user
+    /// can't end up with two `Esc` pills by accident.
+    private var placedBuiltins: Set<String> {
+        Set(slots.compactMap { slot -> String? in
+            if case .builtin(let b) = slot { return b.rawValue }
+            return nil
+        })
+    }
 
     var body: some View {
         List {
+            // Live preview — shows the actual rendered row exactly as it
+            // will appear above the keyboard, on the same dark surface.
+            // Updates immediately on any reorder / add / delete because
+            // it reads the same @AppStorage the keyboard does.
             Section {
-                let columns = [GridItem(.adaptive(minimum: 100, maximum: 180), spacing: 6)]
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
-                    ForEach(QuickButton.allCases) { button in
-                        chip(button)
+                rowPreview
+                    .listRowInsets(EdgeInsets(top: 8, leading: 6, bottom: 8, trailing: 6))
+                    .listRowBackground(Color.clear)
+            } header: {
+                Text("Preview")
+            }
+
+            Section {
+                if slots.isEmpty {
+                    Text("No buttons yet. Tap + to add one.")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
+                } else {
+                    ForEach(slots) { slot in
+                        slotRow(slot)
                     }
+                    .onMove(perform: moveSlots)
+                    .onDelete(perform: deleteSlots)
                 }
-                .padding(.vertical, 4)
+            } header: {
+                HStack {
+                    Text("Row Order")
+                    Spacer()
+                    Text("\(slots.count)")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
             } footer: {
-                Text("Tap a chip to toggle it on/off. Enabled buttons show up in the row above the keyboard.")
+                Text("Drag the handle to reorder. Swipe to remove. Spacers add fixed gaps between buttons.")
+            }
+
+            if !customs.isEmpty {
+                Section {
+                    ForEach(customs) { c in
+                        Button {
+                            editingCustomID = c.id
+                        } label: {
+                            HStack {
+                                customPillPreview(c)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(c.label).foregroundStyle(.primary)
+                                    Text(payloadSummary(c.payload))
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .onDelete(perform: deleteCustomDefs)
+                } header: {
+                    HStack {
+                        Text("Custom Buttons")
+                        Spacer()
+                        Text("\(customs.count)")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                } footer: {
+                    Text("Tap to edit. Deleting here removes it from the row too.")
+                }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Quick Buttons")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                EditButton()
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                addMenu
+            }
+        }
+        .sheet(isPresented: $addingCustom) {
+            CustomButtonForm(
+                initial: nil,
+                onSave: { newButton in
+                    var defs = customs
+                    defs.append(newButton)
+                    customButtonsJSON = CustomButtonStore.encode(defs)
+                    var s = slots
+                    s.append(.custom(newButton.id))
+                    persistSlots(s)
+                }
+            )
+        }
+        .sheet(item: Binding(
+            get: { editingCustomID.flatMap { customsByID[$0] } },
+            set: { editingCustomID = $0?.id }
+        )) { existing in
+            CustomButtonForm(
+                initial: existing,
+                onSave: { updated in
+                    var defs = customs
+                    if let idx = defs.firstIndex(where: { $0.id == updated.id }) {
+                        defs[idx] = updated
+                    }
+                    customButtonsJSON = CustomButtonStore.encode(defs)
+                }
+            )
+        }
     }
 
     @ViewBuilder
-    private func chip(_ button: QuickButton) -> some View {
-        let isOn = QuickButton.decode(enabledQuickButtonsRaw).contains(button)
-        Button {
-            toggle(button)
-        } label: {
-            HStack(spacing: 4) {
-                if let icon = button.systemImage {
-                    Image(systemName: icon)
-                        .font(.system(size: 10, weight: .medium))
+    private func slotRow(_ slot: QuickSlot) -> some View {
+        switch slot {
+        case .builtin(let b):
+            HStack(spacing: 12) {
+                builtinPillPreview(b)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(b.displayName)
+                    Text("Built-in")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
                 }
-                Text(button.displayName)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
+                Spacer()
             }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .foregroundStyle(isOn ? .white : .secondary)
-            .background(isOn ? Color.accentColor : Color.secondary.opacity(0.15))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+        case .custom(let id):
+            if let def = customsByID[id] {
+                HStack(spacing: 12) {
+                    customPillPreview(def)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(def.label)
+                        Text("Custom · \(payloadSummary(def.payload))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                }
+            } else {
+                HStack(spacing: 12) {
+                    Image(systemName: "questionmark.square.dashed")
+                        .frame(width: 36, height: 28)
+                        .foregroundStyle(.tertiary)
+                    Text("Custom (deleted)").foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+        case .spacer:
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.15))
+                    .frame(width: 36, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        Image(systemName: "arrow.left.and.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    )
+                Text("Spacer")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
         }
-        .buttonStyle(.plain)
     }
 
-    private func toggle(_ button: QuickButton) {
-        var current = QuickButton.decode(enabledQuickButtonsRaw)
-        if current.contains(button) {
-            current.removeAll { $0 == button }
-        } else {
-            // Canonical order keeps the row stable regardless of toggle sequence.
-            current = QuickButton.allCases.filter { current.contains($0) || $0 == button }
+    /// Live preview of the actual quick-button row, rendered on the dark
+    /// keyboard surface so users see exactly what they'll get without
+    /// dismissing the editor. Horizontally scrolls when the row gets long.
+    @ViewBuilder
+    private var rowPreview: some View {
+        let items = previewRowItems
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 3) {
+                if items.isEmpty {
+                    Text("Empty — add a button below")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.horizontal, 12)
+                } else {
+                    ForEach(items, id: \.0) { _, view in
+                        view
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }
-        enabledQuickButtonsRaw = QuickButton.encode(current)
+        .background(Color.black.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Build the preview items as `(id, AnyView)` pairs so SwiftUI's
+    /// ForEach has stable identity even though the items are a mix of
+    /// builtin pills, custom pills, and spacers. Mirrors the same render
+    /// logic as the live keyboard row, minus the disable-when-disconnected
+    /// styling (the editor doesn't need to grey out its preview).
+    private var previewRowItems: [(String, AnyView)] {
+        var result: [(String, AnyView)] = []
+        for slot in slots {
+            switch slot {
+            case .builtin(let b):
+                result.append((slot.id, AnyView(builtinPillPreview(b))))
+            case .custom(let id):
+                if let def = customsByID[id] {
+                    result.append((slot.id, AnyView(customPillPreview(def))))
+                }
+            case .spacer:
+                result.append((slot.id, AnyView(
+                    Color.clear.frame(width: 12, height: 1)
+                )))
+            }
+        }
+        return result
+    }
+
+    /// Pill mock that matches the keyboard's `quickActionButton` chrome.
+    /// Intentionally non-interactive in the editor — just a visual proxy.
+    @ViewBuilder
+    private func builtinPillPreview(_ b: QuickButton) -> some View {
+        Group {
+            if let sym = b.systemImage {
+                Image(systemName: sym)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16, height: 16)
+            } else {
+                Text(b.label)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 5)
+        .frame(minWidth: 20, minHeight: 28)
+        .background(Color.white.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    @ViewBuilder
+    private func customPillPreview(_ c: CustomButton) -> some View {
+        Group {
+            if let sym = c.systemImage, !sym.isEmpty {
+                Image(systemName: sym)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16, height: 16)
+            } else {
+                Text(c.label)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 5)
+        .frame(minWidth: 20, minHeight: 28)
+        .background(Color.white.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    /// "+" toolbar menu, categorized so the long QuickButton list isn't a
+    /// flat scroll-of-doom. Built-ins already in the slot list are
+    /// disabled to prevent accidental duplicates.
+    @ViewBuilder
+    private var addMenu: some View {
+        Menu {
+            Section("Slash") {
+                ForEach(QuickButton.allCases.filter { $0.category == .slash }) { btn in
+                    builtinAddRow(btn)
+                }
+            }
+            Section("Answers") {
+                ForEach(QuickButton.allCases.filter { $0.category == .answer }) { btn in
+                    builtinAddRow(btn)
+                }
+            }
+            Section("Keystrokes") {
+                ForEach(QuickButton.allCases.filter { $0.category == .keystroke }) { btn in
+                    builtinAddRow(btn)
+                }
+            }
+            Section {
+                Button {
+                    addingCustom = true
+                } label: {
+                    Label("Custom Button…", systemImage: "plus.square.dashed")
+                }
+                Button {
+                    addSpacer()
+                } label: {
+                    Label("Spacer", systemImage: "arrow.left.and.right")
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+        }
+    }
+
+    @ViewBuilder
+    private func builtinAddRow(_ btn: QuickButton) -> some View {
+        let placed = placedBuiltins.contains(btn.rawValue)
+        Button {
+            addBuiltin(btn)
+        } label: {
+            if let sym = btn.systemImage {
+                Label(btn.displayName + (placed ? " · added" : ""), systemImage: sym)
+            } else {
+                Text(btn.displayName + (placed ? " · added" : ""))
+            }
+        }
+        .disabled(placed)
+    }
+
+    private func payloadSummary(_ p: CustomPayload) -> String {
+        switch p {
+        case .slash(let t, let a): return "\(t)\(a ? " ⏎" : "")"
+        case .rawText(let t, let a): return "\"\(t)\"\(a ? " ⏎" : "")"
+        case .keystroke(let action): return action
+        }
+    }
+
+    private func moveSlots(from source: IndexSet, to destination: Int) {
+        var s = slots
+        s.move(fromOffsets: source, toOffset: destination)
+        persistSlots(s)
+    }
+
+    private func deleteSlots(at offsets: IndexSet) {
+        var s = slots
+        s.remove(atOffsets: offsets)
+        persistSlots(s)
+    }
+
+    private func deleteCustomDefs(at offsets: IndexSet) {
+        var defs = customs
+        let removedIds = offsets.map { defs[$0].id }
+        defs.remove(atOffsets: offsets)
+        customButtonsJSON = CustomButtonStore.encode(defs)
+        // Cascade-remove any slots referencing the deleted custom IDs so
+        // the row doesn't render orphan "Custom (deleted)" pills.
+        let removedSet = Set(removedIds)
+        let pruned = slots.filter { slot in
+            if case .custom(let id) = slot { return !removedSet.contains(id) }
+            return true
+        }
+        if pruned.count != slots.count {
+            persistSlots(pruned)
+        }
+    }
+
+    private func addBuiltin(_ btn: QuickButton) {
+        var s = slots
+        s.append(.builtin(btn))
+        persistSlots(s)
+    }
+
+    private func addSpacer() {
+        var s = slots
+        s.append(.spacer(UUID()))
+        persistSlots(s)
+    }
+
+    /// Persist the slot list and keep the legacy CSV in sync. The CSV is no
+    /// longer the source of truth, but PreferencesSyncService still mirrors
+    /// it to the Mac for older clients and a downgrade safety net.
+    private func persistSlots(_ s: [QuickSlot]) {
+        quickSlotsJSON = QuickSlotStore.encode(s)
+        let builtins = s.compactMap { slot -> QuickButton? in
+            if case .builtin(let b) = slot { return b }
+            return nil
+        }
+        enabledQuickButtonsRaw = QuickButton.encode(builtins)
+    }
+}
+
+/// Add/edit form for a custom button. Two-section layout: identity (label
+/// + optional SF Symbol) on top, behavior (payload type + auto-submit)
+/// below. Saves go through `onSave`; the parent owns the @AppStorage write.
+struct CustomButtonForm: View {
+    /// nil = create-new flow; non-nil = edit existing.
+    let initial: CustomButton?
+    let onSave: (CustomButton) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var label: String = ""
+    @State private var systemImage: String = ""
+    @State private var payloadKind: PayloadKind = .slash
+    @State private var text: String = ""
+    @State private var autoSubmit: Bool = true
+    @State private var keystroke: String = "press_y"
+
+    enum PayloadKind: String, CaseIterable, Identifiable {
+        case slash = "Slash"
+        case rawText = "Text"
+        case keystroke = "Keystroke"
+        var id: String { rawValue }
+    }
+
+    private static let keystrokeOptions: [(label: String, action: String)] = [
+        ("Y", "press_y"), ("N", "press_n"),
+        ("1", "press_1"), ("2", "press_2"), ("3", "press_3"),
+        ("Escape", "press_escape"),
+        ("Return", "press_return"),
+        ("Tab", "press_tab"),
+        ("Shift+Tab", "press_shift_tab"),
+        ("Backspace", "press_backspace"),
+        ("Ctrl+C", "press_ctrl_c"),
+        ("Ctrl+D", "press_ctrl_d"),
+        ("Clear input", "clear_input"),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Label") {
+                    TextField("Shown on the button", text: $label)
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                    TextField("SF Symbol (optional)", text: $systemImage)
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                }
+
+                Section("Action") {
+                    Picker("Type", selection: $payloadKind) {
+                        ForEach(PayloadKind.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+
+                    switch payloadKind {
+                    case .slash:
+                        TextField("/foo or /foo arg", text: $text)
+                            .autocorrectionDisabled(true)
+                            .textInputAutocapitalization(.never)
+                        Toggle("Auto-submit (press Return)", isOn: $autoSubmit)
+                    case .rawText:
+                        TextField("Text to send", text: $text)
+                        Toggle("Auto-submit (press Return)", isOn: $autoSubmit)
+                    case .keystroke:
+                        Picker("Key", selection: $keystroke) {
+                            ForEach(Self.keystrokeOptions, id: \.action) { opt in
+                                Text(opt.label).tag(opt.action)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(initial == nil ? "New Button" : "Edit Button")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(!isValid)
+                }
+            }
+            .onAppear { hydrate() }
+        }
+    }
+
+    private var isValid: Bool {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
+        guard !trimmedLabel.isEmpty else { return false }
+        switch payloadKind {
+        case .slash:
+            return text.hasPrefix("/") && text.count >= 2
+        case .rawText:
+            return !text.isEmpty
+        case .keystroke:
+            return !keystroke.isEmpty
+        }
+    }
+
+    private func hydrate() {
+        guard let initial else { return }
+        label = initial.label
+        systemImage = initial.systemImage ?? ""
+        switch initial.payload {
+        case .slash(let t, let a):
+            payloadKind = .slash; text = t; autoSubmit = a
+        case .rawText(let t, let a):
+            payloadKind = .rawText; text = t; autoSubmit = a
+        case .keystroke(let action):
+            payloadKind = .keystroke; keystroke = action
+        }
+    }
+
+    private func save() {
+        let payload: CustomPayload
+        switch payloadKind {
+        case .slash: payload = .slash(text: text, autoSubmit: autoSubmit)
+        case .rawText: payload = .rawText(text: text, autoSubmit: autoSubmit)
+        case .keystroke: payload = .keystroke(action: keystroke)
+        }
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        let symbol = systemImage.trimmingCharacters(in: .whitespaces)
+        let btn = CustomButton(
+            id: initial?.id ?? UUID(),
+            label: trimmed,
+            systemImage: symbol.isEmpty ? nil : symbol,
+            payload: payload
+        )
+        onSave(btn)
+        dismiss()
     }
 }
 

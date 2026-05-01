@@ -29,6 +29,11 @@ final class WebSocketServer {
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
     private let networkQueue = DispatchQueue(label: "quip.websocket", qos: .userInitiated)
+    /// Retry interval when the listener can't bind (e.g. port 8765 squatted by
+    /// another process). Without this the server would give up silently and the
+    /// phone would talk to whatever is on 8765 and report "bad response from server".
+    nonisolated private static let bindRetryInterval: TimeInterval = 5
+    private var bindRetryWorkItem: DispatchWorkItem?
 
     /// Tracks a WebSocket connection, its authentication state, and rate limiting.
     private struct ClientConnection {
@@ -91,7 +96,13 @@ final class WebSocketServer {
         do {
             listener = try NWListener(using: parameters, on: 8765)
         } catch {
-            print("[WebSocketServer] Failed to create listener: \(error)")
+            print("[WebSocketServer] Failed to create listener: \(error) — retrying in \(Self.bindRetryInterval)s")
+            connectionLog?.record(
+                .failed,
+                remote: "listener:8765",
+                detail: "bind failed: \(error) — will retry"
+            )
+            scheduleBindRetry()
             return
         }
 
@@ -107,9 +118,17 @@ final class WebSocketServer {
                     print("[WebSocketServer] Listening on localhost:\(port)")
                 }
             case .failed(let error):
-                print("[WebSocketServer] Listener failed: \(error)")
+                print("[WebSocketServer] Listener failed: \(error) — retrying in \(Self.bindRetryInterval)s")
                 DispatchQueue.main.async {
                     self.isRunning = false
+                    self.connectionLog?.record(
+                        .failed,
+                        remote: "listener:8765",
+                        detail: "listener failed: \(error) — will retry"
+                    )
+                    self.listener?.cancel()
+                    self.listener = nil
+                    self.scheduleBindRetry()
                 }
             case .cancelled:
                 DispatchQueue.main.async {
@@ -182,7 +201,23 @@ final class WebSocketServer {
         listener.start(queue: networkQueue)
     }
 
+    /// Schedule a single-shot retry of `start()`. Idempotent — replaces any
+    /// already-pending retry so we don't stack timers when `.failed` fires
+    /// repeatedly.
+    private func scheduleBindRetry() {
+        bindRetryWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.bindRetryWorkItem = nil
+            self.start()
+        }
+        bindRetryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.bindRetryInterval, execute: work)
+    }
+
     func stop() {
+        bindRetryWorkItem?.cancel()
+        bindRetryWorkItem = nil
         listener?.cancel()
         listener = nil
         for client in clients {

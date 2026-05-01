@@ -899,3 +899,32 @@ Diagnosed autonomously via a Node.js fake-iOS-client (`/tmp/quip-content-probe.j
 5. `#10` + `#11` together (transport hardening) — verify pins first, ship as one PR.
 6. `#12` (sandbox) — last because it's the TCC-prompting one.
 7. Protocol items (`#17`, `#18`, `#19`, `#20`) — bump protocol version once, ship together.
+
+---
+
+### 43. Custom quick-buttons editor + reorderable slot row (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commits `2ef5f6b` (UI tightening: same-letter slash grouping `/c…`, Notifications dropdown, keystroke-pill collision fix), `498a29d` (remove dedicated `/plan` quick button), `9283a69` (custom buttons + slot editor, v1.4.0). Installed on iPhone 17 Pro Max.
+
+**What shipped:**
+- Quick-button row goes from fixed 3-cluster layout (slash | answers | keystrokes) to a flat user-controlled ordered list, Apple-toolbar-style.
+- `Settings → Quick Buttons` editor: drag handle to reorder, swipe to delete, "+" toolbar menu adds Built-in / Custom / Spacer.
+- Custom-button form: label + optional SF Symbol + payload (Slash / Raw text / Keystroke) + auto-submit toggle.
+- Spacers (12pt fixed) for grouping between slots; user can stack multiples for wider gaps.
+- Same-letter slash grouping (`/c…` Menu pill) now spans built-ins + custom slash buttons.
+
+**Persistence:**
+- `quickSlotsJSON` (@AppStorage) — JSON-encoded `[QuickSlot]`, source of truth for the row.
+- `customButtonsJSON` (@AppStorage) — JSON-encoded `[CustomButton]` definitions referenced by UUID.
+- Legacy `enabledQuickButtons` CSV kept in sync with the slot list's built-ins for downgrade safety.
+- One-shot CSV→JSON migration on first launch in v1.4.0 — preserves existing order, auto-inserts spacers at category transitions so the upgraded row matches the old auto-cluster layout.
+- `PreferencesSnapshot` extended with `quickSlotsJSON` + `customButtonsJSON` so the slot list and definitions survive reinstall via the existing Mac WebSocket + iCloud KVS sync path.
+
+**Implementation notes:**
+- `QuickSlot` and `CustomPayload` use hand-rolled `Codable` because Swift's automatic synthesis fails for these enums under our build settings (`SWIFT_STRICT_CONCURRENCY=minimal`). Wire format is `kind` discriminator + per-case payload fields — adding a new case won't break decoding of older JSON.
+- Cascade-delete: removing a custom definition prunes any slots referencing its UUID in the same persist cycle.
+- The dedicated `/plan` built-in quick button was removed (`498a29d`) in favor of users defining their own custom button if they want one. `Shift+Tab` remains as a manual mode-cycle.
+
+**Acceptance test:** Settings → Quick Buttons → "+" → Custom Button → label "/btw", payload Slash `/btw `, auto-submit off → Save → row shows `/btw` pill → tap fires the slash text into Claude. Drag a Spacer between two pills → 12pt gap appears in the row. Reinstall the app via `devicectl` → editor reopens with the same slots + custom defs.
+
+**Related:** `QuipiOS/QuipApp.swift` (QuickSlot, CustomButton, QuickButtonsSheet, CustomButtonForm), `QuipiOS/Services/PreferencesSyncService.swift`, `Shared/MessageProtocol.swift:502+`.
