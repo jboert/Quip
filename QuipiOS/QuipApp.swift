@@ -2746,7 +2746,7 @@ struct MainiOSView: View {
     /// Group slash-command buttons by their first letter so multi-member
     /// letters (e.g. /c → /caveman, /clear, /compact, /commit-push-pr) collapse
     /// into a single "/c…" pill that opens a native iOS Menu on tap. Solo
-    /// letters and non-slash entries (bare /, planMode wand) stay as direct
+    /// letters and non-slash entries (bare /) stay as direct
     /// buttons. Order preserved from the input array; only the first member
     /// of a multi-letter group emits its menu pill.
     private func slashRowItems(_ slash: [QuickButton]) -> [SlashRowItem] {
@@ -3487,7 +3487,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
     case commitPushPr, caveman, ultraReview
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
-    case planMode, shiftTab
+    case shiftTab
 
     var id: String { rawValue }
 
@@ -3513,7 +3513,6 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return "Tab"
         case .backspace: return "Backspace"
         case .clearInput: return "Clear input"
-        case .planMode: return "→Plan mode"
         case .shiftTab: return "Shift+Tab"
         }
     }
@@ -3543,10 +3542,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlD: return "Ctrl+D"
         case .tab: return "Tab"
         // Icon-only buttons — the SF Symbol carries the meaning. Empty label
-        // keeps the button compact (especially planMode → just the wand).
+        // keeps the button compact.
         case .backspace: return ""
         case .clearInput: return ""
-        case .planMode: return ""
         case .shiftTab: return ""
         }
     }
@@ -3559,7 +3557,6 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlD: return "eject"
         case .tab: return "arrow.right.to.line"
         case .clearInput: return "delete.left.fill"
-        case .planMode: return "wand.and.stars"
         case .shiftTab: return "arrow.left.to.line"
         default: return nil
         }
@@ -3582,7 +3579,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var category: Category {
         switch self {
-        case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview, .planMode: return .slash
+        case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview: return .slash
         case .yes, .no, .one, .two, .three: return .answer
         case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab: return .keystroke
         }
@@ -3619,13 +3616,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return .quickAction("press_tab")
         case .backspace: return .quickAction("press_backspace")
         case .clearInput: return .quickAction("clear_input")
-        // Mac side reads the detected Claude mode for the target window and
-        // sends just enough Shift+Tab presses to reach plan mode (cycle order:
-        // normal → autoAccept → plan → normal). Falls back to an ErrorMessage
-        // toast on the phone when the mode isn't yet detected.
-        case .planMode: return .quickAction("set_plan_mode")
-        // Raw Shift+Tab — manual fallback when mode auto-detect is unreliable
-        // or the user wants to step through the cycle one mode at a time.
+        // Raw Shift+Tab — cycles Claude mode (normal → autoAccept → plan).
         case .shiftTab: return .quickAction("press_shift_tab")
         }
     }
