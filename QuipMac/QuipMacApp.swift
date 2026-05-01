@@ -1297,12 +1297,22 @@ struct QuipMacApp: App {
     /// tells the user to use the manual `press_shift_tab` action instead.
     @MainActor
     private func cycleClaudeMode(to target: ClaudeMode, for window: ManagedWindow) {
-        let current = claudeModeDetector.windowModes[window.id] ?? .normal
-        let knownMode = claudeModeDetector.windowModes[window.id] != nil
-
-        if !knownMode {
-            // No detected indicator yet — refuse to press blind. Tell the user.
-            let err = ErrorMessage(reason: "Can't detect current Claude mode for \(window.name) — press Shift+Tab manually until you see the right indicator.")
+        // The mode scanner only emits a positive value for plan / autoAccept
+        // (those have visible indicator strings). Normal mode has no indicator,
+        // so the detector returns nil for it — same nil value it returns when
+        // Claude isn't running at all. Disambiguate via `windowsWithClaudeProcess`:
+        // if Claude IS running and no indicator was found, the window is in normal
+        // mode by elimination. Without this fallback the plan-mode button refused
+        // to press whenever the user was starting from a fresh normal-mode prompt.
+        let detected = claudeModeDetector.windowModes[window.id]
+        let claudeRunning = terminalStateDetector.windowsWithClaudeProcess.contains(window.id)
+        let current: ClaudeMode
+        if let detected {
+            current = detected
+        } else if claudeRunning {
+            current = .normal
+        } else {
+            let err = ErrorMessage(reason: "Claude doesn't appear to be running in \(window.name) — start it (`claude`) or press Shift+Tab manually.")
             webSocketServer.broadcast(err)
             return
         }
