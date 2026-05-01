@@ -1632,12 +1632,27 @@ struct MainiOSView: View {
                             default: return "rectangle.3.group"
                             }
                         }()
-                        Image(systemName: icon)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
-                            .frame(width: auxW, height: auxH)
-                            .background(colors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        // ZStack with a text fallback so the button is never
+                        // blank if the SF Symbol fails to draw — which has
+                        // happened when the icon name churns mid-redraw
+                        // (cycling between rectangle.split.3x1/1x3/group).
+                        // The text sits behind the icon, hidden when the icon
+                        // renders correctly.
+                        ZStack {
+                            Text("⊞")
+                                .font(.system(size: 14, weight: .semibold))
+                            Image(systemName: icon)
+                                .font(.system(size: 16, weight: .semibold))
+                                // Stable identity per icon name forces a clean
+                                // redraw instead of a partial swap that can
+                                // leave the symbol blank.
+                                .id("arrange-\(icon)")
+                                .accessibilityLabel("Arrange windows")
+                        }
+                        .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
+                        .frame(width: auxW, height: auxH)
+                        .background(colors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     .disabled(windows.filter(\.enabled).count < 2)
                     .simultaneousGesture(
@@ -2702,18 +2717,29 @@ struct MainiOSView: View {
                 }
             }
         } label: {
-            Group {
+            ZStack {
+                // Always render the text label as a fallback so the button is
+                // never blank — even if the SF Symbol fails to draw (which has
+                // happened intermittently when the app comes back from a Live
+                // Activity / push-driven scene transition and the SF Symbol
+                // cache hasn't repopulated yet). The Image, when present, is
+                // drawn on top and hides the text. If the Image disappears,
+                // the text becomes visible automatically.
+                Text(button.label)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+
                 if let symbol = button.systemImage {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .semibold))
-                } else {
-                    // Single-line with auto-shrink so a row of 8-10 buttons
-                    // fits on the phone without `/compact` wrapping to two
-                    // lines mid-word.
-                    Text(button.label)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.55)
+                        .frame(width: 16, height: 16)
+                        // Stable identity per symbol — without it, SwiftUI
+                        // sometimes elides the icon when the button row
+                        // re-renders mid-animation.
+                        .id("qb-icon-\(symbol)")
+                        .background(Color.white.opacity(0.15))
+                        .accessibilityLabel(button.displayName)
                 }
             }
             .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
@@ -3360,6 +3386,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
     //   Claude Code answers (Y/N and number choices),
     //   Terminal keystrokes (Esc, Ctrl-C, Ctrl-D, Tab, Backspace).
     case slash, plan, btw, compact, clearContext, prd
+    case commitPushPr, caveman, ultraReview
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
     case planMode, shiftTab
@@ -3374,6 +3401,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .compact: return "/compact"
         case .clearContext: return "/clear"
         case .prd: return "/prd"
+        case .commitPushPr: return "/commit-push-pr"
+        case .caveman: return "/caveman"
+        case .ultraReview: return "/ultrareview"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -3400,6 +3430,11 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .compact: return "/compact"
         case .clearContext: return "/clear"
         case .prd: return "/prd"
+        // Long slash commands shortened to fit the phone button row.
+        // Settings still lists the full command.
+        case .commitPushPr: return "/ship"
+        case .caveman: return "/cave"
+        case .ultraReview: return "/ultra"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -3409,6 +3444,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .ctrlC: return "Ctrl+C"
         case .ctrlD: return "Ctrl+D"
         case .tab: return "Tab"
+        // Icon-only buttons — the SF Symbol carries the meaning. Empty label
+        // keeps the button compact (especially planMode → just the wand).
         case .backspace: return ""
         case .clearInput: return ""
         case .planMode: return ""
@@ -3447,7 +3484,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var category: Category {
         switch self {
-        case .slash, .plan, .btw, .compact, .clearContext, .prd, .planMode: return .slash
+        case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview, .planMode: return .slash
         case .yes, .no, .one, .two, .three: return .answer
         case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab: return .keystroke
         }
@@ -3469,6 +3506,10 @@ enum QuickButton: String, CaseIterable, Identifiable {
         // /prd takes a follow-up description, so don't auto-submit — same
         // pattern as /plan and /btw.
         case .prd: return .sendText("/prd ", pressReturn: false)
+        // Standalone commands — auto-submit.
+        case .commitPushPr: return .sendText("/commit-push-pr", pressReturn: true)
+        case .caveman: return .sendText("/caveman", pressReturn: true)
+        case .ultraReview: return .sendText("/ultrareview", pressReturn: true)
         case .yes: return .quickAction("press_y")
         case .no: return .quickAction("press_n")
         case .one: return .sendText("1", pressReturn: true)
