@@ -1756,13 +1756,14 @@ struct MainiOSView: View {
                 if !isPortrait {
                     let enabled = QuickButton.decode(enabledQuickButtonsRaw)
                     if !enabled.isEmpty {
+                        let landscapeSlash = enabled.filter { $0.isSlashCommand || $0 == .slash }
+                        let landscapeRest = enabled.filter { !($0.isSlashCommand || $0 == .slash) }
                         Spacer().frame(width: 8)
-                        ForEach(Array(enabled.enumerated()), id: \.element.id) { index, button in
-                            if index > 0, enabled[index - 1].isSlashCommand != button.isSlashCommand {
-                                Spacer().frame(width: 6)
-                            }
-                            quickActionButton(button)
+                        slashRowView(landscapeSlash)
+                        if !landscapeSlash.isEmpty, !landscapeRest.isEmpty {
+                            Spacer().frame(width: 6)
                         }
+                        ForEach(landscapeRest) { quickActionButton($0) }
                     }
                 }
             }
@@ -1779,7 +1780,7 @@ struct MainiOSView: View {
                     let numbers = enabled.filter { $0 == .one || $0 == .two || $0 == .three }
                     let keystroke = enabled.filter { $0.category == .keystroke }
                     HStack(spacing: 3) {
-                        ForEach(slash) { quickActionButton($0) }
+                        slashRowView(slash)
                         Spacer(minLength: 6)
                         ForEach(yesNo) { quickActionButton($0) }
                         // Small fixed gap between Y/N (confirmations) and
@@ -2691,55 +2692,152 @@ struct MainiOSView: View {
 
     // MARK: - Configurable Quick Buttons
 
-    @ViewBuilder
-    private func quickActionButton(_ button: QuickButton) -> some View {
-        Button {
-            guard let wid = selectedWindowId else { return }
-            switch button.action {
-            case .sendText(let text, let pressReturn):
-                // Auto-submitting text is a "submit" — flush any pending image
-                // first and defer the text send until after the image hits the
-                // wire so the Mac processes them in order.
-                if pressReturn {
-                    sendPendingImageIfNeeded(windowId: wid) { [client] in
-                        client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
-                    }
-                } else {
+    /// Fire the wire action for a QuickButton — extracted from `quickActionButton`
+    /// so the slash-letter Menu items (which trigger from a Menu, not a Button
+    /// label) can share the same image-flush + send semantics.
+    private func fireQuickButton(_ button: QuickButton) {
+        guard let wid = selectedWindowId else { return }
+        switch button.action {
+        case .sendText(let text, let pressReturn):
+            // Auto-submitting text is a "submit" — flush any pending image
+            // first and defer the text send until after the image hits the
+            // wire so the Mac processes them in order.
+            if pressReturn {
+                sendPendingImageIfNeeded(windowId: wid) { [client] in
                     client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
                 }
-            case .quickAction(let action):
-                if action == "press_return" {
-                    sendPendingImageIfNeeded(windowId: wid) { [client] in
-                        client.send(QuickActionMessage(windowId: wid, action: action))
-                    }
-                } else {
+            } else {
+                client.send(SendTextMessage(windowId: wid, text: text, pressReturn: pressReturn))
+            }
+        case .quickAction(let action):
+            if action == "press_return" {
+                sendPendingImageIfNeeded(windowId: wid) { [client] in
                     client.send(QuickActionMessage(windowId: wid, action: action))
+                }
+            } else {
+                client.send(QuickActionMessage(windowId: wid, action: action))
+            }
+        }
+    }
+
+    /// First letter after the leading "/" for slash-command buttons (e.g. "c"
+    /// for "/clear"). Returns nil for non-slash actions or the bare "/".
+    private func slashLetter(of button: QuickButton) -> Character? {
+        guard button.isSlashCommand, button != .slash else { return nil }
+        let s = button.displayName
+        guard s.count >= 2, s.first == "/" else { return nil }
+        return s[s.index(after: s.startIndex)].lowercased().first
+    }
+
+    /// One row item in the slash-command strip — either a single button or a
+    /// collapsed `/x…` menu that expands on tap to its members.
+    enum SlashRowItem: Identifiable {
+        case button(QuickButton)
+        case group(letter: Character, buttons: [QuickButton])
+
+        var id: String {
+            switch self {
+            case .button(let b): return "btn-\(b.rawValue)"
+            case .group(let l, _): return "grp-\(l)"
+            }
+        }
+    }
+
+    /// Group slash-command buttons by their first letter so multi-member
+    /// letters (e.g. /c → /caveman, /clear, /compact, /commit-push-pr) collapse
+    /// into a single "/c…" pill that opens a native iOS Menu on tap. Solo
+    /// letters and non-slash entries (bare /, planMode wand) stay as direct
+    /// buttons. Order preserved from the input array; only the first member
+    /// of a multi-letter group emits its menu pill.
+    private func slashRowItems(_ slash: [QuickButton]) -> [SlashRowItem] {
+        var lettersWithMembers: [Character: [QuickButton]] = [:]
+        for btn in slash {
+            if let key = slashLetter(of: btn) {
+                lettersWithMembers[key, default: []].append(btn)
+            }
+        }
+        var items: [SlashRowItem] = []
+        var emitted = Set<Character>()
+        for btn in slash {
+            if let key = slashLetter(of: btn), let members = lettersWithMembers[key], members.count > 1 {
+                if emitted.insert(key).inserted {
+                    items.append(.group(letter: key, buttons: members))
+                }
+            } else {
+                items.append(.button(btn))
+            }
+        }
+        return items
+    }
+
+    /// Pill that matches `quickActionButton`'s shape but opens an iOS Menu
+    /// when tapped. The Menu auto-positions to avoid overlapping the keys
+    /// around it (system handles edge clipping + the dismiss-on-outside-tap),
+    /// so the keyboard stays tidy until the user actually drills in.
+    @ViewBuilder
+    private func slashGroupMenuButton(letter: Character, buttons: [QuickButton]) -> some View {
+        Menu {
+            ForEach(buttons) { btn in
+                Button {
+                    fireQuickButton(btn)
+                } label: {
+                    Text(btn.displayName)
                 }
             }
         } label: {
-            ZStack {
-                // Always render the text label as a fallback so the button is
-                // never blank — even if the SF Symbol fails to draw (which has
-                // happened intermittently when the app comes back from a Live
-                // Activity / push-driven scene transition and the SF Symbol
-                // cache hasn't repopulated yet). The Image, when present, is
-                // drawn on top and hides the text. If the Image disappears,
-                // the text becomes visible automatically.
-                Text(button.label)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
+            Text("/\(String(letter))…")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 5)
+                .frame(minWidth: 20)
+                .background(Color.white.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .disabled(selectedWindowId == nil)
+    }
 
+    /// Render a slash-command strip with letter grouping applied. Use this in
+    /// place of `ForEach(slash) { quickActionButton($0) }`.
+    @ViewBuilder
+    private func slashRowView(_ slash: [QuickButton]) -> some View {
+        ForEach(slashRowItems(slash)) { item in
+            switch item {
+            case .button(let btn):
+                quickActionButton(btn)
+            case .group(let letter, let buttons):
+                slashGroupMenuButton(letter: letter, buttons: buttons)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func quickActionButton(_ button: QuickButton) -> some View {
+        Button {
+            fireQuickButton(button)
+        } label: {
+            // Render EITHER the symbol OR the text label, never both. A prior
+            // ZStack-with-fallback approach drew Text behind Image, but for
+            // buttons whose `label` is wider than the 16x16 icon frame
+            // (e.g. "Ctrl+C", "⌫"), the Text bled out past the icon edges
+            // and looked like a second smaller pill nested inside the outer
+            // pill — the keystroke-cluster "collision" artifact. The stable
+            // `.id` per symbol is what prevents the intermittent
+            // icon-disappearance, not the text fallback.
+            Group {
                 if let symbol = button.systemImage {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .semibold))
                         .frame(width: 16, height: 16)
-                        // Stable identity per symbol — without it, SwiftUI
-                        // sometimes elides the icon when the button row
-                        // re-renders mid-animation.
                         .id("qb-icon-\(symbol)")
-                        .background(Color.white.opacity(0.15))
                         .accessibilityLabel(button.displayName)
+                } else {
+                    Text(button.label)
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
                 }
             }
             .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
@@ -3608,44 +3706,26 @@ struct SettingsSheet: View {
                     Text("Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
                 }
 
-                // Notifications — one section. Kill switch on top; the
-                // usual sub-toggles only matter if Pause All is off, so we
-                // gate them behind it to cut visual noise. Quiet Hours
-                // steppers only show when the toggle is on, same deal.
-                // Kept tight: no secondary "status" footer unless the OS
-                // hasn't granted permission — that's the one case worth
-                // surfacing because push won't work at all.
+                // Notifications — moved behind a NavigationLink so the main
+                // Settings page stays scannable. Inline summary on the right
+                // gives a one-glance read on whether push is on, paused, or
+                // currently quiet without drilling in.
                 Section {
-                    Toggle("Pause All", isOn: $pushPaused)
-                    if !pushPaused {
-                        Toggle("Banner", isOn: $pushBannerEnabled)
-                        if pushBannerEnabled {
-                            Toggle("Sound", isOn: $pushSound)
-                            Toggle("Banner When App Open", isOn: $pushForegroundBanner)
+                    NavigationLink {
+                        NotificationsSettingsSheet(
+                            client: client,
+                            pushRegistration: pushRegistration
+                        )
+                    } label: {
+                        HStack {
+                            Text("Notifications")
+                            Spacer()
+                            Text(notificationsSummary)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
-                        Toggle("Live Activities", isOn: $liveActivitiesEnabled)
-                        Toggle("Quiet Hours", isOn: $quietHoursEnabled)
-                        if quietHoursEnabled {
-                            Stepper("From \(formatHour(quietHoursStart))",
-                                    value: $quietHoursStart, in: 0...23)
-                            Stepper("Until \(formatHour(quietHoursEnd))",
-                                    value: $quietHoursEnd, in: 0...23)
-                        }
-                    }
-                } header: {
-                    Text("Notifications")
-                } footer: {
-                    if pushRegistration.deviceToken == nil {
-                        Text("Notification permission not granted. Reconnect or check iOS Settings → Quip.")
                     }
                 }
-                .onChange(of: pushPaused) { _, _ in sendPrefs() }
-                .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
-                .onChange(of: pushSound) { _, _ in sendPrefs() }
-                .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
-                .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
-                .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
-                .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
 
                 // Quick Buttons — moved behind a NavigationLink so the
                 // ~18-chip grid doesn't pile on at the bottom of the main
@@ -3793,6 +3873,118 @@ struct SettingsSheet: View {
         return "\(display) \(suffix)"
     }
 
+    /// One-line state summary shown next to the Notifications NavigationLink
+    /// on the main Settings page. Priority: Paused beats everything; then a
+    /// quiet-now flag; otherwise just "On" or "Banner off". Kept short so it
+    /// doesn't fight the disclosure chevron for row space.
+    fileprivate var notificationsSummary: String {
+        if pushPaused { return "Paused" }
+        if !pushBannerEnabled { return "Banner off" }
+        if quietHoursEnabled {
+            return "Quiet \(formatHour(quietHoursStart))–\(formatHour(quietHoursEnd))"
+        }
+        return "On"
+    }
+
+}
+
+/// Notifications detail page — push toggles + Quiet Hours window. Pushed
+/// behind a NavigationLink in `SettingsSheet` so the main settings list
+/// stays short. Reads the same @AppStorage keys (single source of truth in
+/// UserDefaults), so changes here flow back to the parent automatically.
+struct NotificationsSettingsSheet: View {
+    var client: WebSocketClient
+    var pushRegistration: PushRegistrationService
+    @AppStorage("pushPaused") private var pushPaused = false
+    @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
+    @AppStorage("pushSound") private var pushSound = true
+    @AppStorage("pushForegroundBanner") private var pushForegroundBanner = false
+    @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
+    @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
+    @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
+    @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
+
+    var body: some View {
+        List {
+            Section {
+                Toggle("Pause All", isOn: $pushPaused)
+                if !pushPaused {
+                    Toggle("Banner", isOn: $pushBannerEnabled)
+                    if pushBannerEnabled {
+                        Toggle("Sound", isOn: $pushSound)
+                        Toggle("Banner When App Open", isOn: $pushForegroundBanner)
+                    }
+                    Toggle("Live Activities", isOn: $liveActivitiesEnabled)
+
+                    // Quiet Hours kept to two rows max:
+                    //   row 1: "Quiet Hours" toggle
+                    //   row 2: "From [pill] to [pill]" range picker (only visible
+                    //          when the toggle is on)
+                    // Compact Menu pickers replace the old pair of full-width
+                    // Steppers — those took two rows by themselves and pushed the
+                    // section unnecessarily long.
+                    Toggle("Quiet Hours", isOn: $quietHoursEnabled)
+                    if quietHoursEnabled {
+                        HStack {
+                            Text("From")
+                            Spacer()
+                            hourMenu(value: $quietHoursStart)
+                            Text("to")
+                                .foregroundStyle(.secondary)
+                            hourMenu(value: $quietHoursEnd)
+                        }
+                    }
+                }
+            } footer: {
+                if pushRegistration.deviceToken == nil {
+                    Text("Notification permission not granted. Reconnect or check iOS Settings → Quip.")
+                }
+            }
+            .onChange(of: pushPaused) { _, _ in sendPrefs() }
+            .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
+            .onChange(of: pushSound) { _, _ in sendPrefs() }
+            .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
+            .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
+            .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
+            .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
+        }
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Compact 24-hour Menu picker. Renders the selected hour as a small pill
+    /// (e.g. "10 PM") which expands to a 24-row scrollable menu on tap. Way
+    /// tighter than a Stepper — fits two side-by-side on one row.
+    @ViewBuilder
+    private func hourMenu(value: Binding<Int>) -> some View {
+        Menu(formatHour(value.wrappedValue)) {
+            ForEach(0..<24, id: \.self) { h in
+                Button(formatHour(h)) { value.wrappedValue = h }
+            }
+        }
+    }
+
+    private func formatHour(_ h: Int) -> String {
+        let hh = h % 24
+        let suffix = hh < 12 ? "AM" : "PM"
+        let display = hh == 0 ? 12 : (hh > 12 ? hh - 12 : hh)
+        return "\(display) \(suffix)"
+    }
+
+    private func sendPrefs() {
+        guard let token = pushRegistration.deviceToken else { return }
+        let msg = PushPreferencesMessage(
+            deviceToken: token,
+            paused: pushPaused,
+            quietHoursStart: quietHoursEnabled ? quietHoursStart : nil,
+            quietHoursEnd: quietHoursEnabled ? quietHoursEnd : nil,
+            sound: pushSound,
+            foregroundBanner: pushForegroundBanner,
+            bannerEnabled: pushBannerEnabled,
+            timeZone: TimeZone.current.identifier
+        )
+        client.send(msg)
+    }
 }
 
 /// Quick Buttons detail page — lives behind a NavigationLink in SettingsSheet
