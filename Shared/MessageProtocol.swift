@@ -514,6 +514,16 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     var pushQuietHoursEnd: Int?
     var liveActivitiesEnabled: Bool?
     var ttsEnabled: Bool?
+    /// JSON-encoded ordered slot list from the Apple-toolbar-style editor.
+    /// Supersedes `enabledQuickButtons` (kept for downgrade safety) — the
+    /// CSV is regenerated from the slot list's built-in entries on each
+    /// edit. Optional so older Macs without this field stay forward-
+    /// compatible.
+    var quickSlotsJSON: String?
+    /// JSON-encoded `[CustomButton]` definitions table referenced by the
+    /// slot list via UUID. Persisted separately so re-ordering doesn't
+    /// rewrite definitions.
+    var customButtonsJSON: String?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -529,7 +539,9 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         pushQuietHoursStart: Int? = nil,
         pushQuietHoursEnd: Int? = nil,
         liveActivitiesEnabled: Bool? = nil,
-        ttsEnabled: Bool? = nil
+        ttsEnabled: Bool? = nil,
+        quickSlotsJSON: String? = nil,
+        customButtonsJSON: String? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -545,6 +557,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.pushQuietHoursEnd = pushQuietHoursEnd
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.ttsEnabled = ttsEnabled
+        self.quickSlotsJSON = quickSlotsJSON
+        self.customButtonsJSON = customButtonsJSON
     }
 }
 
