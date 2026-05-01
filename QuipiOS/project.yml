@@ -45,7 +45,7 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Quip
-        CFBundleShortVersionString: 1.3.3
+        CFBundleShortVersionString: 1.3.4
         UILaunchScreen:
           UIColorName: ""
         NSSpeechRecognitionUsageDescription: Quip uses speech recognition to transcribe your voice commands for Claude Code.
