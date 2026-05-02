@@ -9,8 +9,12 @@ import ApplicationServices
 
 // MARK: - Models
 
-/// Represents a window managed by Quip
-struct ManagedWindow: Identifiable, Sendable {
+/// Represents a window managed by Quip.
+/// `@unchecked Sendable`: `icon: NSImage?` is technically not Sendable, but
+/// every read/write happens on the MainActor (see the comment on `icon`).
+/// The unchecked conformance avoids cascading actor-isolation churn through
+/// callers that already pass `ManagedWindow` across actor boundaries.
+struct ManagedWindow: Identifiable, @unchecked Sendable {
     let id: String                // Unique identifier (bundleId + windowNumber)
     let name: String              // Window title
     let app: String               // Application name
