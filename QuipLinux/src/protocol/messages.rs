@@ -280,6 +280,33 @@ impl AuthResultMessage {
     }
 }
 
+/// Backend → iPhone. Sent immediately after `auth_result(success: true)`.
+/// `device_id` is a stable UUIDv4 generated on first daemon launch and
+/// persisted in `~/.config/quip/device_id`. The phone keys per-backend
+/// state (PIN in Keychain, paired-backend row) against it.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceIdentityMessage {
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(rename = "deviceID")]
+    pub device_id: String,
+    #[serde(rename = "deviceKind")]
+    pub device_kind: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+}
+
+impl DeviceIdentityMessage {
+    pub fn new(device_id: String, display_name: String) -> Self {
+        Self {
+            type_: "device_identity".into(),
+            device_id,
+            device_kind: "linux".into(),
+            display_name,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TTS audio — streamed sentence-by-sentence to clients
 // ---------------------------------------------------------------------------

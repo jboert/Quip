@@ -12,9 +12,12 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{error, info, warn};
 
-use crate::protocol::messages::{encode_message, message_type, AuthMessage, AuthResultMessage};
+use crate::protocol::messages::{
+    encode_message, message_type, AuthMessage, AuthResultMessage, DeviceIdentityMessage,
+};
 use crate::services::auth_throttle::{AuthDecision, AuthThrottle};
 use crate::services::connection_log::{ConnectionEventKind, ConnectionLog};
+use crate::services::device_id;
 use crate::services::pin_manager::PINManager;
 
 type WsSink = SplitSink<WebSocketStream<TcpStream>, Message>;
@@ -236,10 +239,23 @@ impl WsServer {
                                                 let result_msg = AuthResultMessage::success();
                                                 let json = encode_message(&result_msg).unwrap_or_default();
 
+                                                // Stable per-installation UUID — see device_id.rs
+                                                // and DeviceIdentityMessage. The phone keys
+                                                // per-backend Keychain PINs against this.
+                                                let identity = DeviceIdentityMessage::new(
+                                                    device_id::get_or_create(),
+                                                    hostname::get()
+                                                        .ok()
+                                                        .and_then(|h| h.into_string().ok())
+                                                        .unwrap_or_else(|| "Linux".into()),
+                                                );
+                                                let identity_json = encode_message(&identity).unwrap_or_default();
+
                                                 let mut locked = clients.lock().await;
                                                 if let Some(client) = locked.get_mut(&client_id) {
                                                     client.authenticated = true;
                                                     let _ = client.sink.send(Message::Text(json.into())).await;
+                                                    let _ = client.sink.send(Message::Text(identity_json.into())).await;
                                                 }
                                             } else {
                                                 auth_throttle.record_failure(peer_ip);

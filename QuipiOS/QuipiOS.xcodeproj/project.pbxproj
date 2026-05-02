@@ -40,6 +40,7 @@
 		67348F3277C90D577C7D95D3 /* PushRegistrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA867C4EE46E8D6EEA5EC8D /* PushRegistrationService.swift */; };
 		689A5ACEE675BEBE7608C903 /* PTTWindowTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1BB453F0473949D38101D3F /* PTTWindowTrackerTests.swift */; };
 		6D05492F589AA379C4DB67BA /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343D7EF269316EB5B3DCC796 /* MessageProtocolTests.swift */; };
+		6E425B84F2A52841E8485386 /* BackendConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A26AAB8221B8827AD9A61B0 /* BackendConnectionManager.swift */; };
 		6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE3FC3415A512C214E8D8D9 /* PTTWindowTracker.swift */; };
 		6F89F8CCE385F0E125415C6B /* WhisperAudioSenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A833238659B2E7E8D205F45 /* WhisperAudioSenderTests.swift */; };
 		7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414AD810B644C175CFB73EE5 /* WindowInfo.swift */; };
@@ -50,6 +51,7 @@
 		996767763A69068B0D1D8687 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EED90216075AC25A1EDB70 /* SpeechService.swift */; };
 		A77BA34594060260386B5501 /* QuipMacPermsActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9CD5E023A432434C3093C06 /* QuipMacPermsActivityAttributes.swift */; };
 		A795C27D5F398A26647E2B49 /* SeamStitcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B827C2D030F43E7C9485615 /* SeamStitcherTests.swift */; };
+		A83DA871E1C581C5B55B2853 /* PairedBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C9266FDBE3CF14DDC598A9C /* PairedBackend.swift */; };
 		A977CCC72BA863A04F17FB77 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 07BAAAC4E0E8051B6FF2664E /* Assets.xcassets */; };
 		AC12BD221896070181F785DC /* QuipLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109D3594919D4EF54DE97C72 /* QuipLiveActivityWidget.swift */; };
 		B712CA6389A8643DAA92C4FE /* CertPins.json in Resources */ = {isa = PBXBuildFile; fileRef = 50991F62509F0EBB3C8037B9 /* CertPins.json */; };
@@ -58,10 +60,13 @@
 		BC0AAA34114426CFF2BEEB74 /* ArrangeLayoutMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEE82AF4A4EEBCF4A0DED50 /* ArrangeLayoutMappingTests.swift */; };
 		C048886FBB8F8115ED5B1964 /* PushNotificationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3153F1300EF9EB3372F1EE7A /* PushNotificationCenter.swift */; };
 		C10D61840E80EDAD704827A9 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 310DDC8B5BA9B05DA4632BF5 /* Color+Hex.swift */; };
+		C73C06767E4C7A7F3EEFCFD1 /* BackendPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC41AFA7144AFEB7E2DB4FA6 /* BackendPickerSheet.swift */; };
 		CA62A184114B15E2FB535A95 /* MirrorDesktopFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BAE6A8EDAED117D04D2161D /* MirrorDesktopFilterTests.swift */; };
 		D0B1694FE8FBF6965FCE4748 /* WhisperAudioSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E556291C05B9A0CF7C50AA5 /* WhisperAudioSender.swift */; };
 		D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */; };
+		D6951671B113FBEEB9B32067 /* KeychainBackendPINs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0956F285AE5835E9D2C425 /* KeychainBackendPINs.swift */; };
 		D90497A715C2D1FEBC04B532 /* LinkifiedTerminalContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6D5159A24459D33F4AE547B /* LinkifiedTerminalContentTests.swift */; };
+		DC04F286BAE7BA037BB7CAC7 /* BackendSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DB6CA6BFA3AC43DFF6F885 /* BackendSession.swift */; };
 		E15A8F5B7E6A925B33ECA315 /* KeychainDeviceID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 382370F0C983ABEC82E06430 /* KeychainDeviceID.swift */; };
 		E634311FF9DEAEA0E074302E /* ImagePickerPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3150B50687617E509C16EC1D /* ImagePickerPresenter.swift */; };
 		F0364CB28BFA07CC324DF280 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F583D197E23AF06962CE81A /* Constants.swift */; };
@@ -92,6 +97,7 @@
 		18E21C7F1FD2E724E4790F5D /* QuipLiveActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = QuipLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1B0C4B6E9EA1F79748808978 /* RecognizerRolloverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognizerRolloverTests.swift; sourceTree = "<group>"; };
 		1D6ED80C8277F668CC0B273C /* ImageRecompressor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRecompressor.swift; sourceTree = "<group>"; };
+		1E0956F285AE5835E9D2C425 /* KeychainBackendPINs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainBackendPINs.swift; sourceTree = "<group>"; };
 		25530A43AA8DC90AF7ED2C57 /* AudioRingBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBufferTests.swift; sourceTree = "<group>"; };
 		28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRectangle.swift; sourceTree = "<group>"; };
 		2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuipiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -104,6 +110,7 @@
 		38403BB3D3EAD614680767A6 /* dictation-vocab.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "dictation-vocab.txt"; sourceTree = "<group>"; };
 		3FC01677A64725213479F75E /* PCMChunker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMChunker.swift; sourceTree = "<group>"; };
 		414AD810B644C175CFB73EE5 /* WindowInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowInfo.swift; sourceTree = "<group>"; };
+		44DB6CA6BFA3AC43DFF6F885 /* BackendSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendSession.swift; sourceTree = "<group>"; };
 		46181BEC707D4C04671D336E /* QuipMacPermsActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacPermsActivityWidget.swift; sourceTree = "<group>"; };
 		47C70308C62E57B9CBBEFF9E /* SpeechServicePathSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServicePathSelectionTests.swift; sourceTree = "<group>"; };
 		4A833238659B2E7E8D205F45 /* WhisperAudioSenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSenderTests.swift; sourceTree = "<group>"; };
@@ -111,6 +118,7 @@
 		4E556291C05B9A0CF7C50AA5 /* WhisperAudioSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSender.swift; sourceTree = "<group>"; };
 		50991F62509F0EBB3C8037B9 /* CertPins.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = CertPins.json; sourceTree = "<group>"; };
 		591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalContentOverlay.swift; sourceTree = "<group>"; };
+		5C9266FDBE3CF14DDC598A9C /* PairedBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedBackend.swift; sourceTree = "<group>"; };
 		5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipLiveActivityAttributes.swift; sourceTree = "<group>"; };
 		5DED5CFC890EBB97FEDDAAFC /* ImageUploadMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageUploadMessageTests.swift; sourceTree = "<group>"; };
 		63A7D08ECBB0B1EFA3F77328 /* HardwareButtonHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareButtonHandler.swift; sourceTree = "<group>"; };
@@ -118,6 +126,7 @@
 		731E1A072569A16DBA76D9EB /* LiveActivityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityService.swift; sourceTree = "<group>"; };
 		764505DC63C7C214558A63CC /* WindowManagerSessionIdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManagerSessionIdTests.swift; sourceTree = "<group>"; };
 		773DBA5F5449A8B4C8E7D1AE /* PendingImageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingImageState.swift; sourceTree = "<group>"; };
+		7A26AAB8221B8827AD9A61B0 /* BackendConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendConnectionManager.swift; sourceTree = "<group>"; };
 		89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSNotificationOverlay.swift; sourceTree = "<group>"; };
 		8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
 		959643D7FC10BD21E0FDE409 /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
@@ -141,6 +150,7 @@
 		E10C0B106747159F0E24ED6C /* RemoteSpeechSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSpeechSession.swift; sourceTree = "<group>"; };
 		E98AE3676ED21B03DFD1861D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E9CD5E023A432434C3093C06 /* QuipMacPermsActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacPermsActivityAttributes.swift; sourceTree = "<group>"; };
+		EC41AFA7144AFEB7E2DB4FA6 /* BackendPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendPickerSheet.swift; sourceTree = "<group>"; };
 		ED7E3E6E78D3A418103DBD8C /* SeamStitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamStitcher.swift; sourceTree = "<group>"; };
 		F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
 		F37E465512A160C3F0FE0310 /* ImageRecompressorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRecompressorTests.swift; sourceTree = "<group>"; };
@@ -236,6 +246,7 @@
 		625FB982606090F193D7CE93 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				EC41AFA7144AFEB7E2DB4FA6 /* BackendPickerSheet.swift */,
 				310DDC8B5BA9B05DA4632BF5 /* Color+Hex.swift */,
 				F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */,
 				AB1FAB05086E60FFC302C3E6 /* ContextMenuView.swift */,
@@ -288,9 +299,11 @@
 		B82A58177E51EF2234FD8D1C /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				7A26AAB8221B8827AD9A61B0 /* BackendConnectionManager.swift */,
 				9EB84DC38B2B261AB78D9B78 /* BonjourBrowser.swift */,
 				63A7D08ECBB0B1EFA3F77328 /* HardwareButtonHandler.swift */,
 				1D6ED80C8277F668CC0B273C /* ImageRecompressor.swift */,
+				1E0956F285AE5835E9D2C425 /* KeychainBackendPINs.swift */,
 				382370F0C983ABEC82E06430 /* KeychainDeviceID.swift */,
 				731E1A072569A16DBA76D9EB /* LiveActivityService.swift */,
 				773DBA5F5449A8B4C8E7D1AE /* PendingImageState.swift */,
@@ -309,6 +322,8 @@
 		E96781A6729F4AC1D1B88B16 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				44DB6CA6BFA3AC43DFF6F885 /* BackendSession.swift */,
+				5C9266FDBE3CF14DDC598A9C /* PairedBackend.swift */,
 				414AD810B644C175CFB73EE5 /* WindowInfo.swift */,
 			);
 			path = Models;
@@ -475,6 +490,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				0AA0F2FFEDD25846D8E8E6A0 /* AudioRingBuffer.swift in Sources */,
+				6E425B84F2A52841E8485386 /* BackendConnectionManager.swift in Sources */,
+				C73C06767E4C7A7F3EEFCFD1 /* BackendPickerSheet.swift in Sources */,
+				DC04F286BAE7BA037BB7CAC7 /* BackendSession.swift in Sources */,
 				4D0689B3D9653512F27A322D /* BonjourBrowser.swift in Sources */,
 				C10D61840E80EDAD704827A9 /* Color+Hex.swift in Sources */,
 				B74D4BBBD664959095BE58DE /* ConnectionStatusBar.swift in Sources */,
@@ -483,11 +501,13 @@
 				2E3F0351CC5E90C934E0F0B2 /* HardwareButtonHandler.swift in Sources */,
 				E634311FF9DEAEA0E074302E /* ImagePickerPresenter.swift in Sources */,
 				390A246B5D13F798E9B55E7B /* ImageRecompressor.swift in Sources */,
+				D6951671B113FBEEB9B32067 /* KeychainBackendPINs.swift in Sources */,
 				E15A8F5B7E6A925B33ECA315 /* KeychainDeviceID.swift in Sources */,
 				216CB65B0E4953EF7B3C45BA /* LiveActivityService.swift in Sources */,
 				2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */,
 				81636C8A292C763A850701B8 /* PCMChunker.swift in Sources */,
 				6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */,
+				A83DA871E1C581C5B55B2853 /* PairedBackend.swift in Sources */,
 				046BFBEA924261A691A9EA3B /* PendingImagePreviewStrip.swift in Sources */,
 				F7B32FEF1E1A176C2710D831 /* PendingImageState.swift in Sources */,
 				20FE94C556B5D03097FB0030 /* PreferencesSyncService.swift in Sources */,
