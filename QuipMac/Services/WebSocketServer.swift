@@ -384,6 +384,20 @@ final class WebSocketServer {
         }
     }
 
+    /// Stable per-installation UUID. Generated on first call and persisted in
+    /// `UserDefaults` under `quip.deviceID`. The phone uses this to key
+    /// per-backend state (PIN in Keychain, paired-backend row) so that state
+    /// survives URL/hostname changes.
+    static func deviceID() -> String {
+        let key = "quip.deviceID"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+        let new = UUID().uuidString
+        UserDefaults.standard.set(new, forKey: key)
+        return new
+    }
+
     /// Per-host auth throttle. See AuthThrottle.swift for policy.
     private let authThrottle = AuthThrottle()
 
@@ -422,6 +436,14 @@ final class WebSocketServer {
             authThrottle.recordSuccess(host: host)
             setAuthenticated(connection)
             send(AuthResultMessage(success: true, error: nil), to: connection)
+            // Stable backend UUID so the phone can key per-backend state
+            // (PIN in Keychain, paired-backend row) against something that
+            // survives URL/hostname changes. See DeviceIdentityMessage.
+            send(DeviceIdentityMessage(
+                deviceID: Self.deviceID(),
+                deviceKind: "mac",
+                displayName: Host.current().localizedName ?? "Mac"
+            ), to: connection)
             print("[WebSocketServer] Client authenticated successfully")
             connectionLog?.record(.authSucceeded, remote: remoteStr, detail: nil)
             onClientAuthenticated?()

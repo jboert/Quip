@@ -32,7 +32,10 @@ class AppOrientationDelegate: NSObject, UIApplicationDelegate {
 @main
 struct QuipApp: App {
     @UIApplicationDelegateAdaptor(AppOrientationDelegate.self) var appDelegate
-    @State private var client = WebSocketClient()
+    @State private var manager = BackendConnectionManager()
+    /// Convenience: `client.send(...)` everywhere keeps working unchanged
+    /// because the active session's client is what we want to talk to.
+    private var client: WebSocketClient { manager.active.client }
     @State private var speech = SpeechService()
     @State private var volumeHandler = HardwareButtonHandler()
     @State private var bonjourBrowser = BonjourBrowser()
@@ -98,6 +101,7 @@ struct QuipApp: App {
         WindowGroup {
             MainiOSView(
                 client: client,
+                manager: manager,
                 speech: speech,
                 bonjourBrowser: bonjourBrowser,
                 windows: $windows,
@@ -164,6 +168,28 @@ struct QuipApp: App {
                 // selection path: tap, Mac echo, deep-link tap, etc.
                 if let newId { attentionCenter.clearAttention(for: newId) }
             }
+            .onChange(of: manager.activeBackendID) { _, _ in
+                // Active backend changed — copy the new session's slice into
+                // the global @State so the UI shows that backend's data
+                // immediately. Hot model: the slice was kept up to date in
+                // the background, so this is a sub-frame view swap.
+                let s = manager.active
+                windows = s.windows
+                selectedWindowId = s.selectedWindowId
+                monitorName = s.monitorName
+                screenAspect = s.screenAspect
+                terminalContentText = s.terminalContentText
+                terminalContentScreenshot = s.terminalContentScreenshot
+                terminalContentURLs = s.terminalContentURLs
+                terminalContentWindowId = s.terminalContentWindowId
+                projectDirectories = s.projectDirectories
+                iTermScanResults = s.iTermScanResults
+                macPermissions = s.macPermissions
+                ttsOverlayTexts = s.ttsOverlayTexts
+                // Repoint speech at the new active client so PTT audio chunks
+                // go to the right backend. `attachWebSocket` is idempotent.
+                speech.attachWebSocket(s.client)
+            }
             .onChange(of: liveActivitiesEnabled) { _, enabled in
                 // Flipping Live Activities off in Settings should drop any
                 // in-flight island card immediately. Without this, the toggle
@@ -207,16 +233,17 @@ struct QuipApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                 // Buy ~30s of background execution so a quick app switch doesn't
-                // suspend the network stack and stale the WebSocket.
-                client.suspendForBackground()
+                // suspend the network stack and stale the WebSocket. Hot model
+                // means every paired backend's socket gets the same grace.
+                manager.suspendAll()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                 volumeHandler.stopMonitoring()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                // Probe the socket on return; force-reconnect with reset backoff
-                // if the probe doesn't pong within 2s.
-                client.resumeFromBackground()
+                // Probe every paired backend's socket on return; force-reconnect
+                // with reset backoff if the probe doesn't pong within 2s.
+                manager.resumeAll()
             }
         }
     }
@@ -236,23 +263,31 @@ struct QuipApp: App {
     }
 
     private func setup() {
+        // Hot model: load persisted paired backends, then `bootstrap()`
+        // spawns one wired+connected `WebSocketClient` per entry. Each
+        // session accumulates its own state slice; switching active backend
+        // is just a UI flip. Note: manager hooks (set below) are wired to
+        // the manager BEFORE bootstrap fires its first message routes —
+        // SwiftUI runs `setup()` synchronously on body composition, so the
+        // hooks are in place before any network frame arrives.
+        manager.loadPaired()
+
         speech.requestAuthorization()
         speech.attachWebSocket(client)
 
-        client.onLayoutUpdate = { update in
+        // Hot model: the manager's `wire(session:)` already maintained each
+        // session's slice (windows, monitorName, terminalContent, etc.). The
+        // host hooks below only fire global side-effects + mirror into
+        // QuipApp's @State for the *active* session — background sessions
+        // accumulate state silently in their own slice so a switch is instant.
+        manager.onLayoutUpdate = { session, update in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 let wasEmpty = windows.isEmpty
                 windows = update.windows
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
-                // Auto-arrange (FR-2) — fire on every list change unless the
-                // user has explicitly taken control via cycle button or drag.
-                // Auto-arrange chooser fires from MainiOSView via
-                // `.onChange(of: windows)` since the relevant @AppStorage
-                // and `phoneFrameOverrides` state lives there. We just
-                // refresh the windows binding here and the View reacts.
-                // Allow all orientations once we have windows, suggest landscape
                 if wasEmpty && !update.windows.isEmpty {
                     AppOrientationDelegate.allowAllOrientations = true
                     if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
@@ -260,54 +295,48 @@ struct QuipApp: App {
                     }
                     UIViewController.attemptRotationToDeviceOrientation()
                 }
-                // If the selected window vanished (Mac restarted, window closed),
-                // auto-select the first available window so buttons don't go dead.
                 if let wid = selectedWindowId, !update.windows.contains(where: { $0.id == wid }) {
                     selectedWindowId = update.windows.first?.id
                     if let newId = selectedWindowId {
-                        client.send(SelectWindowMessage(windowId: newId))
+                        session.client.send(SelectWindowMessage(windowId: newId))
                     }
                 }
-                // Tell the Mac which window we currently have selected — but only
-                // if this is the first layout update after connection (wasEmpty = true).
                 if wasEmpty, let wid = selectedWindowId, update.windows.contains(where: { $0.id == wid }) {
-                    client.send(SelectWindowMessage(windowId: wid))
+                    session.client.send(SelectWindowMessage(windowId: wid))
                 }
             }
         }
 
-        client.onSelectWindow = { windowId in
+        manager.onSelectWindow = { session, windowId in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
-                // Mac is asking us to switch — set local selection without echoing
-                // a select_window back, which would loop.
                 guard windows.contains(where: { $0.id == windowId }) else { return }
                 selectedWindowId = windowId
             }
         }
 
-        client.onProjectDirectories = { dirs in
-            DispatchQueue.main.async {
-                projectDirectories = dirs
-            }
+        manager.onProjectDirectories = { session, dirs in
+            guard session.backendID == manager.activeBackendID else { return }
+            DispatchQueue.main.async { projectDirectories = dirs }
         }
 
-        client.onITermWindowList = { infos in
-            DispatchQueue.main.async {
-                iTermScanResults = infos
-            }
+        manager.onITermWindowList = { session, infos in
+            guard session.backendID == manager.activeBackendID else { return }
+            DispatchQueue.main.async { iTermScanResults = infos }
         }
 
-        client.onError = { reason in
+        manager.onError = { session, reason in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 errorToast = reason
-                // Auto-dismiss after 3 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     if errorToast == reason { errorToast = nil }
                 }
             }
         }
 
-        client.onStateChange = { windowId, newState in
+        manager.onStateChange = { session, windowId, newState in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 if let i = windows.firstIndex(where: { $0.id == windowId }) {
                     let w = windows[i]
@@ -316,15 +345,7 @@ struct QuipApp: App {
                         frame: w.frame, state: newState, color: w.color,
                         isThinking: w.isThinking
                     )
-                    // Drive the Dynamic Island Live Activity for the user's
-                    // currently-selected window. PRD scope: only the selected
-                    // window gets an island; every other thinking window is
-                    // tracked by the Mac but doesn't pop its own activity.
                     if windowId == selectedWindowId, liveActivitiesEnabled {
-                        // During quiet hours, suppress start/update so no new
-                        // island card pops and existing cards stop changing
-                        // state. `end` still fires on neutral so anything that
-                        // started before quiet hours can clean itself up.
                         let islandState: String? = switch newState {
                         case "thinking": "thinking"
                         case "waiting_for_input": "waiting"
@@ -333,8 +354,6 @@ struct QuipApp: App {
                         if let islandState, !isInQuietHoursNow() {
                             liveActivity.startOrUpdate(windowId: windowId, windowName: w.name, state: islandState)
                         } else if islandState == nil {
-                            // neutral or anything else: user is actively engaged
-                            // with the terminal; no need for an island card.
                             liveActivity.end(windowId: windowId)
                         }
                     }
@@ -356,33 +375,22 @@ struct QuipApp: App {
             }
         }
 
-        client.onTerminalContent = { windowId, content, screenshot, urls in
+        manager.onTerminalContent = { session, windowId, content, screenshot, urls in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 terminalContentWindowId = windowId
                 terminalContentText = content
-                // Preserve last-good screenshot when the new update doesn't
-                // carry one — happens on Mac Screen Recording revocation
-                // (cdhash change after a Mac rebuild), Tailscale reconnects,
-                // network switches, or momentary Mac CPU spikes where
-                // screencapture returns nil. Without this, the iOS panel
-                // would drop to "Loading…" on every bad refresh even though
-                // the window state hasn't actually changed. Window switches
-                // still clear via `selectedWindowId.onChange` so we never
-                // show stale content from the wrong window.
                 if let screenshot, !screenshot.isEmpty {
                     terminalContentScreenshot = screenshot
                 }
-                // Same preservation rule as screenshot: Mac sends urls=nil when
-                // extraction returns empty (transient iTerm scrape miss, brief
-                // window blur, throttle gap). Don't wipe a good tray on a bad
-                // refresh — selectedWindowId.onChange clears on real switches.
                 if let urls, !urls.isEmpty {
                     terminalContentURLs = urls
                 }
             }
         }
 
-        client.onMacPermissions = { snapshot in
+        manager.onMacPermissions = { session, snapshot in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 macPermissions = snapshot
                 let denied = snapshot.deniedCount
@@ -396,30 +404,39 @@ struct QuipApp: App {
             }
         }
 
-        client.onOutputDelta = { windowId, windowName, text, isFinal in
+        manager.onOutputDelta = { session, windowId, windowName, text, isFinal in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 guard ttsEnabled else { return }
                 ttsOverlayTexts[windowId] = text
             }
         }
 
-        client.onTTSAudio = { windowId, windowName, sessionId, sequence, isFinal, wavData in
+        manager.onTTSAudio = { session, windowId, windowName, sessionId, sequence, isFinal, wavData in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 guard ttsEnabled else { return }
                 speech.enqueueAudio(wavData, windowId: windowId, sessionId: sessionId, isFinal: isFinal)
             }
         }
 
-        client.onAuthRequired = {
+        manager.onAuthRequired = { session in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 pinText = ""
                 showPINEntry = true
             }
         }
 
-        client.onAuthResult = { success, error in
+        manager.onAuthResult = { session, success, error in
             DispatchQueue.main.async {
+                guard session.backendID == manager.activeBackendID else { return }
                 if success {
+                    // Persist the just-validated PIN so the next launch (and
+                    // background reconnects) can auto-auth without prompting.
+                    if let pin = session.client.sessionPIN {
+                        KeychainBackendPINs.write(backendID: session.backendID, pin: pin)
+                    }
                     showPINEntry = false
                     pinText = ""
                     // Prompt for notification permission (if needed) and hand
@@ -461,16 +478,18 @@ struct QuipApp: App {
             }
         }
 
-        client.onPreferencesRestore = { snapshot in
+        manager.onPreferencesRestore = { session, snapshot in
+            guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 prefsSync.applyRestore(snapshot)
             }
         }
 
-        // Wire the sync service to actually transmit via the WebSocket. Done
-        // once at setup so every UserDefaults change can fire-and-forget.
-        prefsSync.send = { [client] data in
-            client.sendRaw(data)
+        // Wire the sync service to actually transmit via the WebSocket. The
+        // closure dynamically resolves `manager.active.client` each call, so
+        // it always targets the current active backend even after a swap.
+        prefsSync.send = { [manager] data in
+            manager.active.client.sendRaw(data)
         }
         prefsSync.start()
 
@@ -485,6 +504,12 @@ struct QuipApp: App {
         volumeHandler.onArm = { speech.arm() }
         volumeHandler.onDisarm = { speech.disarm() }
         speech.startObservingInterruptions()
+
+        // All host hooks wired. Now spawn one client per paired backend and
+        // kick off auto-connect for any with a Keychain PIN. Background
+        // backends connect silently — their slice updates don't fan out to
+        // global @State because the gates above test active id.
+        manager.bootstrap()
     }
 
     @MainActor
@@ -600,6 +625,7 @@ struct QuipApp: App {
 
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
+    @Bindable var manager: BackendConnectionManager
     var speech: SpeechService
     var bonjourBrowser: BonjourBrowser
     @Binding var windows: [WindowState]
@@ -656,6 +682,8 @@ struct MainiOSView: View {
     @AppStorage("mainRow.keyboard") private var mainRowKeyboard: Bool = true
     @AppStorage("mainRow.return") private var mainRowReturn: Bool = true
     @State private var showSettings = false
+    /// Multi-backend picker sheet trigger.
+    @State private var showBackendPicker = false
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
     /// Which tab the Spawn sheet is on. "new" shows project directories
@@ -891,17 +919,16 @@ struct MainiOSView: View {
             // Companion onAppear for the rest of the legacy hookup below.
             // Register image upload result callbacks. These are idempotent
             // reassignments so re-firing onAppear is harmless.
-            client.onImageUploadAck = { [weak pendingImage] _ in
+            manager.onImageUploadAck = { [weak pendingImage] session, _ in
+                guard session.backendID == manager.activeBackendID else { return }
                 DispatchQueue.main.async {
-                    // Brief checkmark flash over the thumbnail so the user
-                    // sees the path actually landed in the prompt before
-                    // the preview strip vanishes.
                     let generator = UINotificationFeedbackGenerator()
                     generator.notificationOccurred(.success)
                     pendingImage?.markSentAndClear()
                 }
             }
-            client.onImageUploadError = { [weak pendingImage] reason in
+            manager.onImageUploadError = { [weak pendingImage] session, reason in
+                guard session.backendID == manager.activeBackendID else { return }
                 DispatchQueue.main.async { pendingImage?.markError(reason) }
             }
         }
@@ -977,6 +1004,19 @@ struct MainiOSView: View {
                 pushRegistration: pushRegistration,
                 macPermissions: macPermissions
             )
+        }
+        .sheet(isPresented: $showBackendPicker) {
+            BackendPickerSheet(
+                manager: manager,
+                isActiveConnected: client.isConnected,
+                isPresented: $showBackendPicker
+            ) {
+                // "Add backend" tapped: disconnect to surface the URL entry
+                // so the user can paste/scan/Bonjour-pick a new daemon. The
+                // existing connect path will append the new entry to
+                // `paired` via `ensureImplicitDefault`.
+                client.disconnect()
+            }
         }
         // Image-attach sheets — hoisted to the body so both portrait and
         // landscape views can trigger them via the shared @State bindings.
@@ -1063,6 +1103,7 @@ struct MainiOSView: View {
         .alert("Unrecognized Server", isPresented: $showURLWarning) {
             Button("Connect Anyway", role: .destructive) {
                 if let url = pendingUnsafeURL {
+                    manager.ensureImplicitDefault(url: url.absoluteString)
                     client.connect(to: url)
                     addToRecents(url.absoluteString)
                     pendingUnsafeURL = nil
@@ -1293,6 +1334,7 @@ struct MainiOSView: View {
                     ForEach(bonjourBrowser.discoveredHosts) { host in
                         Button {
                             if let url = host.wsURL {
+                                manager.ensureImplicitDefault(url: url.absoluteString)
                                 client.connect(to: url)
                                 addToRecents(url.absoluteString)
                             }
@@ -1412,12 +1454,32 @@ struct MainiOSView: View {
 
     private var connectedBar: some View {
         HStack(spacing: 4) {
-            Circle()
-                .fill(client.isConnected ? colors.statusConnected : colors.statusConnecting)
-                .frame(width: 6, height: 6)
-            Text(client.isConnected ? "Connected" : "Connecting\u{2026}")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(colors.textSecondary)
+            // Tap the dot+label to open the multi-backend picker. Hidden when
+            // there's no paired entry yet (first launch) so the affordance
+            // only shows up once it's actionable.
+            Button {
+                if !manager.paired.isEmpty {
+                    showBackendPicker = true
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(client.isConnected ? colors.statusConnected : colors.statusConnecting)
+                        .frame(width: 6, height: 6)
+                    Text(client.isConnected ? "Connected" : "Connecting\u{2026}")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(colors.textSecondary)
+                    if manager.paired.count > 1 {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8))
+                            .foregroundStyle(colors.textTertiary)
+                        Text("\(manager.paired.count) paired")
+                            .font(.system(size: 9))
+                            .foregroundStyle(colors.textTertiary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
             if let error = client.lastError {
                 Text(error)
                     .font(.system(size: 9))
@@ -2539,6 +2601,7 @@ struct MainiOSView: View {
         }
         if let url = URL(string: urlStr) {
             if isURLTrusted(url) {
+                manager.ensureImplicitDefault(url: urlStr)
                 client.connect(to: url)
                 addToRecents(urlStr)
             } else {

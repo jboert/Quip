@@ -180,6 +180,9 @@ final class WebSocketClient {
     var onError: ((String) -> Void)?
     var onAuthRequired: (() -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
+    /// Backend identifies itself with a stable UUID right after auth_ok.
+    /// `BackendConnectionManager` uses this to key per-backend state.
+    var onDeviceIdentity: ((DeviceIdentityMessage) -> Void)?
     /// Mac is sending back a preferences snapshot the phone previously
     /// uploaded — used to repopulate UserDefaults after a reinstall.
     var onPreferencesRestore: ((PreferencesSnapshot) -> Void)?
@@ -506,6 +509,10 @@ final class WebSocketClient {
                     sessionPIN = nil  // Clear bad PIN
                 }
                 onAuthResult?(msg.success, msg.error)
+            }
+        case "device_identity":
+            if let msg = try? decoder.decode(DeviceIdentityMessage.self, from: data) {
+                onDeviceIdentity?(msg)
             }
         case "layout_update":
             guard isAuthenticated else { return }

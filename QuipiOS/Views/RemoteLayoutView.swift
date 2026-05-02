@@ -7,8 +7,16 @@ struct RemoteLayoutView: View {
     var macName: String = "Mac"
     var onConnect: ((String) -> Void)? = nil
     var onWindowAction: ((String, WindowAction) -> Void)? = nil
+    /// Forwarded to ConnectionStatusBar — opens the multi-backend picker.
+    var onTapStatus: (() -> Void)? = nil
+    var pairedHint: String? = nil
+    /// Horizontal swipe on the layout area cycles the active backend.
+    /// `direction` is +1 (next) or -1 (previous). Wired to
+    /// `BackendConnectionManager.cycleActive(direction:)`.
+    var onCycleBackend: ((Int) -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
+    @State private var swipeOffset: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -25,13 +33,45 @@ struct RemoteLayoutView: View {
                 ConnectionStatusBar(
                     isConnected: isConnected,
                     macName: macName,
-                    onConnect: onConnect
+                    onConnect: onConnect,
+                    onTapStatus: onTapStatus,
+                    pairedHint: pairedHint
                 )
 
-                // Window layout area — takes all available space
+                // Window layout area — takes all available space.
+                // Backend cycle gesture lives here (NOT on the terminal panel,
+                // where horizontal swipe is reserved for window cycling).
+                // 60pt threshold + 2:1 horizontal-to-vertical ratio prevents
+                // accidental triggers from vertical scrolls inside the area.
                 layoutArea
                     .padding(.horizontal, 12)
                     .padding(.vertical, 12)
+                    .offset(x: swipeOffset)
+                    .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.75),
+                               value: swipeOffset)
+                    .gesture(
+                        DragGesture(minimumDistance: 20)
+                            .onChanged { value in
+                                guard onCycleBackend != nil else { return }
+                                let dx = value.translation.width
+                                let dy = value.translation.height
+                                if abs(dx) < abs(dy) * 2 {
+                                    if swipeOffset != 0 { swipeOffset = 0 }
+                                    return
+                                }
+                                let damped = dx * 0.3
+                                swipeOffset = max(-60, min(60, damped))
+                            }
+                            .onEnded { value in
+                                let dx = value.translation.width
+                                let dy = value.translation.height
+                                swipeOffset = 0
+                                guard let onCycleBackend,
+                                      abs(dx) >= 60,
+                                      abs(dx) >= abs(dy) * 2 else { return }
+                                onCycleBackend(dx < 0 ? 1 : -1)
+                            }
+                    )
 
                 // Selected window indicator at bottom
                 if let selected = windows.first(where: { $0.id == selectedWindowId }) {

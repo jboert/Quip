@@ -5,6 +5,7 @@ pub mod auth_throttle;
 pub mod claude_mode;
 pub mod cloudflare_tunnel;
 pub mod connection_log;
+pub mod device_id;
 pub mod image_upload;
 pub mod kokoro_tts;
 pub mod log_paths;

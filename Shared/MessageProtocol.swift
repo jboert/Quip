@@ -627,6 +627,27 @@ struct AuthResultMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Device Identity
+
+/// Backend → iPhone. Sent immediately after `auth_result(success: true)` so the
+/// phone can key per-backend state (PIN in Keychain, paired-backend row, etc.)
+/// against a stable UUID rather than a URL that changes with network. Daemons
+/// generate `deviceID` once on first launch and persist it (Mac: UserDefaults
+/// `quip.deviceID`; Linux: settings store next to the PIN).
+struct DeviceIdentityMessage: Codable, Sendable {
+    let type: String
+    let deviceID: String   // UUIDv4
+    let deviceKind: String // "mac" | "linux"
+    let displayName: String
+
+    init(deviceID: String, deviceKind: String, displayName: String) {
+        self.type = "device_identity"
+        self.deviceID = deviceID
+        self.deviceKind = deviceKind
+        self.displayName = displayName
+    }
+}
+
 // MARK: - Mac Permission Status
 
 /// One of the macOS TCC panes Quip needs the user to grant. The phone sends this
