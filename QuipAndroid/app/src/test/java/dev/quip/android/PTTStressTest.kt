@@ -162,7 +162,12 @@ class PTTStressTest {
      */
     @Test
     fun `concurrent send attempts with volatile guard`() {
-        @Volatile var hasSentTranscription = false
+        // @Volatile would be ideal here but it can't annotate locals — the
+        // Kotlin compiler emits "annotation is not applicable to target
+        // 'local variable'" and fails the build. The captured local already
+        // becomes a Ref<Boolean> field on the synthesized closure class, so
+        // the race condition the test is stressing still surfaces.
+        var hasSentTranscription = false
         val sendCount = AtomicInteger(0)
         val threadCount = 10
         val barrier = CyclicBarrier(threadCount)

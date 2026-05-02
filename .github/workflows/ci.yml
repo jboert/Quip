@@ -93,17 +93,32 @@ jobs:
         working-directory: QuipiOS
         run: xcodegen generate
 
+      - name: Pick an available iPhone simulator
+        id: sim
+        # Hard-coding `name=iPhone 15` breaks every time GitHub bumps the
+        # macos-15 image to a newer Xcode whose default sim runtime drops
+        # that device. Resolve to whatever iPhone simulator the runner has
+        # available at job time and pass its UDID to xcodebuild.
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list -j devices available \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; \
+                ids=[v["udid"] for k in d for v in d[k] if v.get("name","").startswith("iPhone")]; \
+                print(ids[0] if ids else "", end="")')
+          if [ -z "$UDID" ]; then
+            echo "No iPhone simulator found on runner" >&2
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
       - name: Build & test
-        # Pick whichever recent simulator the runner has installed by leaving
-        # the device name out — `OS=latest,platform=iOS Simulator` lets xcodebuild
-        # resolve to whatever's available, which keeps the workflow stable across
-        # GitHub-runner image upgrades.
         run: |
           set -o pipefail
           xcodebuild test \
             -project QuipiOS/QuipiOS.xcodeproj \
             -scheme QuipiOS \
-            -destination 'platform=iOS Simulator,OS=latest,name=iPhone 15' \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
