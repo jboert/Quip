@@ -251,35 +251,38 @@ struct QuipMacApp: App {
 
         var subtitleCounter = 0
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            // Read on main so we can use @MainActor state; the expensive
-            // AppleScript/CG calls run off-main below.
-            let forceSessionFetch = windowManager.needsIterm2SessionIdRefresh
-            DispatchQueue.global(qos: .utility).async {
-                let snapshot = WindowManager.fetchWindowList()
+            // Timer fires on the main runloop (we scheduled it from main), so
+            // assumeIsolated is sound. Swift 6 types the closure as @Sendable
+            // and won't let us touch MainActor state without an explicit hop.
+            MainActor.assumeIsolated {
+                // Read on main so we can use @MainActor state; the expensive
+                // AppleScript/CG calls run off-main below. subtitleCounter
+                // stays on main so it isn't shared into the @Sendable global
+                // queue closure.
+                let forceSessionFetch = windowManager.needsIterm2SessionIdRefresh
                 subtitleCounter += 1
-                let subtitles: [CGWindowID: String]?
-                if subtitleCounter >= 5 {
-                    subtitleCounter = 0
-                    subtitles = WindowManager.fetchSubtitles()
-                } else {
-                    subtitles = nil
-                }
-                // Fetch session IDs on the subtitle cycle OR whenever the Mac
-                // side has any iTerm2 window still missing a UUID. Without the
-                // latter, a new window can route keystrokes to the wrong pane
-                // for up to the full 10s subtitle-cycle gap.
-                let shouldFetchSessions = subtitles != nil || forceSessionFetch
-                let sessions = shouldFetchSessions ? WindowManager.fetchIterm2SessionIds() : nil
-                DispatchQueue.main.async {
-                    windowManager.applyWindowSnapshot(snapshot)
-                    if let subtitles { windowManager.applySubtitles(subtitles) }
-                    if let sessions { windowManager.applyIterm2SessionIds(sessions) }
-                    // After session IDs are matched, re-enable anything the
-                    // user attached in a prior run so the window is in the
-                    // picker again without a round-trip.
-                    windowManager.enableAttachedWindows()
-                    self.syncTrackedWindows()
-                    broadcastLayout()
+                let needSubtitles = subtitleCounter >= 5
+                if needSubtitles { subtitleCounter = 0 }
+                DispatchQueue.global(qos: .utility).async {
+                    let snapshot = WindowManager.fetchWindowList()
+                    let subtitles = needSubtitles ? WindowManager.fetchSubtitles() : nil
+                    // Fetch session IDs on the subtitle cycle OR whenever the
+                    // Mac side has any iTerm2 window still missing a UUID.
+                    // Without the latter, a new window can route keystrokes to
+                    // the wrong pane for up to the full 10s subtitle-cycle gap.
+                    let shouldFetchSessions = subtitles != nil || forceSessionFetch
+                    let sessions = shouldFetchSessions ? WindowManager.fetchIterm2SessionIds() : nil
+                    DispatchQueue.main.async {
+                        windowManager.applyWindowSnapshot(snapshot)
+                        if let subtitles { windowManager.applySubtitles(subtitles) }
+                        if let sessions { windowManager.applyIterm2SessionIds(sessions) }
+                        // After session IDs are matched, re-enable anything the
+                        // user attached in a prior run so the window is in the
+                        // picker again without a round-trip.
+                        windowManager.enableAttachedWindows()
+                        self.syncTrackedWindows()
+                        broadcastLayout()
+                    }
                 }
             }
         }
@@ -976,40 +979,37 @@ struct QuipMacApp: App {
         "phonePrefs.\(deviceID)"
     }
 
+    @MainActor
     private func setupWhisper() async {
-        await MainActor.run {
-            self.whisperStatusStore.state = .preparing
-            self.broadcastWhisperStatus()
-        }
+        // @MainActor on the function keeps WhisperKit (non-Sendable) pinned to
+        // main throughout — Swift 6 strict concurrency rejected the previous
+        // form because `try await WhisperKit(...)` was nonisolated and the
+        // result couldn't be sent back into MainActor.run.
+        self.whisperStatusStore.state = .preparing
+        self.broadcastWhisperStatus()
 
         #if canImport(WhisperKit)
         do {
             let kit = try await WhisperKit(model: "openai_whisper-base")
             let transcriber = WhisperKitTranscriber(kit: kit)
-            await MainActor.run {
-                self.whisperService = WhisperDictationService(transcriber: transcriber) { msg in
-                    // Hop back to Main to use the existing broadcast helper.
-                    DispatchQueue.main.async {
-                        if let m = msg as? TranscriptResultMessage {
-                            self.webSocketServer.broadcast(m)
-                        }
+            self.whisperService = WhisperDictationService(transcriber: transcriber) { msg in
+                // Hop back to Main to use the existing broadcast helper.
+                DispatchQueue.main.async {
+                    if let m = msg as? TranscriptResultMessage {
+                        self.webSocketServer.broadcast(m)
                     }
                 }
-                self.whisperStatusStore.state = .ready
-                self.broadcastWhisperStatus()
-                self.startWhisperReaper()
             }
+            self.whisperStatusStore.state = .ready
+            self.broadcastWhisperStatus()
+            self.startWhisperReaper()
         } catch {
-            await MainActor.run {
-                self.whisperStatusStore.state = .failed(message: error.localizedDescription)
-                self.broadcastWhisperStatus()
-            }
-        }
-        #else
-        await MainActor.run {
-            self.whisperStatusStore.state = .failed(message: "WhisperKit not available")
+            self.whisperStatusStore.state = .failed(message: error.localizedDescription)
             self.broadcastWhisperStatus()
         }
+        #else
+        self.whisperStatusStore.state = .failed(message: "WhisperKit not available")
+        self.broadcastWhisperStatus()
         #endif
     }
 

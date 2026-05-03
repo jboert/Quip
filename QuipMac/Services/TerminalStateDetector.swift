@@ -50,11 +50,14 @@ final class TerminalStateDetector {
         guard pollTimer == nil else { return }
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            // Snapshot what we need from main, then do the heavy ps(1) work off main.
-            let tracked = self.trackedWindows
-            let currentStates = self.windowStates
-            let sttWindows = currentStates.filter { $0.value == .sttActive }.keys
-            let threshold = self.cpuIdleThreshold
+            // Timer fires on the main runloop. Snapshot MainActor state inside
+            // assumeIsolated, then do the heavy ps(1) work off main.
+            let (tracked, sttWindows, threshold): ([String: pid_t], Set<String>, Double) =
+                MainActor.assumeIsolated {
+                    let states = self.windowStates
+                    let stt = Set(states.filter { $0.value == .sttActive }.keys)
+                    return (self.trackedWindows, stt, self.cpuIdleThreshold)
+                }
             self.pollQueue.async { [weak self] in
                 guard let self else { return }
                 var results: [(String, TerminalState)] = []
