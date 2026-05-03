@@ -101,11 +101,15 @@ jobs:
       # root so xcodebuild finds them. xcodegen 2.44.x didn't have this
       # behavior — when the formula stabilizes (or we restructure Shared),
       # this whole block goes away.
-      - name: Symlink iOS resources at repo root for xcodegen 2.45 layout
+      - name: Mirror iOS resources at repo root for xcodegen 2.45 layout
         run: |
           set -euo pipefail
+          # actool refuses to follow symlinks for asset catalogs, so a real
+          # copy is required for Assets.xcassets even though the others would
+          # work as symlinks. Use -R for everything to keep the loop uniform.
           for f in Signing.xcconfig Assets.xcassets Info.plist QuipiOS.entitlements; do
-            ln -sf "QuipiOS/${f}" "${f}"
+            rm -rf "${f}"
+            cp -R "QuipiOS/${f}" "${f}"
           done
 
       - name: Pick an available iPhone simulator

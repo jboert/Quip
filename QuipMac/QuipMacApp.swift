@@ -1,6 +1,12 @@
 import SwiftUI
 import WhisperKit
 
+// WhisperKit (upstream) doesn't declare Sendable conformance. Swift 6 strict
+// concurrency then rejects sending an awaited WhisperKit instance back into
+// MainActor. We only touch the kit on main, so the @unchecked vouches are
+// sound; revisit if WhisperKit ships proper actor-aware annotations.
+extension WhisperKit: @unchecked Sendable {}
+
 /// Append a line to `LogPaths.pushPath`. Used to debug "I didn't get
 /// a notification" — print()/NSLog can't be seen by the user when the
 /// app is launched via `open`, but this file is trivial to `tail -f`.
@@ -990,13 +996,11 @@ struct QuipMacApp: App {
 
         #if canImport(WhisperKit)
         do {
-            // nonisolated(unsafe) escape hatch: WhisperKit's init runs on a
-            // nonisolated executor and returns a non-Sendable instance that
-            // Xcode 16.4 / Swift 6 refuses to send back into MainActor even
-            // when the caller is @MainActor. The kit is only ever touched on
-            // main from here forward (by us and by WhisperKitTranscriber),
-            // so the unsafe is sound.
-            nonisolated(unsafe) let kit = try await WhisperKit(model: "openai_whisper-base")
+            // WhisperKit isn't declared Sendable upstream, so Swift 6 refuses
+            // to send the awaited result back into MainActor. The Sendable
+            // shim below (file-scope) tells the compiler we vouch for it —
+            // we only ever touch the kit on main from here on.
+            let kit = try await WhisperKit(model: "openai_whisper-base")
             let transcriber = WhisperKitTranscriber(kit: kit)
             self.whisperService = WhisperDictationService(transcriber: transcriber) { msg in
                 // Hop back to Main to use the existing broadcast helper.
