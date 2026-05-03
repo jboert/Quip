@@ -62,8 +62,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Install xcodegen 2.44.1
+        # Pin: 2.45.x rewrites source paths to a "common ancestor" basePath
+        # so iOS sources mixing `path: .` with `path: ../Shared` end up at
+        # repo root instead of QuipiOS/. Pulling the .pkg from the upstream
+        # release is the simplest way to lock the version on macos-15.
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/xcodegen.zip \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          sudo /tmp/xcodegen/xcodegen/install.sh
+          xcodegen --version
 
       - name: Generate Mac project
         working-directory: QuipMac
@@ -86,31 +96,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Install xcodegen 2.44.1
+        # Pin: 2.45.x rewrites source paths to a "common ancestor" basePath
+        # so iOS sources mixing `path: .` with `path: ../Shared` end up at
+        # repo root instead of QuipiOS/. Pulling the .pkg from the upstream
+        # release is the simplest way to lock the version on macos-15.
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/xcodegen.zip \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          sudo /tmp/xcodegen/xcodegen/install.sh
+          xcodegen --version
 
       - name: Generate iOS project
         working-directory: QuipiOS
         run: xcodegen generate
-
-      # xcodegen 2.45.4 emits a project layout that resolves the QuipiOS
-      # source group to the repo root (because project.yml mixes `path: .`
-      # with `path: ../Shared`). xcodebuild then looks for Signing.xcconfig,
-      # Assets.xcassets, Info.plist, and the entitlements at /Quip/<name>
-      # instead of /Quip/QuipiOS/<name>. Symlink the whole set at the repo
-      # root so xcodebuild finds them. xcodegen 2.44.x didn't have this
-      # behavior — when the formula stabilizes (or we restructure Shared),
-      # this whole block goes away.
-      - name: Mirror iOS resources at repo root for xcodegen 2.45 layout
-        run: |
-          set -euo pipefail
-          # actool refuses to follow symlinks for asset catalogs, so a real
-          # copy is required for Assets.xcassets even though the others would
-          # work as symlinks. Use -R for everything to keep the loop uniform.
-          for f in Signing.xcconfig Assets.xcassets Info.plist QuipiOS.entitlements; do
-            rm -rf "${f}"
-            cp -R "QuipiOS/${f}" "${f}"
-          done
 
       - name: Pick an available iPhone simulator
         id: sim
