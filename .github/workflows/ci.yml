@@ -93,14 +93,20 @@ jobs:
         working-directory: QuipiOS
         run: xcodegen generate
 
-      # xcodegen 2.45.4 (CI) writes the configFiles path so that xcodebuild
-      # resolves `Signing.xcconfig` to the repo root, not the QuipiOS subdir
-      # where the file actually lives. Drop a stub at the expected location
-      # so `xcodebuild` doesn't error out before compilation. The stub is the
-      # same conditional-include used in QuipiOS/Signing.xcconfig — it has no
-      # effect when no .local.xcconfig exists.
-      - name: Stub Signing.xcconfig at repo root
-        run: cp QuipiOS/Signing.xcconfig Signing.xcconfig
+      # xcodegen 2.45.4 emits a project layout that resolves the QuipiOS
+      # source group to the repo root (because project.yml mixes `path: .`
+      # with `path: ../Shared`). xcodebuild then looks for Signing.xcconfig,
+      # Assets.xcassets, Info.plist, and the entitlements at /Quip/<name>
+      # instead of /Quip/QuipiOS/<name>. Symlink the whole set at the repo
+      # root so xcodebuild finds them. xcodegen 2.44.x didn't have this
+      # behavior — when the formula stabilizes (or we restructure Shared),
+      # this whole block goes away.
+      - name: Symlink iOS resources at repo root for xcodegen 2.45 layout
+        run: |
+          set -euo pipefail
+          for f in Signing.xcconfig Assets.xcassets Info.plist QuipiOS.entitlements; do
+            ln -sf "QuipiOS/${f}" "${f}"
+          done
 
       - name: Pick an available iPhone simulator
         id: sim
