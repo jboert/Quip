@@ -93,6 +93,15 @@ jobs:
         working-directory: QuipiOS
         run: xcodegen generate
 
+      # xcodegen 2.45.4 (CI) writes the configFiles path so that xcodebuild
+      # resolves `Signing.xcconfig` to the repo root, not the QuipiOS subdir
+      # where the file actually lives. Drop a stub at the expected location
+      # so `xcodebuild` doesn't error out before compilation. The stub is the
+      # same conditional-include used in QuipiOS/Signing.xcconfig — it has no
+      # effect when no .local.xcconfig exists.
+      - name: Stub Signing.xcconfig at repo root
+        run: cp QuipiOS/Signing.xcconfig Signing.xcconfig
+
       - name: Pick an available iPhone simulator
         id: sim
         # Hard-coding `name=iPhone 15` breaks every time GitHub bumps the
