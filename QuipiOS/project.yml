@@ -7,11 +7,12 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    SWIFT_VERSION: "6.0"
+    # Stay on Swift 5 language mode for the iOS target. Local builds use
+    # Xcode 26 which relaxed many Swift-6-mode isolation errors back to
+    # warnings, but CI's Xcode 16.4 still treats them as hard errors and
+    # there are too many call sites to retrofit safely right now.
+    SWIFT_VERSION: "5"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    # Swift 6 mode defaults SWIFT_STRICT_CONCURRENCY to "complete", which
-    # requires actor isolation annotations across hundreds of touch points.
-    # Stay on "minimal" while we incrementally annotate; matches QuipMac.
     SWIFT_STRICT_CONCURRENCY: minimal
 targets:
   QuipiOS:
