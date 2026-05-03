@@ -184,20 +184,6 @@ final class BackendConnectionManager {
         savePaired()
     }
 
-    /// Forget a backend — disconnect, drop session and Keychain PIN, remove
-    /// from `paired`. If we just removed the active backend, fall back to the
-    /// first remaining one.
-    func remove(_ id: String) {
-        sessions[id]?.client.disconnect()
-        sessions.removeValue(forKey: id)
-        KeychainBackendPINs.delete(backendID: id)
-        paired.removeAll { $0.id == id }
-        if activeBackendID == id {
-            activeBackendID = paired.first?.id ?? ""
-        }
-        savePaired()
-    }
-
     /// Hot-model switch: pure UI flip. Every paired backend already has a
     /// live `WebSocketClient` thanks to `bootstrap()` / `ensureImplicitDefault`,
     /// so swapping `activeBackendID` is what makes the new backend the one
@@ -237,14 +223,17 @@ final class BackendConnectionManager {
         return id
     }
 
-    /// Drop a paired entry + its Keychain PIN. If we just removed the active
-    /// backend, fall back to whichever paired entry's left. The placeholder
-    /// client gets disconnected so we don't keep streaming on a forgotten URL.
+    /// Drop a paired entry + its Keychain PIN + its live `WebSocketClient`.
+    /// If we just removed the active backend, fall back to whichever paired
+    /// entry's left. Disconnecting the session is what stops the inactive
+    /// ghost backend from spinning a reconnect loop forever — the user
+    /// "forgot" it but the client kept dialing the dead URL.
     func forget(_ id: String) {
+        sessions[id]?.client.disconnect()
+        sessions.removeValue(forKey: id)
         KeychainBackendPINs.delete(backendID: id)
         paired.removeAll { $0.id == id }
         if activeBackendID == id {
-            active.client.disconnect()
             if let next = paired.first {
                 activeBackendID = next.id
                 if let url = URL(string: next.url) {
