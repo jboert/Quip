@@ -9,6 +9,9 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    # Swift 6 mode defaults SWIFT_STRICT_CONCURRENCY to "complete", which
+    # requires actor isolation annotations across hundreds of touch points.
+    # Stay on "minimal" while we incrementally annotate; matches QuipMac.
     SWIFT_STRICT_CONCURRENCY: minimal
 targets:
   QuipiOS:
@@ -107,3 +110,4 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quip"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_STRICT_CONCURRENCY: minimal
