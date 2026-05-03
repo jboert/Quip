@@ -71,30 +71,23 @@ final class WebSocketServer {
     func start() {
         guard !isRunning else { return }
 
-        // Enable aggressive TCP keepalives so zombie connections — phones that
-        // went to background without sending FIN/RST — are reaped within ~30s
-        // instead of waiting for the 2h default RTO. Without this, every broadcast
-        // (including 300–700 KB TTS audio chunks) piles up in the dead connection's
-        // NWConnection send buffer until the socket finally times out.
-        let tcpOptions = NWProtocolTCP.Options()
-        tcpOptions.enableKeepalive = true
-        tcpOptions.keepaliveIdle = 15       // first probe after 15s of silence
-        tcpOptions.keepaliveInterval = 5    // 5s between probes
-        tcpOptions.keepaliveCount = 3       // 3 missed probes = dead (~30s total)
-
-        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
-        let wsOptions = NWProtocolWebSocket.Options()
-        wsOptions.autoReplyPing = true
-        // Default max message size is ~1 MiB, which rejects image uploads
-        // (base64 of a full-resolution phone photo is ~7-10 MB). Match the
-        // iOS client's ceiling so large images don't trigger the connection
-        // reset we were seeing after ~30s of "receiving." See WSLimits.
-        wsOptions.maximumMessageSize = WSLimits.maxMessageBytes
-        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
-
-        // Bind to IPv4 localhost only
+        // Bind a single IPv4-wildcard listener. The previous default
+        // `NWListener(using: parameters, on: 8765)` silently bound `::.8765`
+        // with `IPV6_V6ONLY` semantics — it accepted the loopback path
+        // (`[::1]` from the Cloudflare tunnel proxy) but rejected every IPv4
+        // connection, including the Tailscale `100.x` MagicDNS path. Loopback
+        // kept working and masked the bug for months.
+        //
+        // Binding `0.0.0.0` (IPv4 wildcard) covers loopback v4 (Cloudflare
+        // tunnel resolves `localhost` to `127.0.0.1`), LAN v4, and Tailscale
+        // CGNAT v4 — every path Quip currently uses. A dual-stack v6 socket
+        // with `IPV6_V6ONLY=0` would also work in theory, but Network.framework
+        // sets the v6-only flag on its listeners and exposes no knob to clear
+        // it; running parallel v4 + v6 listeners hits `EADDRINUSE` because the
+        // v4 wildcard collides with the (effectively dual-stack) v6 wildcard.
+        // If Tailscale-over-IPv6 ever matters, we'll need a raw socket bind.
         do {
-            listener = try NWListener(using: parameters, on: 8765)
+            listener = try makeListener()
         } catch {
             print("[WebSocketServer] Failed to create listener: \(error) — retrying in \(Self.bindRetryInterval)s")
             connectionLog?.record(
@@ -102,103 +95,146 @@ final class WebSocketServer {
                 remote: "listener:8765",
                 detail: "bind failed: \(error) — will retry"
             )
+            listener?.cancel(); listener = nil
             scheduleBindRetry()
             return
         }
 
         guard let listener = listener else { return }
+        attachHandlers(to: listener)
+        listener.start(queue: networkQueue)
+    }
 
-        listener.stateUpdateHandler = { [weak self] state in
+    /// Build the IPv4-wildcard listener. Pinning the local endpoint via
+    /// `requiredLocalEndpoint` is what forces the bind to `0.0.0.0:8765`
+    /// instead of letting Network.framework default to `[::]:8765`. The
+    /// seemingly-equivalent `NWProtocolIP.Options.version = .v4` is honored
+    /// only for outbound connections — `NWListener(using:on:)` ignores it.
+    private func makeListener() throws -> NWListener {
+        // Aggressive TCP keepalives so zombie connections — phones that went
+        // to background without sending FIN/RST — are reaped within ~30s
+        // instead of waiting for the 2h default RTO. Without this, every
+        // broadcast (including 300–700 KB TTS audio chunks) piles up in the
+        // dead connection's NWConnection send buffer until the socket times out.
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 15
+        tcpOptions.keepaliveInterval = 5
+        tcpOptions.keepaliveCount = 3
+
+        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: 8765)
+        parameters.allowLocalEndpointReuse = true
+
+        let wsOptions = NWProtocolWebSocket.Options()
+        wsOptions.autoReplyPing = true
+        // Default max message size is ~1 MiB, which rejects image uploads
+        // (base64 of a full-resolution phone photo is ~7-10 MB). See WSLimits.
+        wsOptions.maximumMessageSize = WSLimits.maxMessageBytes
+        parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+
+        return try NWListener(using: parameters)
+    }
+
+    /// Wire state + new-connection handlers onto the listener.
+    private func attachHandlers(to listener: NWListener) {
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
             guard let self else { return }
             switch state {
             case .ready:
-                let port = listener.port?.rawValue ?? 0
+                let port = listener?.port?.rawValue ?? 0
                 DispatchQueue.main.async {
                     self.isRunning = true
-                    print("[WebSocketServer] Listening on localhost:\(port)")
+                    print("[WebSocketServer] Listening on 0.0.0.0:\(port)")
                 }
             case .failed(let error):
                 print("[WebSocketServer] Listener failed: \(error) — retrying in \(Self.bindRetryInterval)s")
                 DispatchQueue.main.async {
-                    self.isRunning = false
                     self.connectionLog?.record(
                         .failed,
                         remote: "listener:8765",
                         detail: "listener failed: \(error) — will retry"
                     )
-                    self.listener?.cancel()
-                    self.listener = nil
+                    self.listener?.cancel(); self.listener = nil
+                    self.isRunning = false
                     self.scheduleBindRetry()
                 }
             case .cancelled:
                 DispatchQueue.main.async {
-                    self.isRunning = false
+                    if self.listener == nil {
+                        self.isRunning = false
+                    }
                 }
             default:
                 break
             }
         }
 
-        listener.newConnectionHandler = { connection in
-            Self.wslog("newConnectionHandler fired for \(connection.endpoint)")
-            connection.stateUpdateHandler = { [weak self] state in
-                guard let self else { return }
-                Self.wslog("Connection state: \(state) for \(connection.endpoint)")
-                switch state {
-                case .ready:
-                    Self.wslog("Connection ready (pending auth)")
-                    KokoroTTSDebug.log("WS connection ready from \(connection.endpoint)")
-                    // CRITICAL: fire the auth signal and start the receive loop
-                    // IMMEDIATELY on the network queue. We used to do this inside
-                    // DispatchQueue.main.async, but under reconnect storms main
-                    // would get backed up 3-26s by SwiftUI re-renders, iOS would
-                    // time out, and the socket would reset mid-handshake.
-                    let requireAuthNow = self.requireAuth
-                    let signalMsg: AuthResultMessage = requireAuthNow
-                        ? AuthResultMessage(success: false, error: "auth_required")
-                        : AuthResultMessage(success: true, error: nil)
-                    KokoroTTSDebug.log(requireAuthNow ? "WS sending auth_required" : "WS sending auth_result success (no auth required)")
-                    self.send(signalMsg, to: connection)
-                    self.receiveMessage(on: connection)
-                    Self.wslog("Sent auth signal, starting receiveMessage")
-                    // State mutation hops to main (this can be slow under load,
-                    // but the socket handshake no longer cares).
-                    let remoteStr = String(describing: connection.endpoint)
-                    DispatchQueue.main.async {
-                        var client = ClientConnection(connection: connection)
-                        client.isAuthenticated = !requireAuthNow
-                        self.clients.append(client)
-                        self.connectedClientCount = self.clients.count
-                        self.connectionLog?.record(
-                            .connected,
-                            remote: remoteStr,
-                            detail: requireAuthNow ? "awaiting PIN" : "no PIN required"
-                        )
-                    }
-                case .failed(let error):
-                    Self.wslog("Connection FAILED: \(error)")
-                    KokoroTTSDebug.log("WS connection FAILED: \(error)")
-                    let remoteStr = String(describing: connection.endpoint)
-                    let errStr = String(describing: error)
-                    DispatchQueue.main.async {
-                        self.connectionLog?.record(.failed, remote: remoteStr, detail: errStr)
-                        self.removeConnection(connection)
-                    }
-                case .cancelled:
-                    let remoteStr = String(describing: connection.endpoint)
-                    DispatchQueue.main.async {
-                        self.connectionLog?.record(.disconnected, remote: remoteStr, detail: nil)
-                        self.removeConnection(connection)
-                    }
-                default:
-                    break
-                }
-            }
-            connection.start(queue: self.networkQueue)
-            Self.wslog("connection.start() called immediately")
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.handleNewConnection(connection)
         }
+    }
 
-        listener.start(queue: networkQueue)
+    /// Per-connection setup. Identical for v4 and v6 acceptors.
+    /// `nonisolated` because NWListener.newConnectionHandler runs on the
+    /// network queue, not the main actor — same context the original inline
+    /// closure ran in. Internal main-actor mutations are dispatched via
+    /// `DispatchQueue.main.async` blocks, matching the prior pattern.
+    private nonisolated func handleNewConnection(_ connection: NWConnection) {
+        Self.wslog("newConnectionHandler fired for \(connection.endpoint)")
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            Self.wslog("Connection state: \(state) for \(connection.endpoint)")
+            switch state {
+            case .ready:
+                Self.wslog("Connection ready (pending auth)")
+                KokoroTTSDebug.log("WS connection ready from \(connection.endpoint)")
+                // CRITICAL: fire the auth signal and start the receive loop
+                // IMMEDIATELY on the network queue. We used to do this inside
+                // DispatchQueue.main.async, but under reconnect storms main
+                // would get backed up 3-26s by SwiftUI re-renders, iOS would
+                // time out, and the socket would reset mid-handshake.
+                let requireAuthNow = self.requireAuth
+                let signalMsg: AuthResultMessage = requireAuthNow
+                    ? AuthResultMessage(success: false, error: "auth_required")
+                    : AuthResultMessage(success: true, error: nil)
+                KokoroTTSDebug.log(requireAuthNow ? "WS sending auth_required" : "WS sending auth_result success (no auth required)")
+                self.send(signalMsg, to: connection)
+                self.receiveMessage(on: connection)
+                Self.wslog("Sent auth signal, starting receiveMessage")
+                let remoteStr = String(describing: connection.endpoint)
+                DispatchQueue.main.async {
+                    var client = ClientConnection(connection: connection)
+                    client.isAuthenticated = !requireAuthNow
+                    self.clients.append(client)
+                    self.connectedClientCount = self.clients.count
+                    self.connectionLog?.record(
+                        .connected,
+                        remote: remoteStr,
+                        detail: requireAuthNow ? "awaiting PIN" : "no PIN required"
+                    )
+                }
+            case .failed(let error):
+                Self.wslog("Connection FAILED: \(error)")
+                KokoroTTSDebug.log("WS connection FAILED: \(error)")
+                let remoteStr = String(describing: connection.endpoint)
+                let errStr = String(describing: error)
+                DispatchQueue.main.async {
+                    self.connectionLog?.record(.failed, remote: remoteStr, detail: errStr)
+                    self.removeConnection(connection)
+                }
+            case .cancelled:
+                let remoteStr = String(describing: connection.endpoint)
+                DispatchQueue.main.async {
+                    self.connectionLog?.record(.disconnected, remote: remoteStr, detail: nil)
+                    self.removeConnection(connection)
+                }
+            default:
+                break
+            }
+        }
+        connection.start(queue: networkQueue)
+        Self.wslog("connection.start() called immediately")
     }
 
     /// Schedule a single-shot retry of `start()`. Idempotent — replaces any
