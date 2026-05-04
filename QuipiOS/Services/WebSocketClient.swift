@@ -7,6 +7,7 @@ import Observation
 import Security
 import CommonCrypto
 import UIKit
+import Network
 
 // MARK: - Certificate Pinning for Cloudflare Tunnel
 
@@ -214,12 +215,117 @@ final class WebSocketClient {
     private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
     private var foregroundProbeTask: Task<Void, Never>?
 
+    /// Watches for OS-level network path changes (WiFi roam, VPN flap, cellular
+    /// regained). When path becomes satisfied while we're disconnected,
+    /// short-circuit the exponential backoff and reconnect immediately.
+    private var pathMonitor: NWPathMonitor?
+    /// Periodic watchdog that catches the rare case where `isConnecting` flips
+    /// true but never resolves — neither becomes connected nor errors out.
+    /// Force-restarts the connection after the stall threshold.
+    private var stuckWatchdogTask: Task<Void, Never>?
+    private var connectingStartedAt: Date?
+
+    /// Stall threshold for the watchdog — once `isConnecting` has been true
+    /// this long without progress, the watchdog rips the socket down and
+    /// re-runs `establishConnection` so the user isn't stuck on "Connecting…".
+    private static let stuckThresholdSec: TimeInterval = 25
+
+    /// Diagnostic ring buffer — last 30 connection events with timestamps.
+    /// Surfaced via `recentConnectionEvents` for the in-app diag panel.
+    private var connectionEvents: [String] = []
+    var recentConnectionEvents: [String] { connectionEvents }
+
+    init() {
+        startPathMonitor()
+        startStuckWatchdog()
+    }
+
+    /// Stops the path monitor + stall watchdog. Call from `forget(_:)` so a
+    /// pruned backend's client doesn't leak its background subscribers. The
+    /// `[weak self]` captures inside the handlers already make stale fires
+    /// harmless, but cancelling is tidier.
+    func teardownDiagnostics() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        stuckWatchdogTask?.cancel()
+        stuckWatchdogTask = nil
+    }
+
+    /// Subscribes to network path changes. When the path becomes satisfied and
+    /// we're not already connected, reset the backoff and kick a connection
+    /// attempt right away. Catches the "phone gave up retrying after a network
+    /// blip" failure mode that leaves the UI stuck on "Connecting…".
+    private func startPathMonitor() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if path.status == .satisfied {
+                    self.logEvent("network path satisfied")
+                    if !self.isConnected,
+                       !self.intentionalDisconnect,
+                       self.serverURL != nil {
+                        self.logEvent("path-driven reconnect kick")
+                        self.reconnectDelay = 1.0
+                        self.reconnectTask?.cancel()
+                        self.reconnectTask = nil
+                        self.establishConnection()
+                    }
+                } else {
+                    self.logEvent("network path unsatisfied (\(path.status))")
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue.global(qos: .utility))
+        pathMonitor = monitor
+    }
+
+    /// Periodically checks whether we've been stalled mid-connect. If
+    /// `isConnecting` has been true for more than `stuckThresholdSec` without
+    /// flipping to connected (and we're not intentionally disconnected),
+    /// rip the socket down and start over. Belt-and-suspenders against
+    /// URLSession's occasional zombie state where the ping callback never
+    /// fires and the connection-timeout task somehow never trips either.
+    private func startStuckWatchdog() {
+        stuckWatchdogTask?.cancel()
+        stuckWatchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                if self.isConnecting,
+                   !self.intentionalDisconnect,
+                   let started = self.connectingStartedAt,
+                   Date().timeIntervalSince(started) > Self.stuckThresholdSec {
+                    let secs = Int(Date().timeIntervalSince(started))
+                    self.logEvent("stall watchdog tripped after \(secs)s — forcing reconnect")
+                    self.lastError = "Stalled \(secs)s — resetting"
+                    self.connectingStartedAt = Date()  // start clock for next attempt
+                    self.handleDisconnect()
+                }
+            }
+        }
+    }
+
+    /// Append a timestamped line to the diagnostic ring buffer (cap 30) and
+    /// echo to NSLog. Cheap; called from connection lifecycle transitions so
+    /// the in-app diag panel can show what actually happened without the user
+    /// having to plug in a Mac and tail device logs.
+    private func logEvent(_ msg: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(msg)"
+        connectionEvents.append(line)
+        if connectionEvents.count > 30 { connectionEvents.removeFirst(connectionEvents.count - 30) }
+        NSLog("[WebSocketClient] %@", msg)
+    }
+
     func connect(to url: URL) {
         intentionalDisconnect = false
         serverURL = url
         reconnectDelay = 1.0
         lastError = nil
         isConnecting = true
+        connectingStartedAt = Date()
+        logEvent("connect(to: \(url.absoluteString))")
         establishConnection()
     }
 
@@ -411,13 +517,14 @@ final class WebSocketClient {
                 self.connectionTimeoutTask = nil
 
                 if let error = error {
-                    NSLog("[WebSocketClient] Ping failed: %@", error.localizedDescription)
+                    self.logEvent("initial ping failed: \(error.localizedDescription)")
                     self.lastError = error.localizedDescription
                     self.handleDisconnect()
                 } else {
-                    NSLog("[WebSocketClient] Connected, awaiting authentication")
+                    self.logEvent("connected, awaiting authentication")
                     self.isConnected = true
                     self.isConnecting = false
+                    self.connectingStartedAt = nil
                     self.authError = nil
                     self.lastError = nil
                     self.reconnectDelay = 1.0
@@ -641,9 +748,10 @@ final class WebSocketClient {
                     consecutiveMisses = 0
                 } else {
                     consecutiveMisses += 1
-                    NSLog("[WebSocketClient] Keepalive pong missed (%d/2)", consecutiveMisses)
+                    self.logEvent("keepalive pong missed (\(consecutiveMisses)/2)")
+                    self.lastError = "No pong (\(consecutiveMisses)/2)"
                     if consecutiveMisses >= 2 {
-                        NSLog("[WebSocketClient] Two consecutive missed pongs — forcing reconnect")
+                        self.logEvent("two consecutive missed pongs — forcing reconnect")
                         self.handleDisconnect()
                         return
                     }
@@ -658,6 +766,7 @@ final class WebSocketClient {
         keepaliveTask = nil
         isConnected = false
         isConnecting = true
+        if connectingStartedAt == nil { connectingStartedAt = Date() }
         isAuthenticated = false
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = nil
@@ -668,7 +777,7 @@ final class WebSocketClient {
         session?.invalidateAndCancel()
         session = nil
 
-        NSLog("[WebSocketClient] Will reconnect in %.0f seconds", reconnectDelay)
+        logEvent("will reconnect in \(Int(reconnectDelay))s")
 
         let delay = reconnectDelay
         reconnectTask?.cancel()

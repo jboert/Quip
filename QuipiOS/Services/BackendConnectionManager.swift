@@ -230,6 +230,7 @@ final class BackendConnectionManager {
     /// "forgot" it but the client kept dialing the dead URL.
     func forget(_ id: String) {
         sessions[id]?.client.disconnect()
+        sessions[id]?.client.teardownDiagnostics()
         sessions.removeValue(forKey: id)
         KeychainBackendPINs.delete(backendID: id)
         paired.removeAll { $0.id == id }
