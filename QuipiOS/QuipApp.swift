@@ -5147,9 +5147,49 @@ enum ContentZoomLevel: Int, CaseIterable {
 /// thing that happened" without plugging into a Mac to tail device logs.
 struct ConnectionDiagnosticsSheet: View {
     var client: WebSocketClient
+    @State private var bundleStatus: String?
+    @State private var bundleURL: URL?
+    @State private var showShareSheet = false
+    @State private var requesting = false
 
     var body: some View {
         List {
+            Section {
+                Button {
+                    requestMacLogs()
+                } label: {
+                    HStack {
+                        if requesting {
+                            ProgressView().controlSize(.small)
+                        }
+                        Image(systemName: "arrow.down.doc")
+                        Text(requesting ? "Waiting for Mac…" : "Get Mac logs")
+                    }
+                }
+                .disabled(requesting || !client.isAuthenticated)
+                if let url = bundleURL {
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share \(url.lastPathComponent)")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+                if let status = bundleStatus {
+                    Text(status)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Mac log bundle")
+            } footer: {
+                Text("Asks the Mac for a zip of websocket.log + push.log + kokoro.log + system info. Capped at 4 MiB; if your Mac logs are larger, use Settings → Diagnostics on the Mac itself.")
+            }
+
             Section("Current state") {
                 stateRow(label: "Connected", value: client.isConnected ? "yes" : "no",
                          tint: client.isConnected ? .green : .secondary)
@@ -5193,6 +5233,48 @@ struct ConnectionDiagnosticsSheet: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Diagnostics")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showShareSheet) {
+            if let url = bundleURL {
+                DiagnosticsShareSheet(items: [url])
+            }
+        }
+        .onAppear { wireBundleHandler() }
+    }
+
+    private func wireBundleHandler() {
+        // Set every time the sheet appears so we re-grab the current handler
+        // closure (the previous handler may have been a leftover from a
+        // prior screen instance).
+        client.onDiagnosticsBundle = { msg in
+            if let err = msg.errorReason {
+                bundleStatus = err
+                requesting = false
+                return
+            }
+            guard let base64 = msg.data, let raw = Data(base64Encoded: base64) else {
+                bundleStatus = "Mac sent malformed bundle"
+                requesting = false
+                return
+            }
+            do {
+                let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let dest = dir.appendingPathComponent(msg.filename.isEmpty ? "Quip-diagnostics.zip" : msg.filename)
+                try? FileManager.default.removeItem(at: dest)
+                try raw.write(to: dest)
+                bundleURL = dest
+                bundleStatus = "Bundle ready (\(raw.count / 1024) KB) — tap Share."
+            } catch {
+                bundleStatus = "Couldn't save bundle: \(error.localizedDescription)"
+            }
+            requesting = false
+        }
+    }
+
+    private func requestMacLogs() {
+        requesting = true
+        bundleStatus = "Requesting…"
+        bundleURL = nil
+        client.send(RequestDiagnosticsMessage())
     }
 
     @ViewBuilder
@@ -5207,4 +5289,15 @@ struct ConnectionDiagnosticsSheet: View {
         }
         .font(.system(size: 13))
     }
+}
+
+/// Wraps `UIActivityViewController` for the Connection diagnostics sheet's
+/// "Share Quip-diagnostics-*.zip" button. Items is typically a single
+/// file URL pointing to the saved zip in Documents.
+struct DiagnosticsShareSheet: UIViewControllerRepresentable {
+    var items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

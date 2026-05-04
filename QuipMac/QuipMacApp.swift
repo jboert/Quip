@@ -895,6 +895,9 @@ struct QuipMacApp: App {
         case "scan_iterm_windows":
             handleScanITermWindows()
 
+        case "request_diagnostics":
+            handleRequestDiagnostics()
+
         case "register_push_device":
             if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
                 appendPushDiagnostic("register_push_device: \(msg.deviceToken.prefix(8)) env=\(msg.environment)")
@@ -1069,6 +1072,49 @@ struct QuipMacApp: App {
     /// exists (could've closed between scan and tap), promote it to a
     /// Quip-tracked window by enabling the matching ManagedWindow, persist
     /// the sessionId so the attachment survives Quip restarts, and
+    /// Phone asked for the Mac's diagnostic log bundle. Build the zip on a
+    /// detached task (zip can be 100-500ms), then base64-encode it back
+    /// over the WebSocket as a `DiagnosticsBundleMessage`. Capped at
+    /// 4 MiB pre-base64 so the round-trip stays comfortably under the
+    /// 16 MiB WebSocket payload limit; oversize bundles set `errorReason`
+    /// and the phone shows a "use Mac-side share button instead" hint.
+    @MainActor
+    private func handleRequestDiagnostics() {
+        let cap = 4 * 1024 * 1024  // 4 MiB pre-base64
+        Task.detached {
+            do {
+                let zipURL = try DiagnosticsBundle.makeZip(maxBytes: cap)
+                defer { try? FileManager.default.removeItem(at: zipURL) }
+                let zipData = try Data(contentsOf: zipURL)
+                let base64 = zipData.base64EncodedString()
+                let msg = DiagnosticsBundleMessage(
+                    filename: zipURL.lastPathComponent,
+                    sizeBytes: zipData.count,
+                    data: base64
+                )
+                await MainActor.run {
+                    self.webSocketServer.broadcast(msg)
+                }
+            } catch DiagnosticsBundleError.overSizeCap(let actual, let cap) {
+                let msg = DiagnosticsBundleMessage(
+                    filename: "",
+                    sizeBytes: actual,
+                    data: nil,
+                    errorReason: "Logs too large (\(actual / 1_000_000) MB > \(cap / 1_000_000) MB cap). Use Mac-side share button."
+                )
+                await MainActor.run { self.webSocketServer.broadcast(msg) }
+            } catch {
+                let msg = DiagnosticsBundleMessage(
+                    filename: "",
+                    sizeBytes: 0,
+                    data: nil,
+                    errorReason: "Bundle failed: \(error.localizedDescription)"
+                )
+                await MainActor.run { self.webSocketServer.broadcast(msg) }
+            }
+        }
+    }
+
     /// broadcast a fresh layout so the phone's picker refreshes.
     @MainActor
     private func handleAttachITermWindow(windowNumber: Int, sessionId: String) {

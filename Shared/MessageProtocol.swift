@@ -428,6 +428,41 @@ struct AttachITermWindowMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Diagnostics Bundle
+
+/// iPhone → Mac. Asks the Mac to bundle its three log files
+/// (`websocket.log`, `push.log`, `kokoro.log`) plus a `system-info.txt`
+/// blob into a single zip and ship it back over the WebSocket. Used by
+/// the Connection diagnostics sheet to short-circuit the
+/// "tail this for me, then this one, then this one" support cycle.
+struct RequestDiagnosticsMessage: Codable, Sendable {
+    let type: String
+
+    init() { self.type = "request_diagnostics" }
+}
+
+/// Mac → iPhone. Response to `request_diagnostics`. Carries the zip as
+/// base64. Mac caps total size at ~4 MiB (well under the 16 MiB WS
+/// payload cap, leaving headroom for base64's ~33% inflation); if the
+/// raw logs exceed that, the Mac sets `errorReason` and omits `data`,
+/// pointing the user at the Mac-side share button instead.
+struct DiagnosticsBundleMessage: Codable, Sendable {
+    let type: String
+    let filename: String
+    let sizeBytes: Int
+    /// Base64-encoded zip body. nil when `errorReason` is set.
+    let data: String?
+    let errorReason: String?
+
+    init(filename: String, sizeBytes: Int, data: String?, errorReason: String? = nil) {
+        self.type = "diagnostics_bundle"
+        self.filename = filename
+        self.sizeBytes = sizeBytes
+        self.data = data
+        self.errorReason = errorReason
+    }
+}
+
 // MARK: - Push Notifications
 
 /// iPhone → Mac. Hands over the APNs device token so the Mac can push to
