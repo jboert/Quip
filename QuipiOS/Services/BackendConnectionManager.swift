@@ -148,12 +148,21 @@ final class BackendConnectionManager {
     /// Read persisted paired backends, spawn one client per entry, kick off
     /// auto-connect for entries the user has marked `enabled`. Run once on
     /// launch from `MainiOSView.setup()` after `loadPaired()`.
+    ///
+    /// Each enabled session gets its cached Keychain PIN seeded BEFORE
+    /// the connect call so the connect-time auto-replay at
+    /// `WebSocketClient.swift:546` can fire — without this prime, the
+    /// client hits the socket without a `sessionPIN`, falls into the
+    /// `onAuthRequired` branch, and (because the manager only forwards
+    /// auth-required for the active backend) the user is left staring
+    /// at "Authenticating…" with no actual PIN entry field.
     func bootstrap() {
         for backend in paired {
             let session = BackendSession(backendID: backend.id, client: WebSocketClient())
             wire(session: session)
             sessions[backend.id] = session
             if backend.enabled, let url = URL(string: backend.url) {
+                primePINIfPresent(session: session)
                 connect(session: session, url: url)
             }
         }
