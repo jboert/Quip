@@ -225,11 +225,15 @@ struct QuipApp: App {
                 client.send(SelectWindowMessage(windowId: windowId))
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-                // Only reset the audio session if TTS isn't actively playing —
-                // background audio mode keeps the session alive during playback
-                if !speech.isSpeaking {
-                    volumeHandler.resumeAfterBackground()
-                }
+                // Always call resumeAfterBackground so the volume KVO observer
+                // gets re-armed (it was torn down in pauseMonitoring on enter-
+                // background). The previous `!speech.isSpeaking` guard left
+                // PTT dead whenever the user backgrounded mid-TTS — the
+                // observer stayed nil and vol-down did nothing on return.
+                // resumeAfterBackground itself avoids fighting an active TTS
+                // playback because primeRailIfNeeded only nudges volume when
+                // parked on a rail.
+                volumeHandler.resumeAfterBackground()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                 // Buy ~30s of background execution so a quick app switch doesn't
@@ -238,7 +242,12 @@ struct QuipApp: App {
                 manager.suspendAll()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                volumeHandler.stopMonitoring()
+                // Pause (not stopMonitoring) so windowCount survives. Full
+                // stopMonitoring zeroes windowCount, which left PTT dead on
+                // resume until the next Mac layout_update re-armed it. The
+                // pauseMonitoring path drops just the KVO observer; the next
+                // foreground hook re-arms with the cached windowCount.
+                volumeHandler.pauseMonitoring()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Probe every paired backend's socket on return; force-reconnect

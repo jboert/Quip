@@ -10,8 +10,13 @@ final class HardwareButtonHandler {
 
     // Suppression windows: shorter for self-triggered KVO echoes,
     // slightly longer for PTT transitions that reconfigure the audio session.
+    // pttTransitionSuppression was 0.25s — long enough to swallow a user's
+    // legitimate fast re-press to stop PTT. Dropped to 0.10s, which is still
+    // longer than the phantom restore-volume KVO echo (typically <50ms after
+    // setVolume) but well below the 200–300ms gap a human leaves between
+    // start and stop button taps.
     private static let volumeRestoreSuppression: TimeInterval = 0.3
-    private static let pttTransitionSuppression: TimeInterval = 0.25
+    private static let pttTransitionSuppression: TimeInterval = 0.10
 
     // iOS volume buttons step by 1/16. Stay one step away from each rail so
     // KVO can always see motion in both directions.
@@ -159,8 +164,9 @@ final class HardwareButtonHandler {
 
     /// Re-activate the audio session and reset volume after returning from background.
     /// The OS deactivates the session when backgrounded, killing volume KVO.
+    /// Re-arms the KVO observer if it was torn down (which happens via
+    /// `pauseMonitoring()` on the `didEnterBackground` notification).
     func resumeAfterBackground() {
-        guard volumeObservation != nil else { return }
         // If a press was in flight when we backgrounded, deliver the stop now —
         // volume KVO was paused, so there was no natural release event.
         if isPTTActive {
@@ -168,6 +174,17 @@ final class HardwareButtonHandler {
             onPTTStop?()
         }
         cancelStuckWatchdog()
+
+        // If the observer is gone (background pause), re-arm using the
+        // cached windowCount. Without this, PTT stayed dead from foregrounding
+        // until the next Mac layout_update arrived — could be 1–15s with
+        // the WS resilience layer mid-reconnect.
+        if volumeObservation == nil && windowCount > 0 {
+            startMonitoring(windowCount: windowCount)
+            return
+        }
+        guard volumeObservation != nil else { return }
+
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default,
@@ -177,6 +194,25 @@ final class HardwareButtonHandler {
             NSLog("[Quip][HW] Audio session setup failed: %@", error.localizedDescription)
         }
         primeRailIfNeeded(session: session)
+    }
+
+    /// Lighter teardown for backgrounding: kills the KVO observer (which
+    /// stops firing reliably anyway when the audio session deactivates) but
+    /// preserves `windowCount` so `resumeAfterBackground()` can re-arm
+    /// without waiting for the next Mac `layout_update`.
+    /// Use this on `didEnterBackground`; reserve full `stopMonitoring()`
+    /// for terminal teardown (no-windows state, app shutting down).
+    func pauseMonitoring() {
+        volumeObservation?.invalidate()
+        volumeObservation = nil
+        if isPTTActive {
+            isPTTActive = false
+            onPTTStop?()
+        }
+        suppressUntil = .distantPast
+        cancelStuckWatchdog()
+        // Deliberately keep windowCount so resumeAfterBackground can re-arm.
+        // Deliberately keep routeChangeObserver — it's still useful in fg.
     }
 
     /// Capture the user's current output volume into `savedVolume`. Only
