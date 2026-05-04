@@ -58,6 +58,7 @@
 		B74D4BBBD664959095BE58DE /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */; };
 		B86CDE99611F63E70CB7C7A3 /* RemoteLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */; };
 		BC0AAA34114426CFF2BEEB74 /* ArrangeLayoutMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEE82AF4A4EEBCF4A0DED50 /* ArrangeLayoutMappingTests.swift */; };
+		BDB47940A30E2AE5F74267E3 /* UIImage+HEIC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5623358EE81D9F96BC0761F8 /* UIImage+HEIC.swift */; };
 		C048886FBB8F8115ED5B1964 /* PushNotificationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3153F1300EF9EB3372F1EE7A /* PushNotificationCenter.swift */; };
 		C10D61840E80EDAD704827A9 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 310DDC8B5BA9B05DA4632BF5 /* Color+Hex.swift */; };
 		C73C06767E4C7A7F3EEFCFD1 /* BackendPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC41AFA7144AFEB7E2DB4FA6 /* BackendPickerSheet.swift */; };
@@ -65,6 +66,7 @@
 		D0B1694FE8FBF6965FCE4748 /* WhisperAudioSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E556291C05B9A0CF7C50AA5 /* WhisperAudioSender.swift */; };
 		D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */; };
 		D6951671B113FBEEB9B32067 /* KeychainBackendPINs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0956F285AE5835E9D2C425 /* KeychainBackendPINs.swift */; };
+		D82DF8E5E68CD87CE2BA975A /* UIImageHEICTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F9E57DEE1951FF2AFAE5E1F /* UIImageHEICTests.swift */; };
 		D90497A715C2D1FEBC04B532 /* LinkifiedTerminalContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6D5159A24459D33F4AE547B /* LinkifiedTerminalContentTests.swift */; };
 		DC04F286BAE7BA037BB7CAC7 /* BackendSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DB6CA6BFA3AC43DFF6F885 /* BackendSession.swift */; };
 		E15A8F5B7E6A925B33ECA315 /* KeychainDeviceID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 382370F0C983ABEC82E06430 /* KeychainDeviceID.swift */; };
@@ -117,6 +119,7 @@
 		4B7A2E5808A455F967117889 /* PCMChunkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMChunkerTests.swift; sourceTree = "<group>"; };
 		4E556291C05B9A0CF7C50AA5 /* WhisperAudioSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSender.swift; sourceTree = "<group>"; };
 		50991F62509F0EBB3C8037B9 /* CertPins.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = CertPins.json; sourceTree = "<group>"; };
+		5623358EE81D9F96BC0761F8 /* UIImage+HEIC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UIImage+HEIC.swift"; sourceTree = "<group>"; };
 		591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalContentOverlay.swift; sourceTree = "<group>"; };
 		5C9266FDBE3CF14DDC598A9C /* PairedBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedBackend.swift; sourceTree = "<group>"; };
 		5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipLiveActivityAttributes.swift; sourceTree = "<group>"; };
@@ -129,6 +132,7 @@
 		7A26AAB8221B8827AD9A61B0 /* BackendConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendConnectionManager.swift; sourceTree = "<group>"; };
 		89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSNotificationOverlay.swift; sourceTree = "<group>"; };
 		8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
+		8F9E57DEE1951FF2AFAE5E1F /* UIImageHEICTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIImageHEICTests.swift; sourceTree = "<group>"; };
 		959643D7FC10BD21E0FDE409 /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
 		9BAE6A8EDAED117D04D2161D /* MirrorDesktopFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorDesktopFilterTests.swift; sourceTree = "<group>"; };
 		9EB84DC38B2B261AB78D9B78 /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
@@ -238,6 +242,7 @@
 				1B0C4B6E9EA1F79748808978 /* RecognizerRolloverTests.swift */,
 				BB799E5EBA5A72A97A8EDD06 /* RemoteSpeechSessionTests.swift */,
 				47C70308C62E57B9CBBEFF9E /* SpeechServicePathSelectionTests.swift */,
+				8F9E57DEE1951FF2AFAE5E1F /* UIImageHEICTests.swift */,
 				4A833238659B2E7E8D205F45 /* WhisperAudioSenderTests.swift */,
 			);
 			path = Tests;
@@ -313,6 +318,7 @@
 				E10C0B106747159F0E24ED6C /* RemoteSpeechSession.swift */,
 				DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */,
 				F7EED90216075AC25A1EDB70 /* SpeechService.swift */,
+				5623358EE81D9F96BC0761F8 /* UIImage+HEIC.swift */,
 				B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */,
 				4E556291C05B9A0CF7C50AA5 /* WhisperAudioSender.swift */,
 			);
@@ -480,6 +486,7 @@
 				034FCCCD9B6278E606AB7BBE /* RemoteSpeechSessionTests.swift in Sources */,
 				A795C27D5F398A26647E2B49 /* SeamStitcherTests.swift in Sources */,
 				1FED4AB0761613E80C3FAC9D /* SpeechServicePathSelectionTests.swift in Sources */,
+				D82DF8E5E68CD87CE2BA975A /* UIImageHEICTests.swift in Sources */,
 				6F89F8CCE385F0E125415C6B /* WhisperAudioSenderTests.swift in Sources */,
 				3C69E42DAC8E6515F9BC3F03 /* WindowManagerSessionIdTests.swift in Sources */,
 			);
@@ -524,6 +531,7 @@
 				996767763A69068B0D1D8687 /* SpeechService.swift in Sources */,
 				61BEA675BFFB5F8019D960F0 /* TTSNotificationOverlay.swift in Sources */,
 				545F466547A7823805966083 /* TerminalContentOverlay.swift in Sources */,
+				BDB47940A30E2AE5F74267E3 /* UIImage+HEIC.swift in Sources */,
 				4DD215CB4746FD0FA6D82DD4 /* WebSocketClient.swift in Sources */,
 				D0B1694FE8FBF6965FCE4748 /* WhisperAudioSender.swift in Sources */,
 				7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */,

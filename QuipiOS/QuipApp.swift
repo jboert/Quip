@@ -1985,11 +1985,26 @@ struct MainiOSView: View {
 
         DispatchQueue.global(qos: .userInitiated).async {
             DispatchQueue.main.async { [weak pendingImage] in pendingImage?.setDebugStage("encoding-start") }
+            // Prefer HEIC — typically 50-70% smaller than JPEG-0.95 and
+            // already what the iPhone camera roll uses. Mac's
+            // ImageUploadHandler accepts HEIC via the magic-byte sniff; no
+            // protocol bump required. Fall back to PNG for declared
+            // image/png (lossless), then JPEG-0.95 for everything else,
+            // then nil if neither encoder can speak the image's color
+            // space. (WebP would compress slightly better but its
+            // CGImageDestination encoder wasn't shipped until iOS 18 and
+            // the project targets iOS 17.)
             let rawData: Data?
-            if mime == "image/png" {
+            let initialMime: String
+            if let heic = image.heicData(quality: 0.85) {
+                rawData = heic
+                initialMime = "image/heic"
+            } else if mime == "image/png" {
                 rawData = image.pngData()
+                initialMime = "image/png"
             } else {
                 rawData = image.jpegData(compressionQuality: 0.95)
+                initialMime = "image/jpeg"
             }
             guard let rawData else {
                 DispatchQueue.main.async { [weak pendingImage] in
@@ -1998,9 +2013,11 @@ struct MainiOSView: View {
                 }
                 return
             }
-            DispatchQueue.main.async { [weak pendingImage, c = rawData.count] in pendingImage?.setDebugStage("encoded \(c)B") }
+            DispatchQueue.main.async { [weak pendingImage, c = rawData.count, m = initialMime] in
+                pendingImage?.setDebugStage("encoded \(c)B (\(m))")
+            }
             do {
-                let (data, finalMime) = try recompressor.recompress(rawData: rawData, declaredMime: mime)
+                let (data, finalMime) = try recompressor.recompress(rawData: rawData, declaredMime: initialMime)
                 let base64 = data.base64EncodedString()
                 NSLog("[Quip-iOS] sendPendingImageIfNeeded: dispatching image_upload, base64=%d bytes", base64.count)
                 let msg = ImageUploadMessage(
