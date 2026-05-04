@@ -15,13 +15,9 @@ final class PromptLibrary {
 
     /// Latest snapshot of prompts on disk. Updated on launch + whenever
     /// the directory's contents change (DispatchSourceFileSystemObject
-    /// watches mtime; we rescan on any event).
+    /// watches mtime; we rescan on any event). Each PromptEntry carries
+    /// the full body now so iPhone can edit without a second round-trip.
     private(set) var entries: [PromptEntry] = []
-    /// Full bodies keyed by entry id. iPhone never sees this — only the
-    /// preview (first ~120 chars) goes over the wire to keep the
-    /// PromptLibraryMessage payload small. Mac uses this when the phone
-    /// fires `paste_prompt`.
-    private(set) var bodiesByID: [String: String] = [:]
 
     /// Called when `entries` changes. Wired by the host to broadcast a
     /// PromptLibraryMessage to every connected client.
@@ -61,7 +57,65 @@ final class PromptLibrary {
     /// fires paste_prompt). Returns nil if the file was deleted or
     /// renamed since the last scan.
     func body(for id: String) -> String? {
-        bodiesByID[id]
+        entries.first(where: { $0.id == id })?.body
+    }
+
+    /// Write a prompt to disk under `<id>.txt`. If `label` differs from
+    /// `id`, prefix the file with `# label\n\n` so the round-trip
+    /// preserves the friendly title. Returns the URL on success, nil on
+    /// failure (filesystem error or sanitization rejection).
+    @discardableResult
+    func put(id: String, label: String, body: String) -> URL? {
+        let safeID = Self.sanitizeID(id)
+        guard !safeID.isEmpty else { return nil }
+        let url = Self.directory.appendingPathComponent("\(safeID).txt")
+        let labelDiffersFromID = !label.isEmpty && label != safeID
+        let fileBody = labelDiffersFromID
+            ? "# \(label)\n\n\(body)\n"
+            : "\(body)\n"
+        do {
+            try fileBody.write(to: url, atomically: true, encoding: .utf8)
+            // FS watcher will fire and rescan; return immediately so the
+            // calling handler can ack the phone fast.
+            return url
+        } catch {
+            print("[PromptLibrary] put failed for \(safeID): \(error)")
+            return nil
+        }
+    }
+
+    /// Delete the prompt file for the given id. README.txt is excluded
+    /// from sanitization since it can't be deleted via this path anyway.
+    @discardableResult
+    func delete(id: String) -> Bool {
+        let safeID = Self.sanitizeID(id)
+        guard !safeID.isEmpty, safeID != "README" else { return false }
+        let url = Self.directory.appendingPathComponent("\(safeID).txt")
+        do {
+            try FileManager.default.removeItem(at: url)
+            return true
+        } catch {
+            print("[PromptLibrary] delete failed for \(safeID): \(error)")
+            return false
+        }
+    }
+
+    /// Strip path separators / leading dots / shell metacharacters so a
+    /// hostile id (e.g. `../../../etc/passwd`) can't escape the prompts
+    /// directory or write outside it. Allowed: alphanumeric, dash,
+    /// underscore, dot in the middle. Empty result = reject.
+    static func sanitizeID(_ raw: String) -> String {
+        var out = ""
+        for ch in raw {
+            if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "." {
+                out.append(ch)
+            } else if ch == " " {
+                out.append("-")
+            }
+        }
+        // Strip leading dots (no hidden files, no `.` / `..` traversal).
+        while out.first == "." { out.removeFirst() }
+        return out
     }
 
     private func ensureDirExists() {
@@ -108,22 +162,15 @@ final class PromptLibrary {
             .sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
 
         var newEntries: [PromptEntry] = []
-        var newBodies: [String: String] = [:]
         for url in textFiles {
             guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
             let id = url.deletingPathExtension().lastPathComponent
             let (label, body) = Self.extractLabelAndBody(filename: id, raw: raw)
-            let preview = String(body.prefix(120))
-            newEntries.append(PromptEntry(
-                id: id, label: label,
-                bodyPreview: preview, bodyBytes: body.utf8.count
-            ))
-            newBodies[id] = body
+            newEntries.append(PromptEntry(id: id, label: label, body: body))
         }
 
         if newEntries == entries { return }
         entries = newEntries
-        bodiesByID = newBodies
         onChange?(newEntries)
     }
 

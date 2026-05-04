@@ -452,11 +452,17 @@ struct PromptLibraryMessage: Codable, Sendable {
 /// the display name (defaults to id but can carry a friendlier title
 /// if the file's first non-empty line starts with `# `, in which case
 /// that line becomes the label and gets stripped from the body).
+/// `body` carries the full prompt text so the iPhone can edit without
+/// a second round-trip to the Mac.
 struct PromptEntry: Codable, Sendable, Hashable, Identifiable {
     let id: String
     let label: String
-    let bodyPreview: String  // first ~120 chars, for the iOS list row
-    let bodyBytes: Int
+    let body: String
+
+    /// Convenience for the iOS list row — first 120 chars of the
+    /// body, used as a single-line preview.
+    var bodyPreview: String { String(body.prefix(120)) }
+    var bodyBytes: Int { body.utf8.count }
 }
 
 /// iPhone → Mac. User tapped a prompt — paste its body into the
@@ -472,6 +478,36 @@ struct PastePromptMessage: Codable, Sendable {
         self.id = id
         self.windowId = windowId
         self.pressReturn = pressReturn
+    }
+}
+
+/// iPhone → Mac. Create or update a prompt on disk. Mac writes the
+/// file to `~/Library/Application Support/Quip/prompts/<id>.txt`
+/// (with `# label\n\n` header so the friendly title round-trips), the
+/// FS watcher fires, and the new catalog is broadcast back to all
+/// clients including the originator. (wishlist §57 v2)
+struct PutPromptMessage: Codable, Sendable {
+    let type: String
+    let id: String
+    let label: String
+    let body: String
+
+    init(id: String, label: String, body: String) {
+        self.type = "put_prompt"
+        self.id = id
+        self.label = label
+        self.body = body
+    }
+}
+
+/// iPhone → Mac. Delete a prompt by id (removes the .txt file).
+struct DeletePromptMessage: Codable, Sendable {
+    let type: String
+    let id: String
+
+    init(id: String) {
+        self.type = "delete_prompt"
+        self.id = id
     }
 }
 

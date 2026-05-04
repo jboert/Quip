@@ -5361,12 +5361,14 @@ struct PromptLibrarySheet: View {
     var client: WebSocketClient
     var windowId: String?
     @State private var lastFiredId: String?
+    @State private var editing: PromptEntry?
+    @State private var creatingNew: Bool = false
 
     var body: some View {
         List {
             if client.promptLibrary.isEmpty {
                 Section {
-                    Text("No prompts on Mac yet. Drop .txt files into ~/Library/Application Support/Quip/prompts/ and they appear here automatically. The README.txt in that directory has details.")
+                    Text("No prompts yet. Tap + above to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/ on the Mac.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 } header: {
@@ -5376,6 +5378,19 @@ struct PromptLibrarySheet: View {
                 Section {
                     ForEach(client.promptLibrary) { entry in
                         promptRow(entry)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    client.send(DeletePromptMessage(id: entry.id))
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                Button {
+                                    editing = entry
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(.blue)
+                            }
                     }
                 } header: {
                     HStack {
@@ -5386,13 +5401,32 @@ struct PromptLibrarySheet: View {
                             .font(.caption)
                     }
                 } footer: {
-                    Text("Tap to paste into the current window. Long-press to paste and submit (sends Return after).")
+                    Text("Tap to paste. Long-press to paste-and-submit. Swipe a row for Edit / Delete.")
                 }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Prompts")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    creatingNew = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
+        }
+        .sheet(isPresented: $creatingNew) {
+            PromptEditorSheet(initial: nil) { id, label, body in
+                client.send(PutPromptMessage(id: id, label: label, body: body))
+            }
+        }
+        .sheet(item: $editing) { entry in
+            PromptEditorSheet(initial: entry) { id, label, body in
+                client.send(PutPromptMessage(id: id, label: label, body: body))
+            }
+        }
     }
 
     @ViewBuilder
@@ -5427,6 +5461,86 @@ struct PromptLibrarySheet: View {
         lastFiredId = entry.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             if lastFiredId == entry.id { lastFiredId = nil }
+        }
+    }
+}
+
+/// Create / edit form for a single prompt. `initial=nil` = new-prompt
+/// flow (id field editable); non-nil = edit existing (id locked, only
+/// label/body mutable). Save fires the caller's onSave with the
+/// final (id, label, body) tuple — caller then sends a PutPromptMessage.
+struct PromptEditorSheet: View {
+    let initial: PromptEntry?
+    let onSave: (_ id: String, _ label: String, _ body: String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var idText: String = ""
+    @State private var labelText: String = ""
+    @State private var bodyText: String = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("filename-style id (e.g. ship-it)", text: $idText)
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                        .disabled(initial != nil)
+                        .foregroundStyle(initial != nil ? .secondary : .primary)
+                    TextField("Display label (optional)", text: $labelText)
+                        .autocorrectionDisabled(true)
+                } header: {
+                    Text("Identity")
+                } footer: {
+                    Text(initial == nil
+                         ? "Id becomes the filename on Mac (sans .txt). Allowed: letters, digits, dash, underscore. Spaces become dashes."
+                         : "Id can't be changed after creation — that would orphan keystroke bindings on the Mac. Delete and recreate if you need a new id.")
+                }
+
+                Section {
+                    TextEditor(text: $bodyText)
+                        .font(.system(size: 13, design: .monospaced))
+                        .frame(minHeight: 220)
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    HStack {
+                        Text("Prompt body")
+                        Spacer()
+                        Text("\(bodyText.utf8.count) B")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Sent verbatim to the active terminal when you tap the row in Prompts. No Markdown parsing, no template expansion.")
+                }
+            }
+            .navigationTitle(initial == nil ? "New Prompt" : "Edit Prompt")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let label = labelText.trimmingCharacters(in: .whitespaces)
+                        let body = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !id.isEmpty, !body.isEmpty else { return }
+                        onSave(id, label.isEmpty ? id : label, body)
+                        dismiss()
+                    }
+                    .disabled(idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear {
+                if let initial {
+                    idText = initial.id
+                    labelText = initial.label == initial.id ? "" : initial.label
+                    bodyText = initial.body
+                }
+            }
         }
     }
 }
