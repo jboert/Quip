@@ -4761,11 +4761,26 @@ struct QuickButtonsSheet: View {
     @State private var addingCustom: Bool = false
     @State private var showPromptPicker: Bool = false
 
-    private var slots: [QuickSlot] { QuickSlotStore.decode(quickSlotsJSON) }
-    private var customs: [CustomButton] { CustomButtonStore.decode(customButtonsJSON) }
-    private var customsByID: [UUID: CustomButton] {
-        Dictionary(uniqueKeysWithValues: customs.map { ($0.id, $0) })
-    }
+    // Cached snapshots of the @AppStorage-backed JSON. Computed-property
+    // versions re-decoded on EVERY body evaluation, and any observable
+    // (`client.promptLibrary` broadcasts, other @AppStorage changes) was
+    // enough to re-decode the entire slot list mid-scroll. List layout
+    // shudders during a re-decode and the scroll position resets to the
+    // top — that's the "scrolling to pick custom buttons is buggy and
+    // often goes back to the top" symptom. Caching here means decode
+    // runs only on .onAppear and on the specific .onChange(of:) hooks
+    // below; routine SwiftUI body re-evals are now cheap and don't
+    // disturb List scroll state.
+    @State private var slots: [QuickSlot] = []
+    @State private var customs: [CustomButton] = []
+    @State private var customsByID: [UUID: CustomButton] = [:]
+    /// Snapshot of the prompt catalog labels at sheet open / on
+    /// observable change. slotRow used to read `client.promptLibrary`
+    /// directly which made the row re-render every time the Mac
+    /// broadcast its catalog (every reconnect / FS change). Local
+    /// snapshot breaks that observation chain.
+    @State private var promptLabelByID: [String: String] = [:]
+    @State private var promptByteSizeByID: [String: Int] = [:]
 
     /// Set of built-in QuickButton rawValues already placed in the slot
     /// list — used to disable duplicate adds in the "+" menu so the user
@@ -4868,6 +4883,10 @@ struct QuickButtonsSheet: View {
                 addMenu
             }
         }
+        .onAppear { refreshSnapshots() }
+        .onChange(of: quickSlotsJSON) { _, _ in refreshSlotsSnapshot() }
+        .onChange(of: customButtonsJSON) { _, _ in refreshCustomsSnapshot() }
+        .onChange(of: client?.promptLibrary.count ?? 0) { _, _ in refreshPromptSnapshot() }
         .sheet(isPresented: $addingCustom) {
             CustomButtonForm(
                 initial: nil,
@@ -5006,7 +5025,8 @@ struct QuickButtonsSheet: View {
                 Spacer()
             }
         case .prompt(let pid):
-            let entry = client?.promptLibrary.first(where: { $0.id == pid })
+            let label = promptLabelByID[pid]
+            let bytes = promptByteSizeByID[pid]
             HStack(spacing: 12) {
                 Rectangle()
                     .fill(Color.purple.opacity(0.25))
@@ -5018,8 +5038,8 @@ struct QuickButtonsSheet: View {
                             .foregroundStyle(.purple)
                     )
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry?.label ?? pid)
-                    Text(entry == nil ? "Prompt (Mac unreachable)" : "Prompt · \(entry!.bodyBytes)B")
+                    Text(label ?? pid)
+                    Text(label == nil ? "Prompt (Mac unreachable)" : "Prompt · \(bytes ?? 0)B")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -5097,7 +5117,7 @@ struct QuickButtonsSheet: View {
                     Color.clear.frame(width: 12, height: 1)
                 )))
             case .prompt(let pid):
-                let label = client?.promptLibrary.first(where: { $0.id == pid })?.label ?? pid
+                let label = promptLabelByID[pid] ?? pid
                 result.append((slot.id, AnyView(promptPillPreview(label: label))))
             case .promptsPicker:
                 result.append((slot.id, AnyView(promptsPickerPillPreview())))
@@ -5242,6 +5262,30 @@ struct QuickButtonsSheet: View {
         var s = slots
         s.append(.promptsPicker)
         persistSlots(s)
+    }
+
+    /// Re-read every cached snapshot from its source. Called on the
+    /// view's first .onAppear so the editor opens with fresh data.
+    private func refreshSnapshots() {
+        refreshSlotsSnapshot()
+        refreshCustomsSnapshot()
+        refreshPromptSnapshot()
+    }
+
+    private func refreshSlotsSnapshot() {
+        slots = QuickSlotStore.decode(quickSlotsJSON)
+    }
+
+    private func refreshCustomsSnapshot() {
+        let decoded = CustomButtonStore.decode(customButtonsJSON)
+        customs = decoded
+        customsByID = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+    }
+
+    private func refreshPromptSnapshot() {
+        let entries = client?.promptLibrary ?? []
+        promptLabelByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0.label) })
+        promptByteSizeByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0.bodyBytes) })
     }
 
     @ViewBuilder
