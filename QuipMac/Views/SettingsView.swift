@@ -55,12 +55,13 @@ struct SettingsView: View {
                 }
         }
         // Vertical resize is the common ask (long tabs like Connection
-        // overflow). Width stays fixed at 520 so content doesn't get spread
-        // out across a stretched gutter. `.top` alignment so extra vertical
-        // space falls below content rather than centering it.
+        // overflow). Horizontal also resizable now — at 520 the 8 toolbar
+        // tabs collide and the last ones collapse behind a `>>` chevron;
+        // ideal 720 fits all 8 with breathing room. `.top` alignment so
+        // extra vertical space falls below content rather than centering.
         .frame(minHeight: 460, idealHeight: 460, maxHeight: .infinity,
                alignment: .top)
-        .frame(width: 520)
+        .frame(minWidth: 600, idealWidth: 720, maxWidth: .infinity)
     }
 }
 
