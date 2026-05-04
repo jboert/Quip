@@ -1999,25 +1999,24 @@ struct MainiOSView: View {
 
         DispatchQueue.global(qos: .userInitiated).async {
             DispatchQueue.main.async { [weak pendingImage] in pendingImage?.setDebugStage("encoding-start") }
-            // Prefer HEIC — typically 50-70% smaller than JPEG-0.95 and
-            // already what the iPhone camera roll uses. Mac's
-            // ImageUploadHandler accepts HEIC via the magic-byte sniff; no
-            // protocol bump required. Fall back to PNG for declared
-            // image/png (lossless), then JPEG-0.95 for everything else,
-            // then nil if neither encoder can speak the image's color
-            // space. (WebP would compress slightly better but its
-            // CGImageDestination encoder wasn't shipped until iOS 18 and
-            // the project targets iOS 17.)
+            // Encode to JPEG-0.85 by default — ~30% smaller than the
+            // previous JPEG-0.95 default and the broadest Anthropic-API-
+            // compatible format. PNG is preserved when the source declared
+            // image/png (lossless screenshots stay pixel-perfect).
+            //
+            // HEIC was tried (commit 684956b) but rolled back: the
+            // Anthropic API rejects image/heic with HTTP 400
+            // "Could not process image" — supported types are JPEG, PNG,
+            // GIF, WEBP only. WebP would be a better win but
+            // CGImageDestination's WebP encoder didn't ship until iOS 18
+            // and the project targets iOS 17.
             let rawData: Data?
             let initialMime: String
-            if let heic = image.heicData(quality: 0.85) {
-                rawData = heic
-                initialMime = "image/heic"
-            } else if mime == "image/png" {
+            if mime == "image/png" {
                 rawData = image.pngData()
                 initialMime = "image/png"
             } else {
-                rawData = image.jpegData(compressionQuality: 0.95)
+                rawData = image.jpegData(compressionQuality: 0.85)
                 initialMime = "image/jpeg"
             }
             guard let rawData else {
