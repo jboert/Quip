@@ -200,6 +200,10 @@ final class WebSocketClient {
     var whisperStatus: WhisperState = .preparing
     /// Mac returned the final transcript for a session.
     var onTranscriptResult: ((UUID, String, String?) -> Void)?
+    /// Mac returned a diagnostics bundle (zip of the three logs + system
+    /// info). Wired by ConnectionDiagnosticsSheet to drop the zip in
+    /// Documents and open a UIActivityViewController.
+    var onDiagnosticsBundle: ((DiagnosticsBundleMessage) -> Void)?
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -703,6 +707,13 @@ final class WebSocketClient {
                 onTranscriptResult?(msg.sessionId, msg.text, msg.error)
             } else {
                 NSLog("[Quip][PTT] transcript_result DECODE FAILED")
+            }
+        case "diagnostics_bundle":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(DiagnosticsBundleMessage.self, from: data) {
+                NSLog("[WebSocketClient] diagnostics_bundle: %@ size=%d err=%@",
+                      msg.filename, msg.sizeBytes, msg.errorReason ?? "none")
+                onDiagnosticsBundle?(msg)
             }
         case "whisper_status":
             guard isAuthenticated else { return }
