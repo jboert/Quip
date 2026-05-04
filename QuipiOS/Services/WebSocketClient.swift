@@ -204,6 +204,13 @@ final class WebSocketClient {
     /// info). Wired by ConnectionDiagnosticsSheet to drop the zip in
     /// Documents and open a UIActivityViewController.
     var onDiagnosticsBundle: ((DiagnosticsBundleMessage) -> Void)?
+    /// Mac sent the latest prompt-library catalog (wishlist §57).
+    /// Phone caches into `promptLibrary` so the Prompts sheet can render
+    /// without a fresh fetch.
+    var onPromptLibrary: (([PromptEntry]) -> Void)?
+    /// Cached catalog from the Mac — published so SwiftUI views can
+    /// observe directly (avoids piping through host state).
+    var promptLibrary: [PromptEntry] = []
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -714,6 +721,13 @@ final class WebSocketClient {
                 NSLog("[WebSocketClient] diagnostics_bundle: %@ size=%d err=%@",
                       msg.filename, msg.sizeBytes, msg.errorReason ?? "none")
                 onDiagnosticsBundle?(msg)
+            }
+        case "prompt_library":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(PromptLibraryMessage.self, from: data) {
+                NSLog("[WebSocketClient] prompt_library: %d prompts", msg.prompts.count)
+                promptLibrary = msg.prompts
+                onPromptLibrary?(msg.prompts)
             }
         case "whisper_status":
             guard isAuthenticated else { return }
