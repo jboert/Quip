@@ -938,6 +938,11 @@ struct QuipMacApp: App {
         case "request_diagnostics":
             handleRequestDiagnostics()
 
+        case "request_log_tail":
+            if let msg = MessageCoder.decode(RequestLogTailMessage.self, from: data) {
+                handleRequestLogTail(msg)
+            }
+
         case "paste_prompt":
             if let msg = MessageCoder.decode(PastePromptMessage.self, from: data) {
                 handlePastePrompt(msg)
@@ -1196,6 +1201,44 @@ struct QuipMacApp: App {
                 )
                 await MainActor.run { self.webSocketServer.broadcast(msg) }
             }
+        }
+    }
+
+    /// Phone asked for a tail snapshot of the three log files (text only,
+    /// no zip). Read the last `bytesPerFile` bytes (clamped to 64 KiB max
+    /// per file so a misbehaving phone can't pull whole logs), concatenate
+    /// with `=== <filename> ===` headers, send back as a single
+    /// `LogTailMessage`. Auto-fired by the iOS Connection diagnostics
+    /// sheet on appear, so the user sees recent events without tapping
+    /// the heavier "Get Mac logs" zip path.
+    @MainActor
+    private func handleRequestLogTail(_ msg: RequestLogTailMessage) {
+        let perFileCap = min(max(msg.bytesPerFile, 1024), 64 * 1024)
+        Task.detached {
+            let logDir = LogPaths.directory
+            let files = ["websocket.log", "push.log", "kokoro.log"]
+            var combined = ""
+            for name in files {
+                let url = logDir.appendingPathComponent(name)
+                guard let data = try? Data(contentsOf: url) else {
+                    combined += "=== \(name) ===\n(missing or unreadable)\n\n"
+                    continue
+                }
+                let tailStart = max(0, data.count - perFileCap)
+                let tail = data.subdata(in: tailStart..<data.count)
+                let text = String(data: tail, encoding: .utf8) ?? ""
+                combined += "=== \(name) (\(data.count) bytes total, showing last \(tail.count)) ===\n"
+                combined += text
+                if !text.hasSuffix("\n") { combined += "\n" }
+                combined += "\n"
+            }
+            let captured = ISO8601DateFormatter().string(from: Date())
+            let response = LogTailMessage(
+                text: combined,
+                totalBytes: combined.utf8.count,
+                capturedAt: captured
+            )
+            await MainActor.run { self.webSocketServer.broadcast(response) }
         }
     }
 
