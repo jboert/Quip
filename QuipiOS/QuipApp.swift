@@ -694,6 +694,13 @@ struct MainiOSView: View {
     // User-defined custom buttons. JSON-encoded `[CustomButton]`. Defaults
     // to "[]". Slots reference these by UUID via `.custom(id)`.
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
+    // MRU log for prompts fired from this device. JSON `[String: String]`
+    // mapping prompt id → ISO-8601 lastUsed. Surfaces most-recently-used
+    // prompts at the top of the picker (`.promptsPicker` slot).
+    // Phone-local; doesn't sync to Mac because each device's usage
+    // pattern is its own — Mac keeps the catalog, phone keeps the order.
+    @AppStorage("promptUsageMRUJSON") private var promptUsageMRUJSON: String = "{}"
+    @State private var showPromptsPickerSheet = false
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -2915,6 +2922,8 @@ struct MainiOSView: View {
         case builtinButton(QuickButton)
         case customButton(CustomButton)
         case promptButton(promptID: String, label: String)
+        /// Single "Prompts" pill that opens the library sheet (sorted MRU).
+        case promptsPicker
         case spacer(width: CGFloat, uid: UUID)
         case slashGroup(letter: Character, members: [SlashGroupMember])
 
@@ -2923,6 +2932,7 @@ struct MainiOSView: View {
             case .builtinButton(let b): return "b:\(b.rawValue)"
             case .customButton(let c): return "c:\(c.id.uuidString)"
             case .promptButton(let pid, _): return "p:\(pid)"
+            case .promptsPicker: return "pp"
             case .spacer(_, let uid): return "s:\(uid.uuidString)"
             case .slashGroup(let l, _): return "g:\(l)"
             }
@@ -2948,7 +2958,7 @@ struct MainiOSView: View {
                 if let c = defsById[id], let key = slashLetter(of: c) {
                     letterCount[key, default: 0] += 1
                 }
-            case .prompt, .spacer:
+            case .prompt, .promptsPicker, .spacer:
                 break
             }
         }
@@ -2966,7 +2976,7 @@ struct MainiOSView: View {
                 if let c = defsById[id], let key = slashLetter(of: c), (letterCount[key] ?? 0) > 1 {
                     members[key, default: []].append(.custom(c))
                 }
-            case .prompt, .spacer:
+            case .prompt, .promptsPicker, .spacer:
                 break
             }
         }
@@ -3001,6 +3011,8 @@ struct MainiOSView: View {
                 // a brief disconnect. (§B3)
                 let label = client.promptLibrary.first(where: { $0.id == pid })?.label ?? pid
                 items.append(.promptButton(promptID: pid, label: label))
+            case .promptsPicker:
+                items.append(.promptsPicker)
             }
         }
         return items
@@ -3051,6 +3063,8 @@ struct MainiOSView: View {
                 customQuickButton(c)
             case .promptButton(let pid, let label):
                 promptQuickButton(promptID: pid, label: label)
+            case .promptsPicker:
+                promptsPickerButton()
             case .spacer(let w, _):
                 Spacer().frame(width: w)
             case .slashGroup(let letter, let members):
@@ -3097,6 +3111,82 @@ struct MainiOSView: View {
     private func firePromptSlot(promptID: String, pressReturn: Bool) {
         guard let wid = selectedWindowId, !wid.isEmpty else { return }
         client.send(PastePromptMessage(id: promptID, windowId: wid, pressReturn: pressReturn))
+        recordPromptUsage(promptID)
+    }
+
+    /// Single "Prompts" pill — opens a sheet listing every prompt in the
+    /// Mac catalog, sorted MRU-first. Replaces stuffing per-prompt
+    /// `.prompt(id)` slots into the keyboard row when the user has more
+    /// prompts than reasonably fit.
+    @ViewBuilder
+    private func promptsPickerButton() -> some View {
+        let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
+        Button {
+            showPromptsPickerSheet = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("Prompts")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(canFire ? Color.purple.opacity(0.55) : Color.gray.opacity(0.25))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canFire)
+        .sheet(isPresented: $showPromptsPickerSheet) {
+            NavigationStack {
+                PromptsQuickPickerSheet(
+                    entries: sortedPromptsByMRU(),
+                    onPick: { entry, pressReturn in
+                        firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
+                        showPromptsPickerSheet = false
+                    }
+                )
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    /// Decode the per-device MRU map and return the catalog in MRU order
+    /// (recent first, then unused alphabetically by label so the long-tail
+    /// stays predictable). Pure helper — no side effects.
+    private func sortedPromptsByMRU() -> [PromptEntry] {
+        let raw = promptUsageMRUJSON.data(using: .utf8) ?? Data()
+        let mru = (try? JSONDecoder().decode([String: String].self, from: raw)) ?? [:]
+        let formatter = ISO8601DateFormatter()
+        let usedDates: [String: Date] = mru.compactMapValues { formatter.date(from: $0) }
+        return client.promptLibrary.sorted { a, b in
+            switch (usedDates[a.id], usedDates[b.id]) {
+            case let (.some(da), .some(db)): return da > db
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return a.label.localizedCaseInsensitiveCompare(b.label) == .orderedAscending
+            }
+        }
+    }
+
+    /// Record a fresh usage timestamp for the given prompt id so it
+    /// climbs to the top of the MRU sort next time the picker opens.
+    private func recordPromptUsage(_ promptID: String) {
+        let raw = promptUsageMRUJSON.data(using: .utf8) ?? Data()
+        var mru = (try? JSONDecoder().decode([String: String].self, from: raw)) ?? [:]
+        mru[promptID] = ISO8601DateFormatter().string(from: Date())
+        // Cap at 100 entries — old, unused prompts shouldn't grow the
+        // dict forever. Drop oldest by ISO timestamp string compare,
+        // which is lexically equivalent to chronological for ISO-8601.
+        if mru.count > 100 {
+            let oldestIDs = mru.sorted(by: { $0.value < $1.value }).prefix(mru.count - 100).map(\.key)
+            for id in oldestIDs { mru.removeValue(forKey: id) }
+        }
+        if let data = try? JSONEncoder().encode(mru),
+           let json = String(data: data, encoding: .utf8) {
+            promptUsageMRUJSON = json
+        }
     }
 
     /// Wire-side dispatch for a custom button. Mirrors `fireQuickButton` so
@@ -4074,6 +4164,15 @@ enum QuickSlot: Hashable, Identifiable {
     /// and may not exist if the Mac hasn't broadcast its catalog yet —
     /// the renderer shows a placeholder pill in that case.
     case prompt(promptID: String)
+    /// Single keyboard button labeled "Prompts" — opens the prompt
+    /// library sheet sorted by most-recently-used. Replaces the
+    /// per-prompt slot pattern when the user has many prompts (the
+    /// individual `.prompt(promptID:)` slot doesn't scale past ~5
+    /// prompts on the keyboard row). Tap → sheet → tap a prompt →
+    /// fires PastePromptMessage to the active window. The phone
+    /// records lastUsed locally so ordering reflects this device's
+    /// usage rather than the catalog's filename order.
+    case promptsPicker
     /// Fixed-width gap between adjacent slots. Multiple spacers in a row
     /// stack their widths. Carries a UUID so SwiftUI lists can identify
     /// each spacer separately when there's more than one.
@@ -4084,6 +4183,7 @@ enum QuickSlot: Hashable, Identifiable {
         case .builtin(let b): return "b:\(b.rawValue)"
         case .custom(let uid): return "c:\(uid.uuidString)"
         case .prompt(let pid): return "p:\(pid)"
+        case .promptsPicker: return "pp"
         case .spacer(let uid): return "s:\(uid.uuidString)"
         }
     }
@@ -4113,6 +4213,8 @@ extension QuickSlot: Codable {
             self = .custom(try c.decode(UUID.self, forKey: .customID))
         case "prompt":
             self = .prompt(promptID: try c.decode(String.self, forKey: .promptID))
+        case "promptsPicker":
+            self = .promptsPicker
         case "spacer":
             self = .spacer(try c.decode(UUID.self, forKey: .spacerID))
         default:
@@ -4135,6 +4237,8 @@ extension QuickSlot: Codable {
         case .prompt(let pid):
             try c.encode("prompt", forKey: .kind)
             try c.encode(pid, forKey: .promptID)
+        case .promptsPicker:
+            try c.encode("promptsPicker", forKey: .kind)
         case .spacer(let id):
             try c.encode("spacer", forKey: .kind)
             try c.encode(id, forKey: .spacerID)
@@ -4922,6 +5026,26 @@ struct QuickButtonsSheet: View {
                 }
                 Spacer()
             }
+        case .promptsPicker:
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.purple.opacity(0.25))
+                    .frame(width: 36, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.purple)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Prompts")
+                    Text("Picker · MRU sorted")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
         }
     }
 
@@ -4975,9 +5099,28 @@ struct QuickButtonsSheet: View {
             case .prompt(let pid):
                 let label = client?.promptLibrary.first(where: { $0.id == pid })?.label ?? pid
                 result.append((slot.id, AnyView(promptPillPreview(label: label))))
+            case .promptsPicker:
+                result.append((slot.id, AnyView(promptsPickerPillPreview())))
             }
         }
         return result
+    }
+
+    /// Editor-only mock of the Prompts-picker pill so the preview row
+    /// renders correctly when the user has the picker slot configured.
+    @ViewBuilder
+    private func promptsPickerPillPreview() -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Prompts")
+                .font(.system(size: 11, weight: .medium))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.purple.opacity(0.55))
+        .foregroundStyle(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     /// Editor-only mock of the prompt pill — same purple tint + doc.text
@@ -5081,10 +5224,24 @@ struct QuickButtonsSheet: View {
                         Label("Prompt from library…", systemImage: "doc.text")
                     }
                 }
+                let pickerPlaced = slots.contains(where: { if case .promptsPicker = $0 { return true } else { return false } })
+                Button {
+                    addPromptsPicker()
+                } label: {
+                    Label("Prompts picker" + (pickerPlaced ? " · added" : ""),
+                          systemImage: "doc.text.magnifyingglass")
+                }
+                .disabled(pickerPlaced)
             }
         } label: {
             Image(systemName: "plus")
         }
+    }
+
+    private func addPromptsPicker() {
+        var s = slots
+        s.append(.promptsPicker)
+        persistSlots(s)
     }
 
     @ViewBuilder
@@ -5608,6 +5765,65 @@ struct ConnectionDiagnosticsSheet: View {
 /// Renders the Mac-managed prompt library (wishlist §57). Tapping a row
 /// fires a `paste_prompt` to the Mac, which then sendText's the body
 /// into the currently-targeted iTerm session. Long-press → toggle
+/// Compact picker fired from the keyboard's `.promptsPicker` quick
+/// button. Lists every prompt in MRU order; tap fires paste, long-press
+/// fires paste-and-submit. No edit/delete affordances — that lives in
+/// PromptLibrarySheet (Settings → Prompts). Shows up to 120 chars of
+/// preview per row so the user can tell similar prompts apart at a
+/// glance.
+struct PromptsQuickPickerSheet: View {
+    let entries: [PromptEntry]
+    let onPick: (PromptEntry, _ pressReturn: Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            if entries.isEmpty {
+                Section {
+                    Text("No prompts yet — add them in Settings → Prompts or drop .txt files into ~/Library/Application Support/Quip/prompts/ on the Mac.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section {
+                    ForEach(entries) { entry in
+                        Button {
+                            onPick(entry, false)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.label)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                Text(entry.bodyPreview)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.4)
+                                .onEnded { _ in onPick(entry, true) }
+                        )
+                    }
+                } footer: {
+                    Text("Tap to paste. Long-press to paste-and-submit. Recently-used appear first.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Prompts")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Cancel") { dismiss() }
+            }
+        }
+    }
+}
+
 /// auto-submit (sends Return after the paste). Mirrors the Stream Deck
 /// "clipboard prompt" pattern from the streamdeck-claude-scripts
 /// project but without the .scpt round-trip — the prompt body lives on
