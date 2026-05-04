@@ -204,6 +204,10 @@ final class WebSocketClient {
     /// info). Wired by ConnectionDiagnosticsSheet to drop the zip in
     /// Documents and open a UIActivityViewController.
     var onDiagnosticsBundle: ((DiagnosticsBundleMessage) -> Void)?
+    /// Mac returned a tail snapshot of its three log files as text.
+    /// Wired by ConnectionDiagnosticsSheet to render inline so the
+    /// user sees recent events without triggering the full zip path.
+    var onLogTail: ((LogTailMessage) -> Void)?
     /// Mac sent the latest prompt-library catalog (wishlist §57).
     /// Phone caches into `promptLibrary` so the Prompts sheet can render
     /// without a fresh fetch.
@@ -778,6 +782,12 @@ final class WebSocketClient {
                 NSLog("[WebSocketClient] diagnostics_bundle: %@ size=%d err=%@",
                       msg.filename, msg.sizeBytes, msg.errorReason ?? "none")
                 onDiagnosticsBundle?(msg)
+            }
+        case "log_tail":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(LogTailMessage.self, from: data) {
+                NSLog("[WebSocketClient] log_tail: %d bytes", msg.totalBytes)
+                onLogTail?(msg)
             }
         case "prompt_library":
             guard isAuthenticated else { return }

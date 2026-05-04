@@ -546,6 +546,47 @@ struct DiagnosticsBundleMessage: Codable, Sendable {
     }
 }
 
+/// iPhone → Mac. Asks the Mac for a tail snapshot of its three log
+/// files — text only, no zip. Auto-fired by the Connection diagnostics
+/// sheet on appear, so the user sees recent events without tapping a
+/// button. The full zip download stays as the explicit "Get Mac logs"
+/// path for AirDrop / save-to-Files use cases.
+struct RequestLogTailMessage: Codable, Sendable {
+    let type: String
+    /// How many bytes per file to return from the tail. Default 16 KiB
+    /// is enough for ~200 lines per file at typical log density. Mac
+    /// clamps to a max so a misbehaving phone can't pull whole logs.
+    let bytesPerFile: Int
+
+    init(bytesPerFile: Int = 16 * 1024) {
+        self.type = "request_log_tail"
+        self.bytesPerFile = bytesPerFile
+    }
+}
+
+/// Mac → iPhone. Response to `request_log_tail`. Carries the tail of
+/// each of the three log files as raw text, concatenated with file
+/// headers. Phone renders inline in a scrollable monospace view.
+struct LogTailMessage: Codable, Sendable {
+    let type: String
+    /// Concatenated text — sections separated by `=== <filename> ===`
+    /// headers. Empty if no logs exist yet.
+    let text: String
+    /// Total byte count of `text` (UTF-8). Used by phone for a "5.2 KB"
+    /// label without re-counting.
+    let totalBytes: Int
+    /// ISO-8601 timestamp of when the snapshot was captured. Phone
+    /// shows "captured at HH:mm:ss" so user knows the staleness.
+    let capturedAt: String
+
+    init(text: String, totalBytes: Int, capturedAt: String) {
+        self.type = "log_tail"
+        self.text = text
+        self.totalBytes = totalBytes
+        self.capturedAt = capturedAt
+    }
+}
+
 // MARK: - Push Notifications
 
 /// iPhone → Mac. Hands over the APNs device token so the Mac can push to

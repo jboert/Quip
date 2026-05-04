@@ -5383,9 +5383,58 @@ struct ConnectionDiagnosticsSheet: View {
     @State private var bundleURL: URL?
     @State private var showShareSheet = false
     @State private var requesting = false
+    @State private var logTailText: String = ""
+    @State private var logTailCapturedAt: String = ""
+    @State private var logTailRequesting = false
 
     var body: some View {
         List {
+            Section {
+                if logTailRequesting && logTailText.isEmpty {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Fetching…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if logTailText.isEmpty {
+                    Text("No snapshot yet — pull to refresh.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        Text(logTailText)
+                            .font(.system(size: 10, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 320)
+                }
+            } header: {
+                HStack {
+                    Text("Mac log tail")
+                    Spacer()
+                    Button {
+                        requestLogTail()
+                    } label: {
+                        if logTailRequesting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(logTailRequesting || !client.isAuthenticated)
+                    .font(.system(size: 12))
+                }
+            } footer: {
+                if !logTailCapturedAt.isEmpty {
+                    Text("Snapshot captured \(logTailCapturedAt). Tap refresh icon for fresh tail. Full zip download below.")
+                } else {
+                    Text("Auto-fetched on open. Last 16 KB of each Mac log file (websocket / push / kokoro), text only.")
+                }
+            }
+
             Section {
                 Button {
                     requestMacLogs()
@@ -5395,7 +5444,7 @@ struct ConnectionDiagnosticsSheet: View {
                             ProgressView().controlSize(.small)
                         }
                         Image(systemName: "arrow.down.doc")
-                        Text(requesting ? "Waiting for Mac…" : "Get Mac logs")
+                        Text(requesting ? "Waiting for Mac…" : "Get Mac logs (zip)")
                     }
                 }
                 .disabled(requesting || !client.isAuthenticated)
@@ -5417,9 +5466,9 @@ struct ConnectionDiagnosticsSheet: View {
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Mac log bundle")
+                Text("Full bundle (AirDrop / save)")
             } footer: {
-                Text("Asks the Mac for a zip of websocket.log + push.log + kokoro.log + system info. Capped at 4 MiB; if your Mac logs are larger, use Settings → Diagnostics on the Mac itself.")
+                Text("Zip of websocket.log + push.log + kokoro.log + system info. Capped at 4 MiB.")
             }
 
             Section("Current state") {
@@ -5470,7 +5519,16 @@ struct ConnectionDiagnosticsSheet: View {
                 DiagnosticsShareSheet(items: [url])
             }
         }
-        .onAppear { wireBundleHandler() }
+        .onAppear {
+            wireBundleHandler()
+            wireLogTailHandler()
+            // Auto-fetch the tail snapshot on open. Lightweight (~50 KB
+            // text) so it's fine to fire every time the sheet appears.
+            // Full zip stays opt-in via the button below.
+            if client.isAuthenticated {
+                requestLogTail()
+            }
+        }
     }
 
     private func wireBundleHandler() {
@@ -5500,6 +5558,30 @@ struct ConnectionDiagnosticsSheet: View {
             }
             requesting = false
         }
+    }
+
+    private func wireLogTailHandler() {
+        client.onLogTail = { msg in
+            logTailText = msg.text
+            // Format the captured timestamp as HH:mm:ss for the footer
+            // staleness indicator. Falls back to the raw ISO string if
+            // parsing fails.
+            if let date = ISO8601DateFormatter().date(from: msg.capturedAt) {
+                let f = DateFormatter()
+                f.timeStyle = .medium
+                f.dateStyle = .none
+                logTailCapturedAt = "at \(f.string(from: date))"
+            } else {
+                logTailCapturedAt = msg.capturedAt
+            }
+            logTailRequesting = false
+        }
+    }
+
+    private func requestLogTail() {
+        guard client.isAuthenticated else { return }
+        logTailRequesting = true
+        client.send(RequestLogTailMessage())
     }
 
     private func requestMacLogs() {
