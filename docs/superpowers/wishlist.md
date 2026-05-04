@@ -1083,9 +1083,39 @@ Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glanc
 
 ---
 
-### 57. Prompt library — Mac watches a directory, iPhone pastes (✅ Done v1, eb-branch)
+### B3. Prompts as keyboard quick-buttons (✅ Done v1, eb-branch)
 
-**Status:** ✅ Done v1 on `eb-branch` — commit `ad4fb57`. Built clean for both schemes; installed to Mac and Tim apple 17. 15 of 25 streamdeck-claude-scripts auto-imported.
+**Status:** ✅ Done v1 on `eb-branch` — commit `2ec3ed9`. Built clean iOS sim + device; installed on Tim apple 17.
+
+Promotes Mac-managed prompts from the two-taps-deep Settings → Prompts sheet into the keyboard slot row alongside built-ins, custom buttons, and spacers.
+
+**What shipped:**
+- New `QuickSlot.prompt(promptID: String)` case + Codable wire format with `prompt` kind discriminator and `promptID` payload field. Backward compat preserved.
+- Quick Buttons editor's "+" menu gains "Prompt from library…" (visible only when catalog non-empty). Picker sheet lists prompts with label + 120-char preview; tap appends a `.prompt` slot. Already-placed prompts disabled.
+- Editor `slotRow` + `previewRowItems` render `.prompt` cases with a doc.text icon + purple chip tint to distinguish from custom-text buttons.
+- Keyboard runtime: new `promptQuickButton(promptID:label:)` view. Tap = paste no submit; long-press = paste-and-submit. Disabled when Mac hasn't broadcast catalog or no selectedWindowId.
+- `rowItems` pre-passes ignore `.prompt` for slash grouping (no slash letter to collapse on).
+
+Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bits.
+
+**Acceptance test:** Settings → Quick Buttons → "+" → "Prompt from library…" → pick a prompt → close. Keyboard row shows a purple pill labeled with the prompt. Tap the Mac terminal in the main view, then tap the pill → text pastes into iTerm. Long-press → text pastes + Return.
+
+**Related:** `QuipiOS/QuipApp.swift:4017-4036` (QuickSlot enum + Codable), `2914-2998` (RowItem + rowItems), `3035-3105` (slotRowView + promptQuickButton + firePromptSlot), `4715-4795` (addMenu + promptPickerSheet + addPromptSlot), `4865-4905` (slotRow .prompt case), `4972-5005` (previewRowItems + promptPillPreview).
+
+---
+
+### 57. Prompt library — Mac watches a directory, iPhone pastes (✅ Done v1+v2, eb-branch)
+
+**Status:** ✅ v1 on `eb-branch` commit `ad4fb57` (Mac watches dir, iPhone pastes); v2 commit `fcd2ba1` (iPhone-side create / edit / delete + full body in catalog). Built clean for both schemes; installed to Mac and Tim apple 17. 15 of 25 streamdeck-claude-scripts auto-imported.
+
+**v2 additions:**
+- `PromptEntry` now carries the full `body` inline (was preview + length only). `bodyPreview` and `bodyBytes` become computed properties so existing call sites compile unchanged. iPhone needs the body in-hand to populate the edit form without a second round-trip.
+- New `PutPromptMessage` (id, label, body) and `DeletePromptMessage` (id) — Mac handlers in `QuipMacApp.swift` rely on `PromptLibrary.put` / `.delete`, then the existing FS watcher fires and re-broadcasts the catalog (so the originating phone sees its own write reflected back).
+- iOS `PromptEditorSheet` (new struct in `QuipApp.swift`): id (locked when editing), display label (optional), multi-line body in a `TextEditor` with monospaced font + byte counter. Save disabled until id and body are both non-empty.
+- `PromptLibrarySheet` swipe actions: Edit (blue) opens the editor, Delete (red) sends `DeletePromptMessage`. "+" toolbar button creates new.
+- `PromptLibrary.sanitizeID` strips path separators / leading dots / shell metacharacters so a hostile id can't escape the prompts directory. Spaces become dashes.
+
+**v1 details (preserved):**
 
 **Why:** User asked to bring the Stream Deck "clipboard prompt" pattern (`/Users/erickbzovi/Projects/streamdeck-claude-scripts`) into Quip — a button on the keyboard that pastes a long pre-written prompt into iTerm with one tap. Existing CustomButton.rawText already did the typing, but editing 1-15 KB of prompt text in the iOS form was awful and there was no library/discovery.
 
