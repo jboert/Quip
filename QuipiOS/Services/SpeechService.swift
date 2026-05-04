@@ -496,10 +496,23 @@ private class AudioWorker: @unchecked Sendable {
     func disarm() {
         queue.async { [self] in
             guard self.isArmed else { return }
+            // Cancel any in-flight recognition task — without this the
+            // SFSpeechRecognitionTask can keep the mic alive past
+            // engine.stop, leaving the orange "mic in use" indicator on.
+            self.recognitionTask?.cancel()
+            self.recognitionTask = nil
+            self.recognitionRequest = nil
             self.audioEngine.stop()
             self.audioEngine.inputNode.removeTap(onBus: 0)
             self.ring.clear()
             self.isArmed = false
+            // Release the shared AVAudioSession so iOS clears the mic
+            // indicator. .notifyOthersOnDeactivation lets backgrounded
+            // music apps resume. Best-effort — if TTS is mid-playback
+            // the session will refuse to deactivate; mic will release
+            // when TTS finishes.
+            try? AVAudioSession.sharedInstance()
+                .setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
 
