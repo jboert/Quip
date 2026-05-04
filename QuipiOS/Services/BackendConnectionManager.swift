@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// Owns one `WebSocketClient` per paired backend and the per-backend state
 /// slice (`BackendSession`). All paired backends stay live (Hot model) so a
@@ -28,6 +29,15 @@ final class BackendConnectionManager {
     }
 
     private let placeholder: BackendSession
+
+    /// Watches OS-level network path transitions (Wi-Fi join/leave, cellular,
+    /// VPN flap). On every path change we tell every live client to rewind
+    /// its URL pointer to the primary so the next reconnect prefers the LAN
+    /// URL again — when you walk back into the house, the client switches
+    /// off Tailscale and back to Bonjour LAN automatically. The change
+    /// itself doesn't force a reconnect — `WebSocketClient`'s existing
+    /// path-change handling does that on its own.
+    private var pathMonitor: NWPathMonitor?
 
     /// Hooks the host (`QuipApp`) sets so that side-effecty things which the
     /// manager itself shouldn't know about — Live Activity, push registration,
@@ -127,10 +137,47 @@ final class BackendConnectionManager {
 
     /// Rekey the active paired entry to the daemon's real UUID + capture
     /// kind/displayName. Called from the host's `onDeviceIdentity` callback.
+    ///
+    /// If the rekey lands on a UUID that already exists (user paired the
+    /// same Mac via a second URL — Tailscale after Bonjour, etc), merge
+    /// the freshly-paired entry's URL into the existing entry's URL list
+    /// and drop the duplicate row + duplicate session. Same-Mac dedupe so
+    /// the user sees one logical entry with auto-fallback between paths.
     func recordDeviceIdentity(_ identity: DeviceIdentityMessage) {
         guard let i = paired.firstIndex(where: { $0.id == activeBackendID }) else { return }
         let oldID = activeBackendID
         if oldID != identity.deviceID {
+            // Existing row for the real UUID? Merge instead of rekey.
+            if let existingIdx = paired.firstIndex(where: { $0.id == identity.deviceID }), existingIdx != i {
+                // Move freshly-paired row's URL into the existing row's
+                // URL list (deduped + re-sorted by network priority).
+                var allURLs = paired[existingIdx].urlsInOrder
+                for u in paired[i].urlsInOrder where !allURLs.contains(u) {
+                    allURLs.append(u)
+                }
+                allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+                paired[existingIdx].url = allURLs.first ?? paired[existingIdx].url
+                paired[existingIdx].fallbackURLs = Array(allURLs.dropFirst())
+                paired[existingIdx].lastUsed = Date()
+                paired[existingIdx].enabled = paired[existingIdx].enabled || paired[i].enabled
+                // Drop the freshly-paired row + its session.
+                paired.remove(at: paired.firstIndex(where: { $0.id == oldID })!)
+                sessions[oldID]?.client.disconnect()
+                sessions.removeValue(forKey: oldID)
+                KeychainBackendPINs.delete(backendID: oldID)
+                activeBackendID = identity.deviceID
+                // Reconnect the surviving session with the merged URL
+                // list so it picks up the freshly-paired URL as a
+                // fallback option.
+                if let session = sessions[identity.deviceID] {
+                    session.client.disconnect()
+                    primePINIfPresent(session: session)
+                    let mergedURLs = urlList(for: paired[paired.firstIndex(where: { $0.id == identity.deviceID })!])
+                    connect(session: session, urls: mergedURLs)
+                }
+                savePaired()
+                return
+            }
             KeychainBackendPINs.rekey(from: oldID, to: identity.deviceID)
             paired[i].id = identity.deviceID
             activeBackendID = identity.deviceID
@@ -161,14 +208,38 @@ final class BackendConnectionManager {
             let session = BackendSession(backendID: backend.id, client: WebSocketClient())
             wire(session: session)
             sessions[backend.id] = session
-            if backend.enabled, let url = URL(string: backend.url) {
-                primePINIfPresent(session: session)
-                connect(session: session, url: url)
+            if backend.enabled {
+                let urls = urlList(for: backend)
+                if !urls.isEmpty {
+                    primePINIfPresent(session: session)
+                    connect(session: session, urls: urls)
+                }
             }
         }
         if activeBackendID.isEmpty, let first = paired.first {
             activeBackendID = first.id
         }
+        startPathMonitor()
+    }
+
+    /// Watches OS network path transitions and rewinds every live client's
+    /// URL pointer to its primary on each change. Idempotent — a no-op on
+    /// repeat calls. Cancelling is implicit at deinit (the monitor's queue
+    /// is held by the strong reference).
+    private func startPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        let queue = DispatchQueue(label: "com.quip.BackendConnectionManager.path")
+        monitor.pathUpdateHandler = { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                for s in self.sessions.values {
+                    s.client.resetToPrimaryURL()
+                }
+            }
+        }
+        monitor.start(queue: queue)
+        pathMonitor = monitor
     }
 
     /// Toggle whether a paired backend keeps a live connection. Called from
@@ -183,9 +254,10 @@ final class BackendConnectionManager {
 
         guard let session = sessions[id] else { return }
         if enabled {
-            if let url = URL(string: paired[i].url) {
+            let urls = urlList(for: paired[i])
+            if !urls.isEmpty {
                 primePINIfPresent(session: session)
-                connect(session: session, url: url)
+                connect(session: session, urls: urls)
             }
         } else {
             session.client.disconnect()
@@ -205,9 +277,37 @@ final class BackendConnectionManager {
     /// passing it in. Writes PIN to Keychain, appends to `paired`, opens a
     /// connection. The synthetic `backend.id` is rekeyed once the daemon's
     /// `device_identity` arrives (see `wire(session:)` below).
+    ///
+    /// Already-known id (user paired the same Mac via a different network
+    /// path — Bonjour LAN earlier, Tailscale now): append the new URL as a
+    /// fallback on the existing entry instead of duplicating the row. Same
+    /// Mac, two paths to it, one logical entry — `WebSocketClient.connect`
+    /// walks the URL list with auto-fallback.
     func add(_ backend: PairedBackend, pin: String) {
+        if let i = paired.firstIndex(where: { $0.id == backend.id }) {
+            KeychainBackendPINs.write(backendID: backend.id, pin: pin)
+            // Append the new URL only if it's not already in the list.
+            // Newly-paired URL outranks Tailscale fallbacks if it's a LAN
+            // URL — re-sort by network priority.
+            var allURLs = paired[i].urlsInOrder
+            if !allURLs.contains(backend.url) { allURLs.append(backend.url) }
+            allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+            paired[i].url = allURLs.first ?? paired[i].url
+            paired[i].fallbackURLs = Array(allURLs.dropFirst())
+            paired[i].lastUsed = Date()
+            paired[i].enabled = true
+            savePaired()
+            // Force-reconnect with the new URL list so the freshly-added
+            // path participates in the fallback walk.
+            if let session = sessions[backend.id] {
+                session.client.disconnect()
+                primePINIfPresent(session: session)
+                connect(session: session, urls: urlList(for: paired[i]))
+            }
+            return
+        }
+
         guard paired.count < Self.maxPairedBackends else { return }
-        guard !paired.contains(where: { $0.id == backend.id }) else { return }
 
         KeychainBackendPINs.write(backendID: backend.id, pin: pin)
         paired.append(backend)
@@ -217,8 +317,9 @@ final class BackendConnectionManager {
         if activeBackendID.isEmpty {
             activeBackendID = backend.id
         }
-        if let url = URL(string: backend.url) {
-            connect(session: session, url: url)
+        let urls = urlList(for: backend)
+        if !urls.isEmpty {
+            connect(session: session, urls: urls)
         }
         savePaired()
     }
@@ -293,9 +394,10 @@ final class BackendConnectionManager {
         if activeBackendID == id {
             if let next = paired.first {
                 activeBackendID = next.id
-                if let url = URL(string: next.url) {
+                let urls = urlList(for: next)
+                if !urls.isEmpty {
                     primeActivePIN()
-                    active.client.connect(to: url)
+                    active.client.connect(toURLs: urls)
                 }
             } else {
                 activeBackendID = ""
@@ -308,12 +410,13 @@ final class BackendConnectionManager {
     /// PIN and force a reconnect.
     func reauth(_ id: String, pin: String) {
         guard let session = sessions[id],
-              let entry = paired.first(where: { $0.id == id }),
-              let url = URL(string: entry.url) else { return }
+              let entry = paired.first(where: { $0.id == id }) else { return }
+        let urls = urlList(for: entry)
+        guard !urls.isEmpty else { return }
         KeychainBackendPINs.write(backendID: id, pin: pin)
         session.client.disconnect()
         session.reachability = .connecting
-        connect(session: session, url: url)
+        connect(session: session, urls: urls)
     }
 
     /// Backgrounding/foregrounding — pass through to every live client so all
@@ -346,6 +449,18 @@ final class BackendConnectionManager {
                 defaults.set(true, forKey: "pairedEnabledMigrationV1Done")
                 savePaired()
             }
+            // Multi-URL migration: same-id rows (one Mac paired over both
+            // Bonjour LAN and Tailscale) get merged into a single entry
+            // whose `url` is the LAN URL (preferred when reachable) and
+            // whose `fallbackURLs` are the rest. WebSocketClient.connect
+            // walks `urlsInOrder` and advances on TCP-fail / auth-timeout,
+            // so the user sees one logical Mac and the right path is
+            // chosen automatically.
+            if !defaults.bool(forKey: "pairedMultiURLMigrationV1Done") {
+                paired = Self.mergeSameIDRows(paired)
+                defaults.set(true, forKey: "pairedMultiURLMigrationV1Done")
+                savePaired()
+            }
             return
         }
         // Migrate from the legacy single-backend layout: `lastURL` holds one
@@ -370,17 +485,101 @@ final class BackendConnectionManager {
         UserDefaults.standard.set(activeBackendID, forKey: "activeBackendID")
     }
 
+    /// Collapse multiple rows that share an `id` into one row whose `url`
+    /// is the LAN-preferring primary and whose `fallbackURLs` carry the
+    /// rest. URL ordering: Bonjour `.local` first, then RFC1918 LAN
+    /// (192.168.*, 10.*, 172.16-31.*), then Tailscale CGNAT (100.64-127.*),
+    /// then anything else (Cloudflare tunnel, MagicDNS, etc). `enabled` is
+    /// the OR of all merged rows. `lastUsed` becomes the most recent. Other
+    /// fields take the first row's values.
+    ///
+    /// Pure helper — exposed at file scope for unit testing.
+    static func mergeSameIDRows(_ entries: [PairedBackend]) -> [PairedBackend] {
+        var byID: [String: [PairedBackend]] = [:]
+        var order: [String] = []
+        for e in entries {
+            if byID[e.id] == nil { order.append(e.id) }
+            byID[e.id, default: []].append(e)
+        }
+        return order.map { id -> PairedBackend in
+            let group = byID[id] ?? []
+            // Single-row groups stay as-is (preserve any existing fallbacks).
+            if group.count == 1 { return group[0] }
+
+            // Collect every URL across the group, dedupe, then sort by
+            // network-priority so the LAN URL ends up first.
+            var seen = Set<String>()
+            var allURLs: [String] = []
+            for row in group {
+                for url in row.urlsInOrder where !seen.contains(url) {
+                    seen.insert(url)
+                    allURLs.append(url)
+                }
+            }
+            allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+
+            var merged = group[0]
+            merged.url = allURLs.first ?? merged.url
+            merged.fallbackURLs = Array(allURLs.dropFirst())
+            merged.enabled = group.contains(where: { $0.enabled })
+            merged.lastUsed = group.map(\.lastUsed).max() ?? merged.lastUsed
+            return merged
+        }
+    }
+
+    /// Lower number = preferred for connect (tried first). Bonjour `.local`
+    /// is fastest when reachable, then RFC1918 LAN, then Tailscale CGNAT,
+    /// then everything else. Conservative parse — anything that doesn't
+    /// look like a URL falls into the last bucket.
+    static func urlPriority(_ urlString: String) -> Int {
+        guard let url = URL(string: urlString), let host = url.host else { return 99 }
+        let h = host.lowercased()
+        if h.hasSuffix(".local") { return 0 }
+        // RFC1918 LAN ranges
+        if h.hasPrefix("192.168.") { return 1 }
+        if h.hasPrefix("10.") { return 1 }
+        if h.hasPrefix("172.") {
+            let parts = h.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
+                return 1
+            }
+        }
+        // Tailscale CGNAT (100.64.0.0/10)
+        if h.hasPrefix("100.") {
+            let parts = h.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (64...127).contains(second) {
+                return 2
+            }
+        }
+        // Tailscale MagicDNS suffix
+        if h.hasSuffix(".ts.net") { return 2 }
+        return 3
+    }
+
     // MARK: - Internals
 
     private func connect(session: BackendSession, url: URL) {
+        connect(session: session, urls: [url])
+    }
+
+    /// Multi-URL connect path used by the LAN/Tailscale fallback flow.
+    /// Pre-seeds the cached PIN once (Keychain key is per-backendID, so
+    /// it's the same PIN regardless of which URL ends up authenticating)
+    /// and hands the full URL list to `WebSocketClient.connect(toURLs:)`,
+    /// which advances on TCP-fail / auth-timeout.
+    private func connect(session: BackendSession, urls: [URL]) {
+        guard !urls.isEmpty else { return }
         session.reachability = .connecting
-        // Pre-populate the cached PIN so the client auto-replays it on
-        // `auth_required` without prompting. If Keychain is empty, the client
-        // calls `onAuthRequired` below and we surface `.needsAuth` in the UI.
         if let pin = KeychainBackendPINs.read(backendID: session.backendID) {
             session.client.sendAuth(pin: pin)  // sets sessionPIN; safe pre-connect
         }
-        session.client.connect(to: url)
+        session.client.connect(toURLs: urls)
+    }
+
+    /// Build the `urlsInOrder` list for a paired backend, dropping any
+    /// entries that don't parse as URLs. Used by every connect callsite.
+    private func urlList(for backend: PairedBackend) -> [URL] {
+        backend.urlsInOrder.compactMap { URL(string: $0) }
     }
 
     /// Wire every client callback to fan out: (1) update the session's slice,

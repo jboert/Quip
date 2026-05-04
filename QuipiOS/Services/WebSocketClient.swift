@@ -219,6 +219,13 @@ final class WebSocketClient {
     private var session: URLSession?
     private var pinningDelegate: CloudflareCertificatePinningDelegate?
     private var intentionalDisconnect = false
+    /// Full URL list for the current pairing — primary at index 0,
+    /// fallbacks after. Used by the auto-fallback flow: on connect
+    /// failure or auth-timeout, the client advances to the next URL
+    /// in this list and re-establishes. Reset to index 0 on every
+    /// fresh connect call and on NWPathMonitor path-change.
+    private var connectURLs: [URL] = []
+    private var currentURLIndex: Int = 0
     private var reconnectDelay: TimeInterval = 1.0
     private var reconnectTask: Task<Void, Never>?
     private var connectionTimeoutTask: Task<Void, Never>?
@@ -330,14 +337,54 @@ final class WebSocketClient {
     }
 
     func connect(to url: URL) {
+        connect(toURLs: [url])
+    }
+
+    /// Multi-URL connect with auto-fallback. Tries `urls[0]` first; if the
+    /// initial WS handshake fails OR no auth_result lands within
+    /// `authTimeoutSeconds`, advances to `urls[1]` and so on. Used by the
+    /// LAN/Tailscale fallback flow — `BackendConnectionManager` passes the
+    /// merged paired-backend URL list (LAN first, Tailscale fallback).
+    /// Single-URL callers route here via `connect(to:)`.
+    func connect(toURLs urls: [URL]) {
+        guard let first = urls.first else { return }
         intentionalDisconnect = false
-        serverURL = url
+        connectURLs = urls
+        currentURLIndex = 0
+        hasEverConnectedOnCurrentURL = false
+        serverURL = first
         reconnectDelay = 1.0
         lastError = nil
         isConnecting = true
         connectingStartedAt = Date()
-        logEvent("connect(to: \(url.absoluteString))")
+        logEvent("connect(toURLs: \(urls.count) total, primary: \(first.absoluteString))")
         establishConnection()
+    }
+
+    /// Reset the URL pointer so the next reconnect starts from the
+    /// primary again. Called by `BackendConnectionManager` on
+    /// `NWPathMonitor` path-change — after a Wi-Fi join/leave the LAN
+    /// URL may have become reachable again and we want to prefer it.
+    func resetToPrimaryURL() {
+        guard !connectURLs.isEmpty, currentURLIndex != 0 else { return }
+        currentURLIndex = 0
+        if let first = connectURLs.first { serverURL = first }
+        logEvent("resetToPrimaryURL: rewound to index 0")
+    }
+
+    /// Advance to the next URL in `connectURLs`. Returns true if there
+    /// was a next URL to advance to (caller should retry connect),
+    /// false if we exhausted the list (caller falls back to standard
+    /// reconnect-with-backoff on the current URL).
+    @discardableResult
+    private func advanceToNextURL() -> Bool {
+        let nextIndex = currentURLIndex + 1
+        guard nextIndex < connectURLs.count else { return false }
+        currentURLIndex = nextIndex
+        hasEverConnectedOnCurrentURL = false
+        serverURL = connectURLs[nextIndex]
+        logEvent("advanceToNextURL: trying [\(nextIndex)] \(connectURLs[nextIndex].absoluteString)")
+        return true
     }
 
     func disconnect() {
@@ -539,6 +586,7 @@ final class WebSocketClient {
                     self.authError = nil
                     self.lastError = nil
                     self.reconnectDelay = 1.0
+                    self.hasEverConnectedOnCurrentURL = true
                     self.startKeepalive()
                     // Don't send auth eagerly — wait for the server's first
                     // auth_result message which carries the auth_required
@@ -811,6 +859,26 @@ final class WebSocketClient {
         session?.invalidateAndCancel()
         session = nil
 
+        // Multi-URL fallback: if we have unused fallback URLs in the
+        // current pairing's list, try the next one immediately (no
+        // backoff sleep) before falling back to standard reconnect-with-
+        // backoff on whatever URL we end up on. Only kick in if the
+        // current URL never reached `connected` — once a URL has worked
+        // we stick with it across transient failures (don't ping-pong
+        // between LAN and Tailscale on every brief drop).
+        if !connectURLs.isEmpty, currentURLIndex + 1 < connectURLs.count, !hasEverConnectedOnCurrentURL {
+            let advanced = advanceToNextURL()
+            if advanced {
+                logEvent("falling back to next URL immediately")
+                reconnectTask?.cancel()
+                reconnectTask = Task { [weak self] in
+                    guard let self, !Task.isCancelled, !self.intentionalDisconnect else { return }
+                    self.establishConnection()
+                }
+                return
+            }
+        }
+
         logEvent("will reconnect in \(Int(reconnectDelay))s")
 
         let delay = reconnectDelay
@@ -822,4 +890,11 @@ final class WebSocketClient {
             self.establishConnection()
         }
     }
+
+    /// True once the current `serverURL` has reached the `connected` state
+    /// at least once. Reset whenever `advanceToNextURL` flips the URL or
+    /// `connect(toURLs:)` is called fresh. Used by `handleDisconnect` to
+    /// decide whether transient drops should fail-fast over to the next
+    /// URL or reconnect-with-backoff on the current one.
+    private var hasEverConnectedOnCurrentURL = false
 }
