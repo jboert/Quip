@@ -523,6 +523,10 @@ def _synth_with_cached(text: str, voice: str, speed: float, lang: str) -> bytes:
 def _add_prosody_hints(text: str) -> str:
     """Insert commas at natural pause points to help Kokoro breathe.
     Adds pauses before conjunctions and after introductory phrases."""
+    # Pronounce "~5 min" as "about 5 min" instead of "tilda 5 min". Only
+    # rewrites tilde when followed by a digit (with optional whitespace) so
+    # paths like "~/foo" stay alone.
+    text = re.sub(r"~\s*(?=\d)", "about ", text)
     # Add comma before conjunctions when missing (but not if already punctuated)
     text = re.sub(r"(?<=[a-z]) (but|however|although|though|since|because|so that|which means) ",
                   r", \1 ", text)

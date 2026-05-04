@@ -66,37 +66,57 @@ struct BackendPickerSheet: View {
     @ViewBuilder
     private func row(_ backend: PairedBackend) -> some View {
         let isActive = backend.id == manager.activeBackendID
-        Button {
-            if !isActive {
-                manager.setActive(backend.id)
-            }
-            isPresented = false
-        } label: {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(dotColor(isActive: isActive))
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(backend.name.isEmpty ? "Backend" : backend.name)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
-                    Text(backend.url)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+        HStack(spacing: 10) {
+            Circle()
+                .fill(dotColor(isActive: isActive, enabled: backend.enabled))
+                .frame(width: 8, height: 8)
+            Button {
+                if !isActive {
+                    manager.setActive(backend.id)
                 }
-                Spacer()
-                if isActive {
-                    Image(systemName: "checkmark")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tint)
+                isPresented = false
+            } label: {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(backend.name.isEmpty ? "Backend" : backend.name)
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(backend.enabled ? .primary : .secondary)
+                        Text(backend.url)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 4)
+                    if isActive {
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tint)
+                    }
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+
+            // Auto-connect toggle — gated behind a button so a stray tap on
+            // the row body doesn't disable the only live backend. Bolt icon
+            // matches the "live socket" mental model.
+            Button {
+                manager.setEnabled(backend.id, !backend.enabled)
+            } label: {
+                Image(systemName: backend.enabled ? "bolt.fill" : "bolt.slash")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(backend.enabled ? Color.accentColor : .secondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(backend.enabled ? "Disconnect" : "Connect")
         }
     }
 
-    private func dotColor(isActive: Bool) -> Color {
+    private func dotColor(isActive: Bool, enabled: Bool) -> Color {
+        if !enabled { return .secondary.opacity(0.25) }
         if isActive { return isActiveConnected ? colors.statusConnected : .yellow }
         return .secondary.opacity(0.4)
     }

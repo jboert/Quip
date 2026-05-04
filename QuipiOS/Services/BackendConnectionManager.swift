@@ -146,20 +146,50 @@ final class BackendConnectionManager {
     // MARK: - Lifecycle
 
     /// Read persisted paired backends, spawn one client per entry, kick off
-    /// auto-connect for any whose PIN is in Keychain. Run once on launch from
-    /// `MainiOSView.setup()` after `loadPaired()`.
+    /// auto-connect for entries the user has marked `enabled`. Run once on
+    /// launch from `MainiOSView.setup()` after `loadPaired()`.
     func bootstrap() {
         for backend in paired {
             let session = BackendSession(backendID: backend.id, client: WebSocketClient())
             wire(session: session)
             sessions[backend.id] = session
-            if let url = URL(string: backend.url) {
+            if backend.enabled, let url = URL(string: backend.url) {
                 connect(session: session, url: url)
             }
         }
         if activeBackendID.isEmpty, let first = paired.first {
             activeBackendID = first.id
         }
+    }
+
+    /// Toggle whether a paired backend keeps a live connection. Called from
+    /// the picker sheet's per-row power button. Disabling drops the socket
+    /// but keeps the entry in `paired` so the user can re-enable later
+    /// without re-pairing. Enabling spins up a fresh connection.
+    func setEnabled(_ id: String, _ enabled: Bool) {
+        guard let i = paired.firstIndex(where: { $0.id == id }) else { return }
+        guard paired[i].enabled != enabled else { return }
+        paired[i].enabled = enabled
+        savePaired()
+
+        guard let session = sessions[id] else { return }
+        if enabled {
+            if let url = URL(string: paired[i].url) {
+                primePINIfPresent(session: session)
+                connect(session: session, url: url)
+            }
+        } else {
+            session.client.disconnect()
+            session.reachability = .unreachable
+        }
+    }
+
+    /// Pre-load the cached PIN for a session so the client can auto-replay it
+    /// once the socket is up. Same idea as `primeActivePIN` but scoped to a
+    /// specific session — used when (re)enabling a non-active backend.
+    private func primePINIfPresent(session: BackendSession) {
+        guard let pin = KeychainBackendPINs.read(backendID: session.backendID) else { return }
+        session.client.sendAuth(pin: pin)
     }
 
     /// Pair a new backend — caller is responsible for prompting for a PIN and
@@ -184,19 +214,36 @@ final class BackendConnectionManager {
         savePaired()
     }
 
-    /// Hot-model switch: pure UI flip. Every paired backend already has a
-    /// live `WebSocketClient` thanks to `bootstrap()` / `ensureImplicitDefault`,
-    /// so swapping `activeBackendID` is what makes the new backend the one
-    /// the UI displays. Returns true if the switch was issued.
+    /// Forget a backend — disconnect, drop session and Keychain PIN, remove
+    /// from `paired`. If we just removed the active backend, fall back to the
+    /// first remaining one.
+    func remove(_ id: String) {
+        sessions[id]?.client.disconnect()
+        sessions.removeValue(forKey: id)
+        KeychainBackendPINs.delete(backendID: id)
+        paired.removeAll { $0.id == id }
+        if activeBackendID == id {
+            activeBackendID = paired.first?.id ?? ""
+        }
+        savePaired()
+    }
+
+    /// Hot-model switch: pure UI flip when the target is enabled (the live
+    /// client is already up). If the target is disabled, also enable it and
+    /// kick off a fresh connection — picking a backend from the switcher
+    /// implies "I want to use this one now." Returns true if the switch was
+    /// issued.
     @discardableResult
     func setActive(_ id: String) -> Bool {
         guard activeBackendID != id,
-              sessions[id] != nil else { return false }
-        activeBackendID = id
-        if let i = paired.firstIndex(where: { $0.id == id }) {
-            paired[i].lastUsed = Date()
-            savePaired()
+              sessions[id] != nil,
+              let i = paired.firstIndex(where: { $0.id == id }) else { return false }
+        if !paired[i].enabled {
+            setEnabled(id, true)
         }
+        activeBackendID = id
+        paired[i].lastUsed = Date()
+        savePaired()
         return true
     }
 
@@ -272,10 +319,24 @@ final class BackendConnectionManager {
     // MARK: - Persistence
 
     func loadPaired() {
-        let raw = UserDefaults.standard.data(forKey: "pairedBackendsData") ?? Data()
+        let defaults = UserDefaults.standard
+        let raw = defaults.data(forKey: "pairedBackendsData") ?? Data()
         if let decoded = try? JSONDecoder().decode([PairedBackend].self, from: raw), !decoded.isEmpty {
             paired = decoded
-            activeBackendID = UserDefaults.standard.string(forKey: "activeBackendID") ?? decoded.first?.id ?? ""
+            activeBackendID = defaults.string(forKey: "activeBackendID") ?? decoded.first?.id ?? ""
+            // First-launch migration: before this build all paired backends
+            // auto-connected, which produced multiple parallel sockets to the
+            // same Mac (e.g. one Bonjour entry + one Tailscale entry both
+            // resolving via Tailscale). Drop everyone except the active to
+            // disabled exactly once; the user re-enables the ones they want.
+            if !defaults.bool(forKey: "pairedEnabledMigrationV1Done") {
+                let activeID = activeBackendID
+                for i in paired.indices {
+                    paired[i].enabled = (paired[i].id == activeID)
+                }
+                defaults.set(true, forKey: "pairedEnabledMigrationV1Done")
+                savePaired()
+            }
             return
         }
         // Migrate from the legacy single-backend layout: `lastURL` holds one
@@ -283,11 +344,12 @@ final class BackendConnectionManager {
         // the manager will rekey it once the daemon's `device_identity`
         // arrives. The PIN is NOT migrated — old code only kept it
         // session-scoped, so the user re-enters it once.
-        let legacyURL = UserDefaults.standard.string(forKey: "lastURL") ?? ""
+        let legacyURL = defaults.string(forKey: "lastURL") ?? ""
         if !legacyURL.isEmpty {
             let id = "legacy-\(UUID().uuidString)"
             paired = [PairedBackend(id: id, url: legacyURL, name: "Backend")]
             activeBackendID = id
+            defaults.set(true, forKey: "pairedEnabledMigrationV1Done")
             savePaired()
         }
     }

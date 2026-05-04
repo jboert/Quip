@@ -63,26 +63,30 @@ final class TailscaleService {
         // Path 2: auto-detect — run the CLI off the main actor.
         Task.detached(priority: .userInitiated) { [weak self] in
             let result = Self.detectViaCLI()
-            await MainActor.run {
-                guard let self else { return }
-                // Bail if a newer refresh() has been started.
-                guard self.generation == myGen else { return }
-                switch result {
-                case .success(let detectedHost):
-                    let port = UserDefaults.standard.integer(forKey: "wsPort")
-                    self.publish(
-                        hostname: detectedHost,
-                        port: port > 0 ? port : Self.defaultPort,
-                        error: nil,
-                        generation: myGen
-                    )
-                case .failure(let error):
-                    self.hostname = ""
-                    self.webSocketURL = ""
-                    self.isAvailable = false
-                    self.lastError = error.message
-                }
-            }
+            await self?.applyDetection(result, generation: myGen)
+        }
+    }
+
+    /// MainActor handoff for the detached CLI runner. Pulled out into its own
+    /// method so the closure body doesn't have to send `self` across actor
+    /// boundaries — Swift 6 flagged the previous inlined form as a data race.
+    private func applyDetection(_ result: Result<String, DetectionError>, generation myGen: Int) {
+        // Bail if a newer refresh() has been started.
+        guard self.generation == myGen else { return }
+        switch result {
+        case .success(let detectedHost):
+            let port = UserDefaults.standard.integer(forKey: "wsPort")
+            self.publish(
+                hostname: detectedHost,
+                port: port > 0 ? port : Self.defaultPort,
+                error: nil,
+                generation: myGen
+            )
+        case .failure(let error):
+            self.hostname = ""
+            self.webSocketURL = ""
+            self.isAvailable = false
+            self.lastError = error.message
         }
     }
 

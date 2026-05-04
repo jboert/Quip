@@ -7,7 +7,11 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    SWIFT_VERSION: "6.0"
+    # Stay on Swift 5 language mode for the iOS target. Local builds use
+    # Xcode 26 which relaxed many Swift-6-mode isolation errors back to
+    # warnings, but CI's Xcode 16.4 still treats them as hard errors and
+    # there are too many call sites to retrofit safely right now.
+    SWIFT_VERSION: "5"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     SWIFT_STRICT_CONCURRENCY: minimal
 targets:
@@ -129,3 +133,4 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quip"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_STRICT_CONCURRENCY: minimal
