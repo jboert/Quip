@@ -2,6 +2,49 @@
 
 Future features, improvements, and known bugs tracked for eventual implementation. Each item here is a candidate for a GitHub issue or sprint work. When you're ready to implement one, it should graduate to a spec in `docs/superpowers/specs/` and a plan in `docs/superpowers/plans/`, then land as a commit on a working branch.
 
+---
+
+## Session log — 2026-05-04 (autonomous burn-down)
+
+20 commits on `eb-branch` (not pushed). Started after `64a8376` (§44 iOS WS resilience). Sequence:
+
+| Section | Status | Commit | Hardware-tested |
+|---------|--------|--------|-----------------|
+| §45 Mac NWPath + stall watchdog | ✅ | `352be75` | yes (Mac) |
+| PTT lifecycle fix (pauseMonitoring split + 100ms suppression) | ✅ | `efb49c7` | yes (iPhone) |
+| PTT route-change hardware-only filter + telemetry | ✅ | `149bcf6` | yes (iPhone) |
+| §46 iOS Connection diagnostics panel | ✅ | `6668893` | yes (iPhone) |
+| §47 Image upload encoder | ✅ then reverted | `684956b` → `2097684` | yes (failed → fixed) |
+| §48 Mac menubar last-event + tunnel state | ✅ | `45346ed` | yes (Mac) |
+| §49 Diagnostics bundle (Mac share + iOS request) | ✅ | `d0a69bc` | yes (both) |
+| §B1 Custom Buttons scroll-conflict fix | ✅ | `067c0a2` | yes (iPhone) |
+| §53 v1 Apple Watch glance | ✅ | `a2c977b` | install only — needs Watch verify |
+| §50 v1 QR pairing | ✅ | `a52ad4f` | install only — needs end-to-end pair |
+| §57 v1 Mac prompt library + Stream Deck importer | ✅ | `ad4fb57` | yes (both) |
+| §57 v2 iPhone prompt editor (create/edit/delete) | ✅ | `fcd2ba1` | install only — needs verify |
+| §B3 Prompts as keyboard quick-buttons | ✅ | `2ec3ed9` | install only — needs verify |
+
+**Test still owed by user:**
+- Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
+- QR pairing: scan from iPhone qrcode.viewfinder → connects without typing.
+- iPhone-side prompt create / edit / delete (swipe actions, + button).
+- Prompts as keyboard pills (purple chip in Quick Buttons row, tap pastes, long-press paste-and-submits).
+
+**Still in backlog (need user input or hardware):**
+- §51 iCloud KVS sync of paired backends — needs second device.
+- §52 iPad layout — needs iPad.
+- §54 Wake-word PTT — open stack decision (SFSpeech / Picovoice / on-device Whisper).
+- §55 Clipboard sync (Mac↔iPhone) — open privacy decision (default-on vs default-off).
+- §56 Voice macros ("ship it" → multi-step) — open UX decision.
+
+**v2 follow-ups deferred from this session:**
+- §49 redact tunnel URLs / device tokens before share (TODO marker in code).
+- §53 v2: complication via WidgetKit, slash-button send-back from wrist, per-window vs all-windows toggle.
+- §50 v2: TTL on QR payload, mid-pairing UX, universal-link entry from Mail/Messages.
+- §57 v2 (after current): chains support (multi-step prompts), search/filter when catalog grows past one screen.
+
+---
+
 **Maintenance rules:**
 
 - Every item has a **Title**, **Status**, **Context**, and (optionally) a link to its spec/plan once one exists.
