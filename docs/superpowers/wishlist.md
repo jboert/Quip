@@ -1083,6 +1083,31 @@ Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glanc
 
 ---
 
+### 50. QR pairing — Mac shows QR, iPhone scans (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1 on `eb-branch` — commit `a52ad4f`. Built clean for both schemes; installed to Tim apple 17 and Mac.
+
+**Decisions taken (defaults — autonomously chosen):**
+- Payload format: `quip://pair?url=<base64>&pin=<6digits>` URL scheme (re-uses the already-registered `quip` scheme in `project.yml:62`).
+- No TTL/auto-rotate. PIN regenerate already exists; the QR re-renders whenever the PIN or tunnel URL changes (both @Observable).
+- Re-uses the existing iOS QR scanner (`QRScannerView` already wired via the qrcode.viewfinder button in the URL bar).
+
+**What shipped:**
+- `Shared/PairingPayload.swift` — Codable struct + `encodedURL()` / `decode(_:)`. Strips base64 padding for shorter QRs; tolerates missing padding on decode.
+- `QuipMac/Views/SettingsView.swift` SecurityTab — new "Pair iPhone" section with a 160×160 QR (CIQRCodeGenerator, errorCorrection=M), plus URL + PIN shown alongside for fallback typing. `pairingURL()` picks the Cloudflare tunnel URL when up, else local `ws://<host>.local:8765`.
+- `QuipiOS/QuipApp.swift` — QR scanner callback first tries `PairingPayload.decode(code)`. On match: `manager.addPaired(url:)` → write PIN to Keychain under the new id → `setActive` → `doConnect`. Falls back to legacy "treat as raw URL" if the decode returns nil so existing QR-of-URL workflows still work.
+
+**Acceptance test:** Mac → Settings → Security → see QR. iPhone → tap qrcode.viewfinder in URL bar → point at Mac → connection bar flips to "Connected" within ~2s without typing anything.
+
+**Deferred to v2:**
+- TTL / payload-aging — currently a stale QR works forever (or until PIN rotates).
+- Mid-pairing UX (show "Scanning…" spinner; haptic on detection).
+- Universal-link entry — URL scheme is registered, so `quip://pair?...` could be opened from Mail/Messages without the scanner.
+
+**Related:** `Shared/PairingPayload.swift`, `QuipMac/Views/SettingsView.swift:882-1010`, `QuipiOS/QuipApp.swift:1016-1040`.
+
+---
+
 ### 53. Apple Watch glance — per-window state + haptics (✅ Done v1, eb-branch)
 
 **Status:** ✅ Done v1 on `eb-branch` — commit `a2c977b`. Built clean against iOS sim (with embedded Watch) and watchOS sim schemes. Installed to Tim apple 17; Watch app auto-installs on Apple Watch Ultra 3 once iOS detects the companion.
