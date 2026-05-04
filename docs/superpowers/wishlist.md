@@ -1309,3 +1309,30 @@ Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bit
 **Files to read first:** `QuipiOS/QuipApp.swift` — search `QuickButtonsSheet`, `CustomButtonForm`, `CustomButton` (struct lives at line 3960).
 
 **Acceptance test once fixed:** Open Settings → Quick Buttons → tap an existing custom button → scroll the edit form smoothly with no gesture conflict; pinch/tap reorders work; symbol picker scrolls independently if separate.
+
+---
+
+### B4. Prompts pasting into wrong window (🔍 Open, deferred)
+
+**Status:** 🔍 Open. User reported 2026-05-04 — after `2884682` shipped, tapping a prompt in the Prompts picker sheet still pastes into a window that doesn't match what the user thinks is "active." Need investigation — likely either Mac-side `handlePastePrompt` ignoring the message's `windowId` and falling back to focused/last-active, or phone-side `selectedWindowId` is stale when the picker fires.
+
+**Files to start with:**
+- `QuipiOS/QuipApp.swift:firePromptSlot` — uses `selectedWindowId`
+- `QuipiOS/QuipApp.swift:promptsPickerButton` — sheet captures `selectedWindowId` at invocation
+- `QuipMac/QuipMacApp.swift:handlePastePrompt` (line ~1144) — verify it actually uses `msg.windowId` and not a fallback
+- Also check `PromptLibrarySheet` (the Settings → Prompts row) for similar bug
+
+**Acceptance test:** Pin window A as active → tap Prompts pill → pick a prompt → verify it lands in window A. Repeat with windows B and C. Background and foreground in between to test if `selectedWindowId` survives lifecycle.
+
+---
+
+### B5. Per-client connection visibility on Mac + iOS (📋 Backlog)
+
+**Status:** 📋 Backlog. User asked for both Mac and iOS to show what client/device is connected.
+
+**Mac side:** list each connected phone's IP/endpoint, auth state, and last activity in Settings → Connection (or wherever fits). Right now there's only `connectedClientCount`, no per-client view.
+
+**iOS side:** in Connection diagnostics panel, show which Mac the phone is connected to + which URL out of the urlsInOrder list is currently active (LAN vs Tailscale).
+
+**Cost:** ~half day per side.
+
