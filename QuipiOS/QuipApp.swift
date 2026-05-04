@@ -42,6 +42,7 @@ struct QuipApp: App {
     @State private var pushRegistration = PushRegistrationService()
     @State private var attentionCenter = WindowAttentionCenter()
     @State private var pushDelegate = PushNotificationCenterDelegate()
+    @State private var watchSync = WatchSyncService()
     @State private var liveActivity = LiveActivityService()
     @State private var prefsSync = PreferencesSyncService()
 
@@ -297,6 +298,12 @@ struct QuipApp: App {
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
+                // Push window snapshot to the paired Apple Watch (no-op if
+                // no watch is paired or the app isn't installed).
+                watchSync.push(windows: update.windows.map {
+                    WatchWindowSyncEntry(id: $0.id, name: $0.name,
+                                         state: $0.state, claudeMode: $0.claudeMode)
+                })
                 if wasEmpty && !update.windows.isEmpty {
                     AppOrientationDelegate.allowAllOrientations = true
                     if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
@@ -367,6 +374,13 @@ struct QuipApp: App {
                         }
                     }
                 }
+                // Push the updated snapshot to the watch so it can vibrate
+                // on the waiting_for_input transition. push() dedupes, so
+                // a no-change layout poll doesn't burn WCSession budget.
+                watchSync.push(windows: windows.map {
+                    WatchWindowSyncEntry(id: $0.id, name: $0.name,
+                                         state: $0.state, claudeMode: $0.claudeMode)
+                })
             }
         }
 
