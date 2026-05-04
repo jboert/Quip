@@ -31,6 +31,7 @@
 		413005C731BCDCED5438E47F /* InlineTerminalContentBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD67F0481CA1F97EEB2F5D7C /* InlineTerminalContentBranchTests.swift */; };
 		46B88647F52CB2FD8C378212 /* dictation-vocab.txt in Resources */ = {isa = PBXBuildFile; fileRef = 38403BB3D3EAD614680767A6 /* dictation-vocab.txt */; };
 		48F28455B8142325D6833C25 /* QuipTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE693F49CD672CFD1507FDC6 /* QuipTheme.swift */; };
+		4C7D01580E10B22147ADF207 /* PairingPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD7110E2035880865BD6C7AB /* PairingPayload.swift */; };
 		4D0689B3D9653512F27A322D /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB84DC38B2B261AB78D9B78 /* BonjourBrowser.swift */; };
 		4DD215CB4746FD0FA6D82DD4 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */; };
 		545F466547A7823805966083 /* TerminalContentOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */; };
@@ -183,6 +184,7 @@
 		F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
 		F37E465512A160C3F0FE0310 /* ImageRecompressorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRecompressorTests.swift; sourceTree = "<group>"; };
 		F7EED90216075AC25A1EDB70 /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
+		FD7110E2035880865BD6C7AB /* PairingPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPayload.swift; sourceTree = "<group>"; };
 		FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocol.swift; sourceTree = "<group>"; };
 		FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTStressTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -318,6 +320,7 @@
 				30CED6C2881B9B0070767205 /* AudioRingBuffer.swift */,
 				0F583D197E23AF06962CE81A /* Constants.swift */,
 				FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */,
+				FD7110E2035880865BD6C7AB /* PairingPayload.swift */,
 				3FC01677A64725213479F75E /* PCMChunker.swift */,
 				6FE3FC3415A512C214E8D8D9 /* PTTWindowTracker.swift */,
 				ED7E3E6E78D3A418103DBD8C /* SeamStitcher.swift */,
@@ -580,6 +583,7 @@
 				81636C8A292C763A850701B8 /* PCMChunker.swift in Sources */,
 				6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */,
 				A83DA871E1C581C5B55B2853 /* PairedBackend.swift in Sources */,
+				4C7D01580E10B22147ADF207 /* PairingPayload.swift in Sources */,
 				046BFBEA924261A691A9EA3B /* PendingImagePreviewStrip.swift in Sources */,
 				F7B32FEF1E1A176C2710D831 /* PendingImageState.swift in Sources */,
 				20FE94C556B5D03097FB0030 /* PreferencesSyncService.swift in Sources */,
