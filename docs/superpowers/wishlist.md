@@ -23,6 +23,8 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §57 v1 Mac prompt library + Stream Deck importer | ✅ | `ad4fb57` | yes (both) |
 | §57 v2 iPhone prompt editor (create/edit/delete) | ✅ | `fcd2ba1` | install only — needs verify |
 | §B3 Prompts as keyboard quick-buttons | ✅ | `2ec3ed9` | install only — needs verify |
+| §B6 addMenu observation-chain leak (re-render mid-tap) | ✅ | _pending_ | install only — needs verify |
+| §B7 Prompts as main-row button option | ✅ | _pending_ | install only — needs verify |
 
 **Test still owed by user:**
 - Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
@@ -1336,3 +1338,25 @@ Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bit
 
 **Cost:** ~half day per side.
 
+
+---
+
+### B6. Quick Buttons "+" menu observation-chain leak (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed. User reported 2026-05-04 — "+ arrow drop down still buggy" after the §2884682 snapshot fix. Root cause: the `addMenu` body still read `client.promptLibrary` directly (`if let cl = client, !cl.promptLibrary.isEmpty`), so every Mac catalog broadcast re-evaluated the entire `QuickButtonsSheet` body during an open Menu, dismissing or jumping it mid-tap. The 2884682 commit cached `promptLabelByID` for the slot row but missed this one read site. Switched the menu's gating to `!promptLabelByID.isEmpty` so the open Menu no longer races with `prompt_library` pushes.
+
+**Files:** `QuipiOS/QuipApp.swift` — `addMenu` (around the existing `Prompt from library…` button).
+
+**Acceptance test:** Settings → Quick Buttons → tap "+" → menu opens and stays open while idle. Trigger a Mac prompt-catalog change (touch a `.txt` under `~/Library/Application Support/Quip/prompts/`) while the menu is still open → the menu does NOT collapse / jump. Tap "Prompt from library…" → picker opens reliably.
+
+---
+
+### B7. Prompts as a main-row button (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1. User asked for Prompts to be available as a main control-row button (alongside chevrons / spawn / arrange / mic / photo / keyboard / return), not only as a Quick Buttons slot. Added `mainRow.prompts` @AppStorage toggle (default OFF — opt-in for existing users); when enabled, a `doc.text.magnifyingglass` button renders in RIGHT cluster 1 next to the Photo button. Tap opens the same MRU-sorted `PromptsQuickPickerSheet` the keyboard pill uses. Sheet is hoisted to `MainiOSView.body` so both the main-row button and the (optional) Quick Buttons pill share one presentation site.
+
+**Toggle location:** Settings → Main Row Buttons → "Prompts".
+
+**Files:** `QuipiOS/QuipApp.swift` — `mainRow.prompts` AppStorage (~line 712), main-row HStack RIGHT cluster 1 (~line 1832), `MainRowButtonsSheet` toggles, hoisted `.sheet(isPresented: $showPromptsPickerSheet)` in body. `promptsPickerButton`'s inline `.sheet` modifier removed (now lives at body).
+
+**Acceptance test:** Settings → Main Row Buttons → enable "Prompts" → main row shows the new button next to Photo (disabled when no prompts, no window, or disconnected). Tap → MRU-sorted prompt picker sheet opens. Tap an entry → text pastes into the active window. Long-press in the sheet → paste-and-submit. Disable the main-row toggle → button disappears; the Quick Buttons "Prompts picker" pill still works if it was placed.

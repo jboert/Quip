@@ -709,6 +709,7 @@ struct MainiOSView: View {
     @AppStorage("mainRow.spawn") private var mainRowSpawn: Bool = true
     @AppStorage("mainRow.arrange") private var mainRowArrange: Bool = true
     @AppStorage("mainRow.photo") private var mainRowPhoto: Bool = true
+    @AppStorage("mainRow.prompts") private var mainRowPrompts: Bool = false
     @AppStorage("mainRow.keyboard") private var mainRowKeyboard: Bool = true
     @AppStorage("mainRow.return") private var mainRowReturn: Bool = true
     @State private var showSettings = false
@@ -1049,6 +1050,18 @@ struct MainiOSView: View {
                 macPermissions: macPermissions,
                 selectedWindowId: selectedWindowId
             )
+        }
+        .sheet(isPresented: $showPromptsPickerSheet) {
+            NavigationStack {
+                PromptsQuickPickerSheet(
+                    entries: sortedPromptsByMRU(),
+                    onPick: { entry, pressReturn in
+                        firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
+                        showPromptsPickerSheet = false
+                    }
+                )
+            }
+            .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showBackendPicker) {
             BackendPickerSheet(
@@ -1828,7 +1841,7 @@ struct MainiOSView: View {
                 }
                 Spacer(minLength: 12)
 
-                // RIGHT cluster 1: photo (input attach)
+                // RIGHT cluster 1: input attach (photo, prompts)
                 HStack(spacing: 6) {
                     if mainRowPhoto {
                         Button {
@@ -1843,10 +1856,25 @@ struct MainiOSView: View {
                         }
                         .accessibilityLabel("Attach image")
                     }
+                    if mainRowPrompts {
+                        let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
+                        Button {
+                            showPromptsPickerSheet = true
+                        } label: {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(canFire ? colors.textPrimary : colors.textFaint)
+                                .frame(width: auxW, height: auxH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .disabled(!canFire)
+                        .accessibilityLabel("Prompts")
+                    }
                 }
 
                 // Visual gap between photo and send-cluster (keyboard/return).
-                if mainRowPhoto && rightSendOn {
+                if (mainRowPhoto || mainRowPrompts) && rightSendOn {
                     Spacer().frame(width: 10)
                 }
 
@@ -3138,18 +3166,9 @@ struct MainiOSView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canFire)
-        .sheet(isPresented: $showPromptsPickerSheet) {
-            NavigationStack {
-                PromptsQuickPickerSheet(
-                    entries: sortedPromptsByMRU(),
-                    onPick: { entry, pressReturn in
-                        firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
-                        showPromptsPickerSheet = false
-                    }
-                )
-            }
-            .presentationDetents([.medium, .large])
-        }
+        // Sheet is hoisted to MainiOSView.body (`promptsPickerSheet` modifier)
+        // so the main-row Prompts button can also present it when this slot
+        // pill isn't placed in the Quick Buttons row.
     }
 
     /// Decode the per-device MRU map and return the catalog in MRU order
@@ -4720,6 +4739,7 @@ struct MainRowButtonsSheet: View {
     @AppStorage("mainRow.spawn") private var spawn: Bool = true
     @AppStorage("mainRow.arrange") private var arrange: Bool = true
     @AppStorage("mainRow.photo") private var photo: Bool = true
+    @AppStorage("mainRow.prompts") private var prompts: Bool = false
     @AppStorage("mainRow.keyboard") private var keyboard: Bool = true
     @AppStorage("mainRow.return") private var pressReturn: Bool = true
 
@@ -4731,6 +4751,7 @@ struct MainRowButtonsSheet: View {
                 Toggle(isOn: $spawn) { Label("Spawn New Window", systemImage: "plus") }
                 Toggle(isOn: $arrange) { Label("Arrange Layout", systemImage: "rectangle.3.group") }
                 Toggle(isOn: $photo) { Label("Attach Image", systemImage: "photo") }
+                Toggle(isOn: $prompts) { Label("Prompts", systemImage: "doc.text.magnifyingglass") }
                 Toggle(isOn: $keyboard) { Label("Keyboard Toggle", systemImage: "keyboard") }
                 Toggle(isOn: $pressReturn) { Label("Press Return", systemImage: "return") }
             } footer: {
@@ -5237,7 +5258,10 @@ struct QuickButtonsSheet: View {
                 } label: {
                     Label("Spacer", systemImage: "arrow.left.and.right")
                 }
-                if let cl = client, !cl.promptLibrary.isEmpty {
+                // Read cached snapshot, not `client.promptLibrary` — direct
+                // access re-observed every Mac catalog broadcast and re-rendered
+                // the whole sheet, closing/jumping the open Menu mid-tap.
+                if !promptLabelByID.isEmpty {
                     Button {
                         showPromptPicker = true
                     } label: {
