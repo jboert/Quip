@@ -920,6 +920,17 @@ struct QuipMacApp: App {
                 handlePastePrompt(msg)
             }
 
+        case "put_prompt":
+            if let msg = MessageCoder.decode(PutPromptMessage.self, from: data) {
+                _ = promptLibrary.put(id: msg.id, label: msg.label, body: msg.body)
+                // FS watcher will rescan + re-broadcast; nothing to ack.
+            }
+
+        case "delete_prompt":
+            if let msg = MessageCoder.decode(DeletePromptMessage.self, from: data) {
+                _ = promptLibrary.delete(id: msg.id)
+            }
+
         case "register_push_device":
             if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
                 appendPushDiagnostic("register_push_device: \(msg.deviceToken.prefix(8)) env=\(msg.environment)")
