@@ -200,6 +200,19 @@ final class WebSocketServer {
                     : AuthResultMessage(success: true, error: nil)
                 KokoroTTSDebug.log(requireAuthNow ? "WS sending auth_required" : "WS sending auth_result success (no auth required)")
                 self.send(signalMsg, to: connection)
+                // Send DeviceIdentityMessage so the phone can rekey its
+                // paired-backend row to this Mac's stable UUID. Normally
+                // sent inside handleAuthMessage on PIN success — but the
+                // no-PIN path skips that entirely, so phone never sees
+                // device_identity and same-Mac dedupe (Bonjour vs
+                // Tailscale) can't run.
+                if !requireAuthNow {
+                    self.send(DeviceIdentityMessage(
+                        deviceID: Self.deviceID(),
+                        deviceKind: "mac",
+                        displayName: Host.current().localizedName ?? "Mac"
+                    ), to: connection)
+                }
                 self.receiveMessage(on: connection)
                 Self.wslog("Sent auth signal, starting receiveMessage")
                 let remoteStr = String(describing: connection.endpoint)
@@ -213,6 +226,16 @@ final class WebSocketServer {
                         remote: remoteStr,
                         detail: requireAuthNow ? "awaiting PIN" : "no PIN required"
                     )
+                    // requireAuth=false path bypasses handleAuthMessage,
+                    // so onClientAuthenticated would never fire and the
+                    // host's "send initial layout / permissions /
+                    // prompt_library" handler never runs. Fire it here
+                    // for the no-PIN case so phones get their catalog
+                    // exactly the same way they would on a PIN-required
+                    // server.
+                    if !requireAuthNow {
+                        self.onClientAuthenticated?()
+                    }
                 }
             case .failed(let error):
                 Self.wslog("Connection FAILED: \(error)")
