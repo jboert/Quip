@@ -928,3 +928,155 @@ Diagnosed autonomously via a Node.js fake-iOS-client (`/tmp/quip-content-probe.j
 **Acceptance test:** Settings → Quick Buttons → "+" → Custom Button → label "/btw", payload Slash `/btw `, auto-submit off → Save → row shows `/btw` pill → tap fires the slash text into Claude. Drag a Spacer between two pills → 12pt gap appears in the row. Reinstall the app via `devicectl` → editor reopens with the same slots + custom defs.
 
 **Related:** `QuipiOS/QuipApp.swift` (QuickSlot, CustomButton, QuickButtonsSheet, CustomButtonForm), `QuipiOS/Services/PreferencesSyncService.swift`, `Shared/MessageProtocol.swift:502+`.
+
+---
+
+### 44. iOS WS resilience — NWPathMonitor + stall watchdog + Reset button (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `64a8376`. Installed on iPhone 17 Pro Max. Confirmed working by user 2026-05-03.
+
+**What shipped (`QuipiOS/Services/WebSocketClient.swift`, `BackendConnectionManager.swift`, `QuipApp.swift`):**
+
+1. **`NWPathMonitor` auto-reconnect.** When the OS reports the network path becomes satisfied (WiFi roam, VPN flap, brief offline → back online), if we're disconnected and not intentionally torn down, the client cancels its pending exponential-backoff sleep, resets `reconnectDelay` to 1s, and calls `establishConnection()` immediately. `URLSessionWebSocketTask` does not surface OS-level path events, so the client previously sat in its 10s backoff sleep until the user nudged it.
+
+2. **Stall watchdog (`stuckWatchdogTask`).** Wakes every 5s. If `isConnecting == true` for more than 25s (`stuckThresholdSec`) without progress, sets `lastError = "Stalled <n>s — resetting"` and force-runs `handleDisconnect()` to start over. Belt-and-suspenders for the rare case where `URLSession`'s pingHandler never fires *and* the 8s `connectionTimeoutTask` somehow doesn't trip — the previous code had no escape hatch from that zombie state.
+
+3. **One-tap Reset button.** Connection bar gains an `arrow.clockwise.circle` button next to the X, visible only when `!client.isConnected && client.serverURL != nil`. Tap = `disconnect() + connect(serverURL)`. Replaces the "force-quit Quip from app switcher" recovery path.
+
+4. **Diagnostic ring buffer (`connectionEvents: [String]`, last 30 entries).** Every lifecycle transition (connect, ping success/fail, keepalive miss, disconnect, watchdog trip, NWPath state change) appends a timestamped line. Exposed via `recentConnectionEvents` for an in-app diag panel — UI not built yet, ring buffer is in place.
+
+5. **Keepalive miss surfaces to UI.** Each missed pong now sets `lastError = "No pong (1/2)"` then `(2/2)` so the existing red text under the status bar acts as a live socket-health indicator. No new UI plumbing.
+
+6. **`teardownDiagnostics()`** — `BackendConnectionManager.forget()` now calls this to cancel the `NWPathMonitor` and stop the watchdog `Task` cleanly when a paired backend is removed, preventing per-pruned-backend leaks of background subscribers.
+
+**Worst-case detection times before → after:**
+- Network blip / WiFi roam: until next user action → ~immediate (NWPath kick).
+- Zombie URLSession (no callback): forever → ≤30s (watchdog 5s tick + 25s threshold).
+- Keepalive one-sided drop: ~26s → ~26s (unchanged; previously silent, now visible via "No pong (n/2)").
+- App foreground after suspend: ~2s probe (unchanged; existing `resumeFromBackground`).
+
+**Acceptance test:**
+- Toggle WiFi off then on with the Quip app open → bar should auto-reconnect within ~1s of WiFi returning, no manual Reset tap needed.
+- `pkill Quip` on the Mac with the iPhone connected → bar shows `No pong (1/2)`, then `(2/2)`, then begins reconnect attempts. After Mac restart, NWPath is unaffected so reconnect waits on the normal exponential backoff.
+- If the bar is ever stuck on "Connecting…" >25s, watchdog should auto-tear-down and re-establish; the new Reset button is the manual override.
+
+**Open follow-ups:**
+- Build an in-app "Connection diagnostics" panel that renders `client.recentConnectionEvents` (last 30 timestamped lifecycle lines). Likely under Settings → Network. Useful for users who ask "what happened just now?" without needing a Mac for log capture.
+- Add a Mac-side counterpart for the Cloudflare tunnel — same NWPathMonitor + watchdog idea on `CloudflareTunnel.swift`.
+
+**Related:** `QuipiOS/Services/WebSocketClient.swift` (init, startPathMonitor, startStuckWatchdog, logEvent, teardownDiagnostics), `QuipiOS/Services/BackendConnectionManager.swift` (forget), `QuipiOS/QuipApp.swift` (connection-bar Reset button).
+
+---
+
+### 45. Mac CloudflareTunnel: NWPathMonitor + stall watchdog parity (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `352be75`. Built clean against macOS scheme.
+
+**Why:** Mirror the iOS WS resilience (§44 / `64a8376`) onto the Mac's tunnel. Same root failure: a network-path flap (Wi-Fi roam, ethernet unplug, VPN flap) leaves cloudflared running but with stranded edge connections. The fixed timers (1s URL poll, 60s health check, 3s post-death restart) catch process death only — they don't notice "alive but no edge."
+
+**What shipped (`QuipMac/Services/CloudflareTunnel.swift`):**
+
+1. `NWPathMonitor` — on path-satisfied, if `isRunning && publicURL.isEmpty`, force a tunnel restart instead of waiting for the next minute-long health-check tick.
+2. `stuckWatchdogTimer` — 5s tick. If the in-flight `start()` has been running >30s without resolving `publicURL`, kill cloudflared and restart. Edge resolution should take 1-3s in steady state; 30s means something is wedged.
+3. `connectionEvents` ring (last 30 timestamped lifecycle lines, exposed as `recentConnectionEvents`). Feeds §48 (menubar last-event indicator).
+4. `restartTunnel()` helper unifies path-monitor and watchdog recovery paths; `teardownDiagnostics()` lets `stop()` clean both subscribers.
+5. `logEvent()` is `internal` (not `private`) so tests can drive the ring buffer without spinning up cloudflared.
+
+**Acceptance test:** Toggle Wi-Fi off then on with Quip Mac running → menubar tunnel row should show "resolving…" briefly, then green + URL within ~1s of network coming back. Without this commit, the same toggle would leave the tunnel dead until the next 60s health check or process death.
+
+**Related:** `QuipMac/Services/CloudflareTunnel.swift:32-40,140-260` (new fields + helpers + lifecycle).
+
+---
+
+### 46. iOS Connection diagnostics panel (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `6668893`.
+
+**Why:** `WebSocketClient.recentConnectionEvents` (added in §44) was being collected but had no UI. Users still had to plug into a Mac and tail device logs to see what happened during a stuck-on-Connecting state.
+
+**What shipped (`QuipiOS/QuipApp.swift`):**
+- New `Section { Diagnostics }` in `SettingsSheet` with a `NavigationLink` to `ConnectionDiagnosticsSheet`. Inline summary shows live event count.
+- `ConnectionDiagnosticsSheet` view with two sections: Current state (Connected, Authenticated, Server, Last error — color-coded), and Recent events (last 30 timestamped lines, monospaced, newest first, text-selectable, with a Copy button that dumps the buffer to the pasteboard).
+
+**Acceptance test:** Open Settings → Diagnostics → Connection diagnostics → see ≥3 events from app launch. Toggle Wi-Fi off → re-open → see "network path unsatisfied" and "will reconnect in Ns" entries. Tap Copy → paste into Notes → verify formatted timestamp + message lines.
+
+**Related:** `QuipiOS/QuipApp.swift:4214-4232` (Settings link), `QuipiOS/QuipApp.swift:5135-5210+` (`ConnectionDiagnosticsSheet`).
+
+---
+
+### 47. iOS image upload: HEIC encode for size (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `684956b`. Tests pass on iPhone 17 Pro simulator.
+
+**Why:** Image uploads were always PNG (lossless, fat) or JPEG-0.95 (lossy, no alpha). Switching to HEIC at quality 0.85 cuts a typical photo payload by 50-70% — same Mac decode path (`ImageUploadHandler.swift:16,40,67` already accepts HEIC via the magic-byte sniff), so no protocol bump.
+
+**Pivot from WebP:** WebP encode via `CGImageDestination` wasn't shipped until iOS 18; project targets iOS 17. HEIC encode has been available since iOS 11 and is what the iPhone camera roll already uses by default.
+
+**What shipped:**
+- New `QuipiOS/Services/UIImage+HEIC.swift` — `heicData(quality:)` extension using `ImageIO + CGImageDestination + UTType.heic`. Returns nil on platforms or color spaces the encoder can't represent.
+- `QuipiOS/QuipApp.swift:1986-2008` — `sendPendingImageIfNeeded` tries HEIC first, falls back to PNG (declared image/png) or JPEG-0.95 in that order.
+- New tests in `QuipiOS/Tests/UIImageHEICTests.swift`: HEIC produces valid `ftyp` magic at offset 4; HEIC@0.85 beats JPEG@0.95 on a noisy gradient.
+
+**Acceptance test:** Pick a 4032×3024 photo from camera roll → tap send → spinner clears noticeably faster than before; on the Mac, the dropped file in `~/Library/Caches/Quip/uploads/` is `.heic` and ~50% the size of the equivalent JPEG.
+
+**Related:** `QuipiOS/Services/UIImage+HEIC.swift`, `QuipiOS/QuipApp.swift:1986-2008`, `QuipiOS/Tests/UIImageHEICTests.swift`.
+
+---
+
+### 48. Mac menubar: last-event indicator + tunnel state (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `45346ed`.
+
+**Why:** `MenuBarExtra` showed only the client-count string. Two more rows (Cloudflare tunnel health and the latest `ConnectionLog` event) plus a three-color status dot make the popover answer "is anything alive right now" at a glance, no Settings drill-down.
+
+**What shipped:**
+- `QuipMac/Views/MenuBarView.swift` — three-color statusIndicator dot (green/yellow/red), tunnel row (green when URL resolved, yellow when resolving), last-event row (icon + relative time via `RelativeDateTimeFormatter`).
+- `QuipMac/QuipMacApp.swift` — `ConnectionLog` and `CloudflareTunnel` now injected into the `MenuBarExtra` environment block (previously Settings-only).
+
+**Acceptance test:** With Quip Mac running and phone connected → menubar dot is green, popover shows "Active", tunnel row shows green + truncated subdomain, last-event row shows "authSucceeded · just now". Disconnect phone → popover updates within ~1s to show "Listening" + last-event "disconnected · just now".
+
+**Related:** `QuipMac/Views/MenuBarView.swift:6-14,52-90,116+`, `QuipMac/QuipMacApp.swift:94-102`.
+
+---
+
+### 49. Bundle-and-share diagnostics from Mac + iOS request path (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `d0a69bc`. All 3 `DiagnosticsBundleTests` pass on macOS host.
+
+**Why:** When a user reports a bug, the cycle was "tail this for me, then this one, then this one." This collapses it to one tap.
+
+**What shipped:**
+
+Mac side — Settings → Diagnostics tab (8th tab, stethoscope icon):
+- "Reveal in Finder" opens `~/Library/Logs/Quip/`.
+- "Bundle and share…" zips the three logs (`websocket.log`, `push.log`, `kokoro.log`) plus `system-info.txt` to `/tmp` via `/usr/bin/zip`, then opens `NSSharingServicePicker` (AirDrop, Mail, Messages, Save).
+
+iOS side — Settings → Diagnostics → Connection diagnostics → "Get Mac logs" button:
+- Sends new `RequestDiagnosticsMessage`.
+- Mac handler `handleRequestDiagnostics()` calls `DiagnosticsBundle.makeZip(maxBytes: 4 MiB)`, base64-encodes, ships back as `DiagnosticsBundleMessage`.
+- iOS receives, writes the zip to Documents, surfaces a Share button → `UIActivityViewController` → AirDrop to Mac becomes the one-tap "send Erick the logs" path.
+
+New shared types in `Shared/MessageProtocol.swift`:
+- `RequestDiagnosticsMessage` (type=`request_diagnostics`, empty body).
+- `DiagnosticsBundleMessage` (type=`diagnostics_bundle`, filename, sizeBytes, base64 data, optional errorReason for oversize-cap rejections).
+
+New helper `QuipMac/Services/DiagnosticsBundle.swift`:
+- `makeZip(maxBytes:)` writes `Quip-diagnostics-YYYYMMDD-HHMMSS.zip` to `NSTemporaryDirectory`. Tolerates missing log files. Throws `.overSizeCap` when bundle exceeds the WS-path budget.
+- `systemInfoText()` pinned in tests so future refactors don't drop fields (App version, macOS, Architecture, Uptime).
+- `presentSharePicker(zipURL:anchor:)` wraps `NSSharingServicePicker`.
+
+iOS `DiagnosticsShareSheet` `UIViewControllerRepresentable` wraps `UIActivityViewController` for the SwiftUI sheet.
+
+**Acceptance test (Mac):** Settings → Diagnostics → Bundle and share… → AirDrop sheet appears → drop on another device → unzips to 3 `.log` files + `system-info.txt`.
+
+**Acceptance test (iOS):** Settings → Diagnostics → Connection diagnostics → Get Mac logs → status shows "Bundle ready (NN KB)" → tap Share → `UIActivityViewController` lists AirDrop / Mail / Messages.
+
+**TODO (deferred):** Redact tunnel URLs / device tokens before share. Comment marker in `DiagnosticsBundle.swift`; current data is already in the user's own home dir, so the leak is share-action-only.
+
+**Related:** `QuipMac/Services/DiagnosticsBundle.swift`, `QuipMac/Views/SettingsView.swift:46-49,978+` (DiagnosticsTab), `QuipMac/QuipMacApp.swift:894-895,1077+` (handler), `Shared/MessageProtocol.swift:430-470` (new types), `QuipiOS/Services/WebSocketClient.swift:202-205,710-715` (onDiagnosticsBundle wiring), `QuipiOS/QuipApp.swift:5135-5260+` (Get Mac logs UI).
+
+---
+
+### Boundary marker — autonomous loop halts here, awaiting user input
+
+Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glance, wake-word PTT, clipboard sync, voice macros) all need user decisions, multi-device hardware testing, or new Xcode targets — see plan file at `~/.claude/plans/plan-to-do-eacn-glowing-oasis.md` for the full open-questions list per ticket.
