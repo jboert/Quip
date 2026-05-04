@@ -1083,9 +1083,35 @@ Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glanc
 
 ---
 
-### 53. Apple Watch glance — Claude state + dismiss notification (📋 Backlog)
+### 53. Apple Watch glance — per-window state + haptics (✅ Done v1, eb-branch)
 
-**Status:** 📋 Backlog. User has Apple Watch Ultra 3 paired (per memory). Needs new WatchKit App + Extension targets in `QuipiOS/project.yml` plus signing setup (Fintech Adventures team `D2PM6R797Q` already has the entitlement).
+**Status:** ✅ Done v1 on `eb-branch` — commit `a2c977b`. Built clean against iOS sim (with embedded Watch) and watchOS sim schemes. Installed to Tim apple 17; Watch app auto-installs on Apple Watch Ultra 3 once iOS detects the companion.
+
+**v1 shipped:**
+- New `QuipWatch` target (single-target watchOS `application` via xcodegen, embedded into the iOS app).
+- `QuipiOS/Services/WatchSyncService.swift` — WCSessionDelegate that pushes the active Mac's window snapshot to the wrist. Live channel (`sendMessage`) when reachable, falls back to `updateApplicationContext`. Dedupes against last payload so layout polls with no diff don't burn budget.
+- `QuipiOS/QuipApp.swift` — push hook in `manager.onLayoutUpdate` and `onStateChange` (every state transition reaches the watch).
+- `QuipiOS/QuipWatch/QuipWatchApp.swift` — SwiftUI `WKApplication`. ContentView shows a scroll list of windows: state dot (yellow=awaiting / blue=thinking / green=idle), name, claudeMode badge. Header chip shows iPhone-reachability. `WKInterfaceDevice.current().play(.notification)` haptic on `waiting_for_input` transitions.
+- `QuipiOS/QuipWatch/Info.plist` — WKApplication=true, WKCompanionAppBundleIdentifier=com.quip.QuipiOS.
+
+**Sendable quirk worth remembering:** WCSessionDelegate callbacks are nonisolated; `[String: Any]` payload isn't Sendable under Swift 6 strict concurrency. Extract the Data for the "windows" key in the nonisolated callback (Data IS Sendable), then hop to MainActor with only that Data. Same trick will apply to any future Watch ↔ phone wire shapes.
+
+**xcodegen quirks worth remembering:** iOS app's `path: .` source spec must `exclude: ["QuipWatch/**"]` so the iOS target doesn't try to copy the Watch Info.plist into its own bundle (build fails with "Multiple commands produce Quip.app/Info.plist"). Watch app PRODUCT_NAME must be `QuipWatch` (not `Quip`) to avoid bundle-name collision; user-visible name stays "Quip" via CFBundleDisplayName.
+
+**Acceptance test:** With Quip Mac running + iPhone connected + Watch paired and on-wrist:
+1. Open Quip on iPhone → Watch grid should show "Quip" within ~30s of first install.
+2. Open Quip on Watch → see scroll list of current windows + state.
+3. Click on the Mac terminal so Claude flips to `waiting_for_input` → Watch buzzes (notification haptic).
+4. Background Quip on iPhone → Watch list still updates (via `updateApplicationContext` background channel).
+
+**Deferred to v2:**
+- Complication via WidgetKit — needs Watch widget configuration + complication design + per-budget update strategy (Watch limits to ~50 pushes/day).
+- Slash-button send-back ("/yes", "/no" from wrist) — needs WCSession reverse-direction handling.
+- Per-window vs all-windows toggle — currently shows all.
+
+**Related:** `QuipiOS/QuipWatch/QuipWatchApp.swift`, `QuipiOS/Services/WatchSyncService.swift`, `QuipiOS/QuipApp.swift:46,302-307,386-391` (push hooks), `QuipiOS/project.yml:80-100` (target).
+
+**(historical design notes preserved below for v2 work)**
 
 **What it'd do (v1):**
 - Tiny WatchKit app on the wrist showing per-window Claude state: Thinking · Done · Awaiting input.
