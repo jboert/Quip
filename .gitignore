@@ -48,6 +48,12 @@ QuipiOS/Info.plist
 *.profraw
 *.profdata
 
+# Runtime logs — Mac/iOS Quip writes to ~/Library/Logs/Quip/ which is
+# already outside the repo, but cover any log files that ever land
+# inside the working tree (e.g. local diagnostic dumps).
+*.log
+logs/
+
 # Machine-local / planning scripts — not for the public repo
 scripts/
 tasks/
