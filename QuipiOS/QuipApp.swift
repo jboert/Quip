@@ -1511,6 +1511,21 @@ struct MainiOSView: View {
                     }
                 }
             }
+            // One-tap recovery: visible only while disconnected so the user
+            // can break the "stuck on Connecting…" state without digging
+            // through settings. Disconnects + reconnects to the active URL.
+            if !client.isConnected, let url = client.serverURL {
+                Button {
+                    client.disconnect()
+                    client.connect(to: url)
+                } label: {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(colors.textTertiary)
+                        .frame(width: 20, height: 20)
+                }
+                .accessibilityLabel("Reset connection")
+            }
             Button {
                 client.disconnect()
             } label: {
