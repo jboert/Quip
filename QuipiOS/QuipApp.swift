@@ -5701,8 +5701,10 @@ struct ConnectionDiagnosticsSheet: View {
                          tint: client.isConnected ? .green : .secondary)
                 stateRow(label: "Authenticated", value: client.isAuthenticated ? "yes" : "no",
                          tint: client.isAuthenticated ? .green : .secondary)
-                if let url = client.serverURL?.host {
-                    stateRow(label: "Server", value: url, tint: .secondary)
+                if let url = client.serverURL {
+                    stateRow(label: "Server", value: url.host ?? url.absoluteString, tint: .secondary)
+                    let (label, tint) = transportClassification(for: url)
+                    stateRow(label: "Transport", value: label, tint: tint)
                 }
                 if let err = client.lastError, !err.isEmpty {
                     stateRow(label: "Last error", value: err, tint: .red)
@@ -5827,6 +5829,33 @@ struct ConnectionDiagnosticsSheet: View {
                 .truncationMode(.middle)
         }
         .font(.system(size: 13))
+    }
+
+    /// Classify the active WS URL into a transport bucket so the user can
+    /// answer "am I going LAN, Tailscale, or tunnel right now?" without
+    /// reading the URL byte-by-byte. Heuristics:
+    ///   - `wss://*.trycloudflare.com` or `wss://*.cfargotunnel.com` → Tunnel
+    ///   - host in `100.64.0.0/10` (Tailscale CGNAT) → Tailscale
+    ///   - host ends `.local` or is RFC1918 → LAN
+    ///   - everything else → Direct
+    private func transportClassification(for url: URL) -> (String, Color) {
+        guard let host = url.host?.lowercased() else { return ("Unknown", .secondary) }
+        if host.hasSuffix(".trycloudflare.com") || host.hasSuffix(".cfargotunnel.com") {
+            return ("Cloudflare tunnel", .blue)
+        }
+        if host.hasSuffix(".local") {
+            return ("LAN (Bonjour)", .green)
+        }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        if parts.count == 4 {
+            let a = parts[0], b = parts[1]
+            if a == 100 && (64...127).contains(b) { return ("Tailscale", .indigo) }
+            if a == 10 { return ("LAN (10.x)", .green) }
+            if a == 192 && b == 168 { return ("LAN (192.168.x)", .green) }
+            if a == 172 && (16...31).contains(b) { return ("LAN (172.16-31.x)", .green) }
+            if a == 127 { return ("Loopback", .secondary) }
+        }
+        return ("Direct", .secondary)
     }
 }
 

@@ -103,19 +103,36 @@ struct MenuBarView: View {
             }
 
             if webSocketServer.isRunning {
-                HStack(spacing: 6) {
-                    Image(systemName: "iphone")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if webSocketServer.connectedClientCount > 0 {
-                        Text("\(webSocketServer.connectedClientCount) client\(webSocketServer.connectedClientCount == 1 ? "" : "s") connected")
+                if webSocketServer.connectedClients.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "iphone")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    } else {
                         Text("No clients connected")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                    }
+                } else {
+                    // §B5 per-client list. Each row: device name + relative
+                    // last-activity. Auth state encoded as filled/empty icon
+                    // so the user can spot a "connected but never authed"
+                    // half-state (often the symptom of a wrong PIN).
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(webSocketServer.connectedClients) { c in
+                            HStack(spacing: 6) {
+                                Image(systemName: clientIcon(c))
+                                    .font(.caption)
+                                    .foregroundStyle(c.isAuthenticated ? .green : .yellow)
+                                Text(c.displayTitle)
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                                Text(Self.relativeTimeFormatter.localizedString(for: c.lastActivity, relativeTo: Date()))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
                     }
                 }
             }
@@ -177,6 +194,16 @@ struct MenuBarView: View {
             .replacingOccurrences(of: "https://", with: "")
             .replacingOccurrences(of: ".trycloudflare.com", with: "")
         return "Tunnel: \(trimmed)"
+    }
+
+    private func clientIcon(_ c: WebSocketServer.ConnectedClientInfo) -> String {
+        switch c.deviceKind {
+        case "ios": return "iphone"
+        case "watchos": return "applewatch"
+        case "linux": return "desktopcomputer"
+        case "mac": return "laptopcomputer"
+        default: return c.isAuthenticated ? "iphone" : "iphone.slash"
+        }
     }
 
     private func lastEventIcon(_ kind: ConnectionEvent.Kind) -> String {
