@@ -4199,6 +4199,25 @@ struct SettingsSheet: View {
                 } header: {
                     Text("Notifications")
                 }
+
+                // Diagnostics — surfaces the in-memory connection event
+                // ring buffer that WebSocketClient.connectionEvents has been
+                // collecting since commit 64a8376. No live tail in this
+                // version; the user pulls down to refresh.
+                Section {
+                    NavigationLink {
+                        ConnectionDiagnosticsSheet(client: client)
+                    } label: {
+                        HStack {
+                            Text("Connection diagnostics")
+                            Spacer()
+                            Text("\(client.recentConnectionEvents.count) events")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Diagnostics")
+                }
             }
             .listStyle(.insetGrouped)
             .environment(\.defaultMinListRowHeight, 0)
@@ -5099,5 +5118,76 @@ enum ContentZoomLevel: Int, CaseIterable {
 
     var next: Int {
         (rawValue + 1) % ContentZoomLevel.allCases.count
+    }
+}
+
+// MARK: - Connection Diagnostics
+
+/// Renders the in-memory `WebSocketClient.recentConnectionEvents` ring
+/// buffer (last 30 lifecycle transitions). Read-only; no live tail —
+/// pull-to-refresh re-reads the buffer. Surfaces enough state that the
+/// user can answer "is the socket alive right now and what was the last
+/// thing that happened" without plugging into a Mac to tail device logs.
+struct ConnectionDiagnosticsSheet: View {
+    var client: WebSocketClient
+
+    var body: some View {
+        List {
+            Section("Current state") {
+                stateRow(label: "Connected", value: client.isConnected ? "yes" : "no",
+                         tint: client.isConnected ? .green : .secondary)
+                stateRow(label: "Authenticated", value: client.isAuthenticated ? "yes" : "no",
+                         tint: client.isAuthenticated ? .green : .secondary)
+                if let url = client.serverURL?.host {
+                    stateRow(label: "Server", value: url, tint: .secondary)
+                }
+                if let err = client.lastError, !err.isEmpty {
+                    stateRow(label: "Last error", value: err, tint: .red)
+                }
+            }
+
+            Section {
+                if client.recentConnectionEvents.isEmpty {
+                    Text("No events yet — try a reconnect or background+return.")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12))
+                } else {
+                    ForEach(Array(client.recentConnectionEvents.reversed().enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(nil)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Recent events (\(client.recentConnectionEvents.count))")
+                    Spacer()
+                    Button("Copy") {
+                        UIPasteboard.general.string = client.recentConnectionEvents.joined(separator: "\n")
+                    }
+                    .font(.system(size: 12))
+                    .textCase(nil)
+                }
+            } footer: {
+                Text("Ring buffer keeps the last 30 events. Newest first. Useful when triaging \"why is it stuck on Connecting\" — paste into a bug report.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Diagnostics")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private func stateRow(label: String, value: String, tint: Color) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(.system(size: 13))
     }
 }
