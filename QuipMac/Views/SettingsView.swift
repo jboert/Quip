@@ -44,6 +44,11 @@ struct SettingsView: View {
                     Label("Colors", systemImage: "paintpalette")
                 }
 
+            PromptsTab()
+                .tabItem {
+                    Label("Prompts", systemImage: "doc.text")
+                }
+
             NotificationsTab()
                 .tabItem {
                     Label("Notifications", systemImage: "bell.badge")
@@ -1208,5 +1213,234 @@ private struct AnchoredButton<Label: View>: View {
             return v
         }
         func updateNSView(_ nsView: NSView, context: Context) {}
+    }
+}
+
+// MARK: - Prompts Tab
+//
+// Mac-side editor for the prompt library — mirrors the iOS
+// PromptLibrarySheet (wishlist §57). Both clients write through the
+// same FS-backed PromptLibrary: `put` writes <id>.txt, the directory
+// watcher rescans, `onChange` broadcasts a PromptLibraryMessage to
+// every connected phone. So this tab needs zero "broadcast" wiring —
+// the existing FS-watcher path handles cross-client sync for free.
+
+private struct PromptsTab: View {
+    @Environment(PromptLibrary.self) private var library
+
+    @State private var selectedID: String?
+    @State private var editing: PromptEntry?
+    @State private var creatingNew = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Prompt library")
+                    .font(.headline)
+                Spacer()
+                Text("\(library.entries.count)")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+
+            List(selection: $selectedID) {
+                if library.entries.isEmpty {
+                    Text("No prompts yet. Click + below to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(library.entries) { entry in
+                        promptRow(entry)
+                            .tag(entry.id)
+                    }
+                }
+            }
+            .listStyle(.inset)
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Button {
+                    creatingNew = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .help("New prompt")
+
+                Button {
+                    guard let id = selectedID,
+                          let entry = library.entries.first(where: { $0.id == id }) else { return }
+                    editing = entry
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .disabled(selectedID == nil)
+                .help("Edit selected")
+
+                Button {
+                    guard let id = selectedID else { return }
+                    library.delete(id: id)
+                    selectedID = nil
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(selectedID == nil)
+                .help("Delete selected")
+
+                Spacer()
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([PromptLibrary.directory])
+                } label: {
+                    Text("Reveal in Finder")
+                }
+                .help("Open the prompts directory")
+            }
+            .padding(8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $creatingNew) {
+            PromptEditorSheet(initial: nil) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
+            }
+        }
+        .sheet(item: $editing) { entry in
+            PromptEditorSheet(initial: entry) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func promptRow(_ entry: PromptEntry) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(entry.label)
+                    .font(.system(size: 13, weight: .medium))
+                if entry.label != entry.id {
+                    Text(entry.id)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Text("\(entry.bodyBytes) B")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            Text(entry.bodyPreview)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            editing = entry
+        }
+    }
+}
+
+// MARK: - Prompt Editor Sheet (Mac)
+//
+// Form-style editor matching the iOS PromptEditorSheet. `initial=nil`
+// = new prompt (id editable); non-nil = edit (id locked because the
+// id IS the filename — renaming would orphan keystroke bindings on
+// the phone). Save fires `onSave(id, label, body)`; caller writes
+// through PromptLibrary.put which triggers the FS-watcher broadcast.
+
+private struct PromptEditorSheet: View {
+    let initial: PromptEntry?
+    let onSave: (_ id: String, _ label: String, _ body: String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var idText: String = ""
+    @State private var labelText: String = ""
+    @State private var bodyText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(initial == nil ? "New prompt" : "Edit prompt")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Id (filename)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("e.g. ship-it", text: $idText)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(initial != nil)
+                Text(initial == nil
+                     ? "Allowed: letters, digits, dash, underscore, dot. Spaces become dashes."
+                     : "Id can't be changed after creation — would orphan phone-side bindings. Delete and recreate to rename.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Label (optional)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Display label — defaults to id if empty", text: $labelText)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Body")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(bodyText.utf8.count) B")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                TextEditor(text: $bodyText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(minHeight: 200)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+                Text("Sent verbatim to the active terminal when the row is tapped on the phone. No template expansion.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(20)
+        .frame(width: 540)
+        .onAppear {
+            if let initial {
+                idText = initial.id
+                labelText = initial.label == initial.id ? "" : initial.label
+                bodyText = initial.body
+            }
+        }
+    }
+
+    private var canSave: Bool {
+        !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func save() {
+        let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = labelText.trimmingCharacters(in: .whitespaces)
+        let body = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !body.isEmpty else { return }
+        onSave(id, label.isEmpty ? id : label, body)
+        dismiss()
     }
 }
