@@ -115,6 +115,7 @@ struct QuipMacApp: App {
                 .environment(connectionLog)
                 .environment(pushNotificationService)
                 .environment(whisperStatusStore)
+                .environment(promptLibrary)
         }
         .windowResizability(.contentSize)
     }
