@@ -145,6 +145,39 @@ struct QuipMacApp: App {
         webSocketServer.connectionLog = connectionLog
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
         webSocketServer.requireAuth = requirePIN
+
+        // CRITICAL: register the message + auth callbacks BEFORE
+        // start(). On a no-PIN-required Mac the listener becomes ready
+        // and incoming connections immediately auto-authenticate via
+        // the no-PIN path in WebSocketServer. That path fires
+        // onClientAuthenticated?(); if we set the callback AFTER
+        // start() then a phone reconnecting in the millisecond window
+        // gets ignored and never receives the welcome broadcasts
+        // (layout / permissions / prompt_library). Symptom on the
+        // user side: phone shows "0 on Mac" / "Waiting for Mac…"
+        // after a Mac restart.
+        webSocketServer.onMessageReceived = { [self] data in
+            DispatchQueue.main.async {
+                self.handleIncomingMessage(data)
+            }
+        }
+
+        webSocketServer.onClientAuthenticated = { [self] in
+            DispatchQueue.main.async {
+                self.broadcastLayout()
+                self.broadcastPermissions(force: true)
+                self.broadcastWhisperStatus()
+                // Push the prompt-library catalog so a fresh phone sees
+                // the user's saved prompts without waiting for the next
+                // file-system change. (wishlist §57)
+                let entries = self.promptLibrary.entries
+                NSLog("[QuipMacApp] onClientAuthenticated -> broadcasting prompt_library: %d prompts", entries.count)
+                self.webSocketServer.broadcast(
+                    PromptLibraryMessage(prompts: entries)
+                )
+            }
+        }
+
         webSocketServer.start()
 
         // Prompt library — watch ~/Library/Application Support/Quip/prompts/
@@ -180,26 +213,6 @@ struct QuipMacApp: App {
                 if networkMode == .tailscale {
                     tailscale.refresh()
                 }
-            }
-        }
-
-        webSocketServer.onMessageReceived = { [self] data in
-            DispatchQueue.main.async {
-                self.handleIncomingMessage(data)
-            }
-        }
-
-        webSocketServer.onClientAuthenticated = { [self] in
-            DispatchQueue.main.async {
-                self.broadcastLayout()
-                self.broadcastPermissions(force: true)
-                self.broadcastWhisperStatus()
-                // Push the prompt-library catalog so a fresh phone sees
-                // the user's saved prompts without waiting for the next
-                // file-system change. (wishlist §57)
-                self.webSocketServer.broadcast(
-                    PromptLibraryMessage(prompts: self.promptLibrary.entries)
-                )
             }
         }
 

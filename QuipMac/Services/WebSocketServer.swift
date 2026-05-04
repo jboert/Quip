@@ -447,7 +447,7 @@ final class WebSocketServer {
     /// `UserDefaults` under `quip.deviceID`. The phone uses this to key
     /// per-backend state (PIN in Keychain, paired-backend row) so that state
     /// survives URL/hostname changes.
-    static func deviceID() -> String {
+    nonisolated static func deviceID() -> String {
         let key = "quip.deviceID"
         if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
             return existing
