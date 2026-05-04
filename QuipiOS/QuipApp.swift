@@ -317,6 +317,18 @@ struct QuipApp: App {
                         session.client.send(SelectWindowMessage(windowId: newId))
                     }
                 }
+                // Auto-pick first window on the FIRST layout_update after a
+                // fresh launch / fresh connect. Without this, the user opens
+                // the app, sees windows, taps mic — and PTT silently no-ops
+                // because `startRecording` gates on `selectedWindowId != nil`.
+                // Same gate kills the on-screen mic button AND the hardware
+                // volume-down PTT path, so "nothing happens when I tap mic"
+                // means "no window selected." Picking windows.first restores
+                // both paths.
+                if selectedWindowId == nil, let first = update.windows.first {
+                    selectedWindowId = first.id
+                    session.client.send(SelectWindowMessage(windowId: first.id))
+                }
                 if wasEmpty, let wid = selectedWindowId, update.windows.contains(where: { $0.id == wid }) {
                     session.client.send(SelectWindowMessage(windowId: wid))
                 }
@@ -537,7 +549,15 @@ struct QuipApp: App {
 
     @MainActor
     private func startRecording() {
-        guard let windowId = selectedWindowId else { return }
+        guard let windowId = selectedWindowId else {
+            // Visible failure beats silent no-op. Warning haptic + log so the
+            // user knows the tap registered but the precondition (window
+            // selected) wasn't met. Print survives `devicectl --console` per
+            // memory `reference_ios_device_log_capture.md`.
+            print("[Quip][PTT] startRecording bail: selectedWindowId=nil (windows=\(windows.count))")
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
         // Pin the windowId for this recording — stopRecording must not re-read
         // selectedWindowId, because a mid-recording select_window push or a
         // layout-update reassignment can change it underneath us.
