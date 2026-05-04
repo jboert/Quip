@@ -89,7 +89,11 @@ final class ClaudeModeDetector {
     func startMonitoring(keystrokeInjector: KeystrokeInjector) {
         guard pollTimer == nil else { return }
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] _ in
-            self?.pollOnce(keystrokeInjector: keystrokeInjector)
+            // Timer fires on the main runloop; assumeIsolated keeps the
+            // @MainActor pollOnce call legal under Swift 6 strict concurrency.
+            MainActor.assumeIsolated {
+                self?.pollOnce(keystrokeInjector: keystrokeInjector)
+            }
         }
         print("[ClaudeModeDetector] Started monitoring (interval: \(pollingInterval)s)")
     }

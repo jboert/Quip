@@ -74,3 +74,7 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quip.app/Contents/MacOS/Quip"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        # Tests stay on Swift 5 language mode — CI's Xcode 16.4 errors
+        # on actor-isolation patterns the local Xcode 26 build accepts.
+        SWIFT_VERSION: "5"
+        SWIFT_STRICT_CONCURRENCY: minimal

@@ -62,8 +62,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Install xcodegen 2.44.1
+        # Pin: 2.45.x rewrites source paths to a "common ancestor" basePath
+        # so iOS sources mixing `path: .` with `path: ../Shared` end up at
+        # repo root instead of QuipiOS/. Pulling the .pkg from the upstream
+        # release is the simplest way to lock the version on macos-15.
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/xcodegen.zip \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          sudo /tmp/xcodegen/xcodegen/install.sh
+          xcodegen --version
 
       - name: Generate Mac project
         working-directory: QuipMac
@@ -86,8 +96,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Install xcodegen 2.44.1
+        # Pin: 2.45.x rewrites source paths to a "common ancestor" basePath
+        # so iOS sources mixing `path: .` with `path: ../Shared` end up at
+        # repo root instead of QuipiOS/. Pulling the .pkg from the upstream
+        # release is the simplest way to lock the version on macos-15.
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/xcodegen.zip \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          sudo /tmp/xcodegen/xcodegen/install.sh
+          xcodegen --version
 
       - name: Generate iOS project
         working-directory: QuipiOS
