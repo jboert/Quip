@@ -1039,7 +1039,8 @@ struct MainiOSView: View {
                 enabledQuickButtonsRaw: $enabledQuickButtonsRaw,
                 client: client,
                 pushRegistration: pushRegistration,
-                macPermissions: macPermissions
+                macPermissions: macPermissions,
+                selectedWindowId: selectedWindowId
             )
         }
         .sheet(isPresented: $showBackendPicker) {
@@ -4145,6 +4146,11 @@ struct SettingsSheet: View {
     var client: WebSocketClient
     var pushRegistration: PushRegistrationService
     var macPermissions: MacPermissionsMessage?
+    /// Currently-selected window from the host. Used by the Prompts
+    /// sheet so a paste fires into the same window the user has open
+    /// in the main view. Optional for backwards-compat with any caller
+    /// that doesn't know it yet.
+    var selectedWindowId: String? = nil
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
@@ -4261,6 +4267,26 @@ struct SettingsSheet: View {
                     }
                 } header: {
                     Text("Diagnostics")
+                }
+
+                // Prompts — Mac-managed library of paste-and-run prompts
+                // (~/Library/Application Support/Quip/prompts/*.txt).
+                // Tap a row → Mac sendText's the body into the active
+                // window. Mirrors the Stream Deck "clipboard prompt"
+                // pattern. (wishlist §57)
+                Section {
+                    NavigationLink {
+                        PromptLibrarySheet(client: client, windowId: selectedWindowId)
+                    } label: {
+                        HStack {
+                            Text("Prompts")
+                            Spacer()
+                            Text("\(client.promptLibrary.count) on Mac")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Prompts")
                 }
             }
             .listStyle(.insetGrouped)
@@ -5320,6 +5346,88 @@ struct ConnectionDiagnosticsSheet: View {
                 .truncationMode(.middle)
         }
         .font(.system(size: 13))
+    }
+}
+
+/// Renders the Mac-managed prompt library (wishlist §57). Tapping a row
+/// fires a `paste_prompt` to the Mac, which then sendText's the body
+/// into the currently-targeted iTerm session. Long-press → toggle
+/// auto-submit (sends Return after the paste). Mirrors the Stream Deck
+/// "clipboard prompt" pattern from the streamdeck-claude-scripts
+/// project but without the .scpt round-trip — the prompt body lives on
+/// disk on the Mac (~/Library/Application Support/Quip/prompts/*.txt)
+/// and the phone never has to render the body in an editor field.
+struct PromptLibrarySheet: View {
+    var client: WebSocketClient
+    var windowId: String?
+    @State private var lastFiredId: String?
+
+    var body: some View {
+        List {
+            if client.promptLibrary.isEmpty {
+                Section {
+                    Text("No prompts on Mac yet. Drop .txt files into ~/Library/Application Support/Quip/prompts/ and they appear here automatically. The README.txt in that directory has details.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Library")
+                }
+            } else {
+                Section {
+                    ForEach(client.promptLibrary) { entry in
+                        promptRow(entry)
+                    }
+                } header: {
+                    HStack {
+                        Text("Library")
+                        Spacer()
+                        Text("\(client.promptLibrary.count)")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                } footer: {
+                    Text("Tap to paste into the current window. Long-press to paste and submit (sends Return after).")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Prompts")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private func promptRow(_ entry: PromptEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(entry.label)
+                    .font(.system(size: 14, weight: .medium))
+                Spacer()
+                Text("\(entry.bodyBytes)B")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            Text(entry.bodyPreview)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            if lastFiredId == entry.id {
+                Text("Pasted ✓")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.green)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { fire(entry, pressReturn: false) }
+        .onLongPressGesture(minimumDuration: 0.4) { fire(entry, pressReturn: true) }
+    }
+
+    private func fire(_ entry: PromptEntry, pressReturn: Bool) {
+        guard let wid = windowId, !wid.isEmpty else { return }
+        client.send(PastePromptMessage(id: entry.id, windowId: wid, pressReturn: pressReturn))
+        lastFiredId = entry.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if lastFiredId == entry.id { lastFiredId = nil }
+        }
     }
 }
 

@@ -33,6 +33,7 @@ struct QuipMacApp: App {
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
     @State private var connectionLog = ConnectionLog()
+    @State private var promptLibrary = PromptLibrary()
     @State private var pushNotificationService = PushNotificationService()
     @State private var whisperService: WhisperDictationService?
     @State private var whisperStatusStore = WhisperStatusStore()
@@ -139,6 +140,16 @@ struct QuipMacApp: App {
         webSocketServer.requireAuth = requirePIN
         webSocketServer.start()
 
+        // Prompt library — watch ~/Library/Application Support/Quip/prompts/
+        // and broadcast catalog changes to every authenticated client.
+        // Phone uses the catalog to render a "Prompts" sheet; tap fires
+        // paste_prompt back, the Mac then sendText's the body into the
+        // currently-targeted iTerm window. (wishlist §57)
+        promptLibrary.onChange = { [self] entries in
+            self.webSocketServer.broadcast(PromptLibraryMessage(prompts: entries))
+        }
+        promptLibrary.start()
+
         // Apply current network mode (starts tunnel or Tailscale as needed).
         applyNetworkMode()
 
@@ -176,6 +187,12 @@ struct QuipMacApp: App {
                 self.broadcastLayout()
                 self.broadcastPermissions(force: true)
                 self.broadcastWhisperStatus()
+                // Push the prompt-library catalog so a fresh phone sees
+                // the user's saved prompts without waiting for the next
+                // file-system change. (wishlist §57)
+                self.webSocketServer.broadcast(
+                    PromptLibraryMessage(prompts: self.promptLibrary.entries)
+                )
             }
         }
 
@@ -898,6 +915,11 @@ struct QuipMacApp: App {
         case "request_diagnostics":
             handleRequestDiagnostics()
 
+        case "paste_prompt":
+            if let msg = MessageCoder.decode(PastePromptMessage.self, from: data) {
+                handlePastePrompt(msg)
+            }
+
         case "register_push_device":
             if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
                 appendPushDiagnostic("register_push_device: \(msg.deviceToken.prefix(8)) env=\(msg.environment)")
@@ -1072,6 +1094,33 @@ struct QuipMacApp: App {
     /// exists (could've closed between scan and tap), promote it to a
     /// Quip-tracked window by enabling the matching ManagedWindow, persist
     /// the sessionId so the attachment survives Quip restarts, and
+    /// Phone tapped a prompt — look up the body and inject it into the
+    /// requested window via the existing keystrokeInjector path. Same
+    /// route SendTextMessage uses, so prompt-library payloads honor the
+    /// per-terminal-app shape (iTerm2 AppleScript, Claude Desktop
+    /// clipboard-paste, Terminal.app keystrokes). pressReturn defaults to
+    /// false so the user can review before submitting. (wishlist §57)
+    @MainActor
+    private func handlePastePrompt(_ msg: PastePromptMessage) {
+        guard let body = promptLibrary.body(for: msg.id), !body.isEmpty else {
+            print("[Quip] paste_prompt: unknown prompt id=\(msg.id)")
+            return
+        }
+        ensureITermSessionResolved(for: msg.windowId) { window in
+            let termApp = self.terminalAppForWindow(window)
+            self.windowManager.focusWindow(msg.windowId)
+            let result = self.keystrokeInjector.sendText(
+                body, to: msg.windowId, pressReturn: msg.pressReturn,
+                terminalApp: termApp, windowName: window.name,
+                cgWindowNumber: window.windowNumber,
+                iterm2SessionId: window.iterm2SessionId
+            )
+            if !result.success {
+                print("[Quip] paste_prompt FAILED: \(result.error ?? "unknown")")
+            }
+        }
+    }
+
     /// Phone asked for the Mac's diagnostic log bundle. Build the zip on a
     /// detached task (zip can be 100-500ms), then base64-encode it back
     /// over the WebSocket as a `DiagnosticsBundleMessage`. Capped at

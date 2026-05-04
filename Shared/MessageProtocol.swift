@@ -428,6 +428,53 @@ struct AttachITermWindowMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Prompt Library (wishlist §57)
+
+/// Mac → iPhone. Catalog of named prompts the Mac has on disk under
+/// `~/Library/Application Support/Quip/prompts/*.txt`. Phone renders
+/// them as a list in Settings → Prompts; tapping one fires
+/// `paste_prompt` back, the Mac then sendText's the body into the
+/// active iTerm session. Mirrors the Stream Deck "clipboard prompt"
+/// pattern (paste a long pre-written prompt with one press) but
+/// without needing Stream Deck hardware or the .scpt round-trip.
+struct PromptLibraryMessage: Codable, Sendable {
+    let type: String
+    let prompts: [PromptEntry]
+
+    init(prompts: [PromptEntry]) {
+        self.type = "prompt_library"
+        self.prompts = prompts
+    }
+}
+
+/// One row in the prompt library. `id` is the filename without
+/// extension (used as the lookup key on `paste_prompt`); `label` is
+/// the display name (defaults to id but can carry a friendlier title
+/// if the file's first non-empty line starts with `# `, in which case
+/// that line becomes the label and gets stripped from the body).
+struct PromptEntry: Codable, Sendable, Hashable, Identifiable {
+    let id: String
+    let label: String
+    let bodyPreview: String  // first ~120 chars, for the iOS list row
+    let bodyBytes: Int
+}
+
+/// iPhone → Mac. User tapped a prompt — paste its body into the
+/// currently-targeted window. Mac looks up by id and runs sendText.
+struct PastePromptMessage: Codable, Sendable {
+    let type: String
+    let id: String
+    let windowId: String
+    let pressReturn: Bool
+
+    init(id: String, windowId: String, pressReturn: Bool = false) {
+        self.type = "paste_prompt"
+        self.id = id
+        self.windowId = windowId
+        self.pressReturn = pressReturn
+    }
+}
+
 // MARK: - Diagnostics Bundle
 
 /// iPhone → Mac. Asks the Mac to bundle its three log files
