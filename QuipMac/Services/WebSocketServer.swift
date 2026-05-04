@@ -14,6 +14,10 @@ final class WebSocketServer {
     var connectedClientCount: Int = 0
     /// Number of currently-authenticated direct WebSocket clients. Diagnostic.
     var authenticatedClientCount: Int { clients.filter(\.isAuthenticated).count }
+    /// Public-facing snapshot of currently-connected clients. Refreshed on
+    /// connect/disconnect/auth/identity/activity so MenuBarExtra + Settings
+    /// can render the per-client list (§B5). UI-thread observable.
+    var connectedClients: [ConnectedClientInfo] = []
     var onMessageReceived: ((Data) -> Void)?
     var onClientAuthenticated: (() -> Void)?
     var pinManager: PINManager?
@@ -37,6 +41,9 @@ final class WebSocketServer {
 
     /// Tracks a WebSocket connection, its authentication state, and rate limiting.
     private struct ClientConnection {
+        /// Stable per-connection UUID — used for the public-facing
+        /// `ConnectedClientInfo.id`. Survives device-identity rekeys.
+        let id: UUID = UUID()
         let connection: NWConnection
         var isAuthenticated: Bool = false
         var messageCount: Int = 0
@@ -46,6 +53,17 @@ final class WebSocketServer {
         /// client so a dead/slow socket can't balloon the NWConnection send buffer
         /// into GB-scale memory while TCP keepalive waits to reap it.
         var pendingBytes: Int = 0
+        /// Endpoint description captured at connect time. NWEndpoint's debug
+        /// string is "host:port" with brackets for IPv6 — good enough for UI.
+        var remoteDescription: String = ""
+        var connectedAt: Date = Date()
+        var lastActivity: Date = Date()
+        /// Populated when the peer sends `device_identity` (phone after auth).
+        /// Mac→phone identity is a separate flow; these slots are for the
+        /// remote peer's identity as the server sees it.
+        var deviceID: String? = nil
+        var deviceName: String? = nil
+        var deviceKind: String? = nil
 
         static let maxMessagesPerSecond = 10
         /// Drop broadcasts once a single client has this much buffered. Chosen to
@@ -65,6 +83,25 @@ final class WebSocketServer {
             }
             messageCount += 1
             return messageCount <= Self.maxMessagesPerSecond
+        }
+    }
+
+    /// Publicly observable snapshot of one connected client. Decoupled from
+    /// `ClientConnection` (which holds non-Sendable NWConnection refs) so
+    /// SwiftUI views and the MenuBarExtra can render it freely.
+    struct ConnectedClientInfo: Identifiable, Hashable, Sendable {
+        let id: UUID
+        let remote: String
+        let connectedAt: Date
+        let lastActivity: Date
+        let isAuthenticated: Bool
+        let deviceID: String?
+        let deviceName: String?
+        let deviceKind: String?
+        /// Display title — device name if known, else first segment of `remote`.
+        var displayTitle: String {
+            if let n = deviceName, !n.isEmpty { return n }
+            return remote.split(separator: ":").first.map(String.init) ?? remote
         }
     }
 
@@ -219,8 +256,10 @@ final class WebSocketServer {
                 DispatchQueue.main.async {
                     var client = ClientConnection(connection: connection)
                     client.isAuthenticated = !requireAuthNow
+                    client.remoteDescription = remoteStr
                     self.clients.append(client)
                     self.connectedClientCount = self.clients.count
+                    self.refreshConnectedClients()
                     self.connectionLog?.record(
                         .connected,
                         remote: remoteStr,
@@ -284,8 +323,43 @@ final class WebSocketServer {
         }
         clients.removeAll()
         connectedClientCount = 0
+        refreshConnectedClients()
         isRunning = false
         print("[WebSocketServer] Stopped")
+    }
+
+    /// Rebuild the public-facing `connectedClients` list from the private
+    /// `clients` array. Cheap (typically 1-2 entries); called on every
+    /// connect / disconnect / auth / identity. Activity-tick refreshes are
+    /// throttled separately in `touchActivity` so a busy stream doesn't
+    /// republish 60×/sec.
+    private func refreshConnectedClients() {
+        connectedClients = clients.map { c in
+            ConnectedClientInfo(
+                id: c.id,
+                remote: c.remoteDescription,
+                connectedAt: c.connectedAt,
+                lastActivity: c.lastActivity,
+                isAuthenticated: c.isAuthenticated,
+                deviceID: c.deviceID,
+                deviceName: c.deviceName,
+                deviceKind: c.deviceKind
+            )
+        }
+    }
+
+    /// Bump `lastActivity` for the connection's owning client and republish
+    /// the snapshot — but only if at least 2s have passed since the last
+    /// publish. Without throttling, screenshot streaming churns the
+    /// observable list dozens of times per second.
+    private func touchActivity(for connection: NWConnection) {
+        guard let idx = clients.firstIndex(where: { $0.connection === connection }) else { return }
+        let now = Date()
+        let prev = clients[idx].lastActivity
+        clients[idx].lastActivity = now
+        if now.timeIntervalSince(prev) >= 2.0 {
+            refreshConnectedClients()
+        }
     }
 
     /// Tunnel clients that handle their own WebSocket framing.
@@ -424,6 +498,7 @@ final class WebSocketServer {
     private func removeConnection(_ connection: NWConnection) {
         clients.removeAll(where: { $0.connection === connection })
         connectedClientCount = clients.count
+        refreshConnectedClients()
         // Force the NWConnection to tear down immediately. Without this the
         // socket's send buffer can sit on queued bytes (layout updates, TTS
         // chunks) until the kernel notices — which on a dead Wi-Fi link can
@@ -440,7 +515,19 @@ final class WebSocketServer {
     private func setAuthenticated(_ connection: NWConnection) {
         if let index = clients.firstIndex(where: { $0.connection === connection }) {
             clients[index].isAuthenticated = true
+            refreshConnectedClients()
         }
+    }
+
+    /// Apply an inbound `device_identity` message from a peer (typically the
+    /// phone after auth). Updates the matched client's metadata + republishes
+    /// the public list so UI reflects the device name.
+    private func applyPeerIdentity(_ msg: DeviceIdentityMessage, from connection: NWConnection) {
+        guard let idx = clients.firstIndex(where: { $0.connection === connection }) else { return }
+        clients[idx].deviceID = msg.deviceID
+        clients[idx].deviceName = msg.displayName
+        clients[idx].deviceKind = msg.deviceKind
+        refreshConnectedClients()
     }
 
     /// Stable per-installation UUID. Generated on first call and persisted in
@@ -578,6 +665,19 @@ final class WebSocketServer {
                         return
                     }
 
+                    // §B5: inbound device_identity from the peer — populate the
+                    // per-client display name + kind so MenuBarExtra and Settings
+                    // can render "iPhone 17 Pro Max" instead of "[::1]:54321".
+                    // Don't forward to onMessageReceived; it's metadata, not a
+                    // host-level command.
+                    if messageType == "device_identity",
+                       let msg = MessageCoder.decode(DeviceIdentityMessage.self, from: receivedData) {
+                        self.applyPeerIdentity(msg, from: connection)
+                        self.touchActivity(for: connection)
+                        return
+                    }
+
+                    self.touchActivity(for: connection)
                     self.onMessageReceived?(receivedData)
                 }
             }

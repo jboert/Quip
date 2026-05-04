@@ -796,7 +796,7 @@ struct AuthResultMessage: Codable, Sendable {
 struct DeviceIdentityMessage: Codable, Sendable {
     let type: String
     let deviceID: String   // UUIDv4
-    let deviceKind: String // "mac" | "linux"
+    let deviceKind: String // "mac" | "linux" | "ios" | "watchos"
     let displayName: String
 
     init(deviceID: String, deviceKind: String, displayName: String) {

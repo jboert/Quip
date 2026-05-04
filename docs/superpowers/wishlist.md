@@ -23,8 +23,9 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §57 v1 Mac prompt library + Stream Deck importer | ✅ | `ad4fb57` | yes (both) |
 | §57 v2 iPhone prompt editor (create/edit/delete) | ✅ | `fcd2ba1` | install only — needs verify |
 | §B3 Prompts as keyboard quick-buttons | ✅ | `2ec3ed9` | install only — needs verify |
-| §B6 addMenu observation-chain leak (re-render mid-tap) | ✅ | _pending_ | install only — needs verify |
-| §B7 Prompts as main-row button option | ✅ | _pending_ | install only — needs verify |
+| §B6 addMenu observation-chain leak (re-render mid-tap) | ✅ | `3dbc7da` | install only — needs verify |
+| §B7 Prompts as main-row button option | ✅ | `3dbc7da` | install only — needs verify |
+| §B5 Per-client visibility (Mac + iOS transport tag) | ✅ | _pending_ | install only — needs verify |
 
 **Test still owed by user:**
 - Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
@@ -1328,15 +1329,34 @@ Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bit
 
 ---
 
-### B5. Per-client connection visibility on Mac + iOS (📋 Backlog)
+### B5. Per-client connection visibility on Mac + iOS (✅ Done v1, eb-branch)
 
-**Status:** 📋 Backlog. User asked for both Mac and iOS to show what client/device is connected.
+**Status:** ✅ Done v1. Shipped 2026-05-04.
 
-**Mac side:** list each connected phone's IP/endpoint, auth state, and last activity in Settings → Connection (or wherever fits). Right now there's only `connectedClientCount`, no per-client view.
+**Mac side:** `WebSocketServer` now exposes a public `connectedClients: [ConnectedClientInfo]` snapshot — each entry carries id, remote endpoint string, connectedAt, lastActivity, isAuthenticated, deviceID/deviceName/deviceKind. Refreshed on connect / disconnect / auth / inbound `device_identity` and on every received message (lastActivity touch, throttled to 2s so streaming traffic doesn't churn the published list 60×/sec). MenuBarExtra popover replaces the "N clients connected" line with one row per client (icon by kind, displayTitle, relative last-activity time). Settings → Connection has a new "Connected Clients" section: device name + auth pill + monospaced remote + kind + connected-time + last-seen. Empty state explains "server is listening but no client has connected" so the user isn't left guessing.
 
-**iOS side:** in Connection diagnostics panel, show which Mac the phone is connected to + which URL out of the urlsInOrder list is currently active (LAN vs Tailscale).
+**Phone side:** `WebSocketClient.sendSelfIdentity()` fires a `DeviceIdentityMessage` (deviceID = `KeychainDeviceID.get()`, deviceKind = `"ios"`, displayName = `UIDevice.current.name`) right after `auth_result success`. Mac's new ingest path populates the per-client row. Connection Diagnostics gained a "Transport" row classifying the active `serverURL` into Cloudflare tunnel / LAN (Bonjour) / Tailscale (CGNAT 100.64-127.x) / LAN (RFC1918) / Loopback / Direct so the user can answer "am I going LAN or tunnel?" without reading the URL byte-by-byte.
 
-**Cost:** ~half day per side.
+**Files:**
+- `Shared/MessageProtocol.swift` — `DeviceIdentityMessage.deviceKind` doc widened to include `"ios"` / `"watchos"`.
+- `QuipMac/Services/WebSocketServer.swift` — `ConnectedClientInfo` public struct, extended `ClientConnection` private struct, `connectedClients` published list, `refreshConnectedClients()`, `touchActivity(for:)`, `applyPeerIdentity(_:from:)`, inbound `device_identity` ingest.
+- `QuipMac/Views/MenuBarView.swift` — per-client list section with `clientIcon(_:)` helper.
+- `QuipMac/Views/SettingsView.swift` — ConnectionTab gains Connected Clients section, `relTime` + `clientIcon` helpers.
+- `QuipiOS/Services/WebSocketClient.swift` — `sendSelfIdentity()` called on auth success.
+- `QuipiOS/QuipApp.swift` — `transportClassification(for:)` helper + Transport row in Diagnostics.
+
+**Acceptance test:**
+1. Open Mac Quip → Settings → Connection → "Connected Clients" section shows empty state.
+2. Connect iPhone → row appears with device name (e.g. "Tim apple 17 🍏📲"), green auth dot, "ios" kind tag.
+3. Open Mac MenuBarExtra → see same per-client list with relative last-activity ("just now" / "5s ago").
+4. Background phone for ~30s → MenuBarExtra last-activity rolls to "30s ago" without the row vanishing.
+5. iPhone → Settings → Diagnostics → "Transport" row shows the bucket matching the URL the phone connected via (`.local` → "LAN (Bonjour)", `100.x.x.x` → "Tailscale", `*.trycloudflare.com` → "Cloudflare tunnel").
+6. Disconnect phone → Mac row disappears within ~2s; "None — server is listening but no client has connected." renders.
+
+**Deferred to v2:**
+- Manual disconnect from Mac (kick a stale client).
+- Show currently-active backend's deviceID in iOS Backend picker so user can spot which paired Mac the per-client row belongs to.
+- Tunnel-broadcaster clients aren't represented in `connectedClients` yet — their `TunnelBroadcaster` array is separate. If §50 QR pairing routes more traffic over the tunnel proxy, fold those into the same list.
 
 
 ---

@@ -653,6 +653,51 @@ private struct ConnectionTab: View {
                     .frame(width: 100)
             }
 
+            // §B5 per-client visibility — full table of every active socket so
+            // "is anyone actually talking to me?" answers from a glance instead
+            // of a `netstat | grep 8765` ritual.
+            Section("Connected Clients") {
+                let clients: [WebSocketServer.ConnectedClientInfo] = webSocketServer.connectedClients
+                if clients.isEmpty {
+                    Text("None — server is listening but no client has connected.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(clients) { (c: WebSocketServer.ConnectedClientInfo) in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Image(systemName: clientIcon(c))
+                                    .foregroundStyle(c.isAuthenticated ? .green : .yellow)
+                                Text(c.displayTitle).font(.body.weight(.medium))
+                                Spacer()
+                                Text(c.isAuthenticated ? "authed" : "awaiting auth")
+                                    .font(.caption)
+                                    .foregroundStyle(c.isAuthenticated ? Color.secondary : Color.orange)
+                            }
+                            HStack(spacing: 12) {
+                                Text(c.remote)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                if let kind = c.deviceKind {
+                                    Text(kind)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                                Text("connected \(Self.relTime.localizedString(for: c.connectedAt, relativeTo: Date()))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                Text("· last \(Self.relTime.localizedString(for: c.lastActivity, relativeTo: Date()))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
             Section("Bonjour Discovery") {
                 LabeledContent("Status") {
                     HStack(spacing: 6) {
@@ -876,6 +921,22 @@ private struct ConnectionTab: View {
         case .connected, .authSucceeded: return .green
         case .disconnected: return .secondary
         case .authFailed, .failed: return .red
+        }
+    }
+
+    private static let relTime: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
+    private func clientIcon(_ c: WebSocketServer.ConnectedClientInfo) -> String {
+        switch c.deviceKind {
+        case "ios": return "iphone"
+        case "watchos": return "applewatch"
+        case "linux": return "desktopcomputer"
+        case "mac": return "laptopcomputer"
+        default: return "iphone"
         }
     }
 }

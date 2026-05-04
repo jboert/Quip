@@ -484,6 +484,17 @@ final class WebSocketClient {
         NSLog("[WebSocketClient] Sent auth message")
     }
 
+    /// Tell the Mac who this phone is so its connected-clients table can
+    /// show a human label instead of an endpoint string. Reuses
+    /// `DeviceIdentityMessage` (Mac→phone uses the same shape going the
+    /// other way). Called after auth_result success and after every
+    /// reconnect that returns success without a fresh PIN exchange.
+    func sendSelfIdentity() {
+        let id = KeychainDeviceID.get()
+        let name = UIDevice.current.name
+        send(DeviceIdentityMessage(deviceID: id, deviceKind: "ios", displayName: name))
+    }
+
     func send(_ message: some Codable) {
         guard let task = webSocketTask else { return }
         do {
@@ -682,6 +693,12 @@ final class WebSocketClient {
                 if msg.success {
                     isAuthenticated = true
                     authError = nil
+                    // §B5: tell the Mac who we are so its MenuBarExtra and
+                    // Settings → Connection list can show "iPhone 17 Pro Max"
+                    // instead of an opaque endpoint string. deviceID is the
+                    // Keychain-persisted UUID (survives app reinstall — same
+                    // id the prefs-backup pipeline keys against).
+                    sendSelfIdentity()
                 } else {
                     isAuthenticated = false
                     authError = msg.error ?? "Invalid PIN"
