@@ -83,7 +83,13 @@ final class BackendConnectionManager {
     /// daemon's real UUID when `device_identity` arrives. Cap-aware: drops
     /// the LRU non-pinned entry to make room.
     func ensureImplicitDefault(url: String) {
-        if let i = paired.firstIndex(where: { $0.url == url }) {
+        // URL-based dedupe: any existing row whose primary OR fallback
+        // URL matches → reuse that row, no new entry. Prevents the
+        // "two Backend rows pointing at the same Mac" duplicate seen
+        // when the same URL came in via both QR pairing + Bonjour
+        // discovery, or via legacy single-URL connect after a
+        // multi-URL row already existed.
+        if let i = paired.firstIndex(where: { $0.urlsInOrder.contains(url) }) {
             paired[i].lastUsed = Date()
             activeBackendID = paired[i].id
             ensureSession(for: paired[i].id)
@@ -273,6 +279,28 @@ final class BackendConnectionManager {
         session.client.sendAuth(pin: pin)
     }
 
+    /// Append `url` as a new fallback on an existing paired row at
+    /// `rowIndex`, persist `pin` to Keychain, refresh lastUsed, and
+    /// force-reconnect the row's session with the merged URL list.
+    /// Used when a re-pair attempt or pairing-add lands on a Mac UUID
+    /// that's already known.
+    private func mergeNewURLInto(rowIndex i: Int, backendID: String, url: String, pin: String) {
+        KeychainBackendPINs.write(backendID: backendID, pin: pin)
+        var allURLs = paired[i].urlsInOrder
+        if !allURLs.contains(url) { allURLs.append(url) }
+        allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+        paired[i].url = allURLs.first ?? paired[i].url
+        paired[i].fallbackURLs = Array(allURLs.dropFirst())
+        paired[i].lastUsed = Date()
+        paired[i].enabled = true
+        savePaired()
+        if let session = sessions[backendID] {
+            session.client.disconnect()
+            primePINIfPresent(session: session)
+            connect(session: session, urls: urlList(for: paired[i]))
+        }
+    }
+
     /// Pair a new backend — caller is responsible for prompting for a PIN and
     /// passing it in. Writes PIN to Keychain, appends to `paired`, opens a
     /// connection. The synthetic `backend.id` is rekeyed once the daemon's
@@ -284,22 +312,23 @@ final class BackendConnectionManager {
     /// Mac, two paths to it, one logical entry — `WebSocketClient.connect`
     /// walks the URL list with auto-fallback.
     func add(_ backend: PairedBackend, pin: String) {
+        // Same-id collision: merge fallback URL into existing row.
         if let i = paired.firstIndex(where: { $0.id == backend.id }) {
-            KeychainBackendPINs.write(backendID: backend.id, pin: pin)
-            // Append the new URL only if it's not already in the list.
-            // Newly-paired URL outranks Tailscale fallbacks if it's a LAN
-            // URL — re-sort by network priority.
-            var allURLs = paired[i].urlsInOrder
-            if !allURLs.contains(backend.url) { allURLs.append(backend.url) }
-            allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
-            paired[i].url = allURLs.first ?? paired[i].url
-            paired[i].fallbackURLs = Array(allURLs.dropFirst())
+            mergeNewURLInto(rowIndex: i, backendID: backend.id, url: backend.url, pin: pin)
+            return
+        }
+        // URL-overlap collision: caller fed a URL that already exists in
+        // ANOTHER row's primary or fallback list. Same Mac, different id
+        // (legacy synthetic vs real UUID, or pre-rekey state). Merge into
+        // that other row instead of creating a duplicate. The other row's
+        // PIN stays in Keychain under its id; we just refresh lastUsed
+        // and reconnect.
+        if let i = paired.firstIndex(where: { $0.urlsInOrder.contains(backend.url) }) {
             paired[i].lastUsed = Date()
             paired[i].enabled = true
+            activeBackendID = paired[i].id
             savePaired()
-            // Force-reconnect with the new URL list so the freshly-added
-            // path participates in the fallback walk.
-            if let session = sessions[backend.id] {
+            if let session = sessions[paired[i].id] {
                 session.client.disconnect()
                 primePINIfPresent(session: session)
                 connect(session: session, urls: urlList(for: paired[i]))
@@ -456,9 +485,14 @@ final class BackendConnectionManager {
             // walks `urlsInOrder` and advances on TCP-fail / auth-timeout,
             // so the user sees one logical Mac and the right path is
             // chosen automatically.
-            if !defaults.bool(forKey: "pairedMultiURLMigrationV1Done") {
+            // V1 only deduped by id; V2 also collapses entries that share
+            // any URL but have different ids (e.g. one row still carrying
+            // a `legacy-` synthetic id from before device_identity rekey).
+            // Force-run for any device that completed V1 since the
+            // overlap case wasn't caught by the earlier pass.
+            if !defaults.bool(forKey: "pairedMultiURLMigrationV2Done") {
                 paired = Self.mergeSameIDRows(paired)
-                defaults.set(true, forKey: "pairedMultiURLMigrationV1Done")
+                defaults.set(true, forKey: "pairedMultiURLMigrationV2Done")
                 savePaired()
             }
             return
@@ -485,9 +519,18 @@ final class BackendConnectionManager {
         UserDefaults.standard.set(activeBackendID, forKey: "activeBackendID")
     }
 
-    /// Collapse multiple rows that share an `id` into one row whose `url`
-    /// is the LAN-preferring primary and whose `fallbackURLs` carry the
-    /// rest. URL ordering: Bonjour `.local` first, then RFC1918 LAN
+    /// Collapse multiple rows that share an `id` OR overlap on any URL
+    /// into one row whose `url` is the LAN-preferring primary and whose
+    /// `fallbackURLs` carry the rest.
+    ///
+    /// Two-pass dedupe:
+    /// 1. Group by `id`. Same Mac UUID, different paths → merge.
+    /// 2. Walk groups; any group sharing a URL with an earlier kept group
+    ///    folds into that earlier one (covers the case where one entry
+    ///    was rekeyed to the real Mac UUID and the other still has its
+    ///    `legacy-` synthetic id, so id-grouping alone misses them).
+    ///
+    /// URL ordering: Bonjour `.local` first, then RFC1918 LAN
     /// (192.168.*, 10.*, 172.16-31.*), then Tailscale CGNAT (100.64-127.*),
     /// then anything else (Cloudflare tunnel, MagicDNS, etc). `enabled` is
     /// the OR of all merged rows. `lastUsed` becomes the most recent. Other
@@ -495,36 +538,53 @@ final class BackendConnectionManager {
     ///
     /// Pure helper — exposed at file scope for unit testing.
     static func mergeSameIDRows(_ entries: [PairedBackend]) -> [PairedBackend] {
+        // Pass 1 — collapse same-id rows.
         var byID: [String: [PairedBackend]] = [:]
         var order: [String] = []
         for e in entries {
             if byID[e.id] == nil { order.append(e.id) }
             byID[e.id, default: []].append(e)
         }
-        return order.map { id -> PairedBackend in
+        let firstPass: [PairedBackend] = order.map { id -> PairedBackend in
             let group = byID[id] ?? []
-            // Single-row groups stay as-is (preserve any existing fallbacks).
-            if group.count == 1 { return group[0] }
-
-            // Collect every URL across the group, dedupe, then sort by
-            // network-priority so the LAN URL ends up first.
-            var seen = Set<String>()
-            var allURLs: [String] = []
-            for row in group {
-                for url in row.urlsInOrder where !seen.contains(url) {
-                    seen.insert(url)
-                    allURLs.append(url)
-                }
-            }
-            allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
-
-            var merged = group[0]
-            merged.url = allURLs.first ?? merged.url
-            merged.fallbackURLs = Array(allURLs.dropFirst())
-            merged.enabled = group.contains(where: { $0.enabled })
-            merged.lastUsed = group.map(\.lastUsed).max() ?? merged.lastUsed
-            return merged
+            return group.count == 1 ? group[0] : Self.mergeRows(group)
         }
+
+        // Pass 2 — fold any later row whose URL set overlaps an earlier
+        // row's URL set. Different ids but same Mac (one synthetic
+        // legacy id, one real UUID after device_identity rekey).
+        var kept: [PairedBackend] = []
+        for row in firstPass {
+            let rowURLs = Set(row.urlsInOrder)
+            if let i = kept.firstIndex(where: { !Set($0.urlsInOrder).isDisjoint(with: rowURLs) }) {
+                kept[i] = Self.mergeRows([kept[i], row])
+            } else {
+                kept.append(row)
+            }
+        }
+        return kept
+    }
+
+    /// Merge a non-empty group of `PairedBackend` rows into a single row.
+    /// Caller guarantees the group represents the same Mac (either same
+    /// id OR overlapping URL set). First row's metadata wins for
+    /// non-mergeable fields (name, kind, pinned).
+    private static func mergeRows(_ group: [PairedBackend]) -> PairedBackend {
+        var seen = Set<String>()
+        var allURLs: [String] = []
+        for row in group {
+            for url in row.urlsInOrder where !seen.contains(url) {
+                seen.insert(url)
+                allURLs.append(url)
+            }
+        }
+        allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+        var merged = group[0]
+        merged.url = allURLs.first ?? merged.url
+        merged.fallbackURLs = Array(allURLs.dropFirst())
+        merged.enabled = group.contains(where: { $0.enabled })
+        merged.lastUsed = group.map(\.lastUsed).max() ?? merged.lastUsed
+        return merged
     }
 
     /// Lower number = preferred for connect (tried first). Bonjour `.local`
