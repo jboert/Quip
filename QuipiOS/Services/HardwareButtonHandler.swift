@@ -100,13 +100,25 @@ final class HardwareButtonHandler {
                 // fights whatever app the user is actually using (YouTube etc.).
                 // We deliberately do NOT tear down the observer or audio session
                 // here; that path broke PTT resume before.
-                guard UIApplication.shared.applicationState == .active else { return }
+                guard UIApplication.shared.applicationState == .active else {
+                    print("[Quip][PTT] KVO drop: app not active (state=\(UIApplication.shared.applicationState.rawValue))")
+                    return
+                }
 
                 // Ignore phantom KVO events caused by audio session reconfiguration
-                guard Date() >= self.suppressUntil else { return }
+                let now = Date()
+                guard now >= self.suppressUntil else {
+                    let remaining = self.suppressUntil.timeIntervalSince(now)
+                    print("[Quip][PTT] KVO drop: suppressed (remaining \(String(format: "%.3f", remaining))s)")
+                    return
+                }
 
                 let delta = newVol - oldVol
-                guard abs(delta) > 0.001 else { return }
+                guard abs(delta) > 0.001 else {
+                    print("[Quip][PTT] KVO drop: delta too small (\(delta))")
+                    return
+                }
+                print("[Quip][PTT] KVO accepted: delta=\(delta) isPTTActive=\(self.isPTTActive)")
 
                 // Restore volume to prevent audible changes
                 self.restoreVolume()
@@ -139,9 +151,36 @@ final class HardwareButtonHandler {
             routeChangeObserver = NotificationCenter.default.addObserver(
                 forName: AVAudioSession.routeChangeNotification,
                 object: nil, queue: .main
-            ) { [weak self] _ in
+            ) { [weak self] notification in
                 guard let self else { return }
                 guard UIApplication.shared.applicationState == .active else { return }
+
+                // Only force-stop on actual hardware route changes (headphones
+                // unplugged, BT disconnect, default device changed). The
+                // notification ALSO fires on category changes — and PTT
+                // start itself triggers a category-change when the speech
+                // service activates the mic. The previous handler treated
+                // that internal change as if AirPods had unplugged and
+                // killed PTT immediately. Result: intermittent "vol-down
+                // didn't trigger anything" depending on whether the route-
+                // change notification beat the user's perception.
+                guard let reasonRaw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                      let reason = AVAudioSession.RouteChangeReason(rawValue: reasonRaw) else { return }
+                let isHardwareEvent: Bool
+                switch reason {
+                case .newDeviceAvailable, .oldDeviceUnavailable, .override, .wakeFromSleep, .noSuitableRouteForCategory:
+                    isHardwareEvent = true
+                case .unknown, .categoryChange, .routeConfigurationChange:
+                    isHardwareEvent = false
+                @unknown default:
+                    isHardwareEvent = false
+                }
+                guard isHardwareEvent else {
+                    NSLog("[Quip][PTT] route change reason=%lu (non-hardware), ignoring", reasonRaw)
+                    return
+                }
+
+                NSLog("[Quip][PTT] route change reason=%lu (hardware) — force-stop", reasonRaw)
                 if self.isPTTActive {
                     self.isPTTActive = false
                     self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
