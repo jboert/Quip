@@ -37,6 +37,132 @@ final class CloudflareTunnel {
     private let proxyQueue = DispatchQueue(label: "quip.tunnel-proxy")
     private var stoppedIntentionally = false
 
+    /// Watches for OS-level network path changes. When the path becomes
+    /// satisfied while cloudflared is running but has not yet resolved a
+    /// `publicURL`, force a tunnel restart — cloudflared often gives up
+    /// silently on path flaps and a fresh process is the fastest cure.
+    private var pathMonitor: NWPathMonitor?
+    /// Periodic check that catches the "cloudflared is alive but the tunnel
+    /// never reached the edge" case (no URL parsed within `stuckThresholdSec`).
+    private var stuckWatchdogTimer: Timer?
+    /// Wall-clock at which the current `start()` attempt began. Cleared once
+    /// `publicURL` resolves so the watchdog only counts unresolved attempts.
+    private var connectingStartedAt: Date?
+
+    /// Stall threshold for the watchdog — once a `start()` attempt has been
+    /// in flight this long without `publicURL` resolving, kill cloudflared
+    /// and start fresh. iOS uses 25s on the WS task; Mac side gives a bit
+    /// more room because cloudflared edge resolution does the DNS + TLS
+    /// dance and a quick first-try fail is normal.
+    private static let stuckThresholdSec: TimeInterval = 30
+
+    /// Diagnostic ring buffer — last 30 lifecycle events with timestamps.
+    /// Surfaced via `recentConnectionEvents` for the menubar (wishlist §48)
+    /// and any future in-app diag panel. Mirrors the iOS-side
+    /// `WebSocketClient.connectionEvents` pattern (commit 64a8376).
+    private var connectionEvents: [String] = []
+    var recentConnectionEvents: [String] { connectionEvents }
+
+    init() {
+        startPathMonitor()
+    }
+
+    /// Stops the path monitor + stall watchdog. Call from `stop()` so the
+    /// background subscribers don't outlive the tunnel. `[weak self]` inside
+    /// the handlers already makes stale fires harmless; this is just tidy.
+    func teardownDiagnostics() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        stuckWatchdogTimer?.invalidate()
+        stuckWatchdogTimer = nil
+    }
+
+    /// Append a timestamped line to the ring buffer (cap 30) and echo to
+    /// stdout. Called from every interesting lifecycle transition so the
+    /// menubar / diag panel reflects what actually happened without anyone
+    /// having to tail tunnel.log. `internal` (not `private`) so tests can
+    /// drive the ring buffer without spinning up cloudflared.
+    func logEvent(_ msg: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(msg)"
+        connectionEvents.append(line)
+        if connectionEvents.count > 30 { connectionEvents.removeFirst(connectionEvents.count - 30) }
+        print("[CloudflareTunnel] \(msg)")
+    }
+
+    /// Subscribe to OS network-path changes. When the path becomes
+    /// satisfied and we have an in-flight start attempt with no resolved
+    /// URL, restart cloudflared immediately — the existing 1s pollTimer +
+    /// 60s healthTimer won't notice that cloudflared has silently lost its
+    /// edge connection.
+    private func startPathMonitor() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if path.status == .satisfied {
+                    self.logEvent("network path satisfied")
+                    if self.isRunning && self.publicURL.isEmpty && !self.stoppedIntentionally {
+                        self.logEvent("path-driven tunnel restart (URL still unresolved)")
+                        self.restartTunnel()
+                    }
+                } else {
+                    self.logEvent("network path unsatisfied (\(path.status))")
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue.global(qos: .utility))
+        pathMonitor = monitor
+    }
+
+    /// Arm the stall watchdog for the in-flight `start()` attempt. Fires
+    /// every 5s; if the attempt has been running for more than
+    /// `stuckThresholdSec` with no `publicURL`, kill cloudflared and start
+    /// over. Disarm once `publicURL` resolves (in `checkLogForURL`).
+    private func startStuckWatchdog() {
+        stuckWatchdogTimer?.invalidate()
+        connectingStartedAt = Date()
+        stuckWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.isRunning,
+                      self.publicURL.isEmpty,
+                      !self.stoppedIntentionally,
+                      let started = self.connectingStartedAt else { return }
+                let elapsed = Date().timeIntervalSince(started)
+                if elapsed > Self.stuckThresholdSec {
+                    self.logEvent("stall watchdog tripped after \(Int(elapsed))s — restarting tunnel")
+                    self.restartTunnel()
+                }
+            }
+        }
+    }
+
+    /// Tear down the current cloudflared process + timers and re-enter
+    /// `start()`. Used by the path monitor and stall watchdog. Does NOT set
+    /// `stoppedIntentionally` — we want the terminationHandler to skip its
+    /// own 3s restart so we control the cadence here.
+    private func restartTunnel() {
+        connectingStartedAt = Date()  // reset the clock for the new attempt
+        pollTimer?.invalidate()
+        pollTimer = nil
+        healthTimer?.invalidate()
+        healthTimer = nil
+        if let proc = process, proc.isRunning {
+            proc.terminate()
+        }
+        process = nil
+        publicURL = ""
+        webSocketURL = ""
+        isRunning = false
+        // Brief delay so the OS can reap the SIGTERM'd process before the
+        // next pgrep-and-kill sweep at the top of `start()`.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, !self.stoppedIntentionally else { return }
+            self.start()
+        }
+    }
+
     private static var logPath: String {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         return cacheDir.appendingPathComponent("Quip/tunnel.log").path
@@ -45,6 +171,8 @@ final class CloudflareTunnel {
     func start(localPort: UInt16 = 8765) {
         guard !isRunning else { return }
         stoppedIntentionally = false
+        logEvent("start() invoked")
+        startStuckWatchdog()
 
         // Kill any orphaned cloudflared processes from previous app sessions.
         // When the app is force-quit, cloudflared gets reparented to PID 1 and
@@ -97,13 +225,15 @@ final class CloudflareTunnel {
                 self.pollTimer?.invalidate()
                 self.healthTimer?.invalidate()
                 if !self.stoppedIntentionally {
-                    print("[CloudflareTunnel] Process died, restarting in 3 seconds")
+                    self.logEvent("cloudflared process died — auto-restart in 3s")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                         guard let self, !self.stoppedIntentionally, !self.isRunning else { return }
                         self.publicURL = ""
                         self.webSocketURL = ""
                         self.start()
                     }
+                } else {
+                    self.logEvent("cloudflared process terminated cleanly")
                 }
             }
         }
@@ -142,10 +272,14 @@ final class CloudflareTunnel {
 
     func stop() {
         stoppedIntentionally = true
+        logEvent("stop() invoked")
         pollTimer?.invalidate()
         pollTimer = nil
         healthTimer?.invalidate()
         healthTimer = nil
+        stuckWatchdogTimer?.invalidate()
+        stuckWatchdogTimer = nil
+        connectingStartedAt = nil
         process?.terminate()
         process = nil
         proxyListener?.cancel()
@@ -161,6 +295,8 @@ final class CloudflareTunnel {
             if let url = Self.extractTunnelURL(from: String(raw)) {
                 publicURL = url
                 webSocketURL = url.replacingOccurrences(of: "https://", with: "wss://")
+                connectingStartedAt = nil  // disarm stall watchdog — URL resolved
+                logEvent("publicURL resolved: \(url)")
                 return
             }
         }
