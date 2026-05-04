@@ -24,6 +24,7 @@ targets:
           - "Signing.local.xcconfig"
           - "build/**"
           - "QuipLiveActivity/**"
+          - "QuipWatch/**"
       - path: QuipLiveActivity/Shared
       - path: ../Shared
         excludes:
@@ -31,7 +32,9 @@ targets:
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
-    dependencies: []
+    dependencies:
+      - target: QuipWatch
+        embed: true
     settings:
       base:
         PRODUCT_NAME: Quip
@@ -93,6 +96,25 @@ targets:
         DEVELOPMENT_TEAM: D2PM6R797Q
         GENERATE_INFOPLIST_FILE: "NO"
         SKIP_INSTALL: "NO"
+  QuipWatch:
+    type: application
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources:
+      - path: QuipWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipiOS.watchkitapp
+        PRODUCT_NAME: QuipWatch
+        INFOPLIST_FILE: QuipWatch/Info.plist
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "4"
+        DEVELOPMENT_TEAM: D2PM6R797Q
+        WATCHOS_DEPLOYMENT_TARGET: "10.0"
+        GENERATE_INFOPLIST_FILE: "NO"
+        SKIP_INSTALL: "NO"
+        SWIFT_VERSION: "6.0"
   QuipiOSTests:
     type: bundle.unit-test
     platform: iOS

@@ -35,6 +35,8 @@
 		4DD215CB4746FD0FA6D82DD4 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */; };
 		545F466547A7823805966083 /* TerminalContentOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */; };
 		5B36FBA58C811B5085CC8DF6 /* RemoteSpeechSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10C0B106747159F0E24ED6C /* RemoteSpeechSession.swift */; };
+		5D3B13CBD9409F29F40C07CD /* QuipWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2557AE8AAEAD4735BAEF2EAF /* QuipWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5D88E9EBD78A8058333CC1D3 /* WatchSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 838EDA054E1E6EFFD12734ED /* WatchSyncService.swift */; };
 		61BEA675BFFB5F8019D960F0 /* TTSNotificationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */; };
 		6441F32153F6E86CF6529571 /* QuipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 959643D7FC10BD21E0FDE409 /* QuipApp.swift */; };
 		67348F3277C90D577C7D95D3 /* PushRegistrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA867C4EE46E8D6EEA5EC8D /* PushRegistrationService.swift */; };
@@ -46,6 +48,7 @@
 		7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414AD810B644C175CFB73EE5 /* WindowInfo.swift */; };
 		7880A1510DE089958DF89CAA /* WindowRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */; };
 		81636C8A292C763A850701B8 /* PCMChunker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FC01677A64725213479F75E /* PCMChunker.swift */; };
+		855A8E9290C29653C7B9984A /* QuipWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8135CA5A6364965D159D7274 /* QuipWatchApp.swift */; };
 		90AC9E73F35BAD1CC1917C75 /* QuipLiveActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04067ECD7983ACC50844C82D /* QuipLiveActivityBundle.swift */; };
 		911B08CC263A882D5F10E54B /* QuipLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */; };
 		996767763A69068B0D1D8687 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EED90216075AC25A1EDB70 /* SpeechService.swift */; };
@@ -78,6 +81,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		8937978D53AE52146770FB40 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1FFEE7473E4CC1ABAFA5B870 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FECE6A015BCD20182BBC8A5F;
+			remoteInfo = QuipWatch;
+		};
 		A700083DAD11081C5B039D1F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 1FFEE7473E4CC1ABAFA5B870 /* Project object */;
@@ -87,12 +97,27 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		CBA11178229F186353060A54 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				5D3B13CBD9409F29F40C07CD /* QuipWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		01EA3B9F2E651E55A79DFB40 /* QuipiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = QuipiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		04067ECD7983ACC50844C82D /* QuipLiveActivityBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipLiveActivityBundle.swift; sourceTree = "<group>"; };
 		07BAAAC4E0E8051B6FF2664E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0B827C2D030F43E7C9485615 /* SeamStitcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamStitcherTests.swift; sourceTree = "<group>"; };
 		0BD4C0C02F1EAFBEEDC5EA1D /* PhoneLayoutChooserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLayoutChooserTests.swift; sourceTree = "<group>"; };
+		0E9930F4CA01187AC9C83D77 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		0F583D197E23AF06962CE81A /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		109D3594919D4EF54DE97C72 /* QuipLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipLiveActivityWidget.swift; sourceTree = "<group>"; };
 		18AE69F5AEDB7F658B8657E8 /* QuipiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuipiOS.entitlements; sourceTree = "<group>"; };
@@ -101,6 +126,7 @@
 		1D6ED80C8277F668CC0B273C /* ImageRecompressor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRecompressor.swift; sourceTree = "<group>"; };
 		1E0956F285AE5835E9D2C425 /* KeychainBackendPINs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainBackendPINs.swift; sourceTree = "<group>"; };
 		25530A43AA8DC90AF7ED2C57 /* AudioRingBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBufferTests.swift; sourceTree = "<group>"; };
+		2557AE8AAEAD4735BAEF2EAF /* QuipWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuipWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRectangle.swift; sourceTree = "<group>"; };
 		2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuipiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		30CED6C2881B9B0070767205 /* AudioRingBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBuffer.swift; sourceTree = "<group>"; };
@@ -130,6 +156,8 @@
 		764505DC63C7C214558A63CC /* WindowManagerSessionIdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManagerSessionIdTests.swift; sourceTree = "<group>"; };
 		773DBA5F5449A8B4C8E7D1AE /* PendingImageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingImageState.swift; sourceTree = "<group>"; };
 		7A26AAB8221B8827AD9A61B0 /* BackendConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendConnectionManager.swift; sourceTree = "<group>"; };
+		8135CA5A6364965D159D7274 /* QuipWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipWatchApp.swift; sourceTree = "<group>"; };
+		838EDA054E1E6EFFD12734ED /* WatchSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSyncService.swift; sourceTree = "<group>"; };
 		89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSNotificationOverlay.swift; sourceTree = "<group>"; };
 		8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
 		8F9E57DEE1951FF2AFAE5E1F /* UIImageHEICTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIImageHEICTests.swift; sourceTree = "<group>"; };
@@ -170,6 +198,7 @@
 				E96781A6729F4AC1D1B88B16 /* Models */,
 				00C81D8E06C7AD6C80C65C66 /* Quip */,
 				758CAB7E405283D8A5CCF93C /* QuipLiveActivity */,
+				E300EC98FCADF1D2656FF3D3 /* QuipWatch */,
 				A09650EC2B05403F60FD86D4 /* Resources */,
 				B82A58177E51EF2234FD8D1C /* Services */,
 				538976D44E5C8716FFE3D88D /* Tests */,
@@ -227,6 +256,7 @@
 				01EA3B9F2E651E55A79DFB40 /* QuipiOS.app */,
 				2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */,
 				18E21C7F1FD2E724E4790F5D /* QuipLiveActivity.appex */,
+				2557AE8AAEAD4735BAEF2EAF /* QuipWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -319,10 +349,20 @@
 				DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */,
 				F7EED90216075AC25A1EDB70 /* SpeechService.swift */,
 				5623358EE81D9F96BC0761F8 /* UIImage+HEIC.swift */,
+				838EDA054E1E6EFFD12734ED /* WatchSyncService.swift */,
 				B5760F08A42C6C6570E49A4B /* WebSocketClient.swift */,
 				4E556291C05B9A0CF7C50AA5 /* WhisperAudioSender.swift */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		E300EC98FCADF1D2656FF3D3 /* QuipWatch */ = {
+			isa = PBXGroup;
+			children = (
+				0E9930F4CA01187AC9C83D77 /* Info.plist */,
+				8135CA5A6364965D159D7274 /* QuipWatchApp.swift */,
+			);
+			path = QuipWatch;
 			sourceTree = "<group>";
 		};
 		E96781A6729F4AC1D1B88B16 /* Models */ = {
@@ -353,10 +393,12 @@
 			buildPhases = (
 				D9E99051B59BC6D7B0670DE2 /* Sources */,
 				F5D327F6CB23C79C005A110C /* Resources */,
+				CBA11178229F186353060A54 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				24B21524A61CE5E8AB128F96 /* PBXTargetDependency */,
 			);
 			name = QuipiOS;
 			packageProductDependencies = (
@@ -400,6 +442,23 @@
 			productReference = 2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		FECE6A015BCD20182BBC8A5F /* QuipWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9012F7E4990385778F57ADED /* Build configuration list for PBXNativeTarget "QuipWatch" */;
+			buildPhases = (
+				D21D8CBB16A407B1E594457C /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuipWatch;
+			packageProductDependencies = (
+			);
+			productName = QuipWatch;
+			productReference = 2557AE8AAEAD4735BAEF2EAF /* QuipWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -413,6 +472,10 @@
 						ProvisioningStyle = Automatic;
 					};
 					9DEF60E2FC7CAF561E947475 = {
+						DevelopmentTeam = D2PM6R797Q;
+						ProvisioningStyle = Automatic;
+					};
+					FECE6A015BCD20182BBC8A5F = {
 						DevelopmentTeam = D2PM6R797Q;
 						ProvisioningStyle = Automatic;
 					};
@@ -433,6 +496,7 @@
 			projectRoot = "";
 			targets = (
 				9DEF60E2FC7CAF561E947475 /* QuipLiveActivity */,
+				FECE6A015BCD20182BBC8A5F /* QuipWatch */,
 				0106693FA1DD6F4A224F80DD /* QuipiOS */,
 				FE4AE6E8B87960D72E2FEAD5 /* QuipiOSTests */,
 			);
@@ -492,6 +556,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D21D8CBB16A407B1E594457C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				855A8E9290C29653C7B9984A /* QuipWatchApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D9E99051B59BC6D7B0670DE2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -532,6 +604,7 @@
 				61BEA675BFFB5F8019D960F0 /* TTSNotificationOverlay.swift in Sources */,
 				545F466547A7823805966083 /* TerminalContentOverlay.swift in Sources */,
 				BDB47940A30E2AE5F74267E3 /* UIImage+HEIC.swift in Sources */,
+				5D88E9EBD78A8058333CC1D3 /* WatchSyncService.swift in Sources */,
 				4DD215CB4746FD0FA6D82DD4 /* WebSocketClient.swift in Sources */,
 				D0B1694FE8FBF6965FCE4748 /* WhisperAudioSender.swift in Sources */,
 				7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */,
@@ -542,6 +615,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		24B21524A61CE5E8AB128F96 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FECE6A015BCD20182BBC8A5F /* QuipWatch */;
+			targetProxy = 8937978D53AE52146770FB40 /* PBXContainerItemProxy */;
+		};
 		F6908ACEDED58F2BCA7F02C8 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 0106693FA1DD6F4A224F80DD /* QuipiOS */;
@@ -550,6 +628,25 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		01F6700E4C3CD7723CDDD021 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = D2PM6R797Q;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = QuipWatch/Info.plist;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quip.QuipiOS.watchkitapp;
+				PRODUCT_NAME = QuipWatch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
 		04A755C374A414438F54BE22 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = B3398B602525378B861B9218 /* Signing.xcconfig */;
@@ -639,7 +736,6 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = minimal;
@@ -703,7 +799,6 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = minimal;
@@ -744,6 +839,25 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Quip.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Quip";
 			};
 			name = Debug;
+		};
+		CE3EAA755A900CF8974F9664 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = D2PM6R797Q;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = QuipWatch/Info.plist;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quip.QuipiOS.watchkitapp;
+				PRODUCT_NAME = QuipWatch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
 		};
 		E88DFAED7F77715E3F826B09 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -804,6 +918,15 @@
 			buildConfigurations = (
 				E88DFAED7F77715E3F826B09 /* Debug */,
 				F90B7B69610EDEAE2263CEF9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9012F7E4990385778F57ADED /* Build configuration list for PBXNativeTarget "QuipWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01F6700E4C3CD7723CDDD021 /* Debug */,
+				CE3EAA755A900CF8974F9664 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
