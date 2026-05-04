@@ -540,15 +540,17 @@ final class WebSocketClient {
                     self.lastError = nil
                     self.reconnectDelay = 1.0
                     self.startKeepalive()
-                    // Auto-send cached PIN on reconnect, or prompt for PIN
-                    // (skip if server already auto-authenticated us)
-                    if !self.isAuthenticated {
-                        if let pin = self.sessionPIN {
-                            self.sendAuth(pin: pin)
-                        } else {
-                            self.onAuthRequired?()
-                        }
-                    }
+                    // Don't send auth eagerly — wait for the server's first
+                    // auth_result message which carries the auth_required
+                    // signal. On a Mac with `requireAuth=false` the server
+                    // immediately replies success=true, and a stray PIN we
+                    // sent here would land at handleAuthMessage where the
+                    // missing pinManager.pin produces "Server PIN not
+                    // configured" → flips isAuthenticated back to false →
+                    // phone gets stuck in "Authenticating…". The cached
+                    // sessionPIN now waits in the auth_result handler and
+                    // only fires when we actually see the auth_required
+                    // signal.
                 }
             }
         }
@@ -614,8 +616,15 @@ final class WebSocketClient {
         case "auth_result":
             if let msg = try? decoder.decode(AuthResultMessage.self, from: data) {
                 NSLog("[WebSocketClient] auth_result: success=%d error=%@", msg.success ? 1 : 0, msg.error ?? "none")
-                // "auth_required" is the server's connection-ready signal, not a real error
+                // "auth_required" is the server's connection-ready signal —
+                // server wants a PIN. Send the cached one if we have it,
+                // else surface the prompt to the UI.
                 if msg.error == "auth_required" {
+                    if let pin = sessionPIN {
+                        sendAuth(pin: pin)
+                    } else {
+                        onAuthRequired?()
+                    }
                     return
                 }
                 if msg.success {
