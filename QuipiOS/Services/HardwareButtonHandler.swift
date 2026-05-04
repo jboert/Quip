@@ -241,6 +241,13 @@ final class HardwareButtonHandler {
     /// without waiting for the next Mac `layout_update`.
     /// Use this on `didEnterBackground`; reserve full `stopMonitoring()`
     /// for terminal teardown (no-windows state, app shutting down).
+    ///
+    /// Also fires `onDisarm` so the SpeechService stops its long-lived
+    /// audio engine + tap. Without this, the engine kept the mic active
+    /// while the app was in the background — visible to the user as the
+    /// orange "mic in use" indicator in the iOS status bar / Dynamic
+    /// Island. `resumeAfterBackground` will re-arm via `startMonitoring`
+    /// → `onArm` when the app returns.
     func pauseMonitoring() {
         volumeObservation?.invalidate()
         volumeObservation = nil
@@ -252,6 +259,7 @@ final class HardwareButtonHandler {
         cancelStuckWatchdog()
         // Deliberately keep windowCount so resumeAfterBackground can re-arm.
         // Deliberately keep routeChangeObserver — it's still useful in fg.
+        onDisarm?()
     }
 
     /// Capture the user's current output volume into `savedVolume`. Only
