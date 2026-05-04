@@ -2914,6 +2914,7 @@ struct MainiOSView: View {
     enum RowItem: Identifiable {
         case builtinButton(QuickButton)
         case customButton(CustomButton)
+        case promptButton(promptID: String, label: String)
         case spacer(width: CGFloat, uid: UUID)
         case slashGroup(letter: Character, members: [SlashGroupMember])
 
@@ -2921,6 +2922,7 @@ struct MainiOSView: View {
             switch self {
             case .builtinButton(let b): return "b:\(b.rawValue)"
             case .customButton(let c): return "c:\(c.id.uuidString)"
+            case .promptButton(let pid, _): return "p:\(pid)"
             case .spacer(_, let uid): return "s:\(uid.uuidString)"
             case .slashGroup(let l, _): return "g:\(l)"
             }
@@ -2946,7 +2948,7 @@ struct MainiOSView: View {
                 if let c = defsById[id], let key = slashLetter(of: c) {
                     letterCount[key, default: 0] += 1
                 }
-            case .spacer:
+            case .prompt, .spacer:
                 break
             }
         }
@@ -2964,7 +2966,7 @@ struct MainiOSView: View {
                 if let c = defsById[id], let key = slashLetter(of: c), (letterCount[key] ?? 0) > 1 {
                     members[key, default: []].append(.custom(c))
                 }
-            case .spacer:
+            case .prompt, .spacer:
                 break
             }
         }
@@ -2992,6 +2994,13 @@ struct MainiOSView: View {
                 } else {
                     items.append(.customButton(c))
                 }
+            case .prompt(let pid):
+                // Look up the label from the live catalog. Fall back to the
+                // id when the Mac hasn't broadcast yet — the pill stays
+                // visible (greyed-out) so the slot order doesn't shift on
+                // a brief disconnect. (§B3)
+                let label = client.promptLibrary.first(where: { $0.id == pid })?.label ?? pid
+                items.append(.promptButton(promptID: pid, label: label))
             }
         }
         return items
@@ -3040,12 +3049,54 @@ struct MainiOSView: View {
                 quickActionButton(b)
             case .customButton(let c):
                 customQuickButton(c)
+            case .promptButton(let pid, let label):
+                promptQuickButton(promptID: pid, label: label)
             case .spacer(let w, _):
                 Spacer().frame(width: w)
             case .slashGroup(let letter, let members):
                 slashGroupMenuButton(letter: letter, members: members)
             }
         }
+    }
+
+    /// Pill rendering + tap handling for a Mac-managed prompt slot.
+    /// Style mirrors `customQuickButton` but uses the SF Symbol for
+    /// "doc.text" + a purple tint so the user can tell library-prompts
+    /// apart from custom-text buttons. Tap fires PastePromptMessage to
+    /// the active window; long-press paste-and-submits. Disabled when
+    /// the Mac hasn't broadcast its catalog (label = id) so a stale
+    /// slot doesn't fire to a window with nothing to paste. (§B3)
+    @ViewBuilder
+    private func promptQuickButton(promptID: String, label: String) -> some View {
+        let entry = client.promptLibrary.first(where: { $0.id == promptID })
+        let canFire = entry != nil && client.isConnected && selectedWindowId != nil
+        Button {
+            firePromptSlot(promptID: promptID, pressReturn: false)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(canFire ? Color.purple.opacity(0.55) : Color.gray.opacity(0.25))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canFire)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.4)
+                .onEnded { _ in firePromptSlot(promptID: promptID, pressReturn: true) }
+        )
+    }
+
+    private func firePromptSlot(promptID: String, pressReturn: Bool) {
+        guard let wid = selectedWindowId, !wid.isEmpty else { return }
+        client.send(PastePromptMessage(id: promptID, windowId: wid, pressReturn: pressReturn))
     }
 
     /// Wire-side dispatch for a custom button. Mirrors `fireQuickButton` so
@@ -4016,6 +4067,13 @@ struct CustomButton: Codable, Hashable, Identifiable {
 enum QuickSlot: Hashable, Identifiable {
     case builtin(QuickButton)
     case custom(UUID)
+    /// Reference to a Mac-side prompt (wishlist §B3). Renders as a pill
+    /// labeled with the prompt's display name; tapping fires
+    /// PastePromptMessage to the active window. The prompt itself lives
+    /// on the Mac in ~/Library/Application Support/Quip/prompts/<id>.txt
+    /// and may not exist if the Mac hasn't broadcast its catalog yet —
+    /// the renderer shows a placeholder pill in that case.
+    case prompt(promptID: String)
     /// Fixed-width gap between adjacent slots. Multiple spacers in a row
     /// stack their widths. Carries a UUID so SwiftUI lists can identify
     /// each spacer separately when there's more than one.
@@ -4025,6 +4083,7 @@ enum QuickSlot: Hashable, Identifiable {
         switch self {
         case .builtin(let b): return "b:\(b.rawValue)"
         case .custom(let uid): return "c:\(uid.uuidString)"
+        case .prompt(let pid): return "p:\(pid)"
         case .spacer(let uid): return "s:\(uid.uuidString)"
         }
     }
@@ -4035,7 +4094,7 @@ enum QuickSlot: Hashable, Identifiable {
 // + a value field per case. `kind` strings are part of the persistence
 // format — don't rename without a migration.
 extension QuickSlot: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, button, customID, spacerID }
+    private enum CodingKeys: String, CodingKey { case kind, button, customID, promptID, spacerID }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -4052,6 +4111,8 @@ extension QuickSlot: Codable {
             self = .builtin(button)
         case "custom":
             self = .custom(try c.decode(UUID.self, forKey: .customID))
+        case "prompt":
+            self = .prompt(promptID: try c.decode(String.self, forKey: .promptID))
         case "spacer":
             self = .spacer(try c.decode(UUID.self, forKey: .spacerID))
         default:
@@ -4071,6 +4132,9 @@ extension QuickSlot: Codable {
         case .custom(let id):
             try c.encode("custom", forKey: .kind)
             try c.encode(id, forKey: .customID)
+        case .prompt(let pid):
+            try c.encode("prompt", forKey: .kind)
+            try c.encode(pid, forKey: .promptID)
         case .spacer(let id):
             try c.encode("spacer", forKey: .kind)
             try c.encode(id, forKey: .spacerID)
@@ -4209,7 +4273,7 @@ struct SettingsSheet: View {
                 // logical groups: Appearance, Keyboard, Notifications.
                 Section {
                     NavigationLink {
-                        QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+                        QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw, client: client)
                     } label: {
                         HStack {
                             Text("Quick Buttons")
@@ -4582,11 +4646,16 @@ struct MainRowButtonsSheet: View {
 /// edit so a downgrade-and-restart still reads a sensible row.
 struct QuickButtonsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
+    /// Optional — when present, the "+" menu can offer Mac-managed
+    /// prompts as keyboard slots. Older callers that don't pass a
+    /// client still get the legacy menu (no Prompt section). (§B3)
+    var client: WebSocketClient?
     @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
 
     @State private var editingCustomID: UUID?
     @State private var addingCustom: Bool = false
+    @State private var showPromptPicker: Bool = false
 
     private var slots: [QuickSlot] { QuickSlotStore.decode(quickSlotsJSON) }
     private var customs: [CustomButton] { CustomButtonStore.decode(customButtonsJSON) }
@@ -4723,6 +4792,62 @@ struct QuickButtonsSheet: View {
                 }
             )
         }
+        .sheet(isPresented: $showPromptPicker) {
+            promptPickerSheet
+        }
+    }
+
+    /// Lists every prompt currently in the Mac catalog. Tap = add as a
+    /// .prompt slot at the end of the row. Already-placed prompts are
+    /// disabled so the user can't accidentally double-add. (§B3)
+    private var promptPickerSheet: some View {
+        NavigationStack {
+            List {
+                if let cl = client {
+                    let placed = Set(slots.compactMap { slot -> String? in
+                        if case .prompt(let pid) = slot { return pid }
+                        return nil
+                    })
+                    ForEach(cl.promptLibrary) { entry in
+                        Button {
+                            addPromptSlot(entry.id)
+                            showPromptPicker = false
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.label)
+                                        .foregroundStyle(.primary)
+                                    Text(entry.bodyPreview)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                if placed.contains(entry.id) {
+                                    Text("Added")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                        .disabled(placed.contains(entry.id))
+                    }
+                }
+            }
+            .navigationTitle("Add Prompt")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showPromptPicker = false }
+                }
+            }
+        }
+    }
+
+    private func addPromptSlot(_ promptID: String) {
+        var s = slots
+        s.append(.prompt(promptID: promptID))
+        persistSlots(s)
     }
 
     @ViewBuilder
@@ -4776,6 +4901,27 @@ struct QuickButtonsSheet: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
+        case .prompt(let pid):
+            let entry = client?.promptLibrary.first(where: { $0.id == pid })
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.purple.opacity(0.25))
+                    .frame(width: 36, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.purple)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry?.label ?? pid)
+                    Text(entry == nil ? "Prompt (Mac unreachable)" : "Prompt · \(entry!.bodyBytes)B")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
         }
     }
 
@@ -4826,9 +4972,30 @@ struct QuickButtonsSheet: View {
                 result.append((slot.id, AnyView(
                     Color.clear.frame(width: 12, height: 1)
                 )))
+            case .prompt(let pid):
+                let label = client?.promptLibrary.first(where: { $0.id == pid })?.label ?? pid
+                result.append((slot.id, AnyView(promptPillPreview(label: label))))
             }
         }
         return result
+    }
+
+    /// Editor-only mock of the prompt pill — same purple tint + doc.text
+    /// icon as the live keyboard renderer in `promptQuickButton`. (§B3)
+    @ViewBuilder
+    private func promptPillPreview(label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 9, weight: .semibold))
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.purple.opacity(0.55))
+        .foregroundStyle(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     /// Pill mock that matches the keyboard's `quickActionButton` chrome.
@@ -4906,6 +5073,13 @@ struct QuickButtonsSheet: View {
                     addSpacer()
                 } label: {
                     Label("Spacer", systemImage: "arrow.left.and.right")
+                }
+                if let cl = client, !cl.promptLibrary.isEmpty {
+                    Button {
+                        showPromptPicker = true
+                    } label: {
+                        Label("Prompt from library…", systemImage: "doc.text")
+                    }
                 }
             }
         } label: {
