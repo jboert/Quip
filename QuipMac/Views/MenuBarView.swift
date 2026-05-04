@@ -7,6 +7,8 @@ struct MenuBarView: View {
     @Environment(WindowManager.self) private var windowManager
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
+    @Environment(CloudflareTunnel.self) private var tunnel
+    @Environment(ConnectionLog.self) private var connectionLog
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -52,13 +54,33 @@ struct MenuBarView: View {
     private var statusIndicator: some View {
         HStack(spacing: 4) {
             Circle()
-                .fill(webSocketServer.isRunning ? Color.green : Color.red)
+                .fill(statusColor)
                 .frame(width: 8, height: 8)
 
-            Text(webSocketServer.isRunning ? "Running" : "Stopped")
+            Text(statusLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// Aggregate health: green = server running, ≥1 client, tunnel ready (or
+    /// tunnel disabled). Yellow = server running but listener-only (no
+    /// clients OR tunnel still resolving). Red = server stopped. Three-color
+    /// signal lets the user read overall state from the menubar dot before
+    /// even opening the popover.
+    private var statusColor: Color {
+        guard webSocketServer.isRunning else { return .red }
+        let tunnelHealthy = !tunnel.isRunning || !tunnel.publicURL.isEmpty
+        if webSocketServer.connectedClientCount > 0 && tunnelHealthy {
+            return .green
+        }
+        return .yellow
+    }
+
+    private var statusLabel: String {
+        guard webSocketServer.isRunning else { return "Stopped" }
+        if webSocketServer.connectedClientCount > 0 { return "Active" }
+        return "Listening"
     }
 
     // MARK: - Connection Section
@@ -109,9 +131,76 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            // Cloudflare tunnel status — visible only when the tunnel is
+            // active. Truncates the long *.trycloudflare.com host to a
+            // readable prefix; the user copies the full URL from Settings
+            // if needed. Yellow dot when tunnel is up but URL not yet
+            // resolved (the new stall watchdog from §45 will restart it).
+            if tunnel.isRunning {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(tunnel.publicURL.isEmpty ? Color.yellow : Color.green)
+                        .frame(width: 6, height: 6)
+                    Text(tunnelLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            // Last connection event — pulled from the same ConnectionLog
+            // ring buffer the Settings → Diagnostics tab uses. Single-line
+            // glance at "what just happened with the phone" without having
+            // to open Settings.
+            if let last = connectionLog.events.first {
+                HStack(spacing: 6) {
+                    Image(systemName: lastEventIcon(last.kind))
+                        .font(.caption2)
+                        .foregroundStyle(lastEventColor(last.kind))
+                    Text("\(last.kind.rawValue) · \(Self.relativeTimeFormatter.localizedString(for: last.timestamp, relativeTo: Date()))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
         .padding(12)
     }
+
+    private var tunnelLabel: String {
+        if tunnel.publicURL.isEmpty {
+            return "Tunnel: resolving…"
+        }
+        let trimmed = tunnel.publicURL
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: ".trycloudflare.com", with: "")
+        return "Tunnel: \(trimmed)"
+    }
+
+    private func lastEventIcon(_ kind: ConnectionEvent.Kind) -> String {
+        switch kind {
+        case .connected, .authSucceeded: return "checkmark.circle.fill"
+        case .disconnected: return "circle.dotted"
+        case .authFailed: return "lock.slash.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func lastEventColor(_ kind: ConnectionEvent.Kind) -> Color {
+        switch kind {
+        case .connected, .authSucceeded: return .green
+        case .disconnected: return .secondary
+        case .authFailed, .failed: return .red
+        }
+    }
+
+    private static let relativeTimeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
 
     // MARK: - Actions Section
 

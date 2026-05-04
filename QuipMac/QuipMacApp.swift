@@ -98,6 +98,7 @@ struct QuipMacApp: App {
                 .environment(bonjourAdvertiser)
                 .environment(tunnel)
                 .environment(tailscale)
+                .environment(connectionLog)
                 .onAppear { startServicesOnce() }
         }
         .menuBarExtraStyle(.window)
