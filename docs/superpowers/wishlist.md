@@ -1083,6 +1083,33 @@ Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glanc
 
 ---
 
+### 57. Prompt library — Mac watches a directory, iPhone pastes (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1 on `eb-branch` — commit `ad4fb57`. Built clean for both schemes; installed to Mac and Tim apple 17. 15 of 25 streamdeck-claude-scripts auto-imported.
+
+**Why:** User asked to bring the Stream Deck "clipboard prompt" pattern (`/Users/erickbzovi/Projects/streamdeck-claude-scripts`) into Quip — a button on the keyboard that pastes a long pre-written prompt into iTerm with one tap. Existing CustomButton.rawText already did the typing, but editing 1-15 KB of prompt text in the iOS form was awful and there was no library/discovery.
+
+**What shipped:**
+- `QuipMac/Services/PromptLibrary.swift` — DispatchSource FS observer over `~/Library/Application Support/Quip/prompts/*.txt`. Filename (sans .txt) = entry id. First non-empty line starting with `# Title` becomes the label and is stripped from the body. README.txt seeded on first run.
+- `Shared/MessageProtocol.swift` — `PromptLibraryMessage` (Mac→iPhone, catalog with 120-char body previews) + `PastePromptMessage` (iPhone→Mac, id+windowId+pressReturn).
+- `QuipMac/QuipMacApp.swift` — broadcast on every catalog change, plus push to every newly-authenticated client. New `paste_prompt` handler runs `keystrokeInjector.sendText` through the existing per-terminal-app path (iTerm2 AppleScript, Claude Desktop clipboard-paste, Terminal keystrokes).
+- `QuipiOS/QuipApp.swift` — new `PromptLibrarySheet` under Settings → Prompts. Tap row → paste (no submit). Long-press → paste-and-submit. SettingsSheet now takes `selectedWindowId` so the paste targets the right window.
+- `QuipMac/Tools/import-streamdeck-prompts.sh` — `osadecompile` + python regex extracts `set the clipboard to "..."` body from each `.scpt`, writes one `.txt` per script. Idempotent.
+
+**Acceptance test:** Drop a .txt in `~/Library/Application Support/Quip/prompts/` → iPhone → Settings → Prompts → see new row within ~1s → tap → text appears in Mac iTerm without typing.
+
+**Imported from streamdeck-claude-scripts (15/25):** 00-rules, 07-audit-security, 08-audit-pci, 09-find-dead-code, 10-fix-errors, 12-perf-seo, 14-commit, 26-improve, 27-debug, 28-quick-review, 29-scaffold-slice, 30-prod-ready, 31-mobile, 32-session-review, 33-dominate-niche. Skipped: scripts that use AppleScript directly without a clipboard body (01-clear, 02-compact, 04-ux-review's screenshot path, mic-check, fake-gps, install-build, arrange-iterm, focus-iterm, 06-check-a11y, 17-stats).
+
+**Deferred to v2:**
+- Chains support — Stream Deck has multi-step chains (.chain-*.json files). Would need a multi-row PromptEntry kind + sequence runner with confirmation between steps.
+- iOS-side editor — currently the user has to drop .txt files via Finder/Terminal on the Mac. Adding an editor on the phone is straightforward but pushes scope.
+- Search/filter when the catalog grows past one screen.
+- Show prompts as keyboard quick-buttons (auto-bind first N entries to the existing slot row).
+
+**Related:** `Shared/MessageProtocol.swift:430+` (new types), `QuipMac/Services/PromptLibrary.swift`, `QuipMac/QuipMacApp.swift:148-160,930-945` (wiring + handler), `QuipiOS/Services/WebSocketClient.swift:206-220,725-735`, `QuipiOS/QuipApp.swift:5260+` (PromptLibrarySheet), `QuipMac/Tools/import-streamdeck-prompts.sh`.
+
+---
+
 ### 50. QR pairing — Mac shows QR, iPhone scans (✅ Done v1, eb-branch)
 
 **Status:** ✅ Done v1 on `eb-branch` — commit `a52ad4f`. Built clean for both schemes; installed to Tim apple 17 and Mac.
