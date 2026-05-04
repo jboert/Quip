@@ -25,7 +25,9 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §B3 Prompts as keyboard quick-buttons | ✅ | `2ec3ed9` | install only — needs verify |
 | §B6 addMenu observation-chain leak (re-render mid-tap) | ✅ | `3dbc7da` | install only — needs verify |
 | §B7 Prompts as main-row button option | ✅ | `3dbc7da` | install only — needs verify |
-| §B5 Per-client visibility (Mac + iOS transport tag) | ✅ | _pending_ | install only — needs verify |
+| §B5 Per-client visibility (Mac + iOS transport tag) | ✅ | `2cbeb21` | install only — needs verify |
+| §B8 Live captions regressed on remote Whisper path | ✅ | `4751272` | yes (iPhone) |
+| §B9 Auto-pick first window on layout (PTT silent-fail fix) | ✅ | `6d47a51` | yes (iPhone) |
 
 **Test still owed by user:**
 - Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
@@ -1380,3 +1382,33 @@ Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bit
 **Files:** `QuipiOS/QuipApp.swift` — `mainRow.prompts` AppStorage (~line 712), main-row HStack RIGHT cluster 1 (~line 1832), `MainRowButtonsSheet` toggles, hoisted `.sheet(isPresented: $showPromptsPickerSheet)` in body. `promptsPickerButton`'s inline `.sheet` modifier removed (now lives at body).
 
 **Acceptance test:** Settings → Main Row Buttons → enable "Prompts" → main row shows the new button next to Photo (disabled when no prompts, no window, or disconnected). Tap → MRU-sorted prompt picker sheet opens. Tap an entry → text pastes into the active window. Long-press in the sheet → paste-and-submit. Disable the main-row toggle → button disappears; the Quick Buttons "Prompts picker" pill still works if it was placed.
+
+---
+
+### B8. Live captions regressed on remote Whisper path (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed 2026-05-04 in `4751272`. User reported captions stopped appearing during PTT even though dictation reached the Mac terminal.
+
+**Root cause:** `selectPTTPath` switches to `.remote` once `WebSocketClient.whisperStatus == .ready`. The remote branch in `SpeechService.startRecording` only set up `worker.startForwarding(onBuffer:)` — raw audio chunks fired to the Mac's Whisper, no local recognizer running. `transcribedText` was therefore only populated on `session.stop` with Mac's final text, leaving the on-screen caption overlay empty during speaking. The regression surfaced once the Mac had Whisper warm enough to stay `.ready`; users on a cold/never-loaded Mac stayed on the `.local` path and never saw the symptom.
+
+**Fix:** Remote path now runs a *display-only* on-device SFSpeech recognizer in parallel with Whisper streaming. The single mic tap fans buffers to two consumers: `WhisperAudioSender` (authoritative remote transcript) and `SFSpeechAudioBufferRecognitionRequest` (live captions for the overlay). The captions task auto-recycles on `isFinal` so > 1 min PTT keeps showing partials. `stopForwarding` tears the captions task down so the mic indicator releases.
+
+**Files:** `QuipiOS/Services/SpeechService.swift` — `AudioWorker.startForwarding(onBuffer:onCaption:)`, `beginCaptionTask`, extended `stopForwarding`. `SpeechService.startRecording` remote branch passes `onCaption` that updates `transcribedText` (stale-session guarded).
+
+**Acceptance test:** PTT during connected+Whisper-ready Mac → caption text appears under the recording overlay as you speak → release PTT → Mac's authoritative final text appears in terminal AND replaces `transcribedText` (briefly visible before overlay dismisses). Speak > 1 min → captions keep flowing across recognizer recycles.
+
+---
+
+### B9. PTT silent-fail when no window selected (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed 2026-05-04 in `6d47a51`. User reported "neither volume button nor record button works."
+
+**Root cause:** `MainiOSView.startRecording` gates on `selectedWindowId != nil` and silently returns when nil. Both the on-screen mic Button and the hardware volume-down PTT path funnel through the same closure, so the symptom was both inputs being dead. `onLayoutUpdate` only auto-picked the first window when the *previously-selected* id was stale in the new list — the nil-from-cold-launch case was never handled, leaving fresh installs / fresh connects with no window selected and PTT silently broken.
+
+**Fix:**
+- `onLayoutUpdate` now also auto-picks `windows.first` when `selectedWindowId == nil` and sends `SelectWindowMessage` to the Mac.
+- `startRecording` warning-haptic + `print()` on bail so future "silent mic" debugging is loud, not silent.
+
+**Files:** `QuipiOS/QuipApp.swift` — onLayoutUpdate auto-pick + startRecording bail diagnostic.
+
+**Acceptance test:** Cold-launch app → wait for `layout_update` → mic button records without first having to manually tap a window card. Tap mic with no Mac connected → warning haptic fires + `[Quip][PTT] startRecording bail: selectedWindowId=nil` in `devicectl --console`.
