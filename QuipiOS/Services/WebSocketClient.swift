@@ -663,6 +663,7 @@ final class WebSocketClient {
         switch peek.type {
         case "auth_result":
             if let msg = try? decoder.decode(AuthResultMessage.self, from: data) {
+                print("[Quip] auth_result: success=\(msg.success) error=\(msg.error ?? "none") url=\(serverURL?.absoluteString ?? "?")")
                 NSLog("[WebSocketClient] auth_result: success=%d error=%@", msg.success ? 1 : 0, msg.error ?? "none")
                 // "auth_required" is the server's connection-ready signal —
                 // server wants a PIN. Send the cached one if we have it,
@@ -678,6 +679,7 @@ final class WebSocketClient {
                 if msg.success {
                     isAuthenticated = true
                     authError = nil
+                    print("[Quip] isAuthenticated=true")
                 } else {
                     isAuthenticated = false
                     authError = msg.error ?? "Invalid PIN"
@@ -780,11 +782,17 @@ final class WebSocketClient {
                 onDiagnosticsBundle?(msg)
             }
         case "prompt_library":
-            guard isAuthenticated else { return }
+            guard isAuthenticated else {
+                print("[Quip] prompt_library RECEIVED but isAuthenticated=false — dropped")
+                return
+            }
             if let msg = try? decoder.decode(PromptLibraryMessage.self, from: data) {
+                print("[Quip] prompt_library RECEIVED: \(msg.prompts.count) prompts")
                 NSLog("[WebSocketClient] prompt_library: %d prompts", msg.prompts.count)
                 promptLibrary = msg.prompts
                 onPromptLibrary?(msg.prompts)
+            } else {
+                print("[Quip] prompt_library DECODE FAILED on \(data.count) bytes")
             }
         case "whisper_status":
             guard isAuthenticated else { return }
