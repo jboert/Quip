@@ -4418,25 +4418,6 @@ struct SettingsSheet: View {
                     Text("Notifications")
                 }
 
-                // Diagnostics — surfaces the in-memory connection event
-                // ring buffer that WebSocketClient.connectionEvents has been
-                // collecting since commit 64a8376. No live tail in this
-                // version; the user pulls down to refresh.
-                Section {
-                    NavigationLink {
-                        ConnectionDiagnosticsSheet(client: client)
-                    } label: {
-                        HStack {
-                            Text("Connection diagnostics")
-                            Spacer()
-                            Text("\(client.recentConnectionEvents.count) events")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Diagnostics")
-                }
-
                 // Prompts — Mac-managed library of paste-and-run prompts
                 // (~/Library/Application Support/Quip/prompts/*.txt).
                 // Tap a row → Mac sendText's the body into the active
@@ -4455,6 +4436,25 @@ struct SettingsSheet: View {
                     }
                 } header: {
                     Text("Prompts")
+                }
+
+                // Diagnostics — pinned at the bottom of Settings since it's
+                // a triage tool, not part of the day-to-day. Surfaces the
+                // in-memory connection event ring buffer + auto-fetched
+                // Mac log tail (since commit d8f1503).
+                Section {
+                    NavigationLink {
+                        ConnectionDiagnosticsSheet(client: client)
+                    } label: {
+                        HStack {
+                            Text("Connection diagnostics")
+                            Spacer()
+                            Text("\(client.recentConnectionEvents.count) events")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Diagnostics")
                 }
             }
             .listStyle(.insetGrouped)
