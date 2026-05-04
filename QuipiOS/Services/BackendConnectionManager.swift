@@ -470,5 +470,22 @@ final class BackendConnectionManager {
             guard let self, let session else { return }
             self.onTranscriptResult?(session, sid, text, error)
         }
+
+        // image_upload_ack and image_upload_error were dropped from the
+        // wire() bridge during the multi-backend hot-model rework — the
+        // WebSocketClient receives them and fires its own callbacks, but
+        // nothing forwards to the manager-level closures the host
+        // (QuipApp.swift:945) actually subscribed to. Result: every photo
+        // upload looked stuck on iOS even though the Mac wrote the file
+        // and typed the path successfully — the 10s watchdog would fire
+        // with "no response (last stage: sent, awaiting ack)".
+        c.onImageUploadAck = { [weak self, weak session] savedPath in
+            guard let self, let session else { return }
+            self.onImageUploadAck?(session, savedPath)
+        }
+        c.onImageUploadError = { [weak self, weak session] reason in
+            guard let self, let session else { return }
+            self.onImageUploadError?(session, reason)
+        }
     }
 }
