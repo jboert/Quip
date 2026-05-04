@@ -1080,3 +1080,81 @@ iOS `DiagnosticsShareSheet` `UIViewControllerRepresentable` wraps `UIActivityVie
 ### Boundary marker — autonomous loop halts here, awaiting user input
 
 Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glance, wake-word PTT, clipboard sync, voice macros) all need user decisions, multi-device hardware testing, or new Xcode targets — see plan file at `~/.claude/plans/plan-to-do-eacn-glowing-oasis.md` for the full open-questions list per ticket.
+
+---
+
+### 53. Apple Watch glance — Claude state + dismiss notification (📋 Backlog)
+
+**Status:** 📋 Backlog. User has Apple Watch Ultra 3 paired (per memory). Needs new WatchKit App + Extension targets in `QuipiOS/project.yml` plus signing setup (Fintech Adventures team `D2PM6R797Q` already has the entitlement).
+
+**What it'd do (v1):**
+- Tiny WatchKit app on the wrist showing per-window Claude state: Thinking · Done · Awaiting input.
+- Complication on watch face → tap → opens app → see currently-selected window's status.
+- Push haptic + dismissible notification when Claude flips to `waiting_for_input` (replaces having to glance at phone).
+- One-tap "ack" button → stops the attention pulse (same effect as `clearAttention` in `attentionCenter` on iOS).
+
+**v2 stretch:** send a slash button from watch ("/yes", "/no") for fast confirmation responses.
+
+**Stack:**
+- New WatchKit App + Extension targets in `QuipiOS/project.yml` (xcodegen).
+- Reuses `WatchConnectivity` → iPhone relays `WindowState` + `attentionCount` over WCSession on every state change.
+- Complication via `WidgetKit` (Watch Widget API replaces old ClockKit).
+
+**Cost:** ~1 day for v1.
+
+**Open decisions:**
+- Push state via WCSession only when phone is foreground? Or `transferUserInfo` for background delivery?
+- Show all windows as a list, or only the iPhone's `selectedWindowId`?
+- Complication update budget (Watch limits to ~50 pushes/day) — only push on state transitions, not every layout poll.
+
+---
+
+### 54. Wake-word PTT — "Hey Claude" → start dictation (📋 Backlog)
+
+**Status:** 📋 Backlog. Big technical decision (which keyword-spotting stack) and a hardware-test loop required.
+
+**What it'd do:**
+- Phone listens passively for "Hey Claude" (or user-chosen phrase).
+- On wake-word detection → equivalent to vol-down press → starts recording → streams to Whisper on Mac via existing PTT path.
+- End on silence-timeout (existing `stuckPressWatchdog` already does this) or another wake phrase ("Stop").
+
+**Stack options (this is the main open decision):**
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Apple `SFSpeechRecognizer` + keyword filter | Free, no SDK, on-device | Not designed for always-on; battery hit; false trigger rate |
+| Picovoice Porcupine | Designed for wake-word, ~1% CPU, on-device | Free tier non-commercial only; paid SDK $$$ |
+| `SFSpeechRecognizer` `requiresOnDeviceRecognition=true` + custom rolling buffer | On-device, free, fits existing `SpeechService` shape | Same battery; recognizer drops partials on pause (per memory `project_sfspeech_ondevice_rollover.md`) — needs work |
+| Custom Whisper-tiny streaming | Full control | Big — weeks of work |
+
+**Cost:** v1 with SFSpeech keyword filter ~1 day; with Porcupine ~half day + license question; custom Whisper much more.
+
+**Open decisions:**
+- Battery: always-listening drains 2-5%/hr. Opt-in toggle in Settings? Auto-disable on <20% battery?
+- Privacy: explicit "this app is always listening for X" copy on first enable; Lock-Screen mic indicator stays on.
+- Wake-word config: hardcoded "Hey Claude" or user-pickable phrase? (Pickable needs a custom keyword model.)
+- Conflict with iOS Siri "Hey Siri" — easy to false-trigger on each other.
+
+**Memory caveat:** SFSpeech on-device drops partials on pause (`project_sfspeech_ondevice_rollover.md`); means we'd lose any words spoken in the brief moment between wake-word detection and PTT-stream-start. Need pre-roll buffer (already implemented for normal PTT in commit `354e2aa` "Long-lived audio engine with 500ms pre-roll replay") — extend that buffer rather than add a new one.
+
+---
+
+### B1. iOS Custom Buttons editor — scrolling buggy (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed. User-reported 2026-05-04. Root cause: `Button { … } .buttonStyle(.plain)` rows inside the `Custom Buttons` `List` section ate scroll gestures — well-known SwiftUI conflict. Replaced with `HStack { … }.contentShape(Rectangle()).onTapGesture { editingCustomID = c.id }` so `List` retains scroll ownership and only fires on a clean tap. `.onDelete` swipes also recover. File: `QuipiOS/QuipApp.swift:4592-4615`.
+
+**(historical notes preserved below for context)**
+
+**Reproduction steps (need user confirmation):**
+1. iPhone → Settings → Quick Buttons → "+" → "Custom Button" (or pick existing custom button to edit).
+2. Try to scroll the form — fields, payload picker, SF Symbol grid.
+3. Symptom: scroll either doesn't engage, jumps unexpectedly, or competes with another gesture.
+
+**Likely culprits to investigate (no fix yet):**
+- `CustomButtonForm` may use a `Form` inside a `NavigationLink` inside the `QuickButtonsSheet`'s own `List` — nested scroll containers are SwiftUI's classic scroll-conflict scenario.
+- SF Symbol picker grid (if rendered inline) may use `ScrollView` inside a `Form` row — gesture priority unclear.
+- Drag handle for slot reorder uses `.onDrag` / `.onDrop`; if those modifiers are attached to the wrong view, they can swallow scroll gestures.
+
+**Files to read first:** `QuipiOS/QuipApp.swift` — search `QuickButtonsSheet`, `CustomButtonForm`, `CustomButton` (struct lives at line 3960).
+
+**Acceptance test once fixed:** Open Settings → Quick Buttons → tap an existing custom button → scroll the edit form smoothly with no gesture conflict; pinch/tap reorders work; symbol picker scrolls independently if separate.

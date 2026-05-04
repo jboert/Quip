@@ -4592,25 +4592,30 @@ struct QuickButtonsSheet: View {
             if !customs.isEmpty {
                 Section {
                     ForEach(customs) { c in
-                        Button {
-                            editingCustomID = c.id
-                        } label: {
-                            HStack {
-                                customPillPreview(c)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(c.label).foregroundStyle(.primary)
-                                    Text(payloadSummary(c.payload))
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
+                        // HStack + .contentShape + .onTapGesture instead of
+                        // Button { } .buttonStyle(.plain) — the Button form
+                        // eats scroll gestures inside a List, making the
+                        // section feel sticky and occasionally opening the
+                        // edit sheet when the user is mid-scroll. The tap-
+                        // gesture form lets List own the scroll and only
+                        // fires on a clean tap, restoring smooth scrolling
+                        // and reliable .onDelete swipes.
+                        HStack {
+                            customPillPreview(c)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(c.label).foregroundStyle(.primary)
+                                Text(payloadSummary(c.payload))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.tertiary)
                         }
-                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingCustomID = c.id }
                     }
                     .onDelete(perform: deleteCustomDefs)
                 } header: {
