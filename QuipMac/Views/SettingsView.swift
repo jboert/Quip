@@ -53,11 +53,6 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Notifications", systemImage: "bell.badge")
                 }
-
-            DiagnosticsTab()
-                .tabItem {
-                    Label("Diagnostics", systemImage: "stethoscope")
-                }
         }
         // Vertical resize is the common ask (long tabs like Connection
         // overflow). Horizontal also resizable now — at 520 the 8 toolbar
@@ -892,6 +887,16 @@ private struct SecurityTab: View {
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(CloudflareTunnel.self) private var tunnel
 
+    // Diagnostics-bundle state — folded in from the former Diagnostics
+    // tab. Co-located with PIN + pairing here because both topics are
+    // about "what does this Mac expose to phones, and what shows up in
+    // logs about that exposure?" Single tab keeps the auth-and-audit
+    // story in one place.
+    @State private var lastBundlePath: String?
+    @State private var lastError: String?
+    @State private var bundling: Bool = false
+    @State private var anchorView: NSView?
+
     var body: some View {
         Form {
             Section {
@@ -932,8 +937,96 @@ private struct SecurityTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section {
+                LabeledContent("Logs directory") {
+                    Text(LogPaths.directory.path)
+                        .font(.caption.monospaced())
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([LogPaths.directory])
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+            } header: {
+                Text("Diagnostics — log location")
+            } footer: {
+                Text("Logs survive reboot and are indexed by Console.app under the \"Quip\" filter.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                AnchoredButton(anchor: $anchorView) {
+                    bundleAndShare()
+                } label: {
+                    HStack {
+                        if bundling {
+                            ProgressView().controlSize(.small)
+                        }
+                        Label("Bundle and share…", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .disabled(bundling)
+
+                if let path = lastBundlePath {
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.zipper")
+                            .foregroundStyle(.green)
+                        Text(path)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Reveal") {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                }
+
+                if let err = lastError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            } header: {
+                Text("Diagnostics — share")
+            } footer: {
+                Text("Bundles the three log files plus a system-info text blob into a single zip in /tmp, then opens AirDrop / Mail / Messages. The phone-side equivalent (Settings → Diagnostics → Get Mac logs) sends the same bundle over WebSocket.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private func bundleAndShare() {
+        bundling = true
+        lastError = nil
+        Task.detached {
+            do {
+                let zipURL = try DiagnosticsBundle.makeZip()
+                await MainActor.run {
+                    self.lastBundlePath = zipURL.path
+                    self.bundling = false
+                    DiagnosticsBundle.presentSharePicker(zipURL: zipURL, anchor: self.anchorView)
+                }
+            } catch {
+                await MainActor.run {
+                    self.lastError = "\(error)"
+                    self.bundling = false
+                }
+            }
+        }
     }
 
     /// Renders a pairing QR for whichever URL is currently most useful: the
@@ -1079,116 +1172,6 @@ private struct ColorsTab: View {
             }
         }
         .formStyle(.grouped)
-    }
-}
-
-// MARK: - Diagnostics Tab
-
-/// Bundle the three log files (`websocket.log`, `push.log`, `kokoro.log`)
-/// plus a `system-info.txt` blob into a single zip and surface OS-level
-/// share affordances. Replaces the "tail this for me, then this one,
-/// then this one" support cycle with a one-tap AirDrop / Mail / Save.
-struct DiagnosticsTab: View {
-    @State private var lastBundlePath: String?
-    @State private var lastError: String?
-    @State private var bundling: Bool = false
-    /// Anchor view for NSSharingServicePicker — captured by the
-    /// AnchoredButton helper below so the picker can attach to the
-    /// actual button frame. SwiftUI Buttons don't expose their backing
-    /// NSView, hence the AppKit interop.
-    @State private var anchorView: NSView?
-
-    var body: some View {
-        Form {
-            Section {
-                LabeledContent("Logs directory") {
-                    Text(LogPaths.directory.path)
-                        .font(.caption.monospaced())
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([LogPaths.directory])
-                } label: {
-                    Label("Reveal in Finder", systemImage: "folder")
-                }
-            } header: {
-                Text("Log location")
-            } footer: {
-                Text("Logs survive reboot and are indexed by Console.app under the \"Quip\" filter.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                AnchoredButton(anchor: $anchorView) {
-                    bundleAndShare()
-                } label: {
-                    HStack {
-                        if bundling {
-                            ProgressView().controlSize(.small)
-                        }
-                        Label("Bundle and share…", systemImage: "square.and.arrow.up")
-                    }
-                }
-                .disabled(bundling)
-
-                if let path = lastBundlePath {
-                    HStack(spacing: 8) {
-                        Image(systemName: "doc.zipper")
-                            .foregroundStyle(.green)
-                        Text(path)
-                            .font(.caption.monospaced())
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        Button("Reveal") {
-                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                    }
-                }
-
-                if let err = lastError {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        Text(err)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-            } header: {
-                Text("Share")
-            } footer: {
-                Text("Bundles the three log files plus a system-info text blob into a single zip in /tmp, then opens AirDrop / Mail / Messages. The phone-side equivalent (Settings → Diagnostics → Get Mac logs) sends the same bundle over WebSocket.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    private func bundleAndShare() {
-        bundling = true
-        lastError = nil
-        Task.detached {
-            do {
-                let zipURL = try DiagnosticsBundle.makeZip()
-                await MainActor.run {
-                    self.lastBundlePath = zipURL.path
-                    self.bundling = false
-                    DiagnosticsBundle.presentSharePicker(zipURL: zipURL, anchor: self.anchorView)
-                }
-            } catch {
-                await MainActor.run {
-                    self.lastError = "\(error)"
-                    self.bundling = false
-                }
-            }
-        }
     }
 }
 
