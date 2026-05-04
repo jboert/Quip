@@ -1254,8 +1254,15 @@ private struct PromptsTab: View {
                         .padding(.vertical, 8)
                 } else {
                     ForEach(library.entries) { entry in
-                        promptRow(entry)
-                            .tag(entry.id)
+                        PromptRow(
+                            entry: entry,
+                            onEdit: { editing = entry },
+                            onDelete: {
+                                library.delete(id: entry.id)
+                                if selectedID == entry.id { selectedID = nil }
+                            }
+                        )
+                        .tag(entry.id)
                     }
                 }
             }
@@ -1315,31 +1322,74 @@ private struct PromptsTab: View {
         }
     }
 
-    @ViewBuilder
-    private func promptRow(_ entry: PromptEntry) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(entry.label)
-                    .font(.system(size: 13, weight: .medium))
-                if entry.label != entry.id {
-                    Text(entry.id)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
+}
+
+/// Single row in the Prompts tab. Hover reveals inline pencil + trash
+/// buttons (so you can edit / delete without first selecting + clicking
+/// a toolbar button). Right-click anywhere on the row opens a context
+/// menu with Edit / Delete / Reveal in Finder. Double-click also still
+/// edits — three discoverability paths, pick the one that fits muscle
+/// memory.
+private struct PromptRow: View {
+    let entry: PromptEntry
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(entry.label)
+                        .font(.system(size: 13, weight: .medium))
+                    if entry.label != entry.id {
+                        Text(entry.id)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
-                Spacer()
-                Text("\(entry.bodyBytes) B")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                Text(entry.bodyPreview)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Text(entry.bodyPreview)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            Spacer()
+
+            // Hover-revealed quick actions. Opacity hides them rather than
+            // conditional inclusion so layout stays stable when the cursor
+            // crosses row boundaries (no row-height jitter).
+            HStack(spacing: 4) {
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("Edit")
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Delete")
+            }
+            .opacity(hovering ? 1 : 0)
+
+            Text("\(entry.bodyBytes) B")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            editing = entry
+        .onHover { hovering = $0 }
+        .onTapGesture(count: 2, perform: onEdit)
+        .contextMenu {
+            Button("Edit", action: onEdit)
+            Button("Delete", role: .destructive, action: onDelete)
+            Divider()
+            Button("Reveal in Finder") {
+                let url = PromptLibrary.directory.appendingPathComponent("\(entry.id).txt")
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
         }
     }
 }
