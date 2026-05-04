@@ -3,6 +3,8 @@
 
 import SwiftUI
 import Darwin
+import CoreImage
+import AppKit
 
 struct SettingsView: View {
     @Environment(WindowManager.self) private var windowManager
@@ -881,6 +883,8 @@ private struct ConnectionTab: View {
 
 private struct SecurityTab: View {
     @Environment(PINManager.self) private var pinManager
+    @Environment(WebSocketServer.self) private var webSocketServer
+    @Environment(CloudflareTunnel.self) private var tunnel
 
     var body: some View {
         Form {
@@ -912,8 +916,99 @@ private struct SecurityTab: View {
                     Label("Generate New PIN", systemImage: "arrow.clockwise")
                 }
             }
+
+            Section {
+                pairingQRBlock
+            } header: {
+                Text("Pair iPhone")
+            } footer: {
+                Text("Scan from the iPhone Quip app's URL bar (qrcode.viewfinder button) — auto-fills the URL and PIN, no typing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    /// Renders a pairing QR for whichever URL is currently most useful: the
+    /// Cloudflare tunnel URL (cross-network) when up, otherwise the local
+    /// Bonjour/IP URL the iPhone can reach over LAN. Re-renders whenever
+    /// the tunnel resolves a new URL or the PIN regenerates — no manual
+    /// refresh button needed because the views are bound to @Observable
+    /// state.
+    @ViewBuilder
+    private var pairingQRBlock: some View {
+        let currentURL = pairingURL()
+        if currentURL.isEmpty {
+            Text("Start the WebSocket server to display a pairing QR.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            let payload = PairingPayload(url: currentURL, pin: pinManager.pin)
+            HStack(alignment: .top, spacing: 16) {
+                if let encoded = payload.encodedURL(),
+                   let qr = Self.qrImage(for: encoded) {
+                    Image(nsImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 160, height: 160)
+                        .background(Color.white)
+                        .cornerRadius(6)
+                } else {
+                    Color.secondary.frame(width: 160, height: 160).cornerRadius(6)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("URL")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(currentURL)
+                        .font(.caption.monospaced())
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+
+                    Text("PIN")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                    Text(pinManager.pin)
+                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
+
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// Pick the URL the iPhone is most likely to reach — tunnel URL when
+    /// available (works on cellular too), else the local ws:// host:port.
+    /// Empty when the server isn't running.
+    private func pairingURL() -> String {
+        if !tunnel.webSocketURL.isEmpty {
+            return tunnel.webSocketURL
+        }
+        guard webSocketServer.isRunning else { return "" }
+        let host = Host.current().localizedName ?? "localhost"
+        return "ws://\(host).local:8765"
+    }
+
+    /// Render the payload string into an NSImage via CIFilter (no third-
+    /// party QR library). errorCorrection=M balances density vs. resilience
+    /// to phone-camera blur. Output is upscaled with nearest-neighbor in
+    /// the SwiftUI Image to keep edges crisp at display size.
+    private static func qrImage(for content: String) -> NSImage? {
+        guard let data = content.data(using: .utf8) else { return nil }
+        let filter = CIFilter(name: "CIQRCodeGenerator")
+        filter?.setValue(data, forKey: "inputMessage")
+        filter?.setValue("M", forKey: "inputCorrectionLevel")
+        guard let ciImage = filter?.outputImage else { return nil }
+        let rep = NSCIImageRep(ciImage: ciImage)
+        let nsImage = NSImage(size: rep.size)
+        nsImage.addRepresentation(rep)
+        return nsImage
     }
 }
 

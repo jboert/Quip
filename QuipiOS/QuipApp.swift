@@ -1015,9 +1015,23 @@ struct MainiOSView: View {
         }
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { code in
-                urlText = code
                 showQRScanner = false
-                doConnect()
+                // Detect the §50 quip://pair?... shape — extract URL + PIN,
+                // pre-stage the PIN in Keychain under the new backend's
+                // synthetic id, then connect. Falls back to treating the
+                // scan result as a plain ws(s) URL for backwards
+                // compatibility with the original "raw URL in QR" flow.
+                if let payload = PairingPayload.decode(code) {
+                    urlText = payload.url
+                    if let id = manager.addPaired(url: payload.url, name: "Backend") {
+                        KeychainBackendPINs.write(backendID: id, pin: payload.pin)
+                        manager.setActive(id)
+                    }
+                    doConnect()
+                } else {
+                    urlText = code
+                    doConnect()
+                }
             }
         }
         .sheet(isPresented: $showSettings) {
