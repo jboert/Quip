@@ -4801,6 +4801,11 @@ struct QuickButtonsSheet: View {
     @State private var editingCustomID: UUID?
     @State private var addingCustom: Bool = false
     @State private var showPromptPicker: Bool = false
+    /// Drives the sheet-based add picker. Replaces the prior toolbar Menu,
+    /// which became unscrollable once the slash list grew past ~6 items
+    /// (iOS Menu has a fixed render window and clips long labels mid-word).
+    @State private var showAddSheet: Bool = false
+    @State private var addSheetQuery: String = ""
 
     // Cached snapshots of the @AppStorage-backed JSON. Computed-property
     // versions re-decoded on EVERY body evaluation, and any observable
@@ -4958,6 +4963,9 @@ struct QuickButtonsSheet: View {
         }
         .sheet(isPresented: $showPromptPicker) {
             promptPickerSheet
+        }
+        .sheet(isPresented: $showAddSheet) {
+            addSheet
         }
     }
 
@@ -5246,60 +5254,146 @@ struct QuickButtonsSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
-    /// "+" toolbar menu, categorized so the long QuickButton list isn't a
-    /// flat scroll-of-doom. Built-ins already in the slot list are
-    /// disabled to prevent accidental duplicates.
+    /// "+" toolbar button — opens the sheet-based add picker. The previous
+    /// inline `Menu` rendered a fixed-height list that clipped long slash
+    /// names mid-word and offered awkward scroll once the list passed ~6
+    /// items. A bottom sheet gives proper scroll, two-line rows, and a
+    /// search bar.
     @ViewBuilder
     private var addMenu: some View {
-        Menu {
-            Section("Slash") {
-                ForEach(QuickButton.allCases.filter { $0.category == .slash }) { btn in
-                    builtinAddRow(btn)
-                }
-            }
-            Section("Answers") {
-                ForEach(QuickButton.allCases.filter { $0.category == .answer }) { btn in
-                    builtinAddRow(btn)
-                }
-            }
-            Section("Keystrokes") {
-                ForEach(QuickButton.allCases.filter { $0.category == .keystroke }) { btn in
-                    builtinAddRow(btn)
-                }
-            }
-            Section {
-                Button {
-                    addingCustom = true
-                } label: {
-                    Label("Custom Button…", systemImage: "plus.square.dashed")
-                }
-                Button {
-                    addSpacer()
-                } label: {
-                    Label("Spacer", systemImage: "arrow.left.and.right")
-                }
-                // Read cached snapshot, not `client.promptLibrary` — direct
-                // access re-observed every Mac catalog broadcast and re-rendered
-                // the whole sheet, closing/jumping the open Menu mid-tap.
-                if !promptLabelByID.isEmpty {
-                    Button {
-                        showPromptPicker = true
-                    } label: {
-                        Label("Prompt from library…", systemImage: "doc.text")
-                    }
-                }
-                let pickerPlaced = slots.contains(where: { if case .promptsPicker = $0 { return true } else { return false } })
-                Button {
-                    addPromptsPicker()
-                } label: {
-                    Label("Prompts picker" + (pickerPlaced ? " · added" : ""),
-                          systemImage: "doc.text.magnifyingglass")
-                }
-                .disabled(pickerPlaced)
-            }
+        Button {
+            addSheetQuery = ""
+            showAddSheet = true
         } label: {
             Image(systemName: "plus")
         }
+    }
+
+    /// Sheet-based add picker that replaced the toolbar Menu. Sectioned,
+    /// scrollable, searchable. Filters across all categories at once when
+    /// the user types in the search bar.
+    private var addSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        showAddSheet = false
+                        addingCustom = true
+                    } label: {
+                        Label("Custom Button…", systemImage: "plus.square.dashed")
+                    }
+                    Button {
+                        addSpacer()
+                        showAddSheet = false
+                    } label: {
+                        Label("Spacer", systemImage: "arrow.left.and.right")
+                    }
+                    if !promptLabelByID.isEmpty {
+                        Button {
+                            showAddSheet = false
+                            showPromptPicker = true
+                        } label: {
+                            Label("Prompt from library…", systemImage: "doc.text")
+                        }
+                    }
+                    let pickerPlaced = slots.contains(where: {
+                        if case .promptsPicker = $0 { return true } else { return false }
+                    })
+                    Button {
+                        addPromptsPicker()
+                        showAddSheet = false
+                    } label: {
+                        Label("Prompts picker" + (pickerPlaced ? " · added" : ""),
+                              systemImage: "doc.text.magnifyingglass")
+                    }
+                    .disabled(pickerPlaced)
+                }
+
+                let slashMatches = filteredBuiltins(category: .slash)
+                if !slashMatches.isEmpty {
+                    Section("Slash") {
+                        ForEach(slashMatches) { btn in addSheetRow(btn) }
+                    }
+                }
+                let answerMatches = filteredBuiltins(category: .answer)
+                if !answerMatches.isEmpty {
+                    Section("Answers") {
+                        ForEach(answerMatches) { btn in addSheetRow(btn) }
+                    }
+                }
+                let keystrokeMatches = filteredBuiltins(category: .keystroke)
+                if !keystrokeMatches.isEmpty {
+                    Section("Keystrokes") {
+                        ForEach(keystrokeMatches) { btn in addSheetRow(btn) }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Add Button")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $addSheetQuery, placement: .navigationBarDrawer(displayMode: .always))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { showAddSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// Filter QuickButton cases for the add sheet — applies the search query
+    /// to both `displayName` and `label` so users can find items by either
+    /// the long name (`/commit-commands:commit-push-pr`) or short label
+    /// (`/ship`).
+    private func filteredBuiltins(category: QuickButton.Category) -> [QuickButton] {
+        let q = addSheetQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        return QuickButton.allCases.filter { btn in
+            guard btn.category == category else { return false }
+            if q.isEmpty { return true }
+            return btn.displayName.lowercased().contains(q)
+                || btn.label.lowercased().contains(q)
+        }
+    }
+
+    /// Single row in the add sheet — uses the SHORT label as primary, with
+    /// the full displayName as a secondary line so users can see e.g.
+    /// `/ship` is `/commit-commands:commit-push-pr` without the long name
+    /// wrapping mid-word like the prior Menu did.
+    @ViewBuilder
+    private func addSheetRow(_ btn: QuickButton) -> some View {
+        let placed = placedBuiltins.contains(btn.rawValue)
+        Button {
+            addBuiltin(btn)
+            showAddSheet = false
+        } label: {
+            HStack(spacing: 10) {
+                if let sym = btn.systemImage {
+                    Image(systemName: sym)
+                        .frame(width: 22)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(btn.label.isEmpty ? btn.displayName : btn.label)
+                            .font(.body.weight(.medium))
+                        if placed {
+                            Text("· added")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if btn.label != btn.displayName, !btn.label.isEmpty {
+                        Text(btn.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer()
+            }
+        }
+        .disabled(placed)
     }
 
     private func addPromptsPicker() {
