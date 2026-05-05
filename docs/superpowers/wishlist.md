@@ -58,6 +58,7 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §49 follow-up — DiagnosticsBundle redacts IPv4s + hostname before share | ✅ | `439e94e` | 11 LogRedactor tests + 2 systemInfoText tests green; Tailscale + LAN + public IPv4 all masked, hostname → 8-char hash |
 | §22 follow-up — MacPermissionsStore aggregation tests | ✅ | `439e94e` | 8 tests covering nil/all-granted/all-denied/single/pair/replace |
 | §27 follow-up — dedupe wiring audit (no new handlers) | 📝 | `74990f9` | grep confirms all 7 side-effecting handlers (`send_text`/`quick_action` (covers `test_push`)/`duplicate_window`/`close_window`/`spawn_window`/`paste_prompt`/`attach_iterm_window`) still wrap `messageDedupe.checkAndRecord` post-`b46b45d`; no code change |
+| §B14 iOS quick-button row seed on fresh install (built-ins + demo custom) | ✅ | `0bf1b2b` | 7 new `QuickSlotStoreSeedTests` green; verified on `simctl erase`'d iPhone 17 — `customButtonsJSON` contains `/help` demo, `quickSlotsJSON` contains 11 slots including a `.custom` slot pointing at the demo def. iOS CFBundleShortVersionString bumped 1.4.0 → 1.5.2 |
 
 **Test still owed by user:**
 - §15 hardware verify: phone backgrounded → trigger `waiting_for_input` → push lands with `🤖 AI is waiting`. Trigger 2+ windows → batches to `🤖 N AIs waiting`. Toggle "Notify on All Windows" → non-selected window now pushes.
