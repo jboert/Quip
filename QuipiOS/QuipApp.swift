@@ -738,6 +738,12 @@ struct MainiOSView: View {
     @AppStorage("mainRow.arrange") private var mainRowArrange: Bool = true
     @AppStorage("mainRow.photo") private var mainRowPhoto: Bool = true
     @AppStorage("mainRow.prompts") private var mainRowPrompts: Bool = false
+    /// One-shot flag — set after `mainRowPrompts` has been auto-flipped on
+    /// because the user has at least one prompt in their library. Without
+    /// the flag the auto-on would fight a user who turned it off in
+    /// Settings (catalog refreshes every reconnect → re-flip → infinite
+    /// fight). Once tripped, all subsequent toggle behaviour is manual.
+    @AppStorage("mainRow.prompts.autoEnabledOnce") private var promptsAutoEnabledOnce: Bool = false
     @AppStorage("mainRow.keyboard") private var mainRowKeyboard: Bool = true
     @AppStorage("mainRow.return") private var mainRowReturn: Bool = true
     @State private var showSettings = false
@@ -1036,6 +1042,16 @@ struct MainiOSView: View {
                 updateOrientation()
             }
         }
+        // §A1: discoverability — first time the Mac broadcasts a non-empty
+        // prompt catalog, auto-enable the main-row Prompts button so users
+        // notice it exists. One-shot via `promptsAutoEnabledOnce` so a user
+        // who turns it off in Settings doesn't see it pop back on every
+        // reconnect.
+        .onChange(of: client.promptLibrary.count) { _, count in
+            guard count > 0, !promptsAutoEnabledOnce else { return }
+            promptsAutoEnabledOnce = true
+            mainRowPrompts = true
+        }
         .onChange(of: selectedWindowId) { _, newId in
             // Wipe the cached terminal content immediately so the inline view
             // shows "Loading…" instead of the previous window's text while
@@ -1076,7 +1092,7 @@ struct MainiOSView: View {
                 client: client,
                 pushRegistration: pushRegistration,
                 macPermissions: macPermissions,
-                selectedWindowId: selectedWindowId
+                windowIdProvider: { selectedWindowId }
             )
         }
         .sheet(isPresented: $showPromptsPickerSheet) {
@@ -4361,11 +4377,12 @@ struct SettingsSheet: View {
     var client: WebSocketClient
     var pushRegistration: PushRegistrationService
     var macPermissions: MacPermissionsMessage?
-    /// Currently-selected window from the host. Used by the Prompts
-    /// sheet so a paste fires into the same window the user has open
-    /// in the main view. Optional for backwards-compat with any caller
-    /// that doesn't know it yet.
-    var selectedWindowId: String? = nil
+    /// Resolver for the host's currently-selected window. Closure (not a
+    /// stored value) so the Prompts sheet always fires into the *current*
+    /// window even when the user changes selection after Settings opens.
+    /// (§B4 wrong-window paste bug — by-value capture froze whatever id
+    /// was active at sheet open.)
+    var windowIdProvider: () -> String? = { nil }
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
@@ -4472,7 +4489,7 @@ struct SettingsSheet: View {
                 // pattern. (wishlist §57)
                 Section {
                     NavigationLink {
-                        PromptLibrarySheet(client: client, windowId: selectedWindowId)
+                        PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider)
                     } label: {
                         HStack {
                             Text("Prompts")
@@ -5994,6 +6011,20 @@ struct PromptsQuickPickerSheet: View {
     let entries: [PromptEntry]
     let onPick: (PromptEntry, _ pressReturn: Bool) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var query: String = ""
+
+    /// Filtered against label + bodyPreview, case-insensitive. Empty query
+    /// returns the original MRU-sorted list. Long-tail prompts (Stream Deck
+    /// users with 30+) become reachable without endless scroll.
+    private var filtered: [PromptEntry] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return entries }
+        return entries.filter {
+            $0.label.lowercased().contains(q)
+                || $0.bodyPreview.lowercased().contains(q)
+                || $0.id.lowercased().contains(q)
+        }
+    }
 
     var body: some View {
         List {
@@ -6003,9 +6034,15 @@ struct PromptsQuickPickerSheet: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
+            } else if filtered.isEmpty {
+                Section {
+                    Text("No matches for \"\(query)\"")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 Section {
-                    ForEach(entries) { entry in
+                    ForEach(filtered) { entry in
                         Button {
                             onPick(entry, false)
                         } label: {
@@ -6035,6 +6072,7 @@ struct PromptsQuickPickerSheet: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Prompts")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Cancel") { dismiss() }
@@ -6050,7 +6088,13 @@ struct PromptsQuickPickerSheet: View {
 /// and the phone never has to render the body in an editor field.
 struct PromptLibrarySheet: View {
     var client: WebSocketClient
-    var windowId: String?
+    /// Closure resolver, NOT a captured value. The prior `var windowId: String?`
+    /// shape captured the parent's `selectedWindowId` at NavigationLink
+    /// construction time — so if the user changed the active window after
+    /// opening Settings, the sheet kept firing prompts at the stale window.
+    /// (§B4 wrong-window bug.) Reading via a closure means every paste
+    /// fetches the *current* selection at fire time.
+    var windowIdProvider: () -> String?
     @State private var lastFiredId: String?
     @State private var editing: PromptEntry?
     @State private var creatingNew: Bool = false
@@ -6147,7 +6191,7 @@ struct PromptLibrarySheet: View {
     }
 
     private func fire(_ entry: PromptEntry, pressReturn: Bool) {
-        guard let wid = windowId, !wid.isEmpty else { return }
+        guard let wid = windowIdProvider(), !wid.isEmpty else { return }
         client.send(PastePromptMessage(id: entry.id, windowId: wid, pressReturn: pressReturn))
         lastFiredId = entry.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
