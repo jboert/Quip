@@ -23,11 +23,12 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §57 v1 Mac prompt library + Stream Deck importer | ✅ | `ad4fb57` | yes (both) |
 | §57 v2 iPhone prompt editor (create/edit/delete) | ✅ | `fcd2ba1` | install only — needs verify |
 | §B3 Prompts as keyboard quick-buttons | ✅ | `2ec3ed9` | install only — needs verify |
-| §B6 addMenu observation-chain leak (re-render mid-tap) | ✅ | `3dbc7da` | install only — needs verify |
-| §B7 Prompts as main-row button option | ✅ | `3dbc7da` | install only — needs verify |
-| §B5 Per-client visibility (Mac + iOS transport tag) | ✅ | `2cbeb21` | install only — needs verify |
+| §B6 addMenu observation-chain leak + sheet picker rewrite | ✅ | `3dbc7da` + `5a00a36` | yes (iPhone) |
+| §B7 Prompts as main-row button option | ✅ | `3dbc7da` | yes (iPhone) |
+| §B5 Per-client visibility (Mac + iOS transport tag) | ✅ | `2cbeb21` | yes (iPhone) |
 | §B8 Live captions regressed on remote Whisper path | ✅ | `4751272` | yes (iPhone) |
 | §B9 Auto-pick first window on layout (PTT silent-fail fix) | ✅ | `6d47a51` | yes (iPhone) |
+| §B10 Paired-backends dedupe on load + addPaired URL match | ✅ | `93cc9a8` | yes (iPhone) |
 
 **Test still owed by user:**
 - Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
@@ -1412,3 +1413,22 @@ Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bit
 **Files:** `QuipiOS/QuipApp.swift` — onLayoutUpdate auto-pick + startRecording bail diagnostic.
 
 **Acceptance test:** Cold-launch app → wait for `layout_update` → mic button records without first having to manually tap a window card. Tap mic with no Mac connected → warning haptic fires + `[Quip][PTT] startRecording bail: selectedWindowId=nil` in `devicectl --console`.
+
+---
+
+### B10. Paired backends — duplicate "Backend" rows (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed 2026-05-04 in `93cc9a8`. User screenshot showed two identical rows pointing at the same Tailscale URL.
+
+**Root causes (two failure modes):**
+
+1. `BackendConnectionManager.addPaired(url:)` deduped only on `$0.url == url` (primary URL). If the same URL was already a *fallback* on an existing row (Bonjour discovery had it as fallback after Tailscale paired first), the QR/manual add path appended a duplicate.
+2. `mergeSameIDRows` was gated behind a one-shot `pairedMultiURLMigrationV2Done` UserDefaults flag. Once the migration ran, future stuck duplicates accumulated forever — no recovery path.
+
+**Fix:**
+- `addPaired` now matches against the full `urlsInOrder` set (primary + all fallbacks).
+- `mergeSameIDRows` runs unconditionally on every `loadPaired`. Idempotent on already-deduped data, O(n²) over 1-3 rows in practice. Logs `[Quip][Backends] Deduped on load: N → M rows` when it actually collapses anything; reseats `activeBackendID` if the active row got merged away.
+
+**Files:** `QuipiOS/Services/BackendConnectionManager.swift` — `addPaired`, `loadPaired`.
+
+**Acceptance test:** Backends sheet now shows one row per Mac, even after multi-path pair (Bonjour + Tailscale) or repeated QR-pair attempts. Future stuck duplicates self-heal on next launch.
