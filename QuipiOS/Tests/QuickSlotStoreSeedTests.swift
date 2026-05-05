@@ -69,6 +69,16 @@ final class QuickSlotStoreSeedTests: XCTestCase {
         XCTAssertFalse(autoSubmit, "demo must NOT auto-submit so user can review before sending")
     }
 
+    /// `customQuickButton` renders icon OR label, never both. The seeded
+    /// demo must omit `systemImage` so the "/help" label renders as
+    /// visible text — otherwise users see an unmarked sparkle pill and
+    /// have no idea what the button does.
+    func test_defaultDemo_hasNoSystemImage() {
+        let demo = CustomButtonStore.defaultDemo()
+        XCTAssertNil(demo.systemImage,
+                     "demo must have no systemImage so the label renders as text in the chip row")
+    }
+
     func test_defaultDemo_roundTripsThroughCodable() {
         let demo = CustomButtonStore.defaultDemo()
         let encoded = CustomButtonStore.encode([demo])

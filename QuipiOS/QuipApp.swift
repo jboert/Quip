@@ -4487,10 +4487,16 @@ enum CustomButtonStore {
     static let demoCustomID: UUID = UUID(uuidString: "DEAD1DEA-0000-0000-0000-000000000001")!
 
     static func defaultDemo() -> CustomButton {
+        // No systemImage — `customQuickButton` renders icon OR label
+        // (never both), so seeding an icon would hide the "/help"
+        // label and the demo would look like an unmarked sparkle pill.
+        // Letting the label render as text matches the visual style
+        // of the built-in `/btw` slash pill and makes the demo's
+        // purpose obvious without a tap.
         return CustomButton(
             id: demoCustomID,
             label: "/help",
-            systemImage: "wand.and.stars",
+            systemImage: nil,
             payload: .slash(text: "/help ", autoSubmit: false)
         )
     }
