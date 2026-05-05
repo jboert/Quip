@@ -571,26 +571,30 @@ Bundle into a single JSON blob, save to `Documents/diagnostics/`, present a shar
 
 ---
 
-### 27. Idempotent message IDs + Mac-side dedupe table for safe retries
+### 27. Idempotent message IDs + Mac-side dedupe table for safe retries (✅ Done v1, eb-branch)
 
-**Status:** Wishlist
-**Depends on:** #20 (WebSocket heartbeat / dead-peer detection)
-**Context:** Today, every message the iPhone sends to the Mac is fire-and-forget. There's no message ID, no acknowledgement, no dedupe. If the user double-taps a button (or if a network blip causes the iPhone to retry a send), the Mac will execute the action twice — duplicate spawns two iTerm windows, close fires two close commands, quick actions fire keystrokes twice. Today this is hidden because the iPhone never *intentionally* retries, but as soon as #20 (heartbeats) lands and retry-on-reconnect becomes possible, this becomes a real bug.
+**Status:** ✅ Done v1 on `eb-branch` 2026-05-05. Lighter "ID + dedupe, no ack" path shipped — covers the user-double-taps case today AND structurally unblocks future retry-on-reconnect work without revisiting the protocol.
 
-**Fix:** introduce a `messageId: UUID` field on every iPhone-originated message in `MessageProtocol.swift`. The Mac maintains a **dedupe table** of the last 100 message IDs (TTL 30 seconds). When a message arrives:
-- New ID → process the message, add to table.
-- Duplicate ID → ack with the original result, do nothing.
+**Original "Depends on §20" reasoning re-examined:** the iOS-side keepalive shipped in `64a8376` (commit per `project_ws_resilience.md`) already detects Mac death within ~13s. §20's full Mac→iOS app-level heartbeat (audit #19) is still wishlist, but the "reconnect path exists" part §27 needed is in place. Marginal value of an additional Mac→iOS app heartbeat is small (catches Mac-app-zombified cases where socket is alive but handler is wedged) — defer until that symptom shows up.
 
-The table is in-memory only (lost on QuipMac restart, which is fine — by then the iPhone's retry window has long since passed).
+**What shipped:**
+- `messageId: UUID?` added to side-effecting iPhone-originated wire messages: `SendTextMessage`, `QuickActionMessage`, `DuplicateWindowMessage`, `CloseWindowMessage`, `SpawnWindowMessage`, `AttachITermWindowMessage`, `PastePromptMessage`. Optional + default `UUID()` so phone init sites auto-populate without churn; older clients omitting the field still process every time (treated as "no dedupe").
+- `MessageDedupeTable` (Mac, in-memory). Capacity 100, TTL 30s, NSLock-guarded. Insertion-ordered ring with parallel `[UUID: Date]` index for O(1) hits. Pluggable clock so unit tests step through TTL boundaries without sleeping.
+- Mac handlers wrap each side-effecting case in `if messageDedupe.checkAndRecord(msg.messageId) { print('… DEDUPED'); break }` — fire-and-forget; phone gets no ack on duplicates (lighter v1).
+- 7 unit tests: first/second arrival flip, distinct ids all pass, nil id always processes, capacity-eviction (with corrected ordering after the first run flagged a test bug — oldest-out path needed asserting BEFORE the re-insert), TTL purge with fakeable clock, mixed fresh/stale TTL, concurrent insert under `concurrentPerform` x8 threads x1k each.
 
-**Design questions to resolve in brainstorming:**
-- **Ack-required vs ack-optional.** Strict: every Mac-side handler returns an `AckMessage(messageId, result)` and the iPhone matches retries against pending messages it hasn't acked yet — the most correct version, unlocks at-least-once retry semantics. Lighter: just ID + dedupe, no ack — works for "user double-tapped" but doesn't unlock automatic retry-on-reconnect.
-- **Table size and TTL.** 100 messages / 30 seconds is enough to cover any plausible "network blip caused a retry" window without bloating memory.
-- **Backwards compatibility.** Old iPhone clients that don't send `messageId` should still work — treat missing-ID messages as "always process, never dedupe."
+**Deliberately NOT covered in v1:**
+- `image_upload` — already idempotent at the file path level (atomic write to imageId-keyed path); a phone-side retry of the same image would land on the same path. Adding messageId here would also need to suppress the "type the path again" side effect — file an item if a real symptom shows up.
+- `put_prompt` / `delete_prompt` — filesystem-idempotent (rewriting same content + deleting nonexistent both no-op).
+- `arrange_windows` — geometric, idempotent.
+- `audio_chunk` — per-frame ordered stream; dedupe would BREAK the upload, not protect it.
+- Strict ack-required version (`AckMessage(messageId, result)`) — open question parked for when retry-on-reconnect itself lands. v1 is the "structural net under double-tap" piece.
 
-**Why this is required for #20 to be safely useful:** as soon as the iPhone has a heartbeat-driven reconnect loop, the natural next step is "if a send fails because the connection just died, queue it and retry on reconnect." But you can't safely retry a `duplicate_window` without the dedupe table — the message might have actually reached the Mac before the connection died, and the retry would create a second window. So #27 is the structural prerequisite that turns #20 from "detect dead connections" into "actually recover gracefully from them."
+**Bumped Mac CFBundleShortVersionString 1.3.3 → 1.4.0** to reflect the wire-format addition + perms-surface (§22) + smoke-test (§25) + race fixes (§23) shipping in this session.
 
-**Related:** #20 (WebSocket heartbeat — strict prerequisite; #27 has no value without #20).
+**Related:** #20 (Mac→iOS app heartbeat — still wishlist; §27 ships without waiting now that iOS-side keepalive already catches dead peers).
+
+**Related code:** `Shared/MessageProtocol.swift` (messageId fields), `QuipMac/Services/MessageDedupeTable.swift` (new), `QuipMac/Tests/MessageDedupeTableTests.swift`, `QuipMac/QuipMacApp.swift` (handler guards).
 
 ---
 

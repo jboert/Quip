@@ -87,6 +87,11 @@ struct QuipMacApp: App {
     /// distinct new window instead of all racing to the same one
     /// (wishlist §23 race A). Pruned every poll tick to stay bounded.
     @State private var claimedSpawnedIds: Set<String> = []
+    /// Dedupe table for idempotent phone-originated messages
+    /// (wishlist §27). Phone-side double-tap or future
+    /// retry-on-reconnect sends the same `messageId: UUID`; first
+    /// arrival processes, second is silently dropped.
+    private let messageDedupe = MessageDedupeTable()
 
     var body: some Scene {
         WindowGroup {
@@ -701,6 +706,10 @@ struct QuipMacApp: App {
 
         case "send_text":
             if let msg = MessageCoder.decode(SendTextMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] send_text DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
                 AuditLogger.log(messageType: "send_text", clientIdentifier: "ws-client", textContent: msg.text)
                 guard windowManager.windows.contains(where: { $0.id == msg.windowId }) else {
                     let known = windowManager.windows.map { $0.id }
@@ -803,6 +812,10 @@ struct QuipMacApp: App {
 
         case "quick_action":
             if let msg = MessageCoder.decode(QuickActionMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] quick_action DEDUPED action=\(msg.action) messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
                 AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
                 print("[Quip] quick_action: action=\(msg.action) windowId=\(msg.windowId)")
                 thinkingWindows.insert(msg.windowId)
@@ -900,6 +913,10 @@ struct QuipMacApp: App {
 
         case "duplicate_window":
             if let msg = MessageCoder.decode(DuplicateWindowMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] duplicate_window DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
                 print("[Quip] duplicate_window: sourceWindowId=\(msg.sourceWindowId)")
                 if let source = windowManager.windows.first(where: { $0.id == msg.sourceWindowId }) {
                     // subtitle is documented as "Directory path or secondary info" in
@@ -934,6 +951,10 @@ struct QuipMacApp: App {
 
         case "close_window":
             if let msg = MessageCoder.decode(CloseWindowMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] close_window DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
                 print("[Quip] close_window: windowId=\(msg.windowId)")
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     let termApp = terminalAppForWindow(window)
@@ -948,6 +969,10 @@ struct QuipMacApp: App {
 
         case "spawn_window":
             if let msg = MessageCoder.decode(SpawnWindowMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] spawn_window DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
                 print("[Quip] spawn_window: directory=\(msg.directory)")
                 let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
                 let knownIds = Set(windowManager.windows.map(\.id))
@@ -974,6 +999,10 @@ struct QuipMacApp: App {
 
         case "paste_prompt":
             if let msg = MessageCoder.decode(PastePromptMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] paste_prompt DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
                 handlePastePrompt(msg)
             }
 
@@ -1014,6 +1043,10 @@ struct QuipMacApp: App {
 
         case "attach_iterm_window":
             if let msg = MessageCoder.decode(AttachITermWindowMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] attach_iterm_window DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
                 print("[Quip] attach_iterm_window: windowNumber=\(msg.windowNumber) sessionId=\(msg.sessionId)")
                 handleAttachITermWindow(windowNumber: msg.windowNumber, sessionId: msg.sessionId)
             }
