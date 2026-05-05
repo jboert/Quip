@@ -824,14 +824,26 @@ struct QuipMacApp: App {
                 // buttons — without waiting for Claude to actually
                 // ask a question.
                 if msg.action == "test_push" {
-                    let selected = clientSelectedWindowId
-                        ?? windowManager.windows.first(where: \.isEnabled)?.id
+                    // Synthetic per-tap windowId so the 30s
+                    // (windowId, device) debounce can't suppress
+                    // back-to-back tests, and to bypass the
+                    // "selected window only" per-device gate by
+                    // making selectedWindowId == windowId. The id
+                    // is opaque — never lands in the visible list,
+                    // so tap-to-deep-link will fall through to the
+                    // app's default open behavior. Audit + print so
+                    // we can see in push.log that the request
+                    // arrived even when the gate would have dropped
+                    // a real one.
+                    let testId = "test-\(UUID().uuidString)"
+                    print("[Quip] test_push received from phone — firing notifyWaitingForInput synthetic id=\(testId)")
+                    appendPushDiagnostic("test_push fired synthetic id=\(testId), devices=\(pushNotificationService.devices.count)")
                     pushNotificationService.notifyWaitingForInput(
-                        windowId: selected ?? "test",
+                        windowId: testId,
                         windowName: "Test",
                         projectName: "Quip",
                         attentionCount: 1,
-                        selectedWindowId: selected
+                        selectedWindowId: testId
                     )
                     break
                 }
