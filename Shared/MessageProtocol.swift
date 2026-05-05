@@ -653,10 +653,17 @@ struct PushPreferencesMessage: Codable, Sendable {
     /// Optional so older iOS clients decode cleanly — the Mac falls back
     /// to its own `Calendar.current` in that case.
     let timeZone: String?
+    /// (wishlist §15.) When true, Mac fires waiting_for_input pushes for
+    /// EVERY enabled window, not just the one the phone has selected. When
+    /// false (default), only the selected window pushes — the existing
+    /// "no notification flood from background Claudes" stance.
+    /// Optional in the wire format so older iOS clients decode cleanly as
+    /// `nil` → Mac treats as `false`.
+    let notifyAllWindows: Bool?
 
     init(deviceToken: String, paused: Bool, quietHoursStart: Int?, quietHoursEnd: Int?,
          sound: Bool, foregroundBanner: Bool, bannerEnabled: Bool? = nil,
-         timeZone: String? = nil) {
+         timeZone: String? = nil, notifyAllWindows: Bool? = nil) {
         self.type = "push_preferences"
         self.deviceToken = deviceToken
         self.paused = paused
@@ -666,6 +673,7 @@ struct PushPreferencesMessage: Codable, Sendable {
         self.foregroundBanner = foregroundBanner
         self.bannerEnabled = bannerEnabled
         self.timeZone = timeZone
+        self.notifyAllWindows = notifyAllWindows
     }
 }
 
@@ -689,6 +697,9 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     var pushQuietHoursEnabled: Bool?
     var pushQuietHoursStart: Int?
     var pushQuietHoursEnd: Int?
+    /// (wishlist §15.) Optional so older Macs decode cleanly as nil →
+    /// phone keeps whatever local default it had.
+    var pushNotifyAllWindows: Bool?
     var liveActivitiesEnabled: Bool?
     var ttsEnabled: Bool?
     /// JSON-encoded ordered slot list from the Apple-toolbar-style editor.
@@ -715,6 +726,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         pushQuietHoursEnabled: Bool? = nil,
         pushQuietHoursStart: Int? = nil,
         pushQuietHoursEnd: Int? = nil,
+        pushNotifyAllWindows: Bool? = nil,
         liveActivitiesEnabled: Bool? = nil,
         ttsEnabled: Bool? = nil,
         quickSlotsJSON: String? = nil,
@@ -732,6 +744,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.pushQuietHoursEnabled = pushQuietHoursEnabled
         self.pushQuietHoursStart = pushQuietHoursStart
         self.pushQuietHoursEnd = pushQuietHoursEnd
+        self.pushNotifyAllWindows = pushNotifyAllWindows
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.ttsEnabled = ttsEnabled
         self.quickSlotsJSON = quickSlotsJSON
