@@ -982,13 +982,32 @@ struct MainiOSView: View {
         .environment(\.quipColors, colors)
         .onAppear {
             updateOrientation()
-            // One-shot migration of the legacy CSV `enabledQuickButtons`
-            // representation to the new ordered slot list. Empty JSON =
-            // never migrated; running version puts `quickSlotsJSON` in a
-            // valid state so `effectiveQuickSlots` stays a pure read.
+            // One-shot first-launch seed for the slot row + custom-button
+            // table. Two paths:
+            //   1) Truly-fresh install — both `quickSlotsJSON` empty AND
+            //      `customButtonsJSON` is the empty-array default `"[]"`.
+            //      Seed `defaultSlots(demoCustomID:)` + `defaultDemo()` so
+            //      the row visibly demonstrates both built-ins AND a
+            //      custom button the moment the app connects (no Settings
+            //      drill-down needed, makes simulator QA viable).
+            //   2) Upgrader from pre-§43 CSV — `quickSlotsJSON` empty but
+            //      `customButtonsJSON` already has user data (or the CSV
+            //      itself isn't the default value). Run the existing
+            //      CSV→JSON migration so the user's curated row carries
+            //      forward unchanged.
             if quickSlotsJSON.isEmpty {
-                let migrated = QuickSlotStore.migrate(fromCSV: enabledQuickButtonsRaw)
-                quickSlotsJSON = QuickSlotStore.encode(migrated)
+                let isTrulyFresh =
+                    customButtonsJSON == "[]" &&
+                    enabledQuickButtonsRaw == "plan,yes,no,esc,ctrlC"
+                if isTrulyFresh {
+                    let demo = CustomButtonStore.defaultDemo()
+                    customButtonsJSON = CustomButtonStore.encode([demo])
+                    let seeded = QuickSlotStore.defaultSlots(demoCustomID: demo.id)
+                    quickSlotsJSON = QuickSlotStore.encode(seeded)
+                } else {
+                    let migrated = QuickSlotStore.migrate(fromCSV: enabledQuickButtonsRaw)
+                    quickSlotsJSON = QuickSlotStore.encode(migrated)
+                }
             }
             // Restore persisted phone-side window overrides so a returning
             // user sees their drag layout before the first windows-list
@@ -4373,6 +4392,28 @@ enum QuickSlotStore {
         }
         return slots
     }
+
+    /// Fresh-install starter row. Designed so a new user (or a QA run on a
+    /// freshly-erased simulator) sees both built-ins AND a custom button
+    /// the moment the app connects — proving the feature exists without
+    /// a Settings drill-down. Includes a `.custom(demoCustomID)` slot
+    /// that pairs with `CustomButtonStore.defaultDemo()` to render a
+    /// visible custom-button pill out of the box.
+    static func defaultSlots(demoCustomID: UUID) -> [QuickSlot] {
+        return [
+            .builtin(.btw),
+            .custom(demoCustomID),
+            .spacer(UUID()),
+            .builtin(.yes),
+            .builtin(.no),
+            .spacer(UUID()),
+            .builtin(.one),
+            .builtin(.two),
+            .spacer(UUID()),
+            .builtin(.esc),
+            .builtin(.backspace),
+        ]
+    }
 }
 
 /// Encode/decode the custom-button definitions table.
@@ -4389,6 +4430,23 @@ enum CustomButtonStore {
               let str = String(data: data, encoding: .utf8)
         else { return "[]" }
         return str
+    }
+
+    /// Single starter custom button seeded on truly-fresh installs so the
+    /// quick-button row visibly proves the custom-button feature exists.
+    /// UUID is stable so re-entering the seed path can detect "already
+    /// seeded" without searching by label. Slash payload is a friendly
+    /// no-op (`/help `) — leaves the cursor on the same line so the user
+    /// can either submit or backspace it away.
+    static let demoCustomID: UUID = UUID(uuidString: "DEAD1DEA-0000-0000-0000-000000000001")!
+
+    static func defaultDemo() -> CustomButton {
+        return CustomButton(
+            id: demoCustomID,
+            label: "/help",
+            systemImage: "wand.and.stars",
+            payload: .slash(text: "/help ", autoSubmit: false)
+        )
     }
 }
 
