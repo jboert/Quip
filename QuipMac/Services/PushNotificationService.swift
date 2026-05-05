@@ -61,6 +61,46 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
 
     static let defaults = DevicePushPreferences()
 
+    /// Custom decoder that defaults every field if missing. Without this,
+    /// Codable synthesis REQUIRES every non-Optional field; if a future
+    /// release adds another `var foo: Bool = false`, every prefs row
+    /// stored under the prior schema fails to decode and the in-memory
+    /// `preferences` map silently goes empty (because `loadPreferences`
+    /// swallows the error via `try?`). Symptom: user's "Pause All"
+    /// toggle stops taking effect on the Mac side after a Mac upgrade
+    /// — Mac falls back to `.defaults` which has paused=false.
+    /// Discovered when §15 added `notifyAllWindows`: prior pause prefs
+    /// were unloadable, every push fired, Watch mirrored the alerts.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
+        self.quietHoursStart = try c.decodeIfPresent(Int.self, forKey: .quietHoursStart)
+        self.quietHoursEnd = try c.decodeIfPresent(Int.self, forKey: .quietHoursEnd)
+        self.sound = try c.decodeIfPresent(Bool.self, forKey: .sound) ?? true
+        self.foregroundBanner = try c.decodeIfPresent(Bool.self, forKey: .foregroundBanner) ?? false
+        self.bannerEnabled = try c.decodeIfPresent(Bool.self, forKey: .bannerEnabled) ?? true
+        self.timeZone = try c.decodeIfPresent(String.self, forKey: .timeZone)
+        self.notifyAllWindows = try c.decodeIfPresent(Bool.self, forKey: .notifyAllWindows) ?? false
+    }
+
+    init(paused: Bool = false,
+         quietHoursStart: Int? = nil,
+         quietHoursEnd: Int? = nil,
+         sound: Bool = true,
+         foregroundBanner: Bool = false,
+         bannerEnabled: Bool = true,
+         timeZone: String? = nil,
+         notifyAllWindows: Bool = false) {
+        self.paused = paused
+        self.quietHoursStart = quietHoursStart
+        self.quietHoursEnd = quietHoursEnd
+        self.sound = sound
+        self.foregroundBanner = foregroundBanner
+        self.bannerEnabled = bannerEnabled
+        self.timeZone = timeZone
+        self.notifyAllWindows = notifyAllWindows
+    }
+
     /// True if the current wall-clock hour falls inside the quiet-hours
     /// window. Supports both same-day (start < end, e.g. 13-17) and
     /// overnight (start > end, e.g. 22-7) ranges. Returns false when
