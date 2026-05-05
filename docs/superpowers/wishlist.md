@@ -75,6 +75,9 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §15 v2 — UNNotificationCategory yes/no/1/2 actions on lock screen + Watch (path A) | ✅ | `26e04a3` | yes (Yes button verified at 19:07:42 + 19:08:56 audit.log press_y) |
 | §15 v2 — Notifications settings sectioned + status footer + test-fire button | ✅ | `506c195` | yes (test fire round-trips to APNs; lock-screen banner renders) |
 | §15 v2 — test-fire bypass selection gate + per-tap synthetic id | ✅ | `b46b45d` | yes (push.log `test_push fired synthetic id=…` confirms branch hit) |
+| §49 follow-up — DiagnosticsBundle redacts IPv4s + hostname before share | ✅ | `439e94e` | 11 LogRedactor tests + 2 systemInfoText tests green; Tailscale + LAN + public IPv4 all masked, hostname → 8-char hash |
+| §22 follow-up — MacPermissionsStore aggregation tests | ✅ | `439e94e` | 8 tests covering nil/all-granted/all-denied/single/pair/replace |
+| §27 follow-up — dedupe wiring audit (no new handlers) | 📝 | _pending_ | grep confirms all 7 side-effecting handlers (`send_text`/`quick_action` (covers `test_push`)/`duplicate_window`/`close_window`/`spawn_window`/`paste_prompt`/`attach_iterm_window`) still wrap `messageDedupe.checkAndRecord` post-`b46b45d`; no code change |
 
 **Test still owed by user (today's batch):**
 - §15 hardware verify: phone backgrounded → trigger `waiting_for_input` → push lands with `🤖 AI is waiting`. Trigger 2+ windows → batches to `🤖 N AIs waiting`. Toggle "Notify on All Windows" → non-selected window now pushes.
