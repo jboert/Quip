@@ -5845,6 +5845,14 @@ struct ConnectionDiagnosticsSheet: View {
                     let (label, tint) = transportClassification(for: url)
                     stateRow(label: "Transport", value: label, tint: tint)
                 }
+                let (whisperLabel, whisperTint) = whisperStateClassification(client.whisperStatus)
+                stateRow(label: "Whisper (Mac)", value: whisperLabel, tint: whisperTint)
+                let pttPath: PTTPath = client.isConnected
+                    ? selectPTTPath(isConnected: client.isConnected, whisperStatus: client.whisperStatus)
+                    : .local
+                stateRow(label: "Next PTT path",
+                         value: pttPath == .remote ? "remote (Whisper)" : "local (SFSpeech)",
+                         tint: pttPath == .remote ? .green : .orange)
                 if let err = client.lastError, !err.isEmpty {
                     stateRow(label: "Last error", value: err, tint: .red)
                 }
@@ -5995,6 +6003,15 @@ struct ConnectionDiagnosticsSheet: View {
             if a == 127 { return ("Loopback", .secondary) }
         }
         return ("Direct", .secondary)
+    }
+
+    private func whisperStateClassification(_ state: WhisperState) -> (String, Color) {
+        switch state {
+        case .preparing: return ("preparing", .orange)
+        case .downloading(let p): return ("downloading \(Int(p * 100))%", .orange)
+        case .ready: return ("ready", .green)
+        case .failed(let m): return ("failed: \(m)", .red)
+        }
     }
 }
 

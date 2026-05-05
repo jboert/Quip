@@ -43,10 +43,12 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 **Still in backlog (need user input or hardware):**
 - §51 iCloud KVS sync of paired backends — needs second device.
-- §52 iPad layout — needs iPad.
 - §54 Wake-word PTT — open stack decision (SFSpeech / Picovoice / on-device Whisper).
 - §55 Clipboard sync (Mac↔iPhone) — open privacy decision (default-on vs default-off).
 - §56 Voice macros ("ship it" → multi-step) — open UX decision.
+
+**Tabled (parked, revisit on demand):**
+- §52 iPad layout — tabled 2026-05-05 by user. No iPad to test on; not a current priority.
 
 **v2 follow-ups deferred from this session:**
 - §49 redact tunnel URLs / device tokens before share (TODO marker in code).
@@ -1133,7 +1135,7 @@ iOS `DiagnosticsShareSheet` `UIViewControllerRepresentable` wraps `UIActivityVie
 
 ### Boundary marker — autonomous loop halts here, awaiting user input
 
-Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glance, wake-word PTT, clipboard sync, voice macros) all need user decisions, multi-device hardware testing, or new Xcode targets — see plan file at `~/.claude/plans/plan-to-do-eacn-glowing-oasis.md` for the full open-questions list per ticket.
+Tickets §50–§56 (QR pairing, iCloud KVS sync, ~~iPad layout~~ [tabled], Apple Watch glance, wake-word PTT, clipboard sync, voice macros) all need user decisions, multi-device hardware testing, or new Xcode targets — see plan file at `~/.claude/plans/plan-to-do-eacn-glowing-oasis.md` for the full open-questions list per ticket.
 
 ---
 
