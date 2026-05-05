@@ -10,8 +10,13 @@ final class HardwareButtonHandler {
 
     // Suppression windows: shorter for self-triggered KVO echoes,
     // slightly longer for PTT transitions that reconfigure the audio session.
+    // pttTransitionSuppression was 0.25s — long enough to swallow a user's
+    // legitimate fast re-press to stop PTT. Dropped to 0.10s, which is still
+    // longer than the phantom restore-volume KVO echo (typically <50ms after
+    // setVolume) but well below the 200–300ms gap a human leaves between
+    // start and stop button taps.
     private static let volumeRestoreSuppression: TimeInterval = 0.3
-    private static let pttTransitionSuppression: TimeInterval = 0.25
+    private static let pttTransitionSuppression: TimeInterval = 0.10
 
     // iOS volume buttons step by 1/16. Stay one step away from each rail so
     // KVO can always see motion in both directions.
@@ -95,13 +100,25 @@ final class HardwareButtonHandler {
                 // fights whatever app the user is actually using (YouTube etc.).
                 // We deliberately do NOT tear down the observer or audio session
                 // here; that path broke PTT resume before.
-                guard UIApplication.shared.applicationState == .active else { return }
+                guard UIApplication.shared.applicationState == .active else {
+                    print("[Quip][PTT] KVO drop: app not active (state=\(UIApplication.shared.applicationState.rawValue))")
+                    return
+                }
 
                 // Ignore phantom KVO events caused by audio session reconfiguration
-                guard Date() >= self.suppressUntil else { return }
+                let now = Date()
+                guard now >= self.suppressUntil else {
+                    let remaining = self.suppressUntil.timeIntervalSince(now)
+                    print("[Quip][PTT] KVO drop: suppressed (remaining \(String(format: "%.3f", remaining))s)")
+                    return
+                }
 
                 let delta = newVol - oldVol
-                guard abs(delta) > 0.001 else { return }
+                guard abs(delta) > 0.001 else {
+                    print("[Quip][PTT] KVO drop: delta too small (\(delta))")
+                    return
+                }
+                print("[Quip][PTT] KVO accepted: delta=\(delta) isPTTActive=\(self.isPTTActive)")
 
                 // Restore volume to prevent audible changes
                 self.restoreVolume()
@@ -134,9 +151,36 @@ final class HardwareButtonHandler {
             routeChangeObserver = NotificationCenter.default.addObserver(
                 forName: AVAudioSession.routeChangeNotification,
                 object: nil, queue: .main
-            ) { [weak self] _ in
+            ) { [weak self] notification in
                 guard let self else { return }
                 guard UIApplication.shared.applicationState == .active else { return }
+
+                // Only force-stop on actual hardware route changes (headphones
+                // unplugged, BT disconnect, default device changed). The
+                // notification ALSO fires on category changes — and PTT
+                // start itself triggers a category-change when the speech
+                // service activates the mic. The previous handler treated
+                // that internal change as if AirPods had unplugged and
+                // killed PTT immediately. Result: intermittent "vol-down
+                // didn't trigger anything" depending on whether the route-
+                // change notification beat the user's perception.
+                guard let reasonRaw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                      let reason = AVAudioSession.RouteChangeReason(rawValue: reasonRaw) else { return }
+                let isHardwareEvent: Bool
+                switch reason {
+                case .newDeviceAvailable, .oldDeviceUnavailable, .override, .wakeFromSleep, .noSuitableRouteForCategory:
+                    isHardwareEvent = true
+                case .unknown, .categoryChange, .routeConfigurationChange:
+                    isHardwareEvent = false
+                @unknown default:
+                    isHardwareEvent = false
+                }
+                guard isHardwareEvent else {
+                    NSLog("[Quip][PTT] route change reason=%lu (non-hardware), ignoring", reasonRaw)
+                    return
+                }
+
+                NSLog("[Quip][PTT] route change reason=%lu (hardware) — force-stop", reasonRaw)
                 if self.isPTTActive {
                     self.isPTTActive = false
                     self.suppressUntil = Date().addingTimeInterval(Self.pttTransitionSuppression)
@@ -159,8 +203,9 @@ final class HardwareButtonHandler {
 
     /// Re-activate the audio session and reset volume after returning from background.
     /// The OS deactivates the session when backgrounded, killing volume KVO.
+    /// Re-arms the KVO observer if it was torn down (which happens via
+    /// `pauseMonitoring()` on the `didEnterBackground` notification).
     func resumeAfterBackground() {
-        guard volumeObservation != nil else { return }
         // If a press was in flight when we backgrounded, deliver the stop now —
         // volume KVO was paused, so there was no natural release event.
         if isPTTActive {
@@ -168,6 +213,17 @@ final class HardwareButtonHandler {
             onPTTStop?()
         }
         cancelStuckWatchdog()
+
+        // If the observer is gone (background pause), re-arm using the
+        // cached windowCount. Without this, PTT stayed dead from foregrounding
+        // until the next Mac layout_update arrived — could be 1–15s with
+        // the WS resilience layer mid-reconnect.
+        if volumeObservation == nil && windowCount > 0 {
+            startMonitoring(windowCount: windowCount)
+            return
+        }
+        guard volumeObservation != nil else { return }
+
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default,
@@ -177,6 +233,33 @@ final class HardwareButtonHandler {
             NSLog("[Quip][HW] Audio session setup failed: %@", error.localizedDescription)
         }
         primeRailIfNeeded(session: session)
+    }
+
+    /// Lighter teardown for backgrounding: kills the KVO observer (which
+    /// stops firing reliably anyway when the audio session deactivates) but
+    /// preserves `windowCount` so `resumeAfterBackground()` can re-arm
+    /// without waiting for the next Mac `layout_update`.
+    /// Use this on `didEnterBackground`; reserve full `stopMonitoring()`
+    /// for terminal teardown (no-windows state, app shutting down).
+    ///
+    /// Also fires `onDisarm` so the SpeechService stops its long-lived
+    /// audio engine + tap. Without this, the engine kept the mic active
+    /// while the app was in the background — visible to the user as the
+    /// orange "mic in use" indicator in the iOS status bar / Dynamic
+    /// Island. `resumeAfterBackground` will re-arm via `startMonitoring`
+    /// → `onArm` when the app returns.
+    func pauseMonitoring() {
+        volumeObservation?.invalidate()
+        volumeObservation = nil
+        if isPTTActive {
+            isPTTActive = false
+            onPTTStop?()
+        }
+        suppressUntil = .distantPast
+        cancelStuckWatchdog()
+        // Deliberately keep windowCount so resumeAfterBackground can re-arm.
+        // Deliberately keep routeChangeObserver — it's still useful in fg.
+        onDisarm?()
     }
 
     /// Capture the user's current output volume into `savedVolume`. Only

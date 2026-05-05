@@ -42,6 +42,7 @@ struct QuipApp: App {
     @State private var pushRegistration = PushRegistrationService()
     @State private var attentionCenter = WindowAttentionCenter()
     @State private var pushDelegate = PushNotificationCenterDelegate()
+    @State private var watchSync = WatchSyncService()
     @State private var liveActivity = LiveActivityService()
     @State private var prefsSync = PreferencesSyncService()
 
@@ -186,9 +187,11 @@ struct QuipApp: App {
                 iTermScanResults = s.iTermScanResults
                 macPermissions = s.macPermissions
                 ttsOverlayTexts = s.ttsOverlayTexts
-                // Repoint speech at the new active client so PTT audio chunks
-                // go to the right backend. `attachWebSocket` is idempotent.
-                speech.attachWebSocket(s.client)
+                // Re-run the resolver attach so the freshly active client
+                // gets its onTranscriptResult callback wired up. The
+                // resolver closure itself always returns manager.active.client
+                // so it stays correct across swaps.
+                speech.attachWebSocketResolver { [manager] in manager.active.client }
             }
             .onChange(of: liveActivitiesEnabled) { _, enabled in
                 // Flipping Live Activities off in Settings should drop any
@@ -225,11 +228,15 @@ struct QuipApp: App {
                 client.send(SelectWindowMessage(windowId: windowId))
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-                // Only reset the audio session if TTS isn't actively playing —
-                // background audio mode keeps the session alive during playback
-                if !speech.isSpeaking {
-                    volumeHandler.resumeAfterBackground()
-                }
+                // Always call resumeAfterBackground so the volume KVO observer
+                // gets re-armed (it was torn down in pauseMonitoring on enter-
+                // background). The previous `!speech.isSpeaking` guard left
+                // PTT dead whenever the user backgrounded mid-TTS — the
+                // observer stayed nil and vol-down did nothing on return.
+                // resumeAfterBackground itself avoids fighting an active TTS
+                // playback because primeRailIfNeeded only nudges volume when
+                // parked on a rail.
+                volumeHandler.resumeAfterBackground()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                 // Buy ~30s of background execution so a quick app switch doesn't
@@ -238,7 +245,12 @@ struct QuipApp: App {
                 manager.suspendAll()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                volumeHandler.stopMonitoring()
+                // Pause (not stopMonitoring) so windowCount survives. Full
+                // stopMonitoring zeroes windowCount, which left PTT dead on
+                // resume until the next Mac layout_update re-armed it. The
+                // pauseMonitoring path drops just the KVO observer; the next
+                // foreground hook re-arms with the cached windowCount.
+                volumeHandler.pauseMonitoring()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Probe every paired backend's socket on return; force-reconnect
@@ -273,7 +285,13 @@ struct QuipApp: App {
         manager.loadPaired()
 
         speech.requestAuthorization()
-        speech.attachWebSocket(client)
+        // Resolver form: speech grabs the *current* active client at every
+        // PTT press. The prior `attachWebSocket(client)` form weak-pointed
+        // at whatever `manager.active.client` was at setup time — which,
+        // before `manager.bootstrap()` ran, was the placeholder session's
+        // client. Once the placeholder was released, speech.webSocket was
+        // permanently nil and PTT silently fell to .local with no captions.
+        speech.attachWebSocketResolver { [manager] in manager.active.client }
 
         // Hot model: the manager's `wire(session:)` already maintained each
         // session's slice (windows, monitorName, terminalContent, etc.). The
@@ -288,6 +306,12 @@ struct QuipApp: App {
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
+                // Push window snapshot to the paired Apple Watch (no-op if
+                // no watch is paired or the app isn't installed).
+                watchSync.push(windows: update.windows.map {
+                    WatchWindowSyncEntry(id: $0.id, name: $0.name,
+                                         state: $0.state, claudeMode: $0.claudeMode)
+                })
                 if wasEmpty && !update.windows.isEmpty {
                     AppOrientationDelegate.allowAllOrientations = true
                     if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
@@ -300,6 +324,18 @@ struct QuipApp: App {
                     if let newId = selectedWindowId {
                         session.client.send(SelectWindowMessage(windowId: newId))
                     }
+                }
+                // Auto-pick first window on the FIRST layout_update after a
+                // fresh launch / fresh connect. Without this, the user opens
+                // the app, sees windows, taps mic — and PTT silently no-ops
+                // because `startRecording` gates on `selectedWindowId != nil`.
+                // Same gate kills the on-screen mic button AND the hardware
+                // volume-down PTT path, so "nothing happens when I tap mic"
+                // means "no window selected." Picking windows.first restores
+                // both paths.
+                if selectedWindowId == nil, let first = update.windows.first {
+                    selectedWindowId = first.id
+                    session.client.send(SelectWindowMessage(windowId: first.id))
                 }
                 if wasEmpty, let wid = selectedWindowId, update.windows.contains(where: { $0.id == wid }) {
                     session.client.send(SelectWindowMessage(windowId: wid))
@@ -358,6 +394,13 @@ struct QuipApp: App {
                         }
                     }
                 }
+                // Push the updated snapshot to the watch so it can vibrate
+                // on the waiting_for_input transition. push() dedupes, so
+                // a no-change layout poll doesn't burn WCSession budget.
+                watchSync.push(windows: windows.map {
+                    WatchWindowSyncEntry(id: $0.id, name: $0.name,
+                                         state: $0.state, claudeMode: $0.claudeMode)
+                })
             }
         }
 
@@ -514,7 +557,15 @@ struct QuipApp: App {
 
     @MainActor
     private func startRecording() {
-        guard let windowId = selectedWindowId else { return }
+        guard let windowId = selectedWindowId else {
+            // Visible failure beats silent no-op. Warning haptic + log so the
+            // user knows the tap registered but the precondition (window
+            // selected) wasn't met. Print survives `devicectl --console` per
+            // memory `reference_ios_device_log_capture.md`.
+            print("[Quip][PTT] startRecording bail: selectedWindowId=nil (windows=\(windows.count))")
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
         // Pin the windowId for this recording — stopRecording must not re-read
         // selectedWindowId, because a mid-recording select_window push or a
         // layout-update reassignment can change it underneath us.
@@ -671,6 +722,13 @@ struct MainiOSView: View {
     // User-defined custom buttons. JSON-encoded `[CustomButton]`. Defaults
     // to "[]". Slots reference these by UUID via `.custom(id)`.
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
+    // MRU log for prompts fired from this device. JSON `[String: String]`
+    // mapping prompt id → ISO-8601 lastUsed. Surfaces most-recently-used
+    // prompts at the top of the picker (`.promptsPicker` slot).
+    // Phone-local; doesn't sync to Mac because each device's usage
+    // pattern is its own — Mac keeps the catalog, phone keeps the order.
+    @AppStorage("promptUsageMRUJSON") private var promptUsageMRUJSON: String = "{}"
+    @State private var showPromptsPickerSheet = false
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -679,6 +737,13 @@ struct MainiOSView: View {
     @AppStorage("mainRow.spawn") private var mainRowSpawn: Bool = true
     @AppStorage("mainRow.arrange") private var mainRowArrange: Bool = true
     @AppStorage("mainRow.photo") private var mainRowPhoto: Bool = true
+    @AppStorage("mainRow.prompts") private var mainRowPrompts: Bool = false
+    /// One-shot flag — set after `mainRowPrompts` has been auto-flipped on
+    /// because the user has at least one prompt in their library. Without
+    /// the flag the auto-on would fight a user who turned it off in
+    /// Settings (catalog refreshes every reconnect → re-flip → infinite
+    /// fight). Once tripped, all subsequent toggle behaviour is manual.
+    @AppStorage("mainRow.prompts.autoEnabledOnce") private var promptsAutoEnabledOnce: Bool = false
     @AppStorage("mainRow.keyboard") private var mainRowKeyboard: Bool = true
     @AppStorage("mainRow.return") private var mainRowReturn: Bool = true
     @State private var showSettings = false
@@ -977,6 +1042,16 @@ struct MainiOSView: View {
                 updateOrientation()
             }
         }
+        // §A1: discoverability — first time the Mac broadcasts a non-empty
+        // prompt catalog, auto-enable the main-row Prompts button so users
+        // notice it exists. One-shot via `promptsAutoEnabledOnce` so a user
+        // who turns it off in Settings doesn't see it pop back on every
+        // reconnect.
+        .onChange(of: client.promptLibrary.count) { _, count in
+            guard count > 0, !promptsAutoEnabledOnce else { return }
+            promptsAutoEnabledOnce = true
+            mainRowPrompts = true
+        }
         .onChange(of: selectedWindowId) { _, newId in
             // Wipe the cached terminal content immediately so the inline view
             // shows "Loading…" instead of the previous window's text while
@@ -992,9 +1067,23 @@ struct MainiOSView: View {
         }
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { code in
-                urlText = code
                 showQRScanner = false
-                doConnect()
+                // Detect the §50 quip://pair?... shape — extract URL + PIN,
+                // pre-stage the PIN in Keychain under the new backend's
+                // synthetic id, then connect. Falls back to treating the
+                // scan result as a plain ws(s) URL for backwards
+                // compatibility with the original "raw URL in QR" flow.
+                if let payload = PairingPayload.decode(code) {
+                    urlText = payload.url
+                    if let id = manager.addPaired(url: payload.url, name: "Backend") {
+                        KeychainBackendPINs.write(backendID: id, pin: payload.pin)
+                        manager.setActive(id)
+                    }
+                    doConnect()
+                } else {
+                    urlText = code
+                    doConnect()
+                }
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -1002,8 +1091,21 @@ struct MainiOSView: View {
                 enabledQuickButtonsRaw: $enabledQuickButtonsRaw,
                 client: client,
                 pushRegistration: pushRegistration,
-                macPermissions: macPermissions
+                macPermissions: macPermissions,
+                windowIdProvider: { selectedWindowId }
             )
+        }
+        .sheet(isPresented: $showPromptsPickerSheet) {
+            NavigationStack {
+                PromptsQuickPickerSheet(
+                    entries: sortedPromptsByMRU(),
+                    onPick: { entry, pressReturn in
+                        firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
+                        showPromptsPickerSheet = false
+                    }
+                )
+            }
+            .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showBackendPicker) {
             BackendPickerSheet(
@@ -1511,6 +1613,21 @@ struct MainiOSView: View {
                     }
                 }
             }
+            // One-tap recovery: visible only while disconnected so the user
+            // can break the "stuck on Connecting…" state without digging
+            // through settings. Disconnects + reconnects to the active URL.
+            if !client.isConnected, let url = client.serverURL {
+                Button {
+                    client.disconnect()
+                    client.connect(to: url)
+                } label: {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(colors.textTertiary)
+                        .frame(width: 20, height: 20)
+                }
+                .accessibilityLabel("Reset connection")
+            }
             Button {
                 client.disconnect()
             } label: {
@@ -1768,7 +1885,7 @@ struct MainiOSView: View {
                 }
                 Spacer(minLength: 12)
 
-                // RIGHT cluster 1: photo (input attach)
+                // RIGHT cluster 1: input attach (photo, prompts)
                 HStack(spacing: 6) {
                     if mainRowPhoto {
                         Button {
@@ -1783,10 +1900,25 @@ struct MainiOSView: View {
                         }
                         .accessibilityLabel("Attach image")
                     }
+                    if mainRowPrompts {
+                        let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
+                        Button {
+                            showPromptsPickerSheet = true
+                        } label: {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(canFire ? colors.textPrimary : colors.textFaint)
+                                .frame(width: auxW, height: auxH)
+                                .background(colors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .disabled(!canFire)
+                        .accessibilityLabel("Prompts")
+                    }
                 }
 
                 // Visual gap between photo and send-cluster (keyboard/return).
-                if mainRowPhoto && rightSendOn {
+                if (mainRowPhoto || mainRowPrompts) && rightSendOn {
                     Spacer().frame(width: 10)
                 }
 
@@ -1961,11 +2093,25 @@ struct MainiOSView: View {
 
         DispatchQueue.global(qos: .userInitiated).async {
             DispatchQueue.main.async { [weak pendingImage] in pendingImage?.setDebugStage("encoding-start") }
+            // Encode to JPEG-0.85 by default — ~30% smaller than the
+            // previous JPEG-0.95 default and the broadest Anthropic-API-
+            // compatible format. PNG is preserved when the source declared
+            // image/png (lossless screenshots stay pixel-perfect).
+            //
+            // HEIC was tried (commit 684956b) but rolled back: the
+            // Anthropic API rejects image/heic with HTTP 400
+            // "Could not process image" — supported types are JPEG, PNG,
+            // GIF, WEBP only. WebP would be a better win but
+            // CGImageDestination's WebP encoder didn't ship until iOS 18
+            // and the project targets iOS 17.
             let rawData: Data?
+            let initialMime: String
             if mime == "image/png" {
                 rawData = image.pngData()
+                initialMime = "image/png"
             } else {
-                rawData = image.jpegData(compressionQuality: 0.95)
+                rawData = image.jpegData(compressionQuality: 0.85)
+                initialMime = "image/jpeg"
             }
             guard let rawData else {
                 DispatchQueue.main.async { [weak pendingImage] in
@@ -1974,9 +2120,11 @@ struct MainiOSView: View {
                 }
                 return
             }
-            DispatchQueue.main.async { [weak pendingImage, c = rawData.count] in pendingImage?.setDebugStage("encoded \(c)B") }
+            DispatchQueue.main.async { [weak pendingImage, c = rawData.count, m = initialMime] in
+                pendingImage?.setDebugStage("encoded \(c)B (\(m))")
+            }
             do {
-                let (data, finalMime) = try recompressor.recompress(rawData: rawData, declaredMime: mime)
+                let (data, finalMime) = try recompressor.recompress(rawData: rawData, declaredMime: initialMime)
                 let base64 = data.base64EncodedString()
                 NSLog("[Quip-iOS] sendPendingImageIfNeeded: dispatching image_upload, base64=%d bytes", base64.count)
                 let msg = ImageUploadMessage(
@@ -2845,6 +2993,9 @@ struct MainiOSView: View {
     enum RowItem: Identifiable {
         case builtinButton(QuickButton)
         case customButton(CustomButton)
+        case promptButton(promptID: String, label: String)
+        /// Single "Prompts" pill that opens the library sheet (sorted MRU).
+        case promptsPicker
         case spacer(width: CGFloat, uid: UUID)
         case slashGroup(letter: Character, members: [SlashGroupMember])
 
@@ -2852,6 +3003,8 @@ struct MainiOSView: View {
             switch self {
             case .builtinButton(let b): return "b:\(b.rawValue)"
             case .customButton(let c): return "c:\(c.id.uuidString)"
+            case .promptButton(let pid, _): return "p:\(pid)"
+            case .promptsPicker: return "pp"
             case .spacer(_, let uid): return "s:\(uid.uuidString)"
             case .slashGroup(let l, _): return "g:\(l)"
             }
@@ -2877,7 +3030,7 @@ struct MainiOSView: View {
                 if let c = defsById[id], let key = slashLetter(of: c) {
                     letterCount[key, default: 0] += 1
                 }
-            case .spacer:
+            case .prompt, .promptsPicker, .spacer:
                 break
             }
         }
@@ -2895,7 +3048,7 @@ struct MainiOSView: View {
                 if let c = defsById[id], let key = slashLetter(of: c), (letterCount[key] ?? 0) > 1 {
                     members[key, default: []].append(.custom(c))
                 }
-            case .spacer:
+            case .prompt, .promptsPicker, .spacer:
                 break
             }
         }
@@ -2923,6 +3076,15 @@ struct MainiOSView: View {
                 } else {
                     items.append(.customButton(c))
                 }
+            case .prompt(let pid):
+                // Look up the label from the live catalog. Fall back to the
+                // id when the Mac hasn't broadcast yet — the pill stays
+                // visible (greyed-out) so the slot order doesn't shift on
+                // a brief disconnect. (§B3)
+                let label = client.promptLibrary.first(where: { $0.id == pid })?.label ?? pid
+                items.append(.promptButton(promptID: pid, label: label))
+            case .promptsPicker:
+                items.append(.promptsPicker)
             }
         }
         return items
@@ -2971,11 +3133,122 @@ struct MainiOSView: View {
                 quickActionButton(b)
             case .customButton(let c):
                 customQuickButton(c)
+            case .promptButton(let pid, let label):
+                promptQuickButton(promptID: pid, label: label)
+            case .promptsPicker:
+                promptsPickerButton()
             case .spacer(let w, _):
                 Spacer().frame(width: w)
             case .slashGroup(let letter, let members):
                 slashGroupMenuButton(letter: letter, members: members)
             }
+        }
+    }
+
+    /// Pill rendering + tap handling for a Mac-managed prompt slot.
+    /// Style mirrors `customQuickButton` but uses the SF Symbol for
+    /// "doc.text" + a purple tint so the user can tell library-prompts
+    /// apart from custom-text buttons. Tap fires PastePromptMessage to
+    /// the active window; long-press paste-and-submits. Disabled when
+    /// the Mac hasn't broadcast its catalog (label = id) so a stale
+    /// slot doesn't fire to a window with nothing to paste. (§B3)
+    @ViewBuilder
+    private func promptQuickButton(promptID: String, label: String) -> some View {
+        let entry = client.promptLibrary.first(where: { $0.id == promptID })
+        let canFire = entry != nil && client.isConnected && selectedWindowId != nil
+        Button {
+            firePromptSlot(promptID: promptID, pressReturn: false)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(canFire ? Color.purple.opacity(0.55) : Color.gray.opacity(0.25))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canFire)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.4)
+                .onEnded { _ in firePromptSlot(promptID: promptID, pressReturn: true) }
+        )
+    }
+
+    private func firePromptSlot(promptID: String, pressReturn: Bool) {
+        guard let wid = selectedWindowId, !wid.isEmpty else { return }
+        client.send(PastePromptMessage(id: promptID, windowId: wid, pressReturn: pressReturn))
+        recordPromptUsage(promptID)
+    }
+
+    /// Single "Prompts" pill — opens a sheet listing every prompt in the
+    /// Mac catalog, sorted MRU-first. Replaces stuffing per-prompt
+    /// `.prompt(id)` slots into the keyboard row when the user has more
+    /// prompts than reasonably fit.
+    @ViewBuilder
+    private func promptsPickerButton() -> some View {
+        let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
+        Button {
+            showPromptsPickerSheet = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("Prompts")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(canFire ? Color.purple.opacity(0.55) : Color.gray.opacity(0.25))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canFire)
+        // Sheet is hoisted to MainiOSView.body (`promptsPickerSheet` modifier)
+        // so the main-row Prompts button can also present it when this slot
+        // pill isn't placed in the Quick Buttons row.
+    }
+
+    /// Decode the per-device MRU map and return the catalog in MRU order
+    /// (recent first, then unused alphabetically by label so the long-tail
+    /// stays predictable). Pure helper — no side effects.
+    private func sortedPromptsByMRU() -> [PromptEntry] {
+        let raw = promptUsageMRUJSON.data(using: .utf8) ?? Data()
+        let mru = (try? JSONDecoder().decode([String: String].self, from: raw)) ?? [:]
+        let formatter = ISO8601DateFormatter()
+        let usedDates: [String: Date] = mru.compactMapValues { formatter.date(from: $0) }
+        return client.promptLibrary.sorted { a, b in
+            switch (usedDates[a.id], usedDates[b.id]) {
+            case let (.some(da), .some(db)): return da > db
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return a.label.localizedCaseInsensitiveCompare(b.label) == .orderedAscending
+            }
+        }
+    }
+
+    /// Record a fresh usage timestamp for the given prompt id so it
+    /// climbs to the top of the MRU sort next time the picker opens.
+    private func recordPromptUsage(_ promptID: String) {
+        let raw = promptUsageMRUJSON.data(using: .utf8) ?? Data()
+        var mru = (try? JSONDecoder().decode([String: String].self, from: raw)) ?? [:]
+        mru[promptID] = ISO8601DateFormatter().string(from: Date())
+        // Cap at 100 entries — old, unused prompts shouldn't grow the
+        // dict forever. Drop oldest by ISO timestamp string compare,
+        // which is lexically equivalent to chronological for ISO-8601.
+        if mru.count > 100 {
+            let oldestIDs = mru.sorted(by: { $0.value < $1.value }).prefix(mru.count - 100).map(\.key)
+            for id in oldestIDs { mru.removeValue(forKey: id) }
+        }
+        if let data = try? JSONEncoder().encode(mru),
+           let json = String(data: data, encoding: .utf8) {
+            promptUsageMRUJSON = json
         }
     }
 
@@ -3947,6 +4220,22 @@ struct CustomButton: Codable, Hashable, Identifiable {
 enum QuickSlot: Hashable, Identifiable {
     case builtin(QuickButton)
     case custom(UUID)
+    /// Reference to a Mac-side prompt (wishlist §B3). Renders as a pill
+    /// labeled with the prompt's display name; tapping fires
+    /// PastePromptMessage to the active window. The prompt itself lives
+    /// on the Mac in ~/Library/Application Support/Quip/prompts/<id>.txt
+    /// and may not exist if the Mac hasn't broadcast its catalog yet —
+    /// the renderer shows a placeholder pill in that case.
+    case prompt(promptID: String)
+    /// Single keyboard button labeled "Prompts" — opens the prompt
+    /// library sheet sorted by most-recently-used. Replaces the
+    /// per-prompt slot pattern when the user has many prompts (the
+    /// individual `.prompt(promptID:)` slot doesn't scale past ~5
+    /// prompts on the keyboard row). Tap → sheet → tap a prompt →
+    /// fires PastePromptMessage to the active window. The phone
+    /// records lastUsed locally so ordering reflects this device's
+    /// usage rather than the catalog's filename order.
+    case promptsPicker
     /// Fixed-width gap between adjacent slots. Multiple spacers in a row
     /// stack their widths. Carries a UUID so SwiftUI lists can identify
     /// each spacer separately when there's more than one.
@@ -3956,6 +4245,8 @@ enum QuickSlot: Hashable, Identifiable {
         switch self {
         case .builtin(let b): return "b:\(b.rawValue)"
         case .custom(let uid): return "c:\(uid.uuidString)"
+        case .prompt(let pid): return "p:\(pid)"
+        case .promptsPicker: return "pp"
         case .spacer(let uid): return "s:\(uid.uuidString)"
         }
     }
@@ -3966,7 +4257,7 @@ enum QuickSlot: Hashable, Identifiable {
 // + a value field per case. `kind` strings are part of the persistence
 // format — don't rename without a migration.
 extension QuickSlot: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, button, customID, spacerID }
+    private enum CodingKeys: String, CodingKey { case kind, button, customID, promptID, spacerID }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -3983,6 +4274,10 @@ extension QuickSlot: Codable {
             self = .builtin(button)
         case "custom":
             self = .custom(try c.decode(UUID.self, forKey: .customID))
+        case "prompt":
+            self = .prompt(promptID: try c.decode(String.self, forKey: .promptID))
+        case "promptsPicker":
+            self = .promptsPicker
         case "spacer":
             self = .spacer(try c.decode(UUID.self, forKey: .spacerID))
         default:
@@ -4002,6 +4297,11 @@ extension QuickSlot: Codable {
         case .custom(let id):
             try c.encode("custom", forKey: .kind)
             try c.encode(id, forKey: .customID)
+        case .prompt(let pid):
+            try c.encode("prompt", forKey: .kind)
+            try c.encode(pid, forKey: .promptID)
+        case .promptsPicker:
+            try c.encode("promptsPicker", forKey: .kind)
         case .spacer(let id):
             try c.encode("spacer", forKey: .kind)
             try c.encode(id, forKey: .spacerID)
@@ -4077,6 +4377,12 @@ struct SettingsSheet: View {
     var client: WebSocketClient
     var pushRegistration: PushRegistrationService
     var macPermissions: MacPermissionsMessage?
+    /// Resolver for the host's currently-selected window. Closure (not a
+    /// stored value) so the Prompts sheet always fires into the *current*
+    /// window even when the user changes selection after Settings opens.
+    /// (§B4 wrong-window paste bug — by-value capture froze whatever id
+    /// was active at sheet open.)
+    var windowIdProvider: () -> String? = { nil }
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
@@ -4135,7 +4441,7 @@ struct SettingsSheet: View {
                 // logical groups: Appearance, Keyboard, Notifications.
                 Section {
                     NavigationLink {
-                        QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw)
+                        QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw, client: client)
                     } label: {
                         HStack {
                             Text("Quick Buttons")
@@ -4174,6 +4480,45 @@ struct SettingsSheet: View {
                     }
                 } header: {
                     Text("Notifications")
+                }
+
+                // Prompts — Mac-managed library of paste-and-run prompts
+                // (~/Library/Application Support/Quip/prompts/*.txt).
+                // Tap a row → Mac sendText's the body into the active
+                // window. Mirrors the Stream Deck "clipboard prompt"
+                // pattern. (wishlist §57)
+                Section {
+                    NavigationLink {
+                        PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider)
+                    } label: {
+                        HStack {
+                            Text("Prompts")
+                            Spacer()
+                            Text("\(client.promptLibrary.count) on Mac")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Prompts")
+                }
+
+                // Diagnostics — pinned at the bottom of Settings since it's
+                // a triage tool, not part of the day-to-day. Surfaces the
+                // in-memory connection event ring buffer + auto-fetched
+                // Mac log tail (since commit d8f1503).
+                Section {
+                    NavigationLink {
+                        ConnectionDiagnosticsSheet(client: client)
+                    } label: {
+                        HStack {
+                            Text("Connection diagnostics")
+                            Spacer()
+                            Text("\(client.recentConnectionEvents.count) events")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Diagnostics")
                 }
             }
             .listStyle(.insetGrouped)
@@ -4439,6 +4784,7 @@ struct MainRowButtonsSheet: View {
     @AppStorage("mainRow.spawn") private var spawn: Bool = true
     @AppStorage("mainRow.arrange") private var arrange: Bool = true
     @AppStorage("mainRow.photo") private var photo: Bool = true
+    @AppStorage("mainRow.prompts") private var prompts: Bool = false
     @AppStorage("mainRow.keyboard") private var keyboard: Bool = true
     @AppStorage("mainRow.return") private var pressReturn: Bool = true
 
@@ -4450,6 +4796,7 @@ struct MainRowButtonsSheet: View {
                 Toggle(isOn: $spawn) { Label("Spawn New Window", systemImage: "plus") }
                 Toggle(isOn: $arrange) { Label("Arrange Layout", systemImage: "rectangle.3.group") }
                 Toggle(isOn: $photo) { Label("Attach Image", systemImage: "photo") }
+                Toggle(isOn: $prompts) { Label("Prompts", systemImage: "doc.text.magnifyingglass") }
                 Toggle(isOn: $keyboard) { Label("Keyboard Toggle", systemImage: "keyboard") }
                 Toggle(isOn: $pressReturn) { Label("Press Return", systemImage: "return") }
             } footer: {
@@ -4469,17 +4816,42 @@ struct MainRowButtonsSheet: View {
 /// edit so a downgrade-and-restart still reads a sensible row.
 struct QuickButtonsSheet: View {
     @Binding var enabledQuickButtonsRaw: String
+    /// Optional — when present, the "+" menu can offer Mac-managed
+    /// prompts as keyboard slots. Older callers that don't pass a
+    /// client still get the legacy menu (no Prompt section). (§B3)
+    var client: WebSocketClient?
     @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
 
     @State private var editingCustomID: UUID?
     @State private var addingCustom: Bool = false
+    @State private var showPromptPicker: Bool = false
+    /// Drives the sheet-based add picker. Replaces the prior toolbar Menu,
+    /// which became unscrollable once the slash list grew past ~6 items
+    /// (iOS Menu has a fixed render window and clips long labels mid-word).
+    @State private var showAddSheet: Bool = false
+    @State private var addSheetQuery: String = ""
 
-    private var slots: [QuickSlot] { QuickSlotStore.decode(quickSlotsJSON) }
-    private var customs: [CustomButton] { CustomButtonStore.decode(customButtonsJSON) }
-    private var customsByID: [UUID: CustomButton] {
-        Dictionary(uniqueKeysWithValues: customs.map { ($0.id, $0) })
-    }
+    // Cached snapshots of the @AppStorage-backed JSON. Computed-property
+    // versions re-decoded on EVERY body evaluation, and any observable
+    // (`client.promptLibrary` broadcasts, other @AppStorage changes) was
+    // enough to re-decode the entire slot list mid-scroll. List layout
+    // shudders during a re-decode and the scroll position resets to the
+    // top — that's the "scrolling to pick custom buttons is buggy and
+    // often goes back to the top" symptom. Caching here means decode
+    // runs only on .onAppear and on the specific .onChange(of:) hooks
+    // below; routine SwiftUI body re-evals are now cheap and don't
+    // disturb List scroll state.
+    @State private var slots: [QuickSlot] = []
+    @State private var customs: [CustomButton] = []
+    @State private var customsByID: [UUID: CustomButton] = [:]
+    /// Snapshot of the prompt catalog labels at sheet open / on
+    /// observable change. slotRow used to read `client.promptLibrary`
+    /// directly which made the row re-render every time the Mac
+    /// broadcast its catalog (every reconnect / FS change). Local
+    /// snapshot breaks that observation chain.
+    @State private var promptLabelByID: [String: String] = [:]
+    @State private var promptByteSizeByID: [String: Int] = [:]
 
     /// Set of built-in QuickButton rawValues already placed in the slot
     /// list — used to disable duplicate adds in the "+" menu so the user
@@ -4532,25 +4904,30 @@ struct QuickButtonsSheet: View {
             if !customs.isEmpty {
                 Section {
                     ForEach(customs) { c in
-                        Button {
-                            editingCustomID = c.id
-                        } label: {
-                            HStack {
-                                customPillPreview(c)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(c.label).foregroundStyle(.primary)
-                                    Text(payloadSummary(c.payload))
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
+                        // HStack + .contentShape + .onTapGesture instead of
+                        // Button { } .buttonStyle(.plain) — the Button form
+                        // eats scroll gestures inside a List, making the
+                        // section feel sticky and occasionally opening the
+                        // edit sheet when the user is mid-scroll. The tap-
+                        // gesture form lets List own the scroll and only
+                        // fires on a clean tap, restoring smooth scrolling
+                        // and reliable .onDelete swipes.
+                        HStack {
+                            customPillPreview(c)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(c.label).foregroundStyle(.primary)
+                                Text(payloadSummary(c.payload))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.tertiary)
                         }
-                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingCustomID = c.id }
                     }
                     .onDelete(perform: deleteCustomDefs)
                 } header: {
@@ -4577,6 +4954,10 @@ struct QuickButtonsSheet: View {
                 addMenu
             }
         }
+        .onAppear { refreshSnapshots() }
+        .onChange(of: quickSlotsJSON) { _, _ in refreshSlotsSnapshot() }
+        .onChange(of: customButtonsJSON) { _, _ in refreshCustomsSnapshot() }
+        .onChange(of: client?.promptLibrary.count ?? 0) { _, _ in refreshPromptSnapshot() }
         .sheet(isPresented: $addingCustom) {
             CustomButtonForm(
                 initial: nil,
@@ -4605,6 +4986,65 @@ struct QuickButtonsSheet: View {
                 }
             )
         }
+        .sheet(isPresented: $showPromptPicker) {
+            promptPickerSheet
+        }
+        .sheet(isPresented: $showAddSheet) {
+            addSheet
+        }
+    }
+
+    /// Lists every prompt currently in the Mac catalog. Tap = add as a
+    /// .prompt slot at the end of the row. Already-placed prompts are
+    /// disabled so the user can't accidentally double-add. (§B3)
+    private var promptPickerSheet: some View {
+        NavigationStack {
+            List {
+                if let cl = client {
+                    let placed = Set(slots.compactMap { slot -> String? in
+                        if case .prompt(let pid) = slot { return pid }
+                        return nil
+                    })
+                    ForEach(cl.promptLibrary) { entry in
+                        Button {
+                            addPromptSlot(entry.id)
+                            showPromptPicker = false
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.label)
+                                        .foregroundStyle(.primary)
+                                    Text(entry.bodyPreview)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                if placed.contains(entry.id) {
+                                    Text("Added")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                        .disabled(placed.contains(entry.id))
+                    }
+                }
+            }
+            .navigationTitle("Add Prompt")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showPromptPicker = false }
+                }
+            }
+        }
+    }
+
+    private func addPromptSlot(_ promptID: String) {
+        var s = slots
+        s.append(.prompt(promptID: promptID))
+        persistSlots(s)
     }
 
     @ViewBuilder
@@ -4658,6 +5098,48 @@ struct QuickButtonsSheet: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
+        case .prompt(let pid):
+            let label = promptLabelByID[pid]
+            let bytes = promptByteSizeByID[pid]
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.purple.opacity(0.25))
+                    .frame(width: 36, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.purple)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label ?? pid)
+                    Text(label == nil ? "Prompt (Mac unreachable)" : "Prompt · \(bytes ?? 0)B")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+        case .promptsPicker:
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.purple.opacity(0.25))
+                    .frame(width: 36, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.purple)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Prompts")
+                    Text("Picker · MRU sorted")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
         }
     }
 
@@ -4708,9 +5190,49 @@ struct QuickButtonsSheet: View {
                 result.append((slot.id, AnyView(
                     Color.clear.frame(width: 12, height: 1)
                 )))
+            case .prompt(let pid):
+                let label = promptLabelByID[pid] ?? pid
+                result.append((slot.id, AnyView(promptPillPreview(label: label))))
+            case .promptsPicker:
+                result.append((slot.id, AnyView(promptsPickerPillPreview())))
             }
         }
         return result
+    }
+
+    /// Editor-only mock of the Prompts-picker pill so the preview row
+    /// renders correctly when the user has the picker slot configured.
+    @ViewBuilder
+    private func promptsPickerPillPreview() -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Prompts")
+                .font(.system(size: 11, weight: .medium))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.purple.opacity(0.55))
+        .foregroundStyle(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// Editor-only mock of the prompt pill — same purple tint + doc.text
+    /// icon as the live keyboard renderer in `promptQuickButton`. (§B3)
+    @ViewBuilder
+    private func promptPillPreview(label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 9, weight: .semibold))
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.purple.opacity(0.55))
+        .foregroundStyle(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     /// Pill mock that matches the keyboard's `quickActionButton` chrome.
@@ -4757,42 +5279,176 @@ struct QuickButtonsSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
-    /// "+" toolbar menu, categorized so the long QuickButton list isn't a
-    /// flat scroll-of-doom. Built-ins already in the slot list are
-    /// disabled to prevent accidental duplicates.
+    /// "+" toolbar button — opens the sheet-based add picker. The previous
+    /// inline `Menu` rendered a fixed-height list that clipped long slash
+    /// names mid-word and offered awkward scroll once the list passed ~6
+    /// items. A bottom sheet gives proper scroll, two-line rows, and a
+    /// search bar.
     @ViewBuilder
     private var addMenu: some View {
-        Menu {
-            Section("Slash") {
-                ForEach(QuickButton.allCases.filter { $0.category == .slash }) { btn in
-                    builtinAddRow(btn)
-                }
-            }
-            Section("Answers") {
-                ForEach(QuickButton.allCases.filter { $0.category == .answer }) { btn in
-                    builtinAddRow(btn)
-                }
-            }
-            Section("Keystrokes") {
-                ForEach(QuickButton.allCases.filter { $0.category == .keystroke }) { btn in
-                    builtinAddRow(btn)
-                }
-            }
-            Section {
-                Button {
-                    addingCustom = true
-                } label: {
-                    Label("Custom Button…", systemImage: "plus.square.dashed")
-                }
-                Button {
-                    addSpacer()
-                } label: {
-                    Label("Spacer", systemImage: "arrow.left.and.right")
-                }
-            }
+        Button {
+            addSheetQuery = ""
+            showAddSheet = true
         } label: {
             Image(systemName: "plus")
         }
+    }
+
+    /// Sheet-based add picker that replaced the toolbar Menu. Sectioned,
+    /// scrollable, searchable. Filters across all categories at once when
+    /// the user types in the search bar.
+    private var addSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        showAddSheet = false
+                        addingCustom = true
+                    } label: {
+                        Label("Custom Button…", systemImage: "plus.square.dashed")
+                    }
+                    Button {
+                        addSpacer()
+                        showAddSheet = false
+                    } label: {
+                        Label("Spacer", systemImage: "arrow.left.and.right")
+                    }
+                    if !promptLabelByID.isEmpty {
+                        Button {
+                            showAddSheet = false
+                            showPromptPicker = true
+                        } label: {
+                            Label("Prompt from library…", systemImage: "doc.text")
+                        }
+                    }
+                    let pickerPlaced = slots.contains(where: {
+                        if case .promptsPicker = $0 { return true } else { return false }
+                    })
+                    Button {
+                        addPromptsPicker()
+                        showAddSheet = false
+                    } label: {
+                        Label("Prompts picker" + (pickerPlaced ? " · added" : ""),
+                              systemImage: "doc.text.magnifyingglass")
+                    }
+                    .disabled(pickerPlaced)
+                }
+
+                let slashMatches = filteredBuiltins(category: .slash)
+                if !slashMatches.isEmpty {
+                    Section("Slash") {
+                        ForEach(slashMatches) { btn in addSheetRow(btn) }
+                    }
+                }
+                let answerMatches = filteredBuiltins(category: .answer)
+                if !answerMatches.isEmpty {
+                    Section("Answers") {
+                        ForEach(answerMatches) { btn in addSheetRow(btn) }
+                    }
+                }
+                let keystrokeMatches = filteredBuiltins(category: .keystroke)
+                if !keystrokeMatches.isEmpty {
+                    Section("Keystrokes") {
+                        ForEach(keystrokeMatches) { btn in addSheetRow(btn) }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Add Button")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $addSheetQuery, placement: .navigationBarDrawer(displayMode: .always))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { showAddSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// Filter QuickButton cases for the add sheet — applies the search query
+    /// to both `displayName` and `label` so users can find items by either
+    /// the long name (`/commit-commands:commit-push-pr`) or short label
+    /// (`/ship`).
+    private func filteredBuiltins(category: QuickButton.Category) -> [QuickButton] {
+        let q = addSheetQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        return QuickButton.allCases.filter { btn in
+            guard btn.category == category else { return false }
+            if q.isEmpty { return true }
+            return btn.displayName.lowercased().contains(q)
+                || btn.label.lowercased().contains(q)
+        }
+    }
+
+    /// Single row in the add sheet — uses the SHORT label as primary, with
+    /// the full displayName as a secondary line so users can see e.g.
+    /// `/ship` is `/commit-commands:commit-push-pr` without the long name
+    /// wrapping mid-word like the prior Menu did.
+    @ViewBuilder
+    private func addSheetRow(_ btn: QuickButton) -> some View {
+        let placed = placedBuiltins.contains(btn.rawValue)
+        Button {
+            addBuiltin(btn)
+            showAddSheet = false
+        } label: {
+            HStack(spacing: 10) {
+                if let sym = btn.systemImage {
+                    Image(systemName: sym)
+                        .frame(width: 22)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(btn.label.isEmpty ? btn.displayName : btn.label)
+                            .font(.body.weight(.medium))
+                        if placed {
+                            Text("· added")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if btn.label != btn.displayName, !btn.label.isEmpty {
+                        Text(btn.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer()
+            }
+        }
+        .disabled(placed)
+    }
+
+    private func addPromptsPicker() {
+        var s = slots
+        s.append(.promptsPicker)
+        persistSlots(s)
+    }
+
+    /// Re-read every cached snapshot from its source. Called on the
+    /// view's first .onAppear so the editor opens with fresh data.
+    private func refreshSnapshots() {
+        refreshSlotsSnapshot()
+        refreshCustomsSnapshot()
+        refreshPromptSnapshot()
+    }
+
+    private func refreshSlotsSnapshot() {
+        slots = QuickSlotStore.decode(quickSlotsJSON)
+    }
+
+    private func refreshCustomsSnapshot() {
+        let decoded = CustomButtonStore.decode(customButtonsJSON)
+        customs = decoded
+        customsByID = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+    }
+
+    private func refreshPromptSnapshot() {
+        let entries = client?.promptLibrary ?? []
+        promptLabelByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0.label) })
+        promptByteSizeByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0.bodyBytes) })
     }
 
     @ViewBuilder
@@ -5076,4 +5732,561 @@ enum ContentZoomLevel: Int, CaseIterable {
     var next: Int {
         (rawValue + 1) % ContentZoomLevel.allCases.count
     }
+}
+
+// MARK: - Connection Diagnostics
+
+/// Renders the in-memory `WebSocketClient.recentConnectionEvents` ring
+/// buffer (last 30 lifecycle transitions). Read-only; no live tail —
+/// pull-to-refresh re-reads the buffer. Surfaces enough state that the
+/// user can answer "is the socket alive right now and what was the last
+/// thing that happened" without plugging into a Mac to tail device logs.
+struct ConnectionDiagnosticsSheet: View {
+    var client: WebSocketClient
+    @State private var bundleStatus: String?
+    @State private var bundleURL: URL?
+    @State private var showShareSheet = false
+    @State private var requesting = false
+    @State private var logTailText: String = ""
+    @State private var logTailCapturedAt: String = ""
+    @State private var logTailRequesting = false
+
+    var body: some View {
+        List {
+            Section {
+                if logTailRequesting && logTailText.isEmpty {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Fetching…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if logTailText.isEmpty {
+                    Text("No snapshot yet — pull to refresh.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        Text(logTailText)
+                            .font(.system(size: 10, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 320)
+                }
+            } header: {
+                HStack {
+                    Text("Mac log tail")
+                    Spacer()
+                    Button {
+                        requestLogTail()
+                    } label: {
+                        if logTailRequesting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(logTailRequesting || !client.isAuthenticated)
+                    .font(.system(size: 12))
+                }
+            } footer: {
+                if !logTailCapturedAt.isEmpty {
+                    Text("Snapshot captured \(logTailCapturedAt). Tap refresh icon for fresh tail. Full zip download below.")
+                } else {
+                    Text("Auto-fetched on open. Last 16 KB of each Mac log file (websocket / push / kokoro), text only.")
+                }
+            }
+
+            Section {
+                Button {
+                    requestMacLogs()
+                } label: {
+                    HStack {
+                        if requesting {
+                            ProgressView().controlSize(.small)
+                        }
+                        Image(systemName: "arrow.down.doc")
+                        Text(requesting ? "Waiting for Mac…" : "Get Mac logs (zip)")
+                    }
+                }
+                .disabled(requesting || !client.isAuthenticated)
+                if let url = bundleURL {
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share \(url.lastPathComponent)")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+                if let status = bundleStatus {
+                    Text(status)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Full bundle (AirDrop / save)")
+            } footer: {
+                Text("Zip of websocket.log + push.log + kokoro.log + system info. Capped at 4 MiB.")
+            }
+
+            Section("Current state") {
+                stateRow(label: "Connected", value: client.isConnected ? "yes" : "no",
+                         tint: client.isConnected ? .green : .secondary)
+                stateRow(label: "Authenticated", value: client.isAuthenticated ? "yes" : "no",
+                         tint: client.isAuthenticated ? .green : .secondary)
+                if let url = client.serverURL {
+                    stateRow(label: "Server", value: url.host ?? url.absoluteString, tint: .secondary)
+                    let (label, tint) = transportClassification(for: url)
+                    stateRow(label: "Transport", value: label, tint: tint)
+                }
+                if let err = client.lastError, !err.isEmpty {
+                    stateRow(label: "Last error", value: err, tint: .red)
+                }
+            }
+
+            Section {
+                if client.recentConnectionEvents.isEmpty {
+                    Text("No events yet — try a reconnect or background+return.")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12))
+                } else {
+                    ForEach(Array(client.recentConnectionEvents.reversed().enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(nil)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Recent events (\(client.recentConnectionEvents.count))")
+                    Spacer()
+                    Button("Copy") {
+                        UIPasteboard.general.string = client.recentConnectionEvents.joined(separator: "\n")
+                    }
+                    .font(.system(size: 12))
+                    .textCase(nil)
+                }
+            } footer: {
+                Text("Ring buffer keeps the last 30 events. Newest first. Useful when triaging \"why is it stuck on Connecting\" — paste into a bug report.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Diagnostics")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showShareSheet) {
+            if let url = bundleURL {
+                DiagnosticsShareSheet(items: [url])
+            }
+        }
+        .onAppear {
+            wireBundleHandler()
+            wireLogTailHandler()
+            // Auto-fetch the tail snapshot on open. Lightweight (~50 KB
+            // text) so it's fine to fire every time the sheet appears.
+            // Full zip stays opt-in via the button below.
+            if client.isAuthenticated {
+                requestLogTail()
+            }
+        }
+    }
+
+    private func wireBundleHandler() {
+        // Set every time the sheet appears so we re-grab the current handler
+        // closure (the previous handler may have been a leftover from a
+        // prior screen instance).
+        client.onDiagnosticsBundle = { msg in
+            if let err = msg.errorReason {
+                bundleStatus = err
+                requesting = false
+                return
+            }
+            guard let base64 = msg.data, let raw = Data(base64Encoded: base64) else {
+                bundleStatus = "Mac sent malformed bundle"
+                requesting = false
+                return
+            }
+            do {
+                let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let dest = dir.appendingPathComponent(msg.filename.isEmpty ? "Quip-diagnostics.zip" : msg.filename)
+                try? FileManager.default.removeItem(at: dest)
+                try raw.write(to: dest)
+                bundleURL = dest
+                bundleStatus = "Bundle ready (\(raw.count / 1024) KB) — tap Share."
+            } catch {
+                bundleStatus = "Couldn't save bundle: \(error.localizedDescription)"
+            }
+            requesting = false
+        }
+    }
+
+    private func wireLogTailHandler() {
+        client.onLogTail = { msg in
+            logTailText = msg.text
+            // Format the captured timestamp as HH:mm:ss for the footer
+            // staleness indicator. Falls back to the raw ISO string if
+            // parsing fails.
+            if let date = ISO8601DateFormatter().date(from: msg.capturedAt) {
+                let f = DateFormatter()
+                f.timeStyle = .medium
+                f.dateStyle = .none
+                logTailCapturedAt = "at \(f.string(from: date))"
+            } else {
+                logTailCapturedAt = msg.capturedAt
+            }
+            logTailRequesting = false
+        }
+    }
+
+    private func requestLogTail() {
+        guard client.isAuthenticated else { return }
+        logTailRequesting = true
+        client.send(RequestLogTailMessage())
+    }
+
+    private func requestMacLogs() {
+        requesting = true
+        bundleStatus = "Requesting…"
+        bundleURL = nil
+        client.send(RequestDiagnosticsMessage())
+    }
+
+    @ViewBuilder
+    private func stateRow(label: String, value: String, tint: Color) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(.system(size: 13))
+    }
+
+    /// Classify the active WS URL into a transport bucket so the user can
+    /// answer "am I going LAN, Tailscale, or tunnel right now?" without
+    /// reading the URL byte-by-byte. Heuristics:
+    ///   - `wss://*.trycloudflare.com` or `wss://*.cfargotunnel.com` → Tunnel
+    ///   - host in `100.64.0.0/10` (Tailscale CGNAT) → Tailscale
+    ///   - host ends `.local` or is RFC1918 → LAN
+    ///   - everything else → Direct
+    private func transportClassification(for url: URL) -> (String, Color) {
+        guard let host = url.host?.lowercased() else { return ("Unknown", .secondary) }
+        if host.hasSuffix(".trycloudflare.com") || host.hasSuffix(".cfargotunnel.com") {
+            return ("Cloudflare tunnel", .blue)
+        }
+        if host.hasSuffix(".local") {
+            return ("LAN (Bonjour)", .green)
+        }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        if parts.count == 4 {
+            let a = parts[0], b = parts[1]
+            if a == 100 && (64...127).contains(b) { return ("Tailscale", .indigo) }
+            if a == 10 { return ("LAN (10.x)", .green) }
+            if a == 192 && b == 168 { return ("LAN (192.168.x)", .green) }
+            if a == 172 && (16...31).contains(b) { return ("LAN (172.16-31.x)", .green) }
+            if a == 127 { return ("Loopback", .secondary) }
+        }
+        return ("Direct", .secondary)
+    }
+}
+
+/// Renders the Mac-managed prompt library (wishlist §57). Tapping a row
+/// fires a `paste_prompt` to the Mac, which then sendText's the body
+/// into the currently-targeted iTerm session. Long-press → toggle
+/// Compact picker fired from the keyboard's `.promptsPicker` quick
+/// button. Lists every prompt in MRU order; tap fires paste, long-press
+/// fires paste-and-submit. No edit/delete affordances — that lives in
+/// PromptLibrarySheet (Settings → Prompts). Shows up to 120 chars of
+/// preview per row so the user can tell similar prompts apart at a
+/// glance.
+struct PromptsQuickPickerSheet: View {
+    let entries: [PromptEntry]
+    let onPick: (PromptEntry, _ pressReturn: Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query: String = ""
+
+    /// Filtered against label + bodyPreview, case-insensitive. Empty query
+    /// returns the original MRU-sorted list. Long-tail prompts (Stream Deck
+    /// users with 30+) become reachable without endless scroll.
+    private var filtered: [PromptEntry] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return entries }
+        return entries.filter {
+            $0.label.lowercased().contains(q)
+                || $0.bodyPreview.lowercased().contains(q)
+                || $0.id.lowercased().contains(q)
+        }
+    }
+
+    var body: some View {
+        List {
+            if entries.isEmpty {
+                Section {
+                    Text("No prompts yet — add them in Settings → Prompts or drop .txt files into ~/Library/Application Support/Quip/prompts/ on the Mac.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            } else if filtered.isEmpty {
+                Section {
+                    Text("No matches for \"\(query)\"")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section {
+                    ForEach(filtered) { entry in
+                        Button {
+                            onPick(entry, false)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.label)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                Text(entry.bodyPreview)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.4)
+                                .onEnded { _ in onPick(entry, true) }
+                        )
+                    }
+                } footer: {
+                    Text("Tap to paste. Long-press to paste-and-submit. Recently-used appear first.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Prompts")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Cancel") { dismiss() }
+            }
+        }
+    }
+}
+
+/// auto-submit (sends Return after the paste). Mirrors the Stream Deck
+/// "clipboard prompt" pattern from the streamdeck-claude-scripts
+/// project but without the .scpt round-trip — the prompt body lives on
+/// disk on the Mac (~/Library/Application Support/Quip/prompts/*.txt)
+/// and the phone never has to render the body in an editor field.
+struct PromptLibrarySheet: View {
+    var client: WebSocketClient
+    /// Closure resolver, NOT a captured value. The prior `var windowId: String?`
+    /// shape captured the parent's `selectedWindowId` at NavigationLink
+    /// construction time — so if the user changed the active window after
+    /// opening Settings, the sheet kept firing prompts at the stale window.
+    /// (§B4 wrong-window bug.) Reading via a closure means every paste
+    /// fetches the *current* selection at fire time.
+    var windowIdProvider: () -> String?
+    @State private var lastFiredId: String?
+    @State private var editing: PromptEntry?
+    @State private var creatingNew: Bool = false
+
+    var body: some View {
+        List {
+            if client.promptLibrary.isEmpty {
+                Section {
+                    Text("No prompts yet. Tap + above to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/ on the Mac.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Library")
+                }
+            } else {
+                Section {
+                    ForEach(client.promptLibrary) { entry in
+                        promptRow(entry)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    client.send(DeletePromptMessage(id: entry.id))
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                Button {
+                                    editing = entry
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(.blue)
+                            }
+                    }
+                } header: {
+                    HStack {
+                        Text("Library")
+                        Spacer()
+                        Text("\(client.promptLibrary.count)")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                } footer: {
+                    Text("Tap to paste. Long-press to paste-and-submit. Swipe a row for Edit / Delete.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Prompts")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    creatingNew = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
+        }
+        .sheet(isPresented: $creatingNew) {
+            PromptEditorSheet(initial: nil) { id, label, body in
+                client.send(PutPromptMessage(id: id, label: label, body: body))
+            }
+        }
+        .sheet(item: $editing) { entry in
+            PromptEditorSheet(initial: entry) { id, label, body in
+                client.send(PutPromptMessage(id: id, label: label, body: body))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func promptRow(_ entry: PromptEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(entry.label)
+                    .font(.system(size: 14, weight: .medium))
+                Spacer()
+                Text("\(entry.bodyBytes)B")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            Text(entry.bodyPreview)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            if lastFiredId == entry.id {
+                Text("Pasted ✓")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.green)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { fire(entry, pressReturn: false) }
+        .onLongPressGesture(minimumDuration: 0.4) { fire(entry, pressReturn: true) }
+    }
+
+    private func fire(_ entry: PromptEntry, pressReturn: Bool) {
+        guard let wid = windowIdProvider(), !wid.isEmpty else { return }
+        client.send(PastePromptMessage(id: entry.id, windowId: wid, pressReturn: pressReturn))
+        lastFiredId = entry.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if lastFiredId == entry.id { lastFiredId = nil }
+        }
+    }
+}
+
+/// Create / edit form for a single prompt. `initial=nil` = new-prompt
+/// flow (id field editable); non-nil = edit existing (id locked, only
+/// label/body mutable). Save fires the caller's onSave with the
+/// final (id, label, body) tuple — caller then sends a PutPromptMessage.
+struct PromptEditorSheet: View {
+    let initial: PromptEntry?
+    let onSave: (_ id: String, _ label: String, _ body: String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var idText: String = ""
+    @State private var labelText: String = ""
+    @State private var bodyText: String = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("filename-style id (e.g. ship-it)", text: $idText)
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                        .disabled(initial != nil)
+                        .foregroundStyle(initial != nil ? .secondary : .primary)
+                    TextField("Display label (optional)", text: $labelText)
+                        .autocorrectionDisabled(true)
+                } header: {
+                    Text("Identity")
+                } footer: {
+                    Text(initial == nil
+                         ? "Id becomes the filename on Mac (sans .txt). Allowed: letters, digits, dash, underscore. Spaces become dashes."
+                         : "Id can't be changed after creation — that would orphan keystroke bindings on the Mac. Delete and recreate if you need a new id.")
+                }
+
+                Section {
+                    TextEditor(text: $bodyText)
+                        .font(.system(size: 13, design: .monospaced))
+                        .frame(minHeight: 220)
+                        .autocorrectionDisabled(true)
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    HStack {
+                        Text("Prompt body")
+                        Spacer()
+                        Text("\(bodyText.utf8.count) B")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Sent verbatim to the active terminal when you tap the row in Prompts. No Markdown parsing, no template expansion.")
+                }
+            }
+            .navigationTitle(initial == nil ? "New Prompt" : "Edit Prompt")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let label = labelText.trimmingCharacters(in: .whitespaces)
+                        let body = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !id.isEmpty, !body.isEmpty else { return }
+                        onSave(id, label.isEmpty ? id : label, body)
+                        dismiss()
+                    }
+                    .disabled(idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear {
+                if let initial {
+                    idText = initial.id
+                    labelText = initial.label == initial.id ? "" : initial.label
+                    bodyText = initial.body
+                }
+            }
+        }
+    }
+}
+
+/// Wraps `UIActivityViewController` for the Connection diagnostics sheet's
+/// "Share Quip-diagnostics-*.zip" button. Items is typically a single
+/// file URL pointing to the saved zip in Documents.
+struct DiagnosticsShareSheet: UIViewControllerRepresentable {
+    var items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

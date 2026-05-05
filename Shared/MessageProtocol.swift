@@ -428,6 +428,165 @@ struct AttachITermWindowMessage: Codable, Sendable {
     }
 }
 
+// MARK: - Prompt Library (wishlist §57)
+
+/// Mac → iPhone. Catalog of named prompts the Mac has on disk under
+/// `~/Library/Application Support/Quip/prompts/*.txt`. Phone renders
+/// them as a list in Settings → Prompts; tapping one fires
+/// `paste_prompt` back, the Mac then sendText's the body into the
+/// active iTerm session. Mirrors the Stream Deck "clipboard prompt"
+/// pattern (paste a long pre-written prompt with one press) but
+/// without needing Stream Deck hardware or the .scpt round-trip.
+struct PromptLibraryMessage: Codable, Sendable {
+    let type: String
+    let prompts: [PromptEntry]
+
+    init(prompts: [PromptEntry]) {
+        self.type = "prompt_library"
+        self.prompts = prompts
+    }
+}
+
+/// One row in the prompt library. `id` is the filename without
+/// extension (used as the lookup key on `paste_prompt`); `label` is
+/// the display name (defaults to id but can carry a friendlier title
+/// if the file's first non-empty line starts with `# `, in which case
+/// that line becomes the label and gets stripped from the body).
+/// `body` carries the full prompt text so the iPhone can edit without
+/// a second round-trip to the Mac.
+struct PromptEntry: Codable, Sendable, Hashable, Identifiable {
+    let id: String
+    let label: String
+    let body: String
+
+    /// Convenience for the iOS list row — first 120 chars of the
+    /// body, used as a single-line preview.
+    var bodyPreview: String { String(body.prefix(120)) }
+    var bodyBytes: Int { body.utf8.count }
+}
+
+/// iPhone → Mac. User tapped a prompt — paste its body into the
+/// currently-targeted window. Mac looks up by id and runs sendText.
+struct PastePromptMessage: Codable, Sendable {
+    let type: String
+    let id: String
+    let windowId: String
+    let pressReturn: Bool
+
+    init(id: String, windowId: String, pressReturn: Bool = false) {
+        self.type = "paste_prompt"
+        self.id = id
+        self.windowId = windowId
+        self.pressReturn = pressReturn
+    }
+}
+
+/// iPhone → Mac. Create or update a prompt on disk. Mac writes the
+/// file to `~/Library/Application Support/Quip/prompts/<id>.txt`
+/// (with `# label\n\n` header so the friendly title round-trips), the
+/// FS watcher fires, and the new catalog is broadcast back to all
+/// clients including the originator. (wishlist §57 v2)
+struct PutPromptMessage: Codable, Sendable {
+    let type: String
+    let id: String
+    let label: String
+    let body: String
+
+    init(id: String, label: String, body: String) {
+        self.type = "put_prompt"
+        self.id = id
+        self.label = label
+        self.body = body
+    }
+}
+
+/// iPhone → Mac. Delete a prompt by id (removes the .txt file).
+struct DeletePromptMessage: Codable, Sendable {
+    let type: String
+    let id: String
+
+    init(id: String) {
+        self.type = "delete_prompt"
+        self.id = id
+    }
+}
+
+// MARK: - Diagnostics Bundle
+
+/// iPhone → Mac. Asks the Mac to bundle its three log files
+/// (`websocket.log`, `push.log`, `kokoro.log`) plus a `system-info.txt`
+/// blob into a single zip and ship it back over the WebSocket. Used by
+/// the Connection diagnostics sheet to short-circuit the
+/// "tail this for me, then this one, then this one" support cycle.
+struct RequestDiagnosticsMessage: Codable, Sendable {
+    let type: String
+
+    init() { self.type = "request_diagnostics" }
+}
+
+/// Mac → iPhone. Response to `request_diagnostics`. Carries the zip as
+/// base64. Mac caps total size at ~4 MiB (well under the 16 MiB WS
+/// payload cap, leaving headroom for base64's ~33% inflation); if the
+/// raw logs exceed that, the Mac sets `errorReason` and omits `data`,
+/// pointing the user at the Mac-side share button instead.
+struct DiagnosticsBundleMessage: Codable, Sendable {
+    let type: String
+    let filename: String
+    let sizeBytes: Int
+    /// Base64-encoded zip body. nil when `errorReason` is set.
+    let data: String?
+    let errorReason: String?
+
+    init(filename: String, sizeBytes: Int, data: String?, errorReason: String? = nil) {
+        self.type = "diagnostics_bundle"
+        self.filename = filename
+        self.sizeBytes = sizeBytes
+        self.data = data
+        self.errorReason = errorReason
+    }
+}
+
+/// iPhone → Mac. Asks the Mac for a tail snapshot of its three log
+/// files — text only, no zip. Auto-fired by the Connection diagnostics
+/// sheet on appear, so the user sees recent events without tapping a
+/// button. The full zip download stays as the explicit "Get Mac logs"
+/// path for AirDrop / save-to-Files use cases.
+struct RequestLogTailMessage: Codable, Sendable {
+    let type: String
+    /// How many bytes per file to return from the tail. Default 16 KiB
+    /// is enough for ~200 lines per file at typical log density. Mac
+    /// clamps to a max so a misbehaving phone can't pull whole logs.
+    let bytesPerFile: Int
+
+    init(bytesPerFile: Int = 16 * 1024) {
+        self.type = "request_log_tail"
+        self.bytesPerFile = bytesPerFile
+    }
+}
+
+/// Mac → iPhone. Response to `request_log_tail`. Carries the tail of
+/// each of the three log files as raw text, concatenated with file
+/// headers. Phone renders inline in a scrollable monospace view.
+struct LogTailMessage: Codable, Sendable {
+    let type: String
+    /// Concatenated text — sections separated by `=== <filename> ===`
+    /// headers. Empty if no logs exist yet.
+    let text: String
+    /// Total byte count of `text` (UTF-8). Used by phone for a "5.2 KB"
+    /// label without re-counting.
+    let totalBytes: Int
+    /// ISO-8601 timestamp of when the snapshot was captured. Phone
+    /// shows "captured at HH:mm:ss" so user knows the staleness.
+    let capturedAt: String
+
+    init(text: String, totalBytes: Int, capturedAt: String) {
+        self.type = "log_tail"
+        self.text = text
+        self.totalBytes = totalBytes
+        self.capturedAt = capturedAt
+    }
+}
+
 // MARK: - Push Notifications
 
 /// iPhone → Mac. Hands over the APNs device token so the Mac can push to
@@ -637,7 +796,7 @@ struct AuthResultMessage: Codable, Sendable {
 struct DeviceIdentityMessage: Codable, Sendable {
     let type: String
     let deviceID: String   // UUIDv4
-    let deviceKind: String // "mac" | "linux"
+    let deviceKind: String // "mac" | "linux" | "ios" | "watchos"
     let displayName: String
 
     init(deviceID: String, deviceKind: String, displayName: String) {

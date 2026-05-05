@@ -3,6 +3,8 @@
 
 import SwiftUI
 import Darwin
+import CoreImage
+import AppKit
 
 struct SettingsView: View {
     @Environment(WindowManager.self) private var windowManager
@@ -42,18 +44,24 @@ struct SettingsView: View {
                     Label("Colors", systemImage: "paintpalette")
                 }
 
+            PromptsTab()
+                .tabItem {
+                    Label("Prompts", systemImage: "doc.text")
+                }
+
             NotificationsTab()
                 .tabItem {
                     Label("Notifications", systemImage: "bell.badge")
                 }
         }
         // Vertical resize is the common ask (long tabs like Connection
-        // overflow). Width stays fixed at 520 so content doesn't get spread
-        // out across a stretched gutter. `.top` alignment so extra vertical
-        // space falls below content rather than centering it.
+        // overflow). Horizontal also resizable now — at 520 the 8 toolbar
+        // tabs collide and the last ones collapse behind a `>>` chevron;
+        // ideal 720 fits all 8 with breathing room. `.top` alignment so
+        // extra vertical space falls below content rather than centering.
         .frame(minHeight: 460, idealHeight: 460, maxHeight: .infinity,
                alignment: .top)
-        .frame(width: 520)
+        .frame(minWidth: 600, idealWidth: 720, maxWidth: .infinity)
     }
 }
 
@@ -645,6 +653,51 @@ private struct ConnectionTab: View {
                     .frame(width: 100)
             }
 
+            // §B5 per-client visibility — full table of every active socket so
+            // "is anyone actually talking to me?" answers from a glance instead
+            // of a `netstat | grep 8765` ritual.
+            Section("Connected Clients") {
+                let clients: [WebSocketServer.ConnectedClientInfo] = webSocketServer.connectedClients
+                if clients.isEmpty {
+                    Text("None — server is listening but no client has connected.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(clients) { (c: WebSocketServer.ConnectedClientInfo) in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Image(systemName: clientIcon(c))
+                                    .foregroundStyle(c.isAuthenticated ? .green : .yellow)
+                                Text(c.displayTitle).font(.body.weight(.medium))
+                                Spacer()
+                                Text(c.isAuthenticated ? "authed" : "awaiting auth")
+                                    .font(.caption)
+                                    .foregroundStyle(c.isAuthenticated ? Color.secondary : Color.orange)
+                            }
+                            HStack(spacing: 12) {
+                                Text(c.remote)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                if let kind = c.deviceKind {
+                                    Text(kind)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                                Text("connected \(Self.relTime.localizedString(for: c.connectedAt, relativeTo: Date()))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                Text("· last \(Self.relTime.localizedString(for: c.lastActivity, relativeTo: Date()))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
             Section("Bonjour Discovery") {
                 LabeledContent("Status") {
                     HStack(spacing: 6) {
@@ -870,12 +923,40 @@ private struct ConnectionTab: View {
         case .authFailed, .failed: return .red
         }
     }
+
+    private static let relTime: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
+    private func clientIcon(_ c: WebSocketServer.ConnectedClientInfo) -> String {
+        switch c.deviceKind {
+        case "ios": return "iphone"
+        case "watchos": return "applewatch"
+        case "linux": return "desktopcomputer"
+        case "mac": return "laptopcomputer"
+        default: return "iphone"
+        }
+    }
 }
 
 // MARK: - Security Tab
 
 private struct SecurityTab: View {
     @Environment(PINManager.self) private var pinManager
+    @Environment(WebSocketServer.self) private var webSocketServer
+    @Environment(CloudflareTunnel.self) private var tunnel
+
+    // Diagnostics-bundle state — folded in from the former Diagnostics
+    // tab. Co-located with PIN + pairing here because both topics are
+    // about "what does this Mac expose to phones, and what shows up in
+    // logs about that exposure?" Single tab keeps the auth-and-audit
+    // story in one place.
+    @State private var lastBundlePath: String?
+    @State private var lastError: String?
+    @State private var bundling: Bool = false
+    @State private var anchorView: NSView?
 
     var body: some View {
         Form {
@@ -907,8 +988,187 @@ private struct SecurityTab: View {
                     Label("Generate New PIN", systemImage: "arrow.clockwise")
                 }
             }
+
+            Section {
+                pairingQRBlock
+            } header: {
+                Text("Pair iPhone")
+            } footer: {
+                Text("Scan from the iPhone Quip app's URL bar (qrcode.viewfinder button) — auto-fills the URL and PIN, no typing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                LabeledContent("Logs directory") {
+                    Text(LogPaths.directory.path)
+                        .font(.caption.monospaced())
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([LogPaths.directory])
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+            } header: {
+                Text("Diagnostics — log location")
+            } footer: {
+                Text("Logs survive reboot and are indexed by Console.app under the \"Quip\" filter.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                AnchoredButton(anchor: $anchorView) {
+                    bundleAndShare()
+                } label: {
+                    HStack {
+                        if bundling {
+                            ProgressView().controlSize(.small)
+                        }
+                        Label("Bundle and share…", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .disabled(bundling)
+
+                if let path = lastBundlePath {
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.zipper")
+                            .foregroundStyle(.green)
+                        Text(path)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Reveal") {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                }
+
+                if let err = lastError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            } header: {
+                Text("Diagnostics — share")
+            } footer: {
+                Text("Bundles the three log files plus a system-info text blob into a single zip in /tmp, then opens AirDrop / Mail / Messages. The phone-side equivalent (Settings → Diagnostics → Get Mac logs) sends the same bundle over WebSocket.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private func bundleAndShare() {
+        bundling = true
+        lastError = nil
+        Task.detached {
+            do {
+                let zipURL = try DiagnosticsBundle.makeZip()
+                await MainActor.run {
+                    self.lastBundlePath = zipURL.path
+                    self.bundling = false
+                    DiagnosticsBundle.presentSharePicker(zipURL: zipURL, anchor: self.anchorView)
+                }
+            } catch {
+                await MainActor.run {
+                    self.lastError = "\(error)"
+                    self.bundling = false
+                }
+            }
+        }
+    }
+
+    /// Renders a pairing QR for whichever URL is currently most useful: the
+    /// Cloudflare tunnel URL (cross-network) when up, otherwise the local
+    /// Bonjour/IP URL the iPhone can reach over LAN. Re-renders whenever
+    /// the tunnel resolves a new URL or the PIN regenerates — no manual
+    /// refresh button needed because the views are bound to @Observable
+    /// state.
+    @ViewBuilder
+    private var pairingQRBlock: some View {
+        let currentURL = pairingURL()
+        if currentURL.isEmpty {
+            Text("Start the WebSocket server to display a pairing QR.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            let payload = PairingPayload(url: currentURL, pin: pinManager.pin)
+            HStack(alignment: .top, spacing: 16) {
+                if let encoded = payload.encodedURL(),
+                   let qr = Self.qrImage(for: encoded) {
+                    Image(nsImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 160, height: 160)
+                        .background(Color.white)
+                        .cornerRadius(6)
+                } else {
+                    Color.secondary.frame(width: 160, height: 160).cornerRadius(6)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("URL")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(currentURL)
+                        .font(.caption.monospaced())
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+
+                    Text("PIN")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                    Text(pinManager.pin)
+                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
+
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// Pick the URL the iPhone is most likely to reach — tunnel URL when
+    /// available (works on cellular too), else the local ws:// host:port.
+    /// Empty when the server isn't running.
+    private func pairingURL() -> String {
+        if !tunnel.webSocketURL.isEmpty {
+            return tunnel.webSocketURL
+        }
+        guard webSocketServer.isRunning else { return "" }
+        let host = Host.current().localizedName ?? "localhost"
+        return "ws://\(host).local:8765"
+    }
+
+    /// Render the payload string into an NSImage via CIFilter (no third-
+    /// party QR library). errorCorrection=M balances density vs. resilience
+    /// to phone-camera blur. Output is upscaled with nearest-neighbor in
+    /// the SwiftUI Image to keep edges crisp at display size.
+    private static func qrImage(for content: String) -> NSImage? {
+        guard let data = content.data(using: .utf8) else { return nil }
+        let filter = CIFilter(name: "CIQRCodeGenerator")
+        filter?.setValue(data, forKey: "inputMessage")
+        filter?.setValue("M", forKey: "inputCorrectionLevel")
+        guard let ciImage = filter?.outputImage else { return nil }
+        let rep = NSCIImageRep(ciImage: ciImage)
+        let nsImage = NSImage(size: rep.size)
+        nsImage.addRepresentation(rep)
+        return nsImage
     }
 }
 
@@ -973,5 +1233,308 @@ private struct ColorsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// SwiftUI Button wrapper that captures the underlying NSView via
+/// NSViewRepresentable, so callers can pin an NSSharingServicePicker
+/// to the button's frame instead of the whole window.
+private struct AnchoredButton<Label: View>: View {
+    @Binding var anchor: NSView?
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        Button(action: action, label: label)
+            .background(AnchorCapture(anchor: $anchor))
+    }
+
+    private struct AnchorCapture: NSViewRepresentable {
+        @Binding var anchor: NSView?
+        func makeNSView(context: Context) -> NSView {
+            let v = NSView(frame: .zero)
+            DispatchQueue.main.async { anchor = v }
+            return v
+        }
+        func updateNSView(_ nsView: NSView, context: Context) {}
+    }
+}
+
+// MARK: - Prompts Tab
+//
+// Mac-side editor for the prompt library — mirrors the iOS
+// PromptLibrarySheet (wishlist §57). Both clients write through the
+// same FS-backed PromptLibrary: `put` writes <id>.txt, the directory
+// watcher rescans, `onChange` broadcasts a PromptLibraryMessage to
+// every connected phone. So this tab needs zero "broadcast" wiring —
+// the existing FS-watcher path handles cross-client sync for free.
+
+private struct PromptsTab: View {
+    @Environment(PromptLibrary.self) private var library
+
+    @State private var selectedID: String?
+    @State private var editing: PromptEntry?
+    @State private var creatingNew = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Prompt library")
+                    .font(.headline)
+                Spacer()
+                Text("\(library.entries.count)")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+
+            List(selection: $selectedID) {
+                if library.entries.isEmpty {
+                    Text("No prompts yet. Click + below to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(library.entries) { entry in
+                        PromptRow(
+                            entry: entry,
+                            onEdit: { editing = entry },
+                            onDelete: {
+                                library.delete(id: entry.id)
+                                if selectedID == entry.id { selectedID = nil }
+                            }
+                        )
+                        .tag(entry.id)
+                    }
+                }
+            }
+            .listStyle(.inset)
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Button {
+                    creatingNew = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .help("New prompt")
+
+                Button {
+                    guard let id = selectedID,
+                          let entry = library.entries.first(where: { $0.id == id }) else { return }
+                    editing = entry
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .disabled(selectedID == nil)
+                .help("Edit selected")
+
+                Button {
+                    guard let id = selectedID else { return }
+                    library.delete(id: id)
+                    selectedID = nil
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(selectedID == nil)
+                .help("Delete selected")
+
+                Spacer()
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([PromptLibrary.directory])
+                } label: {
+                    Text("Reveal in Finder")
+                }
+                .help("Open the prompts directory")
+            }
+            .padding(8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $creatingNew) {
+            PromptEditorSheet(initial: nil) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
+            }
+        }
+        .sheet(item: $editing) { entry in
+            PromptEditorSheet(initial: entry) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
+            }
+        }
+    }
+
+}
+
+/// Single row in the Prompts tab. Hover reveals inline pencil + trash
+/// buttons (so you can edit / delete without first selecting + clicking
+/// a toolbar button). Right-click anywhere on the row opens a context
+/// menu with Edit / Delete / Reveal in Finder. Double-click also still
+/// edits — three discoverability paths, pick the one that fits muscle
+/// memory.
+private struct PromptRow: View {
+    let entry: PromptEntry
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(entry.label)
+                        .font(.system(size: 13, weight: .medium))
+                    if entry.label != entry.id {
+                        Text(entry.id)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Text(entry.bodyPreview)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer()
+
+            // Hover-revealed quick actions. Opacity hides them rather than
+            // conditional inclusion so layout stays stable when the cursor
+            // crosses row boundaries (no row-height jitter).
+            HStack(spacing: 4) {
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("Edit")
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Delete")
+            }
+            .opacity(hovering ? 1 : 0)
+
+            Text("\(entry.bodyBytes) B")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(count: 2, perform: onEdit)
+        .contextMenu {
+            Button("Edit", action: onEdit)
+            Button("Delete", role: .destructive, action: onDelete)
+            Divider()
+            Button("Reveal in Finder") {
+                let url = PromptLibrary.directory.appendingPathComponent("\(entry.id).txt")
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        }
+    }
+}
+
+// MARK: - Prompt Editor Sheet (Mac)
+//
+// Form-style editor matching the iOS PromptEditorSheet. `initial=nil`
+// = new prompt (id editable); non-nil = edit (id locked because the
+// id IS the filename — renaming would orphan keystroke bindings on
+// the phone). Save fires `onSave(id, label, body)`; caller writes
+// through PromptLibrary.put which triggers the FS-watcher broadcast.
+
+private struct PromptEditorSheet: View {
+    let initial: PromptEntry?
+    let onSave: (_ id: String, _ label: String, _ body: String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var idText: String = ""
+    @State private var labelText: String = ""
+    @State private var bodyText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(initial == nil ? "New prompt" : "Edit prompt")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Id (filename)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("e.g. ship-it", text: $idText)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(initial != nil)
+                Text(initial == nil
+                     ? "Allowed: letters, digits, dash, underscore, dot. Spaces become dashes."
+                     : "Id can't be changed after creation — would orphan phone-side bindings. Delete and recreate to rename.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Label (optional)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Display label — defaults to id if empty", text: $labelText)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Body")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(bodyText.utf8.count) B")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                TextEditor(text: $bodyText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(minHeight: 200)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+                Text("Sent verbatim to the active terminal when the row is tapped on the phone. No template expansion.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(20)
+        .frame(width: 540)
+        .onAppear {
+            if let initial {
+                idText = initial.id
+                labelText = initial.label == initial.id ? "" : initial.label
+                bodyText = initial.body
+            }
+        }
+    }
+
+    private var canSave: Bool {
+        !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func save() {
+        let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = labelText.trimmingCharacters(in: .whitespaces)
+        let body = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !body.isEmpty else { return }
+        onSave(id, label.isEmpty ? id : label, body)
+        dismiss()
     }
 }

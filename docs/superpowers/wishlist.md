@@ -2,6 +2,60 @@
 
 Future features, improvements, and known bugs tracked for eventual implementation. Each item here is a candidate for a GitHub issue or sprint work. When you're ready to implement one, it should graduate to a spec in `docs/superpowers/specs/` and a plan in `docs/superpowers/plans/`, then land as a commit on a working branch.
 
+---
+
+## Session log — 2026-05-04 (autonomous burn-down)
+
+20 commits on `eb-branch` (not pushed). Started after `64a8376` (§44 iOS WS resilience). Sequence:
+
+| Section | Status | Commit | Hardware-tested |
+|---------|--------|--------|-----------------|
+| §45 Mac NWPath + stall watchdog | ✅ | `352be75` | yes (Mac) |
+| PTT lifecycle fix (pauseMonitoring split + 100ms suppression) | ✅ | `efb49c7` | yes (iPhone) |
+| PTT route-change hardware-only filter + telemetry | ✅ | `149bcf6` | yes (iPhone) |
+| §46 iOS Connection diagnostics panel | ✅ | `6668893` | yes (iPhone) |
+| §47 Image upload encoder | ✅ then reverted | `684956b` → `2097684` | yes (failed → fixed) |
+| §48 Mac menubar last-event + tunnel state | ✅ | `45346ed` | yes (Mac) |
+| §49 Diagnostics bundle (Mac share + iOS request) | ✅ | `d0a69bc` | yes (both) |
+| §B1 Custom Buttons scroll-conflict fix | ✅ | `067c0a2` | yes (iPhone) |
+| §53 v1 Apple Watch glance | ✅ | `a2c977b` | install only — needs Watch verify |
+| §50 v1 QR pairing | ✅ | `a52ad4f` | install only — needs end-to-end pair |
+| §57 v1 Mac prompt library + Stream Deck importer | ✅ | `ad4fb57` | yes (both) |
+| §57 v2 iPhone prompt editor (create/edit/delete) | ✅ | `fcd2ba1` | install only — needs verify |
+| §B3 Prompts as keyboard quick-buttons | ✅ | `2ec3ed9` | install only — needs verify |
+| §B6 addMenu observation-chain leak + sheet picker rewrite | ✅ | `3dbc7da` + `5a00a36` | yes (iPhone) |
+| §B7 Prompts as main-row button option | ✅ | `3dbc7da` | yes (iPhone) |
+| §B5 Per-client visibility (Mac + iOS transport tag) | ✅ | `2cbeb21` | yes (iPhone) |
+| §B8 Live captions regressed on remote Whisper path | ✅ | `4751272` | yes (iPhone) |
+| §B9 Auto-pick first window on layout (PTT silent-fail fix) | ✅ | `6d47a51` | yes (iPhone) |
+| §B10 Paired-backends dedupe on load + addPaired URL match | ✅ | `93cc9a8` | yes (iPhone) |
+| §B11 SpeechService weak-ref drop fix + 4 tests | ✅ | `059f614` + `314b37d` | yes (iPhone) |
+| §B12 Strip Whisper [BLANK_AUDIO] tokens + 8 tests | ✅ | `a6afdc5` | needs verify (Mac) |
+| §B4 Prompts paste-wrong-window — closure-resolver fix | ✅ | _pending_ | install only — needs verify |
+| §A1 Auto-enable mainRow.prompts on first non-empty catalog | ✅ | _pending_ | install only — needs verify |
+| §A4 Searchable PromptsQuickPickerSheet | ✅ | _pending_ | install only — needs verify |
+
+**Test still owed by user:**
+- Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
+- QR pairing: scan from iPhone qrcode.viewfinder → connects without typing.
+- iPhone-side prompt create / edit / delete (swipe actions, + button).
+- Prompts as keyboard pills (purple chip in Quick Buttons row, tap pastes, long-press paste-and-submits).
+
+**Still in backlog (need user input or hardware):**
+- §51 iCloud KVS sync of paired backends — needs second device.
+- §52 iPad layout — needs iPad.
+- §54 Wake-word PTT — open stack decision (SFSpeech / Picovoice / on-device Whisper).
+- §55 Clipboard sync (Mac↔iPhone) — open privacy decision (default-on vs default-off).
+- §56 Voice macros ("ship it" → multi-step) — open UX decision.
+
+**v2 follow-ups deferred from this session:**
+- §49 redact tunnel URLs / device tokens before share (TODO marker in code).
+- §53 v2: complication via WidgetKit, slash-button send-back from wrist, per-window vs all-windows toggle.
+- §50 v2: TTL on QR payload, mid-pairing UX, universal-link entry from Mail/Messages.
+- §57 v2 (after current): chains support (multi-step prompts), search/filter when catalog grows past one screen.
+
+---
+
 **Maintenance rules:**
 
 - Every item has a **Title**, **Status**, **Context**, and (optionally) a link to its spec/plan once one exists.
@@ -928,3 +982,478 @@ Diagnosed autonomously via a Node.js fake-iOS-client (`/tmp/quip-content-probe.j
 **Acceptance test:** Settings → Quick Buttons → "+" → Custom Button → label "/btw", payload Slash `/btw `, auto-submit off → Save → row shows `/btw` pill → tap fires the slash text into Claude. Drag a Spacer between two pills → 12pt gap appears in the row. Reinstall the app via `devicectl` → editor reopens with the same slots + custom defs.
 
 **Related:** `QuipiOS/QuipApp.swift` (QuickSlot, CustomButton, QuickButtonsSheet, CustomButtonForm), `QuipiOS/Services/PreferencesSyncService.swift`, `Shared/MessageProtocol.swift:502+`.
+
+---
+
+### 44. iOS WS resilience — NWPathMonitor + stall watchdog + Reset button (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `64a8376`. Installed on iPhone 17 Pro Max. Confirmed working by user 2026-05-03.
+
+**What shipped (`QuipiOS/Services/WebSocketClient.swift`, `BackendConnectionManager.swift`, `QuipApp.swift`):**
+
+1. **`NWPathMonitor` auto-reconnect.** When the OS reports the network path becomes satisfied (WiFi roam, VPN flap, brief offline → back online), if we're disconnected and not intentionally torn down, the client cancels its pending exponential-backoff sleep, resets `reconnectDelay` to 1s, and calls `establishConnection()` immediately. `URLSessionWebSocketTask` does not surface OS-level path events, so the client previously sat in its 10s backoff sleep until the user nudged it.
+
+2. **Stall watchdog (`stuckWatchdogTask`).** Wakes every 5s. If `isConnecting == true` for more than 25s (`stuckThresholdSec`) without progress, sets `lastError = "Stalled <n>s — resetting"` and force-runs `handleDisconnect()` to start over. Belt-and-suspenders for the rare case where `URLSession`'s pingHandler never fires *and* the 8s `connectionTimeoutTask` somehow doesn't trip — the previous code had no escape hatch from that zombie state.
+
+3. **One-tap Reset button.** Connection bar gains an `arrow.clockwise.circle` button next to the X, visible only when `!client.isConnected && client.serverURL != nil`. Tap = `disconnect() + connect(serverURL)`. Replaces the "force-quit Quip from app switcher" recovery path.
+
+4. **Diagnostic ring buffer (`connectionEvents: [String]`, last 30 entries).** Every lifecycle transition (connect, ping success/fail, keepalive miss, disconnect, watchdog trip, NWPath state change) appends a timestamped line. Exposed via `recentConnectionEvents` for an in-app diag panel — UI not built yet, ring buffer is in place.
+
+5. **Keepalive miss surfaces to UI.** Each missed pong now sets `lastError = "No pong (1/2)"` then `(2/2)` so the existing red text under the status bar acts as a live socket-health indicator. No new UI plumbing.
+
+6. **`teardownDiagnostics()`** — `BackendConnectionManager.forget()` now calls this to cancel the `NWPathMonitor` and stop the watchdog `Task` cleanly when a paired backend is removed, preventing per-pruned-backend leaks of background subscribers.
+
+**Worst-case detection times before → after:**
+- Network blip / WiFi roam: until next user action → ~immediate (NWPath kick).
+- Zombie URLSession (no callback): forever → ≤30s (watchdog 5s tick + 25s threshold).
+- Keepalive one-sided drop: ~26s → ~26s (unchanged; previously silent, now visible via "No pong (n/2)").
+- App foreground after suspend: ~2s probe (unchanged; existing `resumeFromBackground`).
+
+**Acceptance test:**
+- Toggle WiFi off then on with the Quip app open → bar should auto-reconnect within ~1s of WiFi returning, no manual Reset tap needed.
+- `pkill Quip` on the Mac with the iPhone connected → bar shows `No pong (1/2)`, then `(2/2)`, then begins reconnect attempts. After Mac restart, NWPath is unaffected so reconnect waits on the normal exponential backoff.
+- If the bar is ever stuck on "Connecting…" >25s, watchdog should auto-tear-down and re-establish; the new Reset button is the manual override.
+
+**Open follow-ups:**
+- Build an in-app "Connection diagnostics" panel that renders `client.recentConnectionEvents` (last 30 timestamped lifecycle lines). Likely under Settings → Network. Useful for users who ask "what happened just now?" without needing a Mac for log capture.
+- Add a Mac-side counterpart for the Cloudflare tunnel — same NWPathMonitor + watchdog idea on `CloudflareTunnel.swift`.
+
+**Related:** `QuipiOS/Services/WebSocketClient.swift` (init, startPathMonitor, startStuckWatchdog, logEvent, teardownDiagnostics), `QuipiOS/Services/BackendConnectionManager.swift` (forget), `QuipiOS/QuipApp.swift` (connection-bar Reset button).
+
+---
+
+### 45. Mac CloudflareTunnel: NWPathMonitor + stall watchdog parity (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `352be75`. Built clean against macOS scheme.
+
+**Why:** Mirror the iOS WS resilience (§44 / `64a8376`) onto the Mac's tunnel. Same root failure: a network-path flap (Wi-Fi roam, ethernet unplug, VPN flap) leaves cloudflared running but with stranded edge connections. The fixed timers (1s URL poll, 60s health check, 3s post-death restart) catch process death only — they don't notice "alive but no edge."
+
+**What shipped (`QuipMac/Services/CloudflareTunnel.swift`):**
+
+1. `NWPathMonitor` — on path-satisfied, if `isRunning && publicURL.isEmpty`, force a tunnel restart instead of waiting for the next minute-long health-check tick.
+2. `stuckWatchdogTimer` — 5s tick. If the in-flight `start()` has been running >30s without resolving `publicURL`, kill cloudflared and restart. Edge resolution should take 1-3s in steady state; 30s means something is wedged.
+3. `connectionEvents` ring (last 30 timestamped lifecycle lines, exposed as `recentConnectionEvents`). Feeds §48 (menubar last-event indicator).
+4. `restartTunnel()` helper unifies path-monitor and watchdog recovery paths; `teardownDiagnostics()` lets `stop()` clean both subscribers.
+5. `logEvent()` is `internal` (not `private`) so tests can drive the ring buffer without spinning up cloudflared.
+
+**Acceptance test:** Toggle Wi-Fi off then on with Quip Mac running → menubar tunnel row should show "resolving…" briefly, then green + URL within ~1s of network coming back. Without this commit, the same toggle would leave the tunnel dead until the next 60s health check or process death.
+
+**Related:** `QuipMac/Services/CloudflareTunnel.swift:32-40,140-260` (new fields + helpers + lifecycle).
+
+---
+
+### 46. iOS Connection diagnostics panel (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `6668893`.
+
+**Why:** `WebSocketClient.recentConnectionEvents` (added in §44) was being collected but had no UI. Users still had to plug into a Mac and tail device logs to see what happened during a stuck-on-Connecting state.
+
+**What shipped (`QuipiOS/QuipApp.swift`):**
+- New `Section { Diagnostics }` in `SettingsSheet` with a `NavigationLink` to `ConnectionDiagnosticsSheet`. Inline summary shows live event count.
+- `ConnectionDiagnosticsSheet` view with two sections: Current state (Connected, Authenticated, Server, Last error — color-coded), and Recent events (last 30 timestamped lines, monospaced, newest first, text-selectable, with a Copy button that dumps the buffer to the pasteboard).
+
+**Acceptance test:** Open Settings → Diagnostics → Connection diagnostics → see ≥3 events from app launch. Toggle Wi-Fi off → re-open → see "network path unsatisfied" and "will reconnect in Ns" entries. Tap Copy → paste into Notes → verify formatted timestamp + message lines.
+
+**Related:** `QuipiOS/QuipApp.swift:4214-4232` (Settings link), `QuipiOS/QuipApp.swift:5135-5210+` (`ConnectionDiagnosticsSheet`).
+
+---
+
+### 47. iOS image upload: HEIC encode for size (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `684956b`. Tests pass on iPhone 17 Pro simulator.
+
+**Why:** Image uploads were always PNG (lossless, fat) or JPEG-0.95 (lossy, no alpha). Switching to HEIC at quality 0.85 cuts a typical photo payload by 50-70% — same Mac decode path (`ImageUploadHandler.swift:16,40,67` already accepts HEIC via the magic-byte sniff), so no protocol bump.
+
+**Pivot from WebP:** WebP encode via `CGImageDestination` wasn't shipped until iOS 18; project targets iOS 17. HEIC encode has been available since iOS 11 and is what the iPhone camera roll already uses by default.
+
+**What shipped:**
+- New `QuipiOS/Services/UIImage+HEIC.swift` — `heicData(quality:)` extension using `ImageIO + CGImageDestination + UTType.heic`. Returns nil on platforms or color spaces the encoder can't represent.
+- `QuipiOS/QuipApp.swift:1986-2008` — `sendPendingImageIfNeeded` tries HEIC first, falls back to PNG (declared image/png) or JPEG-0.95 in that order.
+- New tests in `QuipiOS/Tests/UIImageHEICTests.swift`: HEIC produces valid `ftyp` magic at offset 4; HEIC@0.85 beats JPEG@0.95 on a noisy gradient.
+
+**Acceptance test:** Pick a 4032×3024 photo from camera roll → tap send → spinner clears noticeably faster than before; on the Mac, the dropped file in `~/Library/Caches/Quip/uploads/` is `.heic` and ~50% the size of the equivalent JPEG.
+
+**Related:** `QuipiOS/Services/UIImage+HEIC.swift`, `QuipiOS/QuipApp.swift:1986-2008`, `QuipiOS/Tests/UIImageHEICTests.swift`.
+
+---
+
+### 48. Mac menubar: last-event indicator + tunnel state (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `45346ed`.
+
+**Why:** `MenuBarExtra` showed only the client-count string. Two more rows (Cloudflare tunnel health and the latest `ConnectionLog` event) plus a three-color status dot make the popover answer "is anything alive right now" at a glance, no Settings drill-down.
+
+**What shipped:**
+- `QuipMac/Views/MenuBarView.swift` — three-color statusIndicator dot (green/yellow/red), tunnel row (green when URL resolved, yellow when resolving), last-event row (icon + relative time via `RelativeDateTimeFormatter`).
+- `QuipMac/QuipMacApp.swift` — `ConnectionLog` and `CloudflareTunnel` now injected into the `MenuBarExtra` environment block (previously Settings-only).
+
+**Acceptance test:** With Quip Mac running and phone connected → menubar dot is green, popover shows "Active", tunnel row shows green + truncated subdomain, last-event row shows "authSucceeded · just now". Disconnect phone → popover updates within ~1s to show "Listening" + last-event "disconnected · just now".
+
+**Related:** `QuipMac/Views/MenuBarView.swift:6-14,52-90,116+`, `QuipMac/QuipMacApp.swift:94-102`.
+
+---
+
+### 49. Bundle-and-share diagnostics from Mac + iOS request path (✅ Done, eb-branch)
+
+**Status:** ✅ Done on `eb-branch` — commit `d0a69bc`. All 3 `DiagnosticsBundleTests` pass on macOS host.
+
+**Why:** When a user reports a bug, the cycle was "tail this for me, then this one, then this one." This collapses it to one tap.
+
+**What shipped:**
+
+Mac side — Settings → Diagnostics tab (8th tab, stethoscope icon):
+- "Reveal in Finder" opens `~/Library/Logs/Quip/`.
+- "Bundle and share…" zips the three logs (`websocket.log`, `push.log`, `kokoro.log`) plus `system-info.txt` to `/tmp` via `/usr/bin/zip`, then opens `NSSharingServicePicker` (AirDrop, Mail, Messages, Save).
+
+iOS side — Settings → Diagnostics → Connection diagnostics → "Get Mac logs" button:
+- Sends new `RequestDiagnosticsMessage`.
+- Mac handler `handleRequestDiagnostics()` calls `DiagnosticsBundle.makeZip(maxBytes: 4 MiB)`, base64-encodes, ships back as `DiagnosticsBundleMessage`.
+- iOS receives, writes the zip to Documents, surfaces a Share button → `UIActivityViewController` → AirDrop to Mac becomes the one-tap "send Erick the logs" path.
+
+New shared types in `Shared/MessageProtocol.swift`:
+- `RequestDiagnosticsMessage` (type=`request_diagnostics`, empty body).
+- `DiagnosticsBundleMessage` (type=`diagnostics_bundle`, filename, sizeBytes, base64 data, optional errorReason for oversize-cap rejections).
+
+New helper `QuipMac/Services/DiagnosticsBundle.swift`:
+- `makeZip(maxBytes:)` writes `Quip-diagnostics-YYYYMMDD-HHMMSS.zip` to `NSTemporaryDirectory`. Tolerates missing log files. Throws `.overSizeCap` when bundle exceeds the WS-path budget.
+- `systemInfoText()` pinned in tests so future refactors don't drop fields (App version, macOS, Architecture, Uptime).
+- `presentSharePicker(zipURL:anchor:)` wraps `NSSharingServicePicker`.
+
+iOS `DiagnosticsShareSheet` `UIViewControllerRepresentable` wraps `UIActivityViewController` for the SwiftUI sheet.
+
+**Acceptance test (Mac):** Settings → Diagnostics → Bundle and share… → AirDrop sheet appears → drop on another device → unzips to 3 `.log` files + `system-info.txt`.
+
+**Acceptance test (iOS):** Settings → Diagnostics → Connection diagnostics → Get Mac logs → status shows "Bundle ready (NN KB)" → tap Share → `UIActivityViewController` lists AirDrop / Mail / Messages.
+
+**TODO (deferred):** Redact tunnel URLs / device tokens before share. Comment marker in `DiagnosticsBundle.swift`; current data is already in the user's own home dir, so the leak is share-action-only.
+
+**Related:** `QuipMac/Services/DiagnosticsBundle.swift`, `QuipMac/Views/SettingsView.swift:46-49,978+` (DiagnosticsTab), `QuipMac/QuipMacApp.swift:894-895,1077+` (handler), `Shared/MessageProtocol.swift:430-470` (new types), `QuipiOS/Services/WebSocketClient.swift:202-205,710-715` (onDiagnosticsBundle wiring), `QuipiOS/QuipApp.swift:5135-5260+` (Get Mac logs UI).
+
+---
+
+### Boundary marker — autonomous loop halts here, awaiting user input
+
+Tickets §50–§56 (QR pairing, iCloud KVS sync, iPad layout, Apple Watch glance, wake-word PTT, clipboard sync, voice macros) all need user decisions, multi-device hardware testing, or new Xcode targets — see plan file at `~/.claude/plans/plan-to-do-eacn-glowing-oasis.md` for the full open-questions list per ticket.
+
+---
+
+### B3. Prompts as keyboard quick-buttons (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1 on `eb-branch` — commit `2ec3ed9`. Built clean iOS sim + device; installed on Tim apple 17.
+
+Promotes Mac-managed prompts from the two-taps-deep Settings → Prompts sheet into the keyboard slot row alongside built-ins, custom buttons, and spacers.
+
+**What shipped:**
+- New `QuickSlot.prompt(promptID: String)` case + Codable wire format with `prompt` kind discriminator and `promptID` payload field. Backward compat preserved.
+- Quick Buttons editor's "+" menu gains "Prompt from library…" (visible only when catalog non-empty). Picker sheet lists prompts with label + 120-char preview; tap appends a `.prompt` slot. Already-placed prompts disabled.
+- Editor `slotRow` + `previewRowItems` render `.prompt` cases with a doc.text icon + purple chip tint to distinguish from custom-text buttons.
+- Keyboard runtime: new `promptQuickButton(promptID:label:)` view. Tap = paste no submit; long-press = paste-and-submit. Disabled when Mac hasn't broadcast catalog or no selectedWindowId.
+- `rowItems` pre-passes ignore `.prompt` for slash grouping (no slash letter to collapse on).
+
+Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bits.
+
+**Acceptance test:** Settings → Quick Buttons → "+" → "Prompt from library…" → pick a prompt → close. Keyboard row shows a purple pill labeled with the prompt. Tap the Mac terminal in the main view, then tap the pill → text pastes into iTerm. Long-press → text pastes + Return.
+
+**Related:** `QuipiOS/QuipApp.swift:4017-4036` (QuickSlot enum + Codable), `2914-2998` (RowItem + rowItems), `3035-3105` (slotRowView + promptQuickButton + firePromptSlot), `4715-4795` (addMenu + promptPickerSheet + addPromptSlot), `4865-4905` (slotRow .prompt case), `4972-5005` (previewRowItems + promptPillPreview).
+
+---
+
+### 57. Prompt library — Mac watches a directory, iPhone pastes (✅ Done v1+v2, eb-branch)
+
+**Status:** ✅ v1 on `eb-branch` commit `ad4fb57` (Mac watches dir, iPhone pastes); v2 commit `fcd2ba1` (iPhone-side create / edit / delete + full body in catalog). Built clean for both schemes; installed to Mac and Tim apple 17. 15 of 25 streamdeck-claude-scripts auto-imported.
+
+**v2 additions:**
+- `PromptEntry` now carries the full `body` inline (was preview + length only). `bodyPreview` and `bodyBytes` become computed properties so existing call sites compile unchanged. iPhone needs the body in-hand to populate the edit form without a second round-trip.
+- New `PutPromptMessage` (id, label, body) and `DeletePromptMessage` (id) — Mac handlers in `QuipMacApp.swift` rely on `PromptLibrary.put` / `.delete`, then the existing FS watcher fires and re-broadcasts the catalog (so the originating phone sees its own write reflected back).
+- iOS `PromptEditorSheet` (new struct in `QuipApp.swift`): id (locked when editing), display label (optional), multi-line body in a `TextEditor` with monospaced font + byte counter. Save disabled until id and body are both non-empty.
+- `PromptLibrarySheet` swipe actions: Edit (blue) opens the editor, Delete (red) sends `DeletePromptMessage`. "+" toolbar button creates new.
+- `PromptLibrary.sanitizeID` strips path separators / leading dots / shell metacharacters so a hostile id can't escape the prompts directory. Spaces become dashes.
+
+**v1 details (preserved):**
+
+**Why:** User asked to bring the Stream Deck "clipboard prompt" pattern (`/Users/erickbzovi/Projects/streamdeck-claude-scripts`) into Quip — a button on the keyboard that pastes a long pre-written prompt into iTerm with one tap. Existing CustomButton.rawText already did the typing, but editing 1-15 KB of prompt text in the iOS form was awful and there was no library/discovery.
+
+**What shipped:**
+- `QuipMac/Services/PromptLibrary.swift` — DispatchSource FS observer over `~/Library/Application Support/Quip/prompts/*.txt`. Filename (sans .txt) = entry id. First non-empty line starting with `# Title` becomes the label and is stripped from the body. README.txt seeded on first run.
+- `Shared/MessageProtocol.swift` — `PromptLibraryMessage` (Mac→iPhone, catalog with 120-char body previews) + `PastePromptMessage` (iPhone→Mac, id+windowId+pressReturn).
+- `QuipMac/QuipMacApp.swift` — broadcast on every catalog change, plus push to every newly-authenticated client. New `paste_prompt` handler runs `keystrokeInjector.sendText` through the existing per-terminal-app path (iTerm2 AppleScript, Claude Desktop clipboard-paste, Terminal keystrokes).
+- `QuipiOS/QuipApp.swift` — new `PromptLibrarySheet` under Settings → Prompts. Tap row → paste (no submit). Long-press → paste-and-submit. SettingsSheet now takes `selectedWindowId` so the paste targets the right window.
+- `QuipMac/Tools/import-streamdeck-prompts.sh` — `osadecompile` + python regex extracts `set the clipboard to "..."` body from each `.scpt`, writes one `.txt` per script. Idempotent.
+
+**Acceptance test:** Drop a .txt in `~/Library/Application Support/Quip/prompts/` → iPhone → Settings → Prompts → see new row within ~1s → tap → text appears in Mac iTerm without typing.
+
+**Imported from streamdeck-claude-scripts (15/25):** 00-rules, 07-audit-security, 08-audit-pci, 09-find-dead-code, 10-fix-errors, 12-perf-seo, 14-commit, 26-improve, 27-debug, 28-quick-review, 29-scaffold-slice, 30-prod-ready, 31-mobile, 32-session-review, 33-dominate-niche. Skipped: scripts that use AppleScript directly without a clipboard body (01-clear, 02-compact, 04-ux-review's screenshot path, mic-check, fake-gps, install-build, arrange-iterm, focus-iterm, 06-check-a11y, 17-stats).
+
+**Deferred to v2:**
+- Chains support — Stream Deck has multi-step chains (.chain-*.json files). Would need a multi-row PromptEntry kind + sequence runner with confirmation between steps.
+- iOS-side editor — currently the user has to drop .txt files via Finder/Terminal on the Mac. Adding an editor on the phone is straightforward but pushes scope.
+- Search/filter when the catalog grows past one screen.
+- Show prompts as keyboard quick-buttons (auto-bind first N entries to the existing slot row).
+
+**Related:** `Shared/MessageProtocol.swift:430+` (new types), `QuipMac/Services/PromptLibrary.swift`, `QuipMac/QuipMacApp.swift:148-160,930-945` (wiring + handler), `QuipiOS/Services/WebSocketClient.swift:206-220,725-735`, `QuipiOS/QuipApp.swift:5260+` (PromptLibrarySheet), `QuipMac/Tools/import-streamdeck-prompts.sh`.
+
+---
+
+### 50. QR pairing — Mac shows QR, iPhone scans (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1 on `eb-branch` — commit `a52ad4f`. Built clean for both schemes; installed to Tim apple 17 and Mac.
+
+**Decisions taken (defaults — autonomously chosen):**
+- Payload format: `quip://pair?url=<base64>&pin=<6digits>` URL scheme (re-uses the already-registered `quip` scheme in `project.yml:62`).
+- No TTL/auto-rotate. PIN regenerate already exists; the QR re-renders whenever the PIN or tunnel URL changes (both @Observable).
+- Re-uses the existing iOS QR scanner (`QRScannerView` already wired via the qrcode.viewfinder button in the URL bar).
+
+**What shipped:**
+- `Shared/PairingPayload.swift` — Codable struct + `encodedURL()` / `decode(_:)`. Strips base64 padding for shorter QRs; tolerates missing padding on decode.
+- `QuipMac/Views/SettingsView.swift` SecurityTab — new "Pair iPhone" section with a 160×160 QR (CIQRCodeGenerator, errorCorrection=M), plus URL + PIN shown alongside for fallback typing. `pairingURL()` picks the Cloudflare tunnel URL when up, else local `ws://<host>.local:8765`.
+- `QuipiOS/QuipApp.swift` — QR scanner callback first tries `PairingPayload.decode(code)`. On match: `manager.addPaired(url:)` → write PIN to Keychain under the new id → `setActive` → `doConnect`. Falls back to legacy "treat as raw URL" if the decode returns nil so existing QR-of-URL workflows still work.
+
+**Acceptance test:** Mac → Settings → Security → see QR. iPhone → tap qrcode.viewfinder in URL bar → point at Mac → connection bar flips to "Connected" within ~2s without typing anything.
+
+**Deferred to v2:**
+- TTL / payload-aging — currently a stale QR works forever (or until PIN rotates).
+- Mid-pairing UX (show "Scanning…" spinner; haptic on detection).
+- Universal-link entry — URL scheme is registered, so `quip://pair?...` could be opened from Mail/Messages without the scanner.
+
+**Related:** `Shared/PairingPayload.swift`, `QuipMac/Views/SettingsView.swift:882-1010`, `QuipiOS/QuipApp.swift:1016-1040`.
+
+---
+
+### 53. Apple Watch glance — per-window state + haptics (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1 on `eb-branch` — commit `a2c977b`. Built clean against iOS sim (with embedded Watch) and watchOS sim schemes. Installed to Tim apple 17; Watch app auto-installs on Apple Watch Ultra 3 once iOS detects the companion.
+
+**v1 shipped:**
+- New `QuipWatch` target (single-target watchOS `application` via xcodegen, embedded into the iOS app).
+- `QuipiOS/Services/WatchSyncService.swift` — WCSessionDelegate that pushes the active Mac's window snapshot to the wrist. Live channel (`sendMessage`) when reachable, falls back to `updateApplicationContext`. Dedupes against last payload so layout polls with no diff don't burn budget.
+- `QuipiOS/QuipApp.swift` — push hook in `manager.onLayoutUpdate` and `onStateChange` (every state transition reaches the watch).
+- `QuipiOS/QuipWatch/QuipWatchApp.swift` — SwiftUI `WKApplication`. ContentView shows a scroll list of windows: state dot (yellow=awaiting / blue=thinking / green=idle), name, claudeMode badge. Header chip shows iPhone-reachability. `WKInterfaceDevice.current().play(.notification)` haptic on `waiting_for_input` transitions.
+- `QuipiOS/QuipWatch/Info.plist` — WKApplication=true, WKCompanionAppBundleIdentifier=com.quip.QuipiOS.
+
+**Sendable quirk worth remembering:** WCSessionDelegate callbacks are nonisolated; `[String: Any]` payload isn't Sendable under Swift 6 strict concurrency. Extract the Data for the "windows" key in the nonisolated callback (Data IS Sendable), then hop to MainActor with only that Data. Same trick will apply to any future Watch ↔ phone wire shapes.
+
+**xcodegen quirks worth remembering:** iOS app's `path: .` source spec must `exclude: ["QuipWatch/**"]` so the iOS target doesn't try to copy the Watch Info.plist into its own bundle (build fails with "Multiple commands produce Quip.app/Info.plist"). Watch app PRODUCT_NAME must be `QuipWatch` (not `Quip`) to avoid bundle-name collision; user-visible name stays "Quip" via CFBundleDisplayName.
+
+**Acceptance test:** With Quip Mac running + iPhone connected + Watch paired and on-wrist:
+1. Open Quip on iPhone → Watch grid should show "Quip" within ~30s of first install.
+2. Open Quip on Watch → see scroll list of current windows + state.
+3. Click on the Mac terminal so Claude flips to `waiting_for_input` → Watch buzzes (notification haptic).
+4. Background Quip on iPhone → Watch list still updates (via `updateApplicationContext` background channel).
+
+**Deferred to v2:**
+- Complication via WidgetKit — needs Watch widget configuration + complication design + per-budget update strategy (Watch limits to ~50 pushes/day).
+- Slash-button send-back ("/yes", "/no" from wrist) — needs WCSession reverse-direction handling.
+- Per-window vs all-windows toggle — currently shows all.
+
+**Related:** `QuipiOS/QuipWatch/QuipWatchApp.swift`, `QuipiOS/Services/WatchSyncService.swift`, `QuipiOS/QuipApp.swift:46,302-307,386-391` (push hooks), `QuipiOS/project.yml:80-100` (target).
+
+**(historical design notes preserved below for v2 work)**
+
+**What it'd do (v1):**
+- Tiny WatchKit app on the wrist showing per-window Claude state: Thinking · Done · Awaiting input.
+- Complication on watch face → tap → opens app → see currently-selected window's status.
+- Push haptic + dismissible notification when Claude flips to `waiting_for_input` (replaces having to glance at phone).
+- One-tap "ack" button → stops the attention pulse (same effect as `clearAttention` in `attentionCenter` on iOS).
+
+**v2 stretch:** send a slash button from watch ("/yes", "/no") for fast confirmation responses.
+
+**Stack:**
+- New WatchKit App + Extension targets in `QuipiOS/project.yml` (xcodegen).
+- Reuses `WatchConnectivity` → iPhone relays `WindowState` + `attentionCount` over WCSession on every state change.
+- Complication via `WidgetKit` (Watch Widget API replaces old ClockKit).
+
+**Cost:** ~1 day for v1.
+
+**Open decisions:**
+- Push state via WCSession only when phone is foreground? Or `transferUserInfo` for background delivery?
+- Show all windows as a list, or only the iPhone's `selectedWindowId`?
+- Complication update budget (Watch limits to ~50 pushes/day) — only push on state transitions, not every layout poll.
+
+---
+
+### 54. Wake-word PTT — "Hey Claude" → start dictation (📋 Backlog)
+
+**Status:** 📋 Backlog. Big technical decision (which keyword-spotting stack) and a hardware-test loop required.
+
+**What it'd do:**
+- Phone listens passively for "Hey Claude" (or user-chosen phrase).
+- On wake-word detection → equivalent to vol-down press → starts recording → streams to Whisper on Mac via existing PTT path.
+- End on silence-timeout (existing `stuckPressWatchdog` already does this) or another wake phrase ("Stop").
+
+**Stack options (this is the main open decision):**
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Apple `SFSpeechRecognizer` + keyword filter | Free, no SDK, on-device | Not designed for always-on; battery hit; false trigger rate |
+| Picovoice Porcupine | Designed for wake-word, ~1% CPU, on-device | Free tier non-commercial only; paid SDK $$$ |
+| `SFSpeechRecognizer` `requiresOnDeviceRecognition=true` + custom rolling buffer | On-device, free, fits existing `SpeechService` shape | Same battery; recognizer drops partials on pause (per memory `project_sfspeech_ondevice_rollover.md`) — needs work |
+| Custom Whisper-tiny streaming | Full control | Big — weeks of work |
+
+**Cost:** v1 with SFSpeech keyword filter ~1 day; with Porcupine ~half day + license question; custom Whisper much more.
+
+**Open decisions:**
+- Battery: always-listening drains 2-5%/hr. Opt-in toggle in Settings? Auto-disable on <20% battery?
+- Privacy: explicit "this app is always listening for X" copy on first enable; Lock-Screen mic indicator stays on.
+- Wake-word config: hardcoded "Hey Claude" or user-pickable phrase? (Pickable needs a custom keyword model.)
+- Conflict with iOS Siri "Hey Siri" — easy to false-trigger on each other.
+
+**Memory caveat:** SFSpeech on-device drops partials on pause (`project_sfspeech_ondevice_rollover.md`); means we'd lose any words spoken in the brief moment between wake-word detection and PTT-stream-start. Need pre-roll buffer (already implemented for normal PTT in commit `354e2aa` "Long-lived audio engine with 500ms pre-roll replay") — extend that buffer rather than add a new one.
+
+---
+
+### B1. iOS Custom Buttons editor — scrolling buggy (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed. User-reported 2026-05-04. Root cause: `Button { … } .buttonStyle(.plain)` rows inside the `Custom Buttons` `List` section ate scroll gestures — well-known SwiftUI conflict. Replaced with `HStack { … }.contentShape(Rectangle()).onTapGesture { editingCustomID = c.id }` so `List` retains scroll ownership and only fires on a clean tap. `.onDelete` swipes also recover. File: `QuipiOS/QuipApp.swift:4592-4615`.
+
+**(historical notes preserved below for context)**
+
+**Reproduction steps (need user confirmation):**
+1. iPhone → Settings → Quick Buttons → "+" → "Custom Button" (or pick existing custom button to edit).
+2. Try to scroll the form — fields, payload picker, SF Symbol grid.
+3. Symptom: scroll either doesn't engage, jumps unexpectedly, or competes with another gesture.
+
+**Likely culprits to investigate (no fix yet):**
+- `CustomButtonForm` may use a `Form` inside a `NavigationLink` inside the `QuickButtonsSheet`'s own `List` — nested scroll containers are SwiftUI's classic scroll-conflict scenario.
+- SF Symbol picker grid (if rendered inline) may use `ScrollView` inside a `Form` row — gesture priority unclear.
+- Drag handle for slot reorder uses `.onDrag` / `.onDrop`; if those modifiers are attached to the wrong view, they can swallow scroll gestures.
+
+**Files to read first:** `QuipiOS/QuipApp.swift` — search `QuickButtonsSheet`, `CustomButtonForm`, `CustomButton` (struct lives at line 3960).
+
+**Acceptance test once fixed:** Open Settings → Quick Buttons → tap an existing custom button → scroll the edit form smoothly with no gesture conflict; pinch/tap reorders work; symbol picker scrolls independently if separate.
+
+---
+
+### B4. Prompts pasting into wrong window (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed 2026-05-04. Root cause: phone-side stale-capture, Mac-side `handlePastePrompt` was already correct (uses `msg.windowId` throughout). The Settings → Prompts NavigationLink passed `windowId: selectedWindowId` to `PromptLibrarySheet` — a stored `String?` value captured at NavigationLink construction. Once Settings was open, the sheet kept firing pastes at whatever window was active when the user opened Settings, even after they switched windows in the main view.
+
+**Fix:** converted both `SettingsSheet.selectedWindowId` and `PromptLibrarySheet.windowId` to closure resolvers (`windowIdProvider: () -> String?`). Each paste calls the resolver fresh, so `firePromptSlot`-style fires always read the *current* `selectedWindowId` from the parent view. Same pattern as the §B11 SpeechService weak-ref → resolver migration.
+
+**Files:** `QuipiOS/QuipApp.swift` — `SettingsSheet` parameter, `PromptLibrarySheet` parameter, call sites.
+
+**Files to start with:**
+- `QuipiOS/QuipApp.swift:firePromptSlot` — uses `selectedWindowId`
+- `QuipiOS/QuipApp.swift:promptsPickerButton` — sheet captures `selectedWindowId` at invocation
+- `QuipMac/QuipMacApp.swift:handlePastePrompt` (line ~1144) — verify it actually uses `msg.windowId` and not a fallback
+- Also check `PromptLibrarySheet` (the Settings → Prompts row) for similar bug
+
+**Acceptance test:** Pin window A as active → tap Prompts pill → pick a prompt → verify it lands in window A. Repeat with windows B and C. Background and foreground in between to test if `selectedWindowId` survives lifecycle.
+
+---
+
+### B5. Per-client connection visibility on Mac + iOS (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1. Shipped 2026-05-04.
+
+**Mac side:** `WebSocketServer` now exposes a public `connectedClients: [ConnectedClientInfo]` snapshot — each entry carries id, remote endpoint string, connectedAt, lastActivity, isAuthenticated, deviceID/deviceName/deviceKind. Refreshed on connect / disconnect / auth / inbound `device_identity` and on every received message (lastActivity touch, throttled to 2s so streaming traffic doesn't churn the published list 60×/sec). MenuBarExtra popover replaces the "N clients connected" line with one row per client (icon by kind, displayTitle, relative last-activity time). Settings → Connection has a new "Connected Clients" section: device name + auth pill + monospaced remote + kind + connected-time + last-seen. Empty state explains "server is listening but no client has connected" so the user isn't left guessing.
+
+**Phone side:** `WebSocketClient.sendSelfIdentity()` fires a `DeviceIdentityMessage` (deviceID = `KeychainDeviceID.get()`, deviceKind = `"ios"`, displayName = `UIDevice.current.name`) right after `auth_result success`. Mac's new ingest path populates the per-client row. Connection Diagnostics gained a "Transport" row classifying the active `serverURL` into Cloudflare tunnel / LAN (Bonjour) / Tailscale (CGNAT 100.64-127.x) / LAN (RFC1918) / Loopback / Direct so the user can answer "am I going LAN or tunnel?" without reading the URL byte-by-byte.
+
+**Files:**
+- `Shared/MessageProtocol.swift` — `DeviceIdentityMessage.deviceKind` doc widened to include `"ios"` / `"watchos"`.
+- `QuipMac/Services/WebSocketServer.swift` — `ConnectedClientInfo` public struct, extended `ClientConnection` private struct, `connectedClients` published list, `refreshConnectedClients()`, `touchActivity(for:)`, `applyPeerIdentity(_:from:)`, inbound `device_identity` ingest.
+- `QuipMac/Views/MenuBarView.swift` — per-client list section with `clientIcon(_:)` helper.
+- `QuipMac/Views/SettingsView.swift` — ConnectionTab gains Connected Clients section, `relTime` + `clientIcon` helpers.
+- `QuipiOS/Services/WebSocketClient.swift` — `sendSelfIdentity()` called on auth success.
+- `QuipiOS/QuipApp.swift` — `transportClassification(for:)` helper + Transport row in Diagnostics.
+
+**Acceptance test:**
+1. Open Mac Quip → Settings → Connection → "Connected Clients" section shows empty state.
+2. Connect iPhone → row appears with device name (e.g. "Tim apple 17 🍏📲"), green auth dot, "ios" kind tag.
+3. Open Mac MenuBarExtra → see same per-client list with relative last-activity ("just now" / "5s ago").
+4. Background phone for ~30s → MenuBarExtra last-activity rolls to "30s ago" without the row vanishing.
+5. iPhone → Settings → Diagnostics → "Transport" row shows the bucket matching the URL the phone connected via (`.local` → "LAN (Bonjour)", `100.x.x.x` → "Tailscale", `*.trycloudflare.com` → "Cloudflare tunnel").
+6. Disconnect phone → Mac row disappears within ~2s; "None — server is listening but no client has connected." renders.
+
+**Deferred to v2:**
+- Manual disconnect from Mac (kick a stale client).
+- Show currently-active backend's deviceID in iOS Backend picker so user can spot which paired Mac the per-client row belongs to.
+- Tunnel-broadcaster clients aren't represented in `connectedClients` yet — their `TunnelBroadcaster` array is separate. If §50 QR pairing routes more traffic over the tunnel proxy, fold those into the same list.
+
+
+---
+
+### B6. Quick Buttons "+" menu observation-chain leak (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed. User reported 2026-05-04 — "+ arrow drop down still buggy" after the §2884682 snapshot fix. Root cause: the `addMenu` body still read `client.promptLibrary` directly (`if let cl = client, !cl.promptLibrary.isEmpty`), so every Mac catalog broadcast re-evaluated the entire `QuickButtonsSheet` body during an open Menu, dismissing or jumping it mid-tap. The 2884682 commit cached `promptLabelByID` for the slot row but missed this one read site. Switched the menu's gating to `!promptLabelByID.isEmpty` so the open Menu no longer races with `prompt_library` pushes.
+
+**Files:** `QuipiOS/QuipApp.swift` — `addMenu` (around the existing `Prompt from library…` button).
+
+**Acceptance test:** Settings → Quick Buttons → tap "+" → menu opens and stays open while idle. Trigger a Mac prompt-catalog change (touch a `.txt` under `~/Library/Application Support/Quip/prompts/`) while the menu is still open → the menu does NOT collapse / jump. Tap "Prompt from library…" → picker opens reliably.
+
+---
+
+### B7. Prompts as a main-row button (✅ Done v1, eb-branch)
+
+**Status:** ✅ Done v1. User asked for Prompts to be available as a main control-row button (alongside chevrons / spawn / arrange / mic / photo / keyboard / return), not only as a Quick Buttons slot. Added `mainRow.prompts` @AppStorage toggle (default OFF — opt-in for existing users); when enabled, a `doc.text.magnifyingglass` button renders in RIGHT cluster 1 next to the Photo button. Tap opens the same MRU-sorted `PromptsQuickPickerSheet` the keyboard pill uses. Sheet is hoisted to `MainiOSView.body` so both the main-row button and the (optional) Quick Buttons pill share one presentation site.
+
+**Toggle location:** Settings → Main Row Buttons → "Prompts".
+
+**Files:** `QuipiOS/QuipApp.swift` — `mainRow.prompts` AppStorage (~line 712), main-row HStack RIGHT cluster 1 (~line 1832), `MainRowButtonsSheet` toggles, hoisted `.sheet(isPresented: $showPromptsPickerSheet)` in body. `promptsPickerButton`'s inline `.sheet` modifier removed (now lives at body).
+
+**Acceptance test:** Settings → Main Row Buttons → enable "Prompts" → main row shows the new button next to Photo (disabled when no prompts, no window, or disconnected). Tap → MRU-sorted prompt picker sheet opens. Tap an entry → text pastes into the active window. Long-press in the sheet → paste-and-submit. Disable the main-row toggle → button disappears; the Quick Buttons "Prompts picker" pill still works if it was placed.
+
+---
+
+### B8. Live captions regressed on remote Whisper path (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed 2026-05-04 in `4751272`. User reported captions stopped appearing during PTT even though dictation reached the Mac terminal.
+
+**Root cause:** `selectPTTPath` switches to `.remote` once `WebSocketClient.whisperStatus == .ready`. The remote branch in `SpeechService.startRecording` only set up `worker.startForwarding(onBuffer:)` — raw audio chunks fired to the Mac's Whisper, no local recognizer running. `transcribedText` was therefore only populated on `session.stop` with Mac's final text, leaving the on-screen caption overlay empty during speaking. The regression surfaced once the Mac had Whisper warm enough to stay `.ready`; users on a cold/never-loaded Mac stayed on the `.local` path and never saw the symptom.
+
+**Fix:** Remote path now runs a *display-only* on-device SFSpeech recognizer in parallel with Whisper streaming. The single mic tap fans buffers to two consumers: `WhisperAudioSender` (authoritative remote transcript) and `SFSpeechAudioBufferRecognitionRequest` (live captions for the overlay). The captions task auto-recycles on `isFinal` so > 1 min PTT keeps showing partials. `stopForwarding` tears the captions task down so the mic indicator releases.
+
+**Files:** `QuipiOS/Services/SpeechService.swift` — `AudioWorker.startForwarding(onBuffer:onCaption:)`, `beginCaptionTask`, extended `stopForwarding`. `SpeechService.startRecording` remote branch passes `onCaption` that updates `transcribedText` (stale-session guarded).
+
+**Acceptance test:** PTT during connected+Whisper-ready Mac → caption text appears under the recording overlay as you speak → release PTT → Mac's authoritative final text appears in terminal AND replaces `transcribedText` (briefly visible before overlay dismisses). Speak > 1 min → captions keep flowing across recognizer recycles.
+
+---
+
+### B9. PTT silent-fail when no window selected (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed 2026-05-04 in `6d47a51`. User reported "neither volume button nor record button works."
+
+**Root cause:** `MainiOSView.startRecording` gates on `selectedWindowId != nil` and silently returns when nil. Both the on-screen mic Button and the hardware volume-down PTT path funnel through the same closure, so the symptom was both inputs being dead. `onLayoutUpdate` only auto-picked the first window when the *previously-selected* id was stale in the new list — the nil-from-cold-launch case was never handled, leaving fresh installs / fresh connects with no window selected and PTT silently broken.
+
+**Fix:**
+- `onLayoutUpdate` now also auto-picks `windows.first` when `selectedWindowId == nil` and sends `SelectWindowMessage` to the Mac.
+- `startRecording` warning-haptic + `print()` on bail so future "silent mic" debugging is loud, not silent.
+
+**Files:** `QuipiOS/QuipApp.swift` — onLayoutUpdate auto-pick + startRecording bail diagnostic.
+
+**Acceptance test:** Cold-launch app → wait for `layout_update` → mic button records without first having to manually tap a window card. Tap mic with no Mac connected → warning haptic fires + `[Quip][PTT] startRecording bail: selectedWindowId=nil` in `devicectl --console`.
+
+---
+
+### B10. Paired backends — duplicate "Backend" rows (✅ Fixed, eb-branch)
+
+**Status:** ✅ Fixed 2026-05-04 in `93cc9a8`. User screenshot showed two identical rows pointing at the same Tailscale URL.
+
+**Root causes (two failure modes):**
+
+1. `BackendConnectionManager.addPaired(url:)` deduped only on `$0.url == url` (primary URL). If the same URL was already a *fallback* on an existing row (Bonjour discovery had it as fallback after Tailscale paired first), the QR/manual add path appended a duplicate.
+2. `mergeSameIDRows` was gated behind a one-shot `pairedMultiURLMigrationV2Done` UserDefaults flag. Once the migration ran, future stuck duplicates accumulated forever — no recovery path.
+
+**Fix:**
+- `addPaired` now matches against the full `urlsInOrder` set (primary + all fallbacks).
+- `mergeSameIDRows` runs unconditionally on every `loadPaired`. Idempotent on already-deduped data, O(n²) over 1-3 rows in practice. Logs `[Quip][Backends] Deduped on load: N → M rows` when it actually collapses anything; reseats `activeBackendID` if the active row got merged away.
+
+**Files:** `QuipiOS/Services/BackendConnectionManager.swift` — `addPaired`, `loadPaired`.
+
+**Acceptance test:** Backends sheet now shows one row per Mac, even after multi-path pair (Bonjour + Tailscale) or repeated QR-pair attempts. Future stuck duplicates self-heal on next launch.
+
+---
+
+### A1. Auto-enable Prompts main-row button on first non-empty catalog (✅ Done, eb-branch)
+
+**Status:** ✅ Done 2026-05-04. New users with no prompts in their catalog get the toggle off (sensible default — no point showing a button that does nothing). First time the Mac broadcasts a non-empty `prompt_library`, an `.onChange` hook in `MainiOSView` flips `mainRow.prompts = true` AND records `mainRow.prompts.autoEnabledOnce = true`. The one-shot flag prevents re-flipping after a user explicitly turns the button off in Settings (catalog re-broadcasts every reconnect; without the flag the auto-on would fight the user forever).
+
+**Files:** `QuipiOS/QuipApp.swift` — `mainRow.prompts.autoEnabledOnce` AppStorage key + `.onChange(of: client.promptLibrary.count)` hook.
+
+---
+
+### A4. Searchable PromptsQuickPickerSheet (✅ Done, eb-branch)
+
+**Status:** ✅ Done 2026-05-04. Stream-Deck users with 30+ prompts couldn't easily find a specific entry past the MRU window. Added `.searchable($query, placement: .navigationBarDrawer(displayMode: .always))` to the picker; filter is case-insensitive and matches against `label`, `bodyPreview`, and raw `id`. Empty query returns the original MRU-sorted list. Empty result set shows "No matches for \"…\"" instead of a blank list.
+
+**Files:** `QuipiOS/QuipApp.swift` — `PromptsQuickPickerSheet` adds `@State query`, computed `filtered`, `.searchable` modifier.

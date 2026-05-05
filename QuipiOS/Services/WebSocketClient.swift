@@ -7,6 +7,7 @@ import Observation
 import Security
 import CommonCrypto
 import UIKit
+import Network
 
 // MARK: - Certificate Pinning for Cloudflare Tunnel
 
@@ -199,6 +200,21 @@ final class WebSocketClient {
     var whisperStatus: WhisperState = .preparing
     /// Mac returned the final transcript for a session.
     var onTranscriptResult: ((UUID, String, String?) -> Void)?
+    /// Mac returned a diagnostics bundle (zip of the three logs + system
+    /// info). Wired by ConnectionDiagnosticsSheet to drop the zip in
+    /// Documents and open a UIActivityViewController.
+    var onDiagnosticsBundle: ((DiagnosticsBundleMessage) -> Void)?
+    /// Mac returned a tail snapshot of its three log files as text.
+    /// Wired by ConnectionDiagnosticsSheet to render inline so the
+    /// user sees recent events without triggering the full zip path.
+    var onLogTail: ((LogTailMessage) -> Void)?
+    /// Mac sent the latest prompt-library catalog (wishlist §57).
+    /// Phone caches into `promptLibrary` so the Prompts sheet can render
+    /// without a fresh fetch.
+    var onPromptLibrary: (([PromptEntry]) -> Void)?
+    /// Cached catalog from the Mac — published so SwiftUI views can
+    /// observe directly (avoids piping through host state).
+    var promptLibrary: [PromptEntry] = []
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -207,6 +223,13 @@ final class WebSocketClient {
     private var session: URLSession?
     private var pinningDelegate: CloudflareCertificatePinningDelegate?
     private var intentionalDisconnect = false
+    /// Full URL list for the current pairing — primary at index 0,
+    /// fallbacks after. Used by the auto-fallback flow: on connect
+    /// failure or auth-timeout, the client advances to the next URL
+    /// in this list and re-establishes. Reset to index 0 on every
+    /// fresh connect call and on NWPathMonitor path-change.
+    private var connectURLs: [URL] = []
+    private var currentURLIndex: Int = 0
     private var reconnectDelay: TimeInterval = 1.0
     private var reconnectTask: Task<Void, Never>?
     private var connectionTimeoutTask: Task<Void, Never>?
@@ -214,13 +237,158 @@ final class WebSocketClient {
     private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
     private var foregroundProbeTask: Task<Void, Never>?
 
+    /// Watches for OS-level network path changes (WiFi roam, VPN flap, cellular
+    /// regained). When path becomes satisfied while we're disconnected,
+    /// short-circuit the exponential backoff and reconnect immediately.
+    private var pathMonitor: NWPathMonitor?
+    /// Periodic watchdog that catches the rare case where `isConnecting` flips
+    /// true but never resolves — neither becomes connected nor errors out.
+    /// Force-restarts the connection after the stall threshold.
+    private var stuckWatchdogTask: Task<Void, Never>?
+    private var connectingStartedAt: Date?
+
+    /// Stall threshold for the watchdog — once `isConnecting` has been true
+    /// this long without progress, the watchdog rips the socket down and
+    /// re-runs `establishConnection` so the user isn't stuck on "Connecting…".
+    private static let stuckThresholdSec: TimeInterval = 25
+
+    /// Diagnostic ring buffer — last 30 connection events with timestamps.
+    /// Surfaced via `recentConnectionEvents` for the in-app diag panel.
+    private var connectionEvents: [String] = []
+    var recentConnectionEvents: [String] { connectionEvents }
+
+    init() {
+        startPathMonitor()
+        startStuckWatchdog()
+    }
+
+    /// Stops the path monitor + stall watchdog. Call from `forget(_:)` so a
+    /// pruned backend's client doesn't leak its background subscribers. The
+    /// `[weak self]` captures inside the handlers already make stale fires
+    /// harmless, but cancelling is tidier.
+    func teardownDiagnostics() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        stuckWatchdogTask?.cancel()
+        stuckWatchdogTask = nil
+    }
+
+    /// Subscribes to network path changes. When the path becomes satisfied and
+    /// we're not already connected, reset the backoff and kick a connection
+    /// attempt right away. Catches the "phone gave up retrying after a network
+    /// blip" failure mode that leaves the UI stuck on "Connecting…".
+    private func startPathMonitor() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if path.status == .satisfied {
+                    self.logEvent("network path satisfied")
+                    if !self.isConnected,
+                       !self.intentionalDisconnect,
+                       self.serverURL != nil {
+                        self.logEvent("path-driven reconnect kick")
+                        self.reconnectDelay = 1.0
+                        self.reconnectTask?.cancel()
+                        self.reconnectTask = nil
+                        self.establishConnection()
+                    }
+                } else {
+                    self.logEvent("network path unsatisfied (\(path.status))")
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue.global(qos: .utility))
+        pathMonitor = monitor
+    }
+
+    /// Periodically checks whether we've been stalled mid-connect. If
+    /// `isConnecting` has been true for more than `stuckThresholdSec` without
+    /// flipping to connected (and we're not intentionally disconnected),
+    /// rip the socket down and start over. Belt-and-suspenders against
+    /// URLSession's occasional zombie state where the ping callback never
+    /// fires and the connection-timeout task somehow never trips either.
+    private func startStuckWatchdog() {
+        stuckWatchdogTask?.cancel()
+        stuckWatchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                if self.isConnecting,
+                   !self.intentionalDisconnect,
+                   let started = self.connectingStartedAt,
+                   Date().timeIntervalSince(started) > Self.stuckThresholdSec {
+                    let secs = Int(Date().timeIntervalSince(started))
+                    self.logEvent("stall watchdog tripped after \(secs)s — forcing reconnect")
+                    self.lastError = "Stalled \(secs)s — resetting"
+                    self.connectingStartedAt = Date()  // start clock for next attempt
+                    self.handleDisconnect()
+                }
+            }
+        }
+    }
+
+    /// Append a timestamped line to the diagnostic ring buffer (cap 30) and
+    /// echo to NSLog. Cheap; called from connection lifecycle transitions so
+    /// the in-app diag panel can show what actually happened without the user
+    /// having to plug in a Mac and tail device logs.
+    private func logEvent(_ msg: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(msg)"
+        connectionEvents.append(line)
+        if connectionEvents.count > 30 { connectionEvents.removeFirst(connectionEvents.count - 30) }
+        NSLog("[WebSocketClient] %@", msg)
+    }
+
     func connect(to url: URL) {
+        connect(toURLs: [url])
+    }
+
+    /// Multi-URL connect with auto-fallback. Tries `urls[0]` first; if the
+    /// initial WS handshake fails OR no auth_result lands within
+    /// `authTimeoutSeconds`, advances to `urls[1]` and so on. Used by the
+    /// LAN/Tailscale fallback flow — `BackendConnectionManager` passes the
+    /// merged paired-backend URL list (LAN first, Tailscale fallback).
+    /// Single-URL callers route here via `connect(to:)`.
+    func connect(toURLs urls: [URL]) {
+        guard let first = urls.first else { return }
         intentionalDisconnect = false
-        serverURL = url
+        connectURLs = urls
+        currentURLIndex = 0
+        hasEverConnectedOnCurrentURL = false
+        serverURL = first
         reconnectDelay = 1.0
         lastError = nil
         isConnecting = true
+        connectingStartedAt = Date()
+        logEvent("connect(toURLs: \(urls.count) total, primary: \(first.absoluteString))")
         establishConnection()
+    }
+
+    /// Reset the URL pointer so the next reconnect starts from the
+    /// primary again. Called by `BackendConnectionManager` on
+    /// `NWPathMonitor` path-change — after a Wi-Fi join/leave the LAN
+    /// URL may have become reachable again and we want to prefer it.
+    func resetToPrimaryURL() {
+        guard !connectURLs.isEmpty, currentURLIndex != 0 else { return }
+        currentURLIndex = 0
+        if let first = connectURLs.first { serverURL = first }
+        logEvent("resetToPrimaryURL: rewound to index 0")
+    }
+
+    /// Advance to the next URL in `connectURLs`. Returns true if there
+    /// was a next URL to advance to (caller should retry connect),
+    /// false if we exhausted the list (caller falls back to standard
+    /// reconnect-with-backoff on the current URL).
+    @discardableResult
+    private func advanceToNextURL() -> Bool {
+        let nextIndex = currentURLIndex + 1
+        guard nextIndex < connectURLs.count else { return false }
+        currentURLIndex = nextIndex
+        hasEverConnectedOnCurrentURL = false
+        serverURL = connectURLs[nextIndex]
+        logEvent("advanceToNextURL: trying [\(nextIndex)] \(connectURLs[nextIndex].absoluteString)")
+        return true
     }
 
     func disconnect() {
@@ -314,6 +482,17 @@ final class WebSocketClient {
         authError = nil
         send(AuthMessage(pin: pin))
         NSLog("[WebSocketClient] Sent auth message")
+    }
+
+    /// Tell the Mac who this phone is so its connected-clients table can
+    /// show a human label instead of an endpoint string. Reuses
+    /// `DeviceIdentityMessage` (Mac→phone uses the same shape going the
+    /// other way). Called after auth_result success and after every
+    /// reconnect that returns success without a fresh PIN exchange.
+    func sendSelfIdentity() {
+        let id = KeychainDeviceID.get()
+        let name = UIDevice.current.name
+        send(DeviceIdentityMessage(deviceID: id, deviceKind: "ios", displayName: name))
     }
 
     func send(_ message: some Codable) {
@@ -411,26 +590,30 @@ final class WebSocketClient {
                 self.connectionTimeoutTask = nil
 
                 if let error = error {
-                    NSLog("[WebSocketClient] Ping failed: %@", error.localizedDescription)
+                    self.logEvent("initial ping failed: \(error.localizedDescription)")
                     self.lastError = error.localizedDescription
                     self.handleDisconnect()
                 } else {
-                    NSLog("[WebSocketClient] Connected, awaiting authentication")
+                    self.logEvent("connected, awaiting authentication")
                     self.isConnected = true
                     self.isConnecting = false
+                    self.connectingStartedAt = nil
                     self.authError = nil
                     self.lastError = nil
                     self.reconnectDelay = 1.0
+                    self.hasEverConnectedOnCurrentURL = true
                     self.startKeepalive()
-                    // Auto-send cached PIN on reconnect, or prompt for PIN
-                    // (skip if server already auto-authenticated us)
-                    if !self.isAuthenticated {
-                        if let pin = self.sessionPIN {
-                            self.sendAuth(pin: pin)
-                        } else {
-                            self.onAuthRequired?()
-                        }
-                    }
+                    // Don't send auth eagerly — wait for the server's first
+                    // auth_result message which carries the auth_required
+                    // signal. On a Mac with `requireAuth=false` the server
+                    // immediately replies success=true, and a stray PIN we
+                    // sent here would land at handleAuthMessage where the
+                    // missing pinManager.pin produces "Server PIN not
+                    // configured" → flips isAuthenticated back to false →
+                    // phone gets stuck in "Authenticating…". The cached
+                    // sessionPIN now waits in the auth_result handler and
+                    // only fires when we actually see the auth_required
+                    // signal.
                 }
             }
         }
@@ -496,13 +679,26 @@ final class WebSocketClient {
         case "auth_result":
             if let msg = try? decoder.decode(AuthResultMessage.self, from: data) {
                 NSLog("[WebSocketClient] auth_result: success=%d error=%@", msg.success ? 1 : 0, msg.error ?? "none")
-                // "auth_required" is the server's connection-ready signal, not a real error
+                // "auth_required" is the server's connection-ready signal —
+                // server wants a PIN. Send the cached one if we have it,
+                // else surface the prompt to the UI.
                 if msg.error == "auth_required" {
+                    if let pin = sessionPIN {
+                        sendAuth(pin: pin)
+                    } else {
+                        onAuthRequired?()
+                    }
                     return
                 }
                 if msg.success {
                     isAuthenticated = true
                     authError = nil
+                    // §B5: tell the Mac who we are so its MenuBarExtra and
+                    // Settings → Connection list can show "iPhone 17 Pro Max"
+                    // instead of an opaque endpoint string. deviceID is the
+                    // Keychain-persisted UUID (survives app reinstall — same
+                    // id the prefs-backup pipeline keys against).
+                    sendSelfIdentity()
                 } else {
                     isAuthenticated = false
                     authError = msg.error ?? "Invalid PIN"
@@ -597,6 +793,26 @@ final class WebSocketClient {
             } else {
                 NSLog("[Quip][PTT] transcript_result DECODE FAILED")
             }
+        case "diagnostics_bundle":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(DiagnosticsBundleMessage.self, from: data) {
+                NSLog("[WebSocketClient] diagnostics_bundle: %@ size=%d err=%@",
+                      msg.filename, msg.sizeBytes, msg.errorReason ?? "none")
+                onDiagnosticsBundle?(msg)
+            }
+        case "log_tail":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(LogTailMessage.self, from: data) {
+                NSLog("[WebSocketClient] log_tail: %d bytes", msg.totalBytes)
+                onLogTail?(msg)
+            }
+        case "prompt_library":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(PromptLibraryMessage.self, from: data) {
+                NSLog("[WebSocketClient] prompt_library: %d prompts", msg.prompts.count)
+                promptLibrary = msg.prompts
+                onPromptLibrary?(msg.prompts)
+            }
         case "whisper_status":
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(WhisperStatusMessage.self, from: data) {
@@ -641,9 +857,10 @@ final class WebSocketClient {
                     consecutiveMisses = 0
                 } else {
                     consecutiveMisses += 1
-                    NSLog("[WebSocketClient] Keepalive pong missed (%d/2)", consecutiveMisses)
+                    self.logEvent("keepalive pong missed (\(consecutiveMisses)/2)")
+                    self.lastError = "No pong (\(consecutiveMisses)/2)"
                     if consecutiveMisses >= 2 {
-                        NSLog("[WebSocketClient] Two consecutive missed pongs — forcing reconnect")
+                        self.logEvent("two consecutive missed pongs — forcing reconnect")
                         self.handleDisconnect()
                         return
                     }
@@ -658,6 +875,7 @@ final class WebSocketClient {
         keepaliveTask = nil
         isConnected = false
         isConnecting = true
+        if connectingStartedAt == nil { connectingStartedAt = Date() }
         isAuthenticated = false
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = nil
@@ -668,7 +886,27 @@ final class WebSocketClient {
         session?.invalidateAndCancel()
         session = nil
 
-        NSLog("[WebSocketClient] Will reconnect in %.0f seconds", reconnectDelay)
+        // Multi-URL fallback: if we have unused fallback URLs in the
+        // current pairing's list, try the next one immediately (no
+        // backoff sleep) before falling back to standard reconnect-with-
+        // backoff on whatever URL we end up on. Only kick in if the
+        // current URL never reached `connected` — once a URL has worked
+        // we stick with it across transient failures (don't ping-pong
+        // between LAN and Tailscale on every brief drop).
+        if !connectURLs.isEmpty, currentURLIndex + 1 < connectURLs.count, !hasEverConnectedOnCurrentURL {
+            let advanced = advanceToNextURL()
+            if advanced {
+                logEvent("falling back to next URL immediately")
+                reconnectTask?.cancel()
+                reconnectTask = Task { [weak self] in
+                    guard let self, !Task.isCancelled, !self.intentionalDisconnect else { return }
+                    self.establishConnection()
+                }
+                return
+            }
+        }
+
+        logEvent("will reconnect in \(Int(reconnectDelay))s")
 
         let delay = reconnectDelay
         reconnectTask?.cancel()
@@ -679,4 +917,11 @@ final class WebSocketClient {
             self.establishConnection()
         }
     }
+
+    /// True once the current `serverURL` has reached the `connected` state
+    /// at least once. Reset whenever `advanceToNextURL` flips the URL or
+    /// `connect(toURLs:)` is called fresh. Used by `handleDisconnect` to
+    /// decide whether transient drops should fail-fast over to the next
+    /// URL or reconnect-with-backoff on the current one.
+    private var hasEverConnectedOnCurrentURL = false
 }

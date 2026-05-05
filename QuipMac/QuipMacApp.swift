@@ -39,6 +39,7 @@ struct QuipMacApp: App {
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
     @State private var connectionLog = ConnectionLog()
+    @State private var promptLibrary = PromptLibrary()
     @State private var pushNotificationService = PushNotificationService()
     @State private var whisperService: WhisperDictationService?
     @State private var whisperStatusStore = WhisperStatusStore()
@@ -104,6 +105,7 @@ struct QuipMacApp: App {
                 .environment(bonjourAdvertiser)
                 .environment(tunnel)
                 .environment(tailscale)
+                .environment(connectionLog)
                 .onAppear { startServicesOnce() }
         }
         .menuBarExtraStyle(.window)
@@ -119,6 +121,7 @@ struct QuipMacApp: App {
                 .environment(connectionLog)
                 .environment(pushNotificationService)
                 .environment(whisperStatusStore)
+                .environment(promptLibrary)
         }
         .windowResizability(.contentSize)
     }
@@ -142,7 +145,50 @@ struct QuipMacApp: App {
         webSocketServer.connectionLog = connectionLog
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
         webSocketServer.requireAuth = requirePIN
+
+        // CRITICAL: register the message + auth callbacks BEFORE
+        // start(). On a no-PIN-required Mac the listener becomes ready
+        // and incoming connections immediately auto-authenticate via
+        // the no-PIN path in WebSocketServer. That path fires
+        // onClientAuthenticated?(); if we set the callback AFTER
+        // start() then a phone reconnecting in the millisecond window
+        // gets ignored and never receives the welcome broadcasts
+        // (layout / permissions / prompt_library). Symptom on the
+        // user side: phone shows "0 on Mac" / "Waiting for Mac…"
+        // after a Mac restart.
+        webSocketServer.onMessageReceived = { [self] data in
+            DispatchQueue.main.async {
+                self.handleIncomingMessage(data)
+            }
+        }
+
+        webSocketServer.onClientAuthenticated = { [self] in
+            DispatchQueue.main.async {
+                self.broadcastLayout()
+                self.broadcastPermissions(force: true)
+                self.broadcastWhisperStatus()
+                // Push the prompt-library catalog so a fresh phone sees
+                // the user's saved prompts without waiting for the next
+                // file-system change. (wishlist §57)
+                let entries = self.promptLibrary.entries
+                NSLog("[QuipMacApp] onClientAuthenticated -> broadcasting prompt_library: %d prompts", entries.count)
+                self.webSocketServer.broadcast(
+                    PromptLibraryMessage(prompts: entries)
+                )
+            }
+        }
+
         webSocketServer.start()
+
+        // Prompt library — watch ~/Library/Application Support/Quip/prompts/
+        // and broadcast catalog changes to every authenticated client.
+        // Phone uses the catalog to render a "Prompts" sheet; tap fires
+        // paste_prompt back, the Mac then sendText's the body into the
+        // currently-targeted iTerm window. (wishlist §57)
+        promptLibrary.onChange = { [self] entries in
+            self.webSocketServer.broadcast(PromptLibraryMessage(prompts: entries))
+        }
+        promptLibrary.start()
 
         // Apply current network mode (starts tunnel or Tailscale as needed).
         applyNetworkMode()
@@ -167,20 +213,6 @@ struct QuipMacApp: App {
                 if networkMode == .tailscale {
                     tailscale.refresh()
                 }
-            }
-        }
-
-        webSocketServer.onMessageReceived = { [self] data in
-            DispatchQueue.main.async {
-                self.handleIncomingMessage(data)
-            }
-        }
-
-        webSocketServer.onClientAuthenticated = { [self] in
-            DispatchQueue.main.async {
-                self.broadcastLayout()
-                self.broadcastPermissions(force: true)
-                self.broadcastWhisperStatus()
             }
         }
 
@@ -903,6 +935,30 @@ struct QuipMacApp: App {
         case "scan_iterm_windows":
             handleScanITermWindows()
 
+        case "request_diagnostics":
+            handleRequestDiagnostics()
+
+        case "request_log_tail":
+            if let msg = MessageCoder.decode(RequestLogTailMessage.self, from: data) {
+                handleRequestLogTail(msg)
+            }
+
+        case "paste_prompt":
+            if let msg = MessageCoder.decode(PastePromptMessage.self, from: data) {
+                handlePastePrompt(msg)
+            }
+
+        case "put_prompt":
+            if let msg = MessageCoder.decode(PutPromptMessage.self, from: data) {
+                _ = promptLibrary.put(id: msg.id, label: msg.label, body: msg.body)
+                // FS watcher will rescan + re-broadcast; nothing to ack.
+            }
+
+        case "delete_prompt":
+            if let msg = MessageCoder.decode(DeletePromptMessage.self, from: data) {
+                _ = promptLibrary.delete(id: msg.id)
+            }
+
         case "register_push_device":
             if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
                 appendPushDiagnostic("register_push_device: \(msg.deviceToken.prefix(8)) env=\(msg.environment)")
@@ -1078,6 +1134,114 @@ struct QuipMacApp: App {
     /// exists (could've closed between scan and tap), promote it to a
     /// Quip-tracked window by enabling the matching ManagedWindow, persist
     /// the sessionId so the attachment survives Quip restarts, and
+    /// Phone tapped a prompt — look up the body and inject it into the
+    /// requested window via the existing keystrokeInjector path. Same
+    /// route SendTextMessage uses, so prompt-library payloads honor the
+    /// per-terminal-app shape (iTerm2 AppleScript, Claude Desktop
+    /// clipboard-paste, Terminal.app keystrokes). pressReturn defaults to
+    /// false so the user can review before submitting. (wishlist §57)
+    @MainActor
+    private func handlePastePrompt(_ msg: PastePromptMessage) {
+        guard let body = promptLibrary.body(for: msg.id), !body.isEmpty else {
+            print("[Quip] paste_prompt: unknown prompt id=\(msg.id)")
+            return
+        }
+        ensureITermSessionResolved(for: msg.windowId) { window in
+            let termApp = self.terminalAppForWindow(window)
+            self.windowManager.focusWindow(msg.windowId)
+            let result = self.keystrokeInjector.sendText(
+                body, to: msg.windowId, pressReturn: msg.pressReturn,
+                terminalApp: termApp, windowName: window.name,
+                cgWindowNumber: window.windowNumber,
+                iterm2SessionId: window.iterm2SessionId
+            )
+            if !result.success {
+                print("[Quip] paste_prompt FAILED: \(result.error ?? "unknown")")
+            }
+        }
+    }
+
+    /// Phone asked for the Mac's diagnostic log bundle. Build the zip on a
+    /// detached task (zip can be 100-500ms), then base64-encode it back
+    /// over the WebSocket as a `DiagnosticsBundleMessage`. Capped at
+    /// 4 MiB pre-base64 so the round-trip stays comfortably under the
+    /// 16 MiB WebSocket payload limit; oversize bundles set `errorReason`
+    /// and the phone shows a "use Mac-side share button instead" hint.
+    @MainActor
+    private func handleRequestDiagnostics() {
+        let cap = 4 * 1024 * 1024  // 4 MiB pre-base64
+        Task.detached {
+            do {
+                let zipURL = try DiagnosticsBundle.makeZip(maxBytes: cap)
+                defer { try? FileManager.default.removeItem(at: zipURL) }
+                let zipData = try Data(contentsOf: zipURL)
+                let base64 = zipData.base64EncodedString()
+                let msg = DiagnosticsBundleMessage(
+                    filename: zipURL.lastPathComponent,
+                    sizeBytes: zipData.count,
+                    data: base64
+                )
+                await MainActor.run {
+                    self.webSocketServer.broadcast(msg)
+                }
+            } catch DiagnosticsBundleError.overSizeCap(let actual, let cap) {
+                let msg = DiagnosticsBundleMessage(
+                    filename: "",
+                    sizeBytes: actual,
+                    data: nil,
+                    errorReason: "Logs too large (\(actual / 1_000_000) MB > \(cap / 1_000_000) MB cap). Use Mac-side share button."
+                )
+                await MainActor.run { self.webSocketServer.broadcast(msg) }
+            } catch {
+                let msg = DiagnosticsBundleMessage(
+                    filename: "",
+                    sizeBytes: 0,
+                    data: nil,
+                    errorReason: "Bundle failed: \(error.localizedDescription)"
+                )
+                await MainActor.run { self.webSocketServer.broadcast(msg) }
+            }
+        }
+    }
+
+    /// Phone asked for a tail snapshot of the three log files (text only,
+    /// no zip). Read the last `bytesPerFile` bytes (clamped to 64 KiB max
+    /// per file so a misbehaving phone can't pull whole logs), concatenate
+    /// with `=== <filename> ===` headers, send back as a single
+    /// `LogTailMessage`. Auto-fired by the iOS Connection diagnostics
+    /// sheet on appear, so the user sees recent events without tapping
+    /// the heavier "Get Mac logs" zip path.
+    @MainActor
+    private func handleRequestLogTail(_ msg: RequestLogTailMessage) {
+        let perFileCap = min(max(msg.bytesPerFile, 1024), 64 * 1024)
+        Task.detached {
+            let logDir = LogPaths.directory
+            let files = ["websocket.log", "push.log", "kokoro.log"]
+            var combined = ""
+            for name in files {
+                let url = logDir.appendingPathComponent(name)
+                guard let data = try? Data(contentsOf: url) else {
+                    combined += "=== \(name) ===\n(missing or unreadable)\n\n"
+                    continue
+                }
+                let tailStart = max(0, data.count - perFileCap)
+                let tail = data.subdata(in: tailStart..<data.count)
+                let text = String(data: tail, encoding: .utf8) ?? ""
+                combined += "=== \(name) (\(data.count) bytes total, showing last \(tail.count)) ===\n"
+                combined += text
+                if !text.hasSuffix("\n") { combined += "\n" }
+                combined += "\n"
+            }
+            let captured = ISO8601DateFormatter().string(from: Date())
+            let response = LogTailMessage(
+                text: combined,
+                totalBytes: combined.utf8.count,
+                capturedAt: captured
+            )
+            await MainActor.run { self.webSocketServer.broadcast(response) }
+        }
+    }
+
     /// broadcast a fresh layout so the phone's picker refreshes.
     @MainActor
     private func handleAttachITermWindow(windowNumber: Int, sessionId: String) {

@@ -72,14 +72,32 @@ final class SpeechService {
     @ObservationIgnored private var activeSessionToken: UUID?
 
     @ObservationIgnored private var remoteSession: RemoteSpeechSession?
-    @ObservationIgnored weak var webSocket: WebSocketClient?
+    /// Resolver closure — returns the *current* active WebSocketClient at the
+    /// moment of each PTT press. Replaces a prior `weak var webSocket` that
+    /// got nilled when its initial target (a placeholder created before
+    /// `BackendConnectionManager.bootstrap`) was released — leaving PTT
+    /// permanently in `.local` path even when the Mac's Whisper was ready.
+    @ObservationIgnored var webSocketResolver: (() -> WebSocketClient?)?
+    /// Computed pass-through so the rest of this file can keep reading
+    /// `webSocket` without churning every call site.
+    var webSocket: WebSocketClient? { webSocketResolver?() }
 
-    /// Wire up to the WebSocket client. Call once at app startup, before the
-    /// first press. Enables the remote Whisper path.
+    /// Wire up to the WebSocket client. Call once at app startup AFTER the
+    /// manager has bootstrapped its sessions, OR pass a closure that always
+    /// resolves to the current active client.
     func attachWebSocket(_ client: WebSocketClient) {
-        webSocket = client
-        client.onTranscriptResult = { [weak self] sid, text, error in
-            self?.remoteSession?.handleTranscript(sessionId: sid, text: text, error: error)
+        attachWebSocketResolver { [weak client] in client }
+    }
+
+    /// Preferred form: hand a resolver that returns the current active
+    /// client. Re-keys the transcript callback on every call so the freshest
+    /// client routes its remote transcripts back to this service.
+    func attachWebSocketResolver(_ resolver: @escaping () -> WebSocketClient?) {
+        webSocketResolver = resolver
+        if let client = resolver() {
+            client.onTranscriptResult = { [weak self] sid, text, error in
+                self?.remoteSession?.handleTranscript(sessionId: sid, text: text, error: error)
+            }
         }
     }
 
@@ -194,9 +212,22 @@ final class SpeechService {
             }
             let session = RemoteSpeechSession(sessionId: sessionToken, sender: sender)
             remoteSession = session
-            worker.startForwarding { [weak session] buf in
-                session?.appendBuffer(buf)
-            }
+            // Display-only SFSpeech captions while remote Whisper handles the
+            // authoritative transcript. Mac's final text overwrites this on
+            // stopRecording. Stale-session guard so a captions update from a
+            // dying recognizer doesn't bleed into the next press.
+            worker.startForwarding(
+                onBuffer: { [weak session] buf in
+                    session?.appendBuffer(buf)
+                },
+                onCaption: { [weak self] text in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        guard self.activeSessionToken == sessionToken else { return }
+                        self.transcribedText = text
+                    }
+                }
+            )
         }
     }
 
@@ -496,10 +527,23 @@ private class AudioWorker: @unchecked Sendable {
     func disarm() {
         queue.async { [self] in
             guard self.isArmed else { return }
+            // Cancel any in-flight recognition task — without this the
+            // SFSpeechRecognitionTask can keep the mic alive past
+            // engine.stop, leaving the orange "mic in use" indicator on.
+            self.recognitionTask?.cancel()
+            self.recognitionTask = nil
+            self.recognitionRequest = nil
             self.audioEngine.stop()
             self.audioEngine.inputNode.removeTap(onBus: 0)
             self.ring.clear()
             self.isArmed = false
+            // Release the shared AVAudioSession so iOS clears the mic
+            // indicator. .notifyOthersOnDeactivation lets backgrounded
+            // music apps resume. Best-effort — if TTS is mid-playback
+            // the session will refuse to deactivate; mic will release
+            // when TTS finishes.
+            try? AVAudioSession.sharedInstance()
+                .setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
 
@@ -648,26 +692,76 @@ private class AudioWorker: @unchecked Sendable {
         }
     }
 
-    /// Remote-path variant: forward mic buffers to `onBuffer` but do not spin
-    /// up a local SFSpeechRecognizer. Engine + tap stay armed.
-    func startForwarding(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void) {
+    /// Remote-path variant: forward mic buffers to `onBuffer` and optionally
+    /// pipe them through a *display-only* SFSpeech recognizer so the user
+    /// still sees live captions on the phone overlay while the Mac handles
+    /// authoritative Whisper transcription. The captions task does NOT
+    /// auto-restart on isFinal — it's purely visual; the Mac's final result
+    /// wins and overwrites `transcribedText` on stop.
+    func startForwarding(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void,
+                         onCaption: (@Sendable (String) -> Void)? = nil) {
         queue.async { [self] in
             guard self.isArmed else { return }
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
             let format = input.outputFormat(forBus: 0)
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 onBuffer(buffer)
+                guard let self else { return }
+                // Feed captions recognizer if active. Same buffer, two consumers.
+                self.recognitionRequest?.append(buffer)
                 self.ring.append(buffer: buffer, at: Date())
+            }
+            if let onCaption {
+                self.beginCaptionTask(onCaption: onCaption)
             }
         }
     }
 
-    /// Stop remote-path forwarding. Re-installs the default tap that only
-    /// feeds the ring so subsequent local-path presses get pre-roll replay.
+    /// Spin up a display-only SFSpeech recognizer for the remote-PTT path.
+    /// Partial results call `onCaption`; isFinal is treated as "this chunk
+    /// done, but user still talking" — start a fresh task so captions keep
+    /// flowing for the duration of the remote upload.
+    private func beginCaptionTask(onCaption: @escaping @Sendable (String) -> Void) {
+        guard let recognizer = speechRecognizer, recognizer.isAvailable else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
+        if !cachedVocab.isEmpty { request.contextualStrings = cachedVocab }
+        self.recognitionRequest = request
+        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, _ in
+            guard let self else { return }
+            self.queue.async {
+                let text = result?.bestTranscription.formattedString ?? ""
+                if !text.isEmpty { onCaption(text) }
+                if result?.isFinal == true {
+                    // Recycle: SFSpeech emits isFinal at ~1-min boundary or on
+                    // silence; user may still be holding PTT. Spawn a fresh task.
+                    self.recognitionTask = nil
+                    self.recognitionRequest = nil
+                    self.beginCaptionTask(onCaption: onCaption)
+                }
+            }
+        }
+        // Replay pre-roll into the request so the first ~500ms of audio
+        // (captured before this task spun up) doesn't get clipped from
+        // the caption display.
+        let now = Date()
+        for entry in self.ring.entries(relativeTo: now) {
+            request.append(entry.buffer)
+        }
+    }
+
+    /// Stop remote-path forwarding. Tears down the captions recognizer (if
+    /// any) and re-installs the default tap that only feeds the ring so
+    /// subsequent local-path presses get pre-roll replay.
     func stopForwarding() {
         queue.async { [self] in
             guard self.isArmed else { return }
+            // Cancel the captions task if remote-with-captions was running.
+            self.recognitionTask?.cancel()
+            self.recognitionTask = nil
+            self.recognitionRequest = nil
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
             let format = input.outputFormat(forBus: 0)

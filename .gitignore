@@ -33,6 +33,8 @@ xcuserdata/
 *.xcuserstate
 DerivedData/
 build/
+build-ios/
+build-mac/
 
 # xcodegen-generated Info.plist — regenerated from <project>/project.yml, see README
 QuipMac/Info.plist
@@ -45,6 +47,12 @@ QuipiOS/Info.plist
 # Coverage / profiling artifacts
 *.profraw
 *.profdata
+
+# Runtime logs — Mac/iOS Quip writes to ~/Library/Logs/Quip/ which is
+# already outside the repo, but cover any log files that ever land
+# inside the working tree (e.g. local diagnostic dumps).
+*.log
+logs/
 
 # Machine-local / planning scripts — not for the public repo
 scripts/

@@ -11,6 +11,11 @@ import Foundation
 /// entry once the real `device_identity` arrives.
 struct PairedBackend: Codable, Identifiable, Hashable {
     var id: String
+    /// Primary URL — first attempted on every connect. For a Mac paired
+    /// over both Bonjour LAN and Tailscale, this is whichever URL the user
+    /// added first (or the LAN URL after the dedupe migration in
+    /// `BackendConnectionManager.loadPaired()`, since LAN is faster when
+    /// reachable).
     var url: String
     var name: String
     var lastSeenLayoutMonitorName: String?
@@ -25,6 +30,18 @@ struct PairedBackend: Codable, Identifiable, Hashable {
     /// migration step in `BackendConnectionManager.loadPaired()` then prunes
     /// to "active only" once per install.
     var enabled: Bool
+    /// Additional URLs to try when `url` doesn't reach the same Mac (e.g.
+    /// off-LAN: primary is `quip-mac.local:8765` which fails, fallback is
+    /// `100.71.x.y:8765` over Tailscale). The manager passes the full
+    /// `urlsInOrder` list to `WebSocketClient.connect` which advances on
+    /// TCP-fail / auth-timeout. Empty for single-URL entries.
+    var fallbackURLs: [String]
+
+    /// Primary + fallback URLs in connect-priority order. Always has at
+    /// least one element (the primary `url`).
+    var urlsInOrder: [String] {
+        [url] + fallbackURLs
+    }
 
     init(id: String,
          url: String,
@@ -33,7 +50,8 @@ struct PairedBackend: Codable, Identifiable, Hashable {
          kind: BackendKind = .unknown,
          lastUsed: Date = Date(),
          pinned: Bool = false,
-         enabled: Bool = true) {
+         enabled: Bool = true,
+         fallbackURLs: [String] = []) {
         self.id = id
         self.url = url
         self.name = name
@@ -42,10 +60,11 @@ struct PairedBackend: Codable, Identifiable, Hashable {
         self.lastUsed = lastUsed
         self.pinned = pinned
         self.enabled = enabled
+        self.fallbackURLs = fallbackURLs
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, url, name, lastSeenLayoutMonitorName, kind, lastUsed, pinned, enabled
+        case id, url, name, lastSeenLayoutMonitorName, kind, lastUsed, pinned, enabled, fallbackURLs
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +77,7 @@ struct PairedBackend: Codable, Identifiable, Hashable {
         self.lastUsed = try c.decodeIfPresent(Date.self, forKey: .lastUsed) ?? Date()
         self.pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.fallbackURLs = try c.decodeIfPresent([String].self, forKey: .fallbackURLs) ?? []
     }
 }
 
