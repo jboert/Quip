@@ -106,6 +106,24 @@ Working tree is clean at `50cd6dc`. Decisions still open in backlog:
 - **Mac stable-signing recipe is non-negotiable** — never `rm -rf /Applications/Quip.app`. Use the 4-step sequence in `reference_quip_install_recipe.md`.
 - **`feedback_eb_branch_push_policy.md` overrides hook prompts** — never push to GitHub without explicit user confirmation, even when an automated hook says "Push." in its message.
 
+## Open PR — needs conflict resolution
+
+**[PR #29](https://github.com/jboert/Quip/pull/29)** — `eb-branch` → `main`, 17 commits. Status: **CONFLICTING**.
+
+Root cause: this session's `git filter-repo` rewrote historical commit `71af40e`'s message body to redact the device name (the rewritten commit is now `e839a2b`). `main` still has the old `71af40e` hash; `eb-branch` has the new `e839a2b` for the same logical commit. Git sees two competing histories with the same parent.
+
+**Resolution options for the next session:**
+- **A. Rebase main onto eb-branch's rewritten history.** Cleanest. `git checkout main && git reset --hard origin/eb-branch && git push origin main --force-with-lease` — but this also force-pushes `main`, which is more disruptive. Only do this if you're solo on the repo (per memory you are, but verify).
+- **B. Cherry-pick this session's 17 commits onto a fresh branch off current `main`.** Avoids force-push; loses the filter-repo redaction of `71af40e` (the historical leak stays in `main`'s history). Acceptable if the leak is no longer worth chasing.
+- **C. Squash merge via GitHub UI.** The PR description has the full breakdown; squash collapses everything into one new commit on `main`, hash mismatch becomes irrelevant. Loses the per-commit audit trail.
+
+Recommend **A** (force-push main with rewritten history) since:
+- Solo dev branch + memory says you're the only consumer
+- Preserves both the per-commit audit trail AND the device-name redaction
+- One-time cost, then clean linear history
+
+If you want `B` or `C` instead, say so before resuming.
+
 ## Resume one-liner
 
-> Continue Quip work on `eb-branch` from `c6eb974`. The 2026-05-05 continuation shipped 13 commits: §49 redaction + §22 perms-store tests + §27 dedupe audit + wishlist scrub (1520→705 lines) + §B14 iOS fresh-install seed + device-name redact across docs (filter-repo'd `71af40e` and force-pushed) + `.claude/` gitignore broadening + up-arrow ↔ Return ⏎ parity + slot row horizontal ScrollView + main row 430pt fit + `/help` demo label-only render + light-mode chip tokens + Settings → Appearance Auto/Light/Dark picker + §B15 a11y wishlist + visual-diff baselines under `docs/qa-baselines/`. **All pushed** to `origin/eb-branch`. 435 tests green (249 Mac + 186 iOS). 16 commits ahead of `main` — open a PR to merge when ready. Physical iPhone 17 Pro Max running `1.5.2` (installed 14:55 PT). /Applications/Quip.app still 1.5.1 (no Mac-app version bump this continuation — Mac LogRedactor + DiagnosticsBundle changes build into the same 1.5.1 .app). Quip QA simulator: UDID `D853A014-E5D8-46F1-A81D-37860AA9DFA2` ("Quip QA — iPhone 17 Pro Max 26.4") — dedicated cloned device per `feedback_default_qa_simulator.md`.
+> Continue Quip work on `eb-branch` from `dcd8946`. The 2026-05-05 continuation shipped 13 substantive commits + 4 doc/handoff commits = 17 total: §49 redaction + §22 perms-store tests + §27 dedupe audit + wishlist scrub (1520→705 lines) + §B14 iOS fresh-install seed + device-name redact across docs (filter-repo'd `71af40e` and force-pushed) + `.claude/` gitignore broadening + up-arrow ↔ Return ⏎ parity + slot row horizontal ScrollView + main row 430pt fit + `/help` demo label-only render + light-mode chip tokens + Settings → Appearance Auto/Light/Dark picker + §B15 a11y wishlist + visual-diff baselines under `docs/qa-baselines/`. **All pushed** to `origin/eb-branch`. 435 tests green (249 Mac + 186 iOS). **PR #29 open against `main` — CONFLICTING because of the filter-repo rewrite (see Open PR section above for resolution options).** Physical iPhone 17 Pro Max running `1.5.2` (installed 14:55 PT, databaseSequenceNumber 9248). /Applications/Quip.app still 1.5.1 (no Mac-app version bump this continuation — Mac LogRedactor + DiagnosticsBundle changes build into the same 1.5.1 .app). Quip QA simulator: UDID `D853A014-E5D8-46F1-A81D-37860AA9DFA2` ("Quip QA — iPhone 17 Pro Max 26.4") — dedicated cloned device per `feedback_default_qa_simulator.md`. iOS-simulator-skill is installed and proven (drives sim taps via accessibility tree + `idb ui tap`); use it for any future visual QA.
