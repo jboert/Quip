@@ -1988,13 +1988,7 @@ struct MainiOSView: View {
                         }
                     }
                     if mainRowReturn {
-                        Button {
-                            if let wid = selectedWindowId {
-                                sendPendingImageIfNeeded(windowId: wid) {
-                                    client.send(QuickActionMessage(windowId: wid, action: "press_return"))
-                                }
-                            }
-                        } label: {
+                        Button { submitOrPressReturn() } label: {
                             Image(systemName: "return")
                                 .font(.system(size: 20, weight: .medium))
                                 .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
@@ -2090,9 +2084,9 @@ struct MainiOSView: View {
             Button { sendTextInput() } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 22))
-                    .foregroundStyle(textInputValue.isEmpty ? colors.buttonDisabled : colors.buttonPrimary)
+                    .foregroundStyle(canSubmitInput ? colors.buttonPrimary : colors.buttonDisabled)
             }
-            .disabled(textInputValue.isEmpty)
+            .disabled(!canSubmitInput)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
@@ -2111,6 +2105,33 @@ struct MainiOSView: View {
             if !text.isEmpty {
                 client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
             }
+        }
+    }
+
+    /// True when there's something for the up-arrow / Return button to
+    /// submit — typed text (after trim) or a queued image. Pure read so
+    /// both the up-arrow's `.disabled` check and `submitOrPressReturn()`'s
+    /// branch read the same condition.
+    private var canSubmitInput: Bool {
+        !textInputValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || pendingImage.hasPendingImage
+    }
+
+    /// Unified action behind the main-row Return ⏎ button. Mirrors the
+    /// up-arrow submit when there's typed text or a queued image so the
+    /// two affordances stop disagreeing on what "send" means. When the
+    /// input is empty, falls through to the bare press_return keystroke
+    /// — that path is what makes Return useful when Claude is sitting
+    /// at a confirmation prompt and the user just wants to advance it
+    /// without typing anything.
+    private func submitOrPressReturn() {
+        if canSubmitInput {
+            sendTextInput()
+            return
+        }
+        guard let wid = selectedWindowId else { return }
+        sendPendingImageIfNeeded(windowId: wid) { [client] in
+            client.send(QuickActionMessage(windowId: wid, action: "press_return"))
         }
     }
 
