@@ -9,6 +9,7 @@ struct MenuBarView: View {
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(CloudflareTunnel.self) private var tunnel
     @Environment(ConnectionLog.self) private var connectionLog
+    @Environment(MacPermissionsStore.self) private var permissionsStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,6 +20,13 @@ struct MenuBarView: View {
 
             // Connection status
             connectionSection
+
+            // Permissions — only rendered when at least one is denied so the
+            // menu stays small in the steady state. (wishlist §22.)
+            if permissionsStore.anyDenied {
+                Divider()
+                permissionsSection
+            }
 
             Divider()
 
@@ -70,6 +78,9 @@ struct MenuBarView: View {
     /// even opening the popover.
     private var statusColor: Color {
         guard webSocketServer.isRunning else { return .red }
+        // A denied TCC perm means commands will silently no-op even with a
+        // healthy WS — surface that on the aggregate dot. (wishlist §22.)
+        if permissionsStore.anyDenied { return .red }
         let tunnelHealthy = !tunnel.isRunning || !tunnel.publicURL.isEmpty
         if webSocketServer.connectedClientCount > 0 && tunnelHealthy {
             return .green
@@ -228,6 +239,74 @@ struct MenuBarView: View {
         f.unitsStyle = .abbreviated
         return f
     }()
+
+    // MARK: - Permissions Section (wishlist §22)
+
+    private var permissionsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                Text("Permissions needed")
+                    .font(.subheadline.weight(.medium))
+            }
+
+            if let snap = permissionsStore.snapshot {
+                if !snap.accessibility {
+                    permissionRow(label: "Accessibility",
+                                  detail: "needed for keystroke injection",
+                                  pane: .accessibility)
+                }
+                if !snap.appleEvents {
+                    permissionRow(label: "Apple Events (iTerm2)",
+                                  detail: "needed for window control",
+                                  pane: .automation)
+                }
+                if !snap.screenRecording {
+                    permissionRow(label: "Screen Recording",
+                                  detail: "needed for screenshot fallback",
+                                  pane: .screenRecording)
+                }
+            }
+        }
+        .padding(12)
+    }
+
+    private func permissionRow(label: String,
+                               detail: String,
+                               pane: MacSettingsPane) -> some View {
+        Button {
+            openPane(pane)
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(Color.red).frame(width: 6, height: 6)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label).font(.caption.weight(.medium))
+                    Text(detail).font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func openPane(_ pane: MacSettingsPane) {
+        let urlString: String
+        switch pane {
+        case .accessibility:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case .automation:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        case .screenRecording:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+        guard let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
+    }
 
     // MARK: - Actions Section
 

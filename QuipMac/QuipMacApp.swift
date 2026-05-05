@@ -78,6 +78,10 @@ struct QuipMacApp: App {
     /// Last broadcast snapshot — keeps the 5s timer from re-sending unchanged
     /// status every tick. Phone gets fresh status on every client auth anyway.
     @State private var lastPermissionsSnapshot: MacPermissionsMessage? = nil
+    /// Same snapshot exposed as @Observable so MenuBarExtra + MenuBarView read
+    /// the current grant state without piping it through the wire envelope.
+    /// (wishlist §22 — Mac-side surface for missing perms.)
+    @State private var permissionsStore = MacPermissionsStore()
 
     var body: some Scene {
         WindowGroup {
@@ -98,7 +102,10 @@ struct QuipMacApp: App {
         .windowStyle(.titleBar)
         .defaultSize(width: 960, height: 640)
 
-        MenuBarExtra("Quip", systemImage: "waveform.circle.fill") {
+        MenuBarExtra("Quip",
+                     systemImage: permissionsStore.anyDenied
+                        ? "exclamationmark.triangle.fill"
+                        : "waveform.circle.fill") {
             MenuBarView()
                 .environment(windowManager)
                 .environment(webSocketServer)
@@ -106,6 +113,7 @@ struct QuipMacApp: App {
                 .environment(tunnel)
                 .environment(tailscale)
                 .environment(connectionLog)
+                .environment(permissionsStore)
                 .onAppear { startServicesOnce() }
         }
         .menuBarExtraStyle(.window)
@@ -339,6 +347,21 @@ struct QuipMacApp: App {
         // a menu/popover (MenuBarExtra). Default mode would pause it.
         RunLoop.main.add(permsTimer, forMode: .common)
 
+        // Re-probe immediately on wake from sleep. macOS frequently revokes
+        // TCC grants across sleep/wake and beta-update cycles; the 5s timer
+        // would catch it eventually but the wake notification gives a hard
+        // edge so the menubar warning glyph + phone red-dot flip the moment
+        // the user comes back. (wishlist §22 — startup self-test for perms.)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                self.broadcastPermissions(force: false)
+            }
+        }
+
         // Initial broadcast so the snapshot exists before the first phone
         // client authenticates — keeps the timer's "skip on equality" path
         // from suppressing the very first send.
@@ -367,6 +390,7 @@ struct QuipMacApp: App {
     @MainActor
     private func broadcastPermissions(force: Bool) {
         let snapshot = permissionProbe.probe()
+        permissionsStore.snapshot = snapshot
         if !force, snapshot == lastPermissionsSnapshot { return }
         lastPermissionsSnapshot = snapshot
         webSocketServer.broadcast(snapshot)
