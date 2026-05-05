@@ -468,21 +468,22 @@ Every commit in this repo to date has been "build, install on physical device, m
 
 ---
 
-### 22. Startup self-test for required macOS permissions
+### 22. Startup self-test for required macOS permissions (✅ Done v1, eb-branch)
 
-**Status:** Wishlist — high-priority reliability infrastructure
-**Context:** QuipMac requires three macOS permissions: **Accessibility** (for `KeystrokeInjector`'s System Events keystroke injection), **Automation/AppleScript** (for `tell application "iTerm2"` window control), and **Local Network** (for the WebSocket discovery mechanism). macOS can revoke any of these at any time — after a system update, after a privacy panel reset, after a beta install, after Quip is rebuilt with a new bundle ID — and the app gets *no notification*. From the user's perspective, "everything was working yesterday" suddenly turns into silently dropped commands.
+**Status:** ✅ Done v1 on `eb-branch` 2026-05-05. Mac-side surface added; the periodic 5s probe + auth-time broadcast that already shipped (`PermissionProbeService` covering Accessibility / Apple Events for iTerm2 / Screen Recording) is now mirrored into a visible warning on the Mac itself, not just the phone strip.
 
-**Fix:** at QuipMac launch (and again after waking from sleep), probe each permission with a cheap dry-run:
-- Accessibility: `AXIsProcessTrustedWithOptions([:])` returns false if not granted.
-- Automation: try a no-op AppleScript like `tell application "iTerm2" to count windows` and catch `errAEEventNotPermitted (-1743)`.
-- Local Network: try a 1-byte UDP send and catch `EPERM` if the entitlement was revoked.
+**What shipped:**
+- `MacPermissionsStore` (@Observable @MainActor) — single source the menubar reads, updated by `broadcastPermissions`. Mirrors the shape of `WhisperStatusStore`.
+- `MenuBarExtra` icon now switches from `waveform.circle.fill` (steady state) to `exclamationmark.triangle.fill` (any TCC perm denied) so the menubar glyph itself signals trouble before the user clicks.
+- New "Permissions needed" section in `MenuBarView` rendered only when `anyDenied` — lists each denied perm with a one-line "what it's for" caption + click-to-open button that fires the matching `x-apple.systempreferences:` URL via `NSWorkspace.shared.open`.
+- Aggregate menubar dot (`statusColor`) flips red when any perm is denied, on top of the existing server/tunnel signal.
+- `NSWorkspace.didWakeNotification` observer added — re-probes immediately on wake so a sleep/wake cycle that revoked a TCC grant flips the warning glyph hard rather than waiting up to 5s for the next periodic tick.
 
-If any probe fails, surface a **red status bar item** with the message "Quip can't reach <permission> — fix in System Settings → Privacy & Security" and a button that opens the relevant pane directly via `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` (and equivalents).
-
-**Why this is high-leverage:** the failure mode it eliminates is the most demoralizing class of Quip bug — "it was working, now it isn't, no error, no log, no signal" — because the failure isn't in Quip's code at all, it's in OS-level permissions Quip depends on. Every other reliability fix on the wishlist assumes permissions are intact. Currently nothing checks.
+**Why Local Network was deliberately skipped:** macOS lacks a clean public probe (the iOS `NWParameters.requiresLocalNetworkPermission` API has no Mac counterpart). The closest signal is "is `WebSocketServer.isRunning` and binding successfully?" — already tracked. Matches the stance of `MacPermissionsMessage`: "if you can read this, Local Network is working." Filing a v2 stub if Sequoia ever surfaces a public probe API.
 
 **Related:** #12 (silent failure diagnostics — same "make failures visible" theme), #20 (WebSocket heartbeat — both detect external-state failures Quip itself can't fix, and both surface them visibly).
+
+**Related code:** `QuipMac/Services/MacPermissionsStore.swift` (new), `QuipMac/Services/PermissionProbeService.swift` (existing probe), `QuipMac/Views/MenuBarView.swift:permissionsSection`, `QuipMacApp.swift:permissionsStore + didWakeNotification observer`.
 
 ---
 
