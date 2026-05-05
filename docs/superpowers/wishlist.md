@@ -72,7 +72,9 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §15 Push notifs — all-windows toggle + batched body | ✅ | `c15d575` | install only — needs hardware verify (push lands w/ 🤖 copy + collapsed batch) |
 | §15 follow-up — DevicePushPreferences decode tolerant of missing fields | ✅ | `6cdae55` | 4 regression tests; user confirmed pause-bug behavior on hardware |
 | Wishlist sweep (2026-05-05 session log + §34 mitigated) | 📝 | `cceba7f` | n/a (docs) |
-| §15 v2 — UNNotificationCategory yes/no/1/2 actions on lock screen + Watch (path A) | ✅ | `26e04a3` | install only — needs hardware verify |
+| §15 v2 — UNNotificationCategory yes/no/1/2 actions on lock screen + Watch (path A) | ✅ | `26e04a3` | yes (Yes button verified at 19:07:42 + 19:08:56 audit.log press_y) |
+| §15 v2 — Notifications settings sectioned + status footer + test-fire button | ✅ | `506c195` | yes (test fire round-trips to APNs; lock-screen banner renders) |
+| §15 v2 — test-fire bypass selection gate + per-tap synthetic id | ✅ | `b46b45d` | yes (push.log `test_push fired synthetic id=…` confirms branch hit) |
 
 **Test still owed by user (today's batch):**
 - §15 hardware verify: phone backgrounded → trigger `waiting_for_input` → push lands with `🤖 AI is waiting`. Trigger 2+ windows → batches to `🤖 N AIs waiting`. Toggle "Notify on All Windows" → non-selected window now pushes.
