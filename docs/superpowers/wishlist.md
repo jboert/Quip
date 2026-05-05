@@ -520,23 +520,31 @@ Every commit in this repo to date has been "build, install on physical device, m
 
 ---
 
-### 25. iTerm2-version smoke test against AppleScript verbs Quip depends on
+### 25. iTerm2-version smoke test against AppleScript verbs Quip depends on (✅ Done v1, eb-branch)
 
-**Status:** Wishlist — fragility check
-**Context:** Most of QuipMac's interop with iTerm2 is via AppleScript verbs (`tell application "iTerm2"`, `current session`, `write text`, window IDs, session unique IDs). Any iTerm2 update can rename a verb, change a return type, shift session ID semantics, or remove a property — and Quip's calls will start failing silently. This is exactly the failure mode that bit commit `4006db4`'s window-by-CGWindowID matching attempt: iTerm2's `id of window` returns iTerm2's own internal integer, not a CGWindowID, and the assumption was wrong from the start.
+**Status:** ✅ Done v1 on `eb-branch` 2026-05-05. New `QuipMacTests/ITermVerbSmokeTests` exercises 11 of the read-only verbs QuipMac uses against a live iTerm2 and asserts the return TYPE on each — exactly the shape mismatch that silently bit `4006db4`. Whole class auto-skips when iTerm2 isn't running so CI machines without iTerm2 stay green.
 
-**Fix:** ship a smoke-test target (separate Xcode scheme, runs in seconds) that exercises every AppleScript verb Quip depends on against the currently-installed iTerm2 and asserts the return shapes:
-- `count windows of application "iTerm2"` returns an integer
-- `get id of first window of application "iTerm2"` returns an integer (not a string, not a record)
-- `get name of current session of first window of application "iTerm2"` returns a string
-- `get unique id of current session of first window of application "iTerm2"` returns a string-formatted UUID
-- ...and so on for every verb in `KeystrokeInjector.spawnWindow`, `closeWindow`, the keystroke path, and the window enumeration path.
+**What ships:**
+- `count windows` → typeSInt32
+- `id of first window` → typeSInt32 (iTerm2 internal int, NOT CGWindowID — captured in a comment so the next reader doesn't repeat the `4006db4` mistake)
+- `miniaturized of first window` → Boolean shape (typeBoolean / typeTrue / typeFalse — iTerm2 currently returns typeTrue/typeFalse, surfaced during smoke-build #1, recorded in test)
+- `name of first window` → string-coercible
+- `bounds of first window` → 4-element list (l, t, r, b)
+- `name of current session of first window` → string-coercible
+- `unique id of current session of first window` → string-coercible, non-empty (session-ID stability is the persistence anchor)
+- `tty of current session of first window` → string-coercible (ttys path)
+- `text of current session of first window` → string-coercible (terminalContent path)
+- `profile name of current session of first window` → string-coercible (TerminalColorManager.resetBackground)
+- `tabs of first window` → list with ≥1 element
+- `first window whose id is N` → resolves and has a name (KeystrokeInjector + WindowManager whose-clause path)
 
-Run this smoke test before every release of QuipMac, and (eventually) gate releases on it passing. The cost is one Xcode scheme and ~50 lines of test harness; the benefit is that every iTerm2 update gets caught in seconds instead of weeks of silent breakage.
+**Deliberately NOT exercised** — destructive verbs (`create window with default profile`, `write text`, `set bounds`, `close`, `select`, `set background color`). Running these against a developer's live iTerm2 would surprise. If a future iTerm2 update is suspected of breaking those, copy the file into a destructive variant gated on an env var.
 
-**Why this matters more than it sounds:** iTerm2 is updated frequently (multiple beta releases per month), and the verbs QuipMac relies on aren't part of any "stable AppleScript API contract" — they're whatever the iTerm2 author shipped this version. The codebase has already lost time to one verb-shape mismatch (`4006db4`). A 50-line smoke test would have caught that in seconds.
+**Discovery from first run:** iTerm2 returns `miniaturized` Booleans as `typeTrue` / `typeFalse` rather than `typeBoolean`. Both are valid Boolean shapes for AppleScript; the assertion was tightened to accept all three. No production code needed to change — `miniaturized` is consumed inside the AppleScript itself (`if miniaturized of w then ...`), not bridged to Swift.
 
-**Related:** #13 (multi-iTerm2-window keystroke targeting — same brittleness root cause; the smoke test would catch the kind of shape mismatch that broke `4006db4`).
+**Related:** #13 (multi-iTerm2-window keystroke targeting — same brittleness root cause; the smoke test would have caught the kind of shape mismatch that broke `4006db4`).
+
+**Related code:** `QuipMac/Tests/ITermVerbSmokeTests.swift`.
 
 ---
 
