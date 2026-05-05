@@ -47,7 +47,7 @@ All green, both schemes, end of session. Run times: Mac 13.6s, iOS 7.3-7.4s.
 | Surface | Version | Last touched |
 |---------|---------|--------------|
 | `/Applications/Quip.app` | 1.5.1 | NOT rebuilt this continuation (still on prior session's `b46b45d` tip; no Mac-app code changed since — only `LogRedactor.swift` + `DiagnosticsBundle.swift` + tests, which build into the SAME .app version 1.5.1) |
-| iOS Tim apple 17 (iPhone 17 Pro Max physical) | Debug build of `5e1f487` (1.4.0) | NOT installed this continuation — physical device still on prior tip |
+| iOS <your-iphone> (iPhone 17 Pro Max physical) | Debug build of `5e1f487` (1.4.0) | NOT installed this continuation — physical device still on prior tip |
 | iPhone 17 Pro Max simulator (`999A4B3C-…`) | Debug build of `0bf1b2b` (1.5.2) | This continuation; fresh-install seed verified via plist (NOT visually — Speech permission dialog blocks the screenshot path; AppleScript can't reach iOS-sim UI contents) |
 | iPhone 17 simulator (`8CDE7F01-…`, erased) | Debug build of `0bf1b2b` (1.5.2) | This continuation; `simctl erase`'d to wipe inherited prefs, then plist-verified seed populates `customButtonsJSON` with `/help` def + `quickSlotsJSON` with 11-slot row including the `.custom(DEAD1DEA-…)` entry |
 | iPhone 17 Pro simulator (`C5E371CA-…`) | Debug build of `0bf1b2b` (1.5.2) | This continuation; auto-installed during test runs |
@@ -96,4 +96,4 @@ Working tree is clean at `b6b6dad`. Decisions still open in backlog:
 
 ## Resume one-liner
 
-> Continue Quip work on `eb-branch` from `b6b6dad`. This session shipped §49 redaction + §22 perms-store tests + §27 dedupe audit (no-op) + wishlist scrub (1520→705 lines) + §B14 iOS fresh-install seed for QA-via-simulator. 5 commits, all on `eb-branch`, NOT pushed (per `feedback_eb_branch_push_policy.md`). 434 tests green (249 Mac + 185 iOS). Read `docs/superpowers/handoffs/2026-05-05-session-handoff.md` for full state. Physical iPhone Tim apple 17 is still on `5e1f487` (1.4.0); install the latest build to see §B14. /Applications/Quip.app is still 1.5.1 (no Mac-app version bump this continuation — only Mac LogRedactor + DiagnosticsBundle + tests, which build into the same 1.5.1 .app).
+> Continue Quip work on `eb-branch` from `b6b6dad`. This session shipped §49 redaction + §22 perms-store tests + §27 dedupe audit (no-op) + wishlist scrub (1520→705 lines) + §B14 iOS fresh-install seed for QA-via-simulator. 5 commits, all on `eb-branch`, NOT pushed (per `feedback_eb_branch_push_policy.md`). 434 tests green (249 Mac + 185 iOS). Read `docs/superpowers/handoffs/2026-05-05-session-handoff.md` for full state. Physical iPhone <your-iphone> is still on `5e1f487` (1.4.0); install the latest build to see §B14. /Applications/Quip.app is still 1.5.1 (no Mac-app version bump this continuation — only Mac LogRedactor + DiagnosticsBundle + tests, which build into the same 1.5.1 .app).

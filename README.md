@@ -53,9 +53,9 @@ cd QuipiOS && xcodegen generate && cd ..
 xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
   -destination 'generic/platform=iOS' -derivedDataPath QuipiOS/build build
 
-# Install wirelessly on Tim apple 17 (replace with your device name — list paired
-# devices with `xcrun devicectl list devices`)
-xcrun devicectl device install app --device "Tim apple 17" \
+# Install wirelessly on your paired iPhone — list paired devices with
+# `xcrun devicectl list devices`, then substitute the name below.
+xcrun devicectl device install app --device "<your-iphone>" \
   QuipiOS/build/Build/Products/Debug-iphoneos/Quip.app
 ```
 

@@ -405,7 +405,7 @@ Per project standing recipe, build + install iOS bundle to the default device (i
 
 ```bash
 cd QuipiOS && xcodegen generate && xcodebuild -project QuipiOS.xcodeproj -scheme QuipiOS -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build build
-devicectl device install app --device "Tim apple 17" build/Build/Products/Debug-iphoneos/Quip.app
+devicectl device install app --device "<your-iphone>" build/Build/Products/Debug-iphoneos/Quip.app
 ```
 
 - [ ] **Step 2: Verify — resume from background**
