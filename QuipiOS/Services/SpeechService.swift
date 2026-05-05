@@ -72,14 +72,32 @@ final class SpeechService {
     @ObservationIgnored private var activeSessionToken: UUID?
 
     @ObservationIgnored private var remoteSession: RemoteSpeechSession?
-    @ObservationIgnored weak var webSocket: WebSocketClient?
+    /// Resolver closure — returns the *current* active WebSocketClient at the
+    /// moment of each PTT press. Replaces a prior `weak var webSocket` that
+    /// got nilled when its initial target (a placeholder created before
+    /// `BackendConnectionManager.bootstrap`) was released — leaving PTT
+    /// permanently in `.local` path even when the Mac's Whisper was ready.
+    @ObservationIgnored var webSocketResolver: (() -> WebSocketClient?)?
+    /// Computed pass-through so the rest of this file can keep reading
+    /// `webSocket` without churning every call site.
+    var webSocket: WebSocketClient? { webSocketResolver?() }
 
-    /// Wire up to the WebSocket client. Call once at app startup, before the
-    /// first press. Enables the remote Whisper path.
+    /// Wire up to the WebSocket client. Call once at app startup AFTER the
+    /// manager has bootstrapped its sessions, OR pass a closure that always
+    /// resolves to the current active client.
     func attachWebSocket(_ client: WebSocketClient) {
-        webSocket = client
-        client.onTranscriptResult = { [weak self] sid, text, error in
-            self?.remoteSession?.handleTranscript(sessionId: sid, text: text, error: error)
+        attachWebSocketResolver { [weak client] in client }
+    }
+
+    /// Preferred form: hand a resolver that returns the current active
+    /// client. Re-keys the transcript callback on every call so the freshest
+    /// client routes its remote transcripts back to this service.
+    func attachWebSocketResolver(_ resolver: @escaping () -> WebSocketClient?) {
+        webSocketResolver = resolver
+        if let client = resolver() {
+            client.onTranscriptResult = { [weak self] sid, text, error in
+                self?.remoteSession?.handleTranscript(sessionId: sid, text: text, error: error)
+            }
         }
     }
 

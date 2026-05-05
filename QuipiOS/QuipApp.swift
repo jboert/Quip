@@ -187,9 +187,11 @@ struct QuipApp: App {
                 iTermScanResults = s.iTermScanResults
                 macPermissions = s.macPermissions
                 ttsOverlayTexts = s.ttsOverlayTexts
-                // Repoint speech at the new active client so PTT audio chunks
-                // go to the right backend. `attachWebSocket` is idempotent.
-                speech.attachWebSocket(s.client)
+                // Re-run the resolver attach so the freshly active client
+                // gets its onTranscriptResult callback wired up. The
+                // resolver closure itself always returns manager.active.client
+                // so it stays correct across swaps.
+                speech.attachWebSocketResolver { [manager] in manager.active.client }
             }
             .onChange(of: liveActivitiesEnabled) { _, enabled in
                 // Flipping Live Activities off in Settings should drop any
@@ -283,7 +285,13 @@ struct QuipApp: App {
         manager.loadPaired()
 
         speech.requestAuthorization()
-        speech.attachWebSocket(client)
+        // Resolver form: speech grabs the *current* active client at every
+        // PTT press. The prior `attachWebSocket(client)` form weak-pointed
+        // at whatever `manager.active.client` was at setup time — which,
+        // before `manager.bootstrap()` ran, was the placeholder session's
+        // client. Once the placeholder was released, speech.webSocket was
+        // permanently nil and PTT silently fell to .local with no captions.
+        speech.attachWebSocketResolver { [manager] in manager.active.client }
 
         // Hot model: the manager's `wire(session:)` already maintained each
         // session's slice (windows, monitorName, terminalContent, etc.). The
