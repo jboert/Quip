@@ -133,12 +133,17 @@ struct SendTextMessage: Codable, Sendable {
     let windowId: String
     let text: String
     let pressReturn: Bool
+    /// Idempotency token (wishlist §27). Optional for backwards compat —
+    /// older clients that omit it still work but won't be deduped.
+    let messageId: UUID?
 
-    init(windowId: String, text: String, pressReturn: Bool = true) {
+    init(windowId: String, text: String, pressReturn: Bool = true,
+         messageId: UUID? = UUID()) {
         self.type = "send_text"
         self.windowId = windowId
         self.text = text
         self.pressReturn = pressReturn
+        self.messageId = messageId
     }
 }
 
@@ -146,11 +151,13 @@ struct QuickActionMessage: Codable, Sendable {
     let type: String
     let windowId: String
     let action: String
+    let messageId: UUID?
 
-    init(windowId: String, action: String) {
+    init(windowId: String, action: String, messageId: UUID? = UUID()) {
         self.type = "quick_action"
         self.windowId = windowId
         self.action = action
+        self.messageId = messageId
     }
 }
 
@@ -177,10 +184,12 @@ struct STTStateMessage: Codable, Sendable {
 struct DuplicateWindowMessage: Codable, Sendable {
     let type: String
     let sourceWindowId: String
+    let messageId: UUID?
 
-    init(sourceWindowId: String) {
+    init(sourceWindowId: String, messageId: UUID? = UUID()) {
         self.type = "duplicate_window"
         self.sourceWindowId = sourceWindowId
+        self.messageId = messageId
     }
 }
 
@@ -189,10 +198,12 @@ struct DuplicateWindowMessage: Codable, Sendable {
 struct CloseWindowMessage: Codable, Sendable {
     let type: String
     let windowId: String
+    let messageId: UUID?
 
-    init(windowId: String) {
+    init(windowId: String, messageId: UUID? = UUID()) {
         self.type = "close_window"
         self.windowId = windowId
+        self.messageId = messageId
     }
 }
 
@@ -201,10 +212,12 @@ struct CloseWindowMessage: Codable, Sendable {
 struct SpawnWindowMessage: Codable, Sendable {
     let type: String
     let directory: String
+    let messageId: UUID?
 
-    init(directory: String) {
+    init(directory: String, messageId: UUID? = UUID()) {
         self.type = "spawn_window"
         self.directory = directory
+        self.messageId = messageId
     }
 }
 
@@ -420,11 +433,13 @@ struct AttachITermWindowMessage: Codable, Sendable {
     let type: String
     let windowNumber: Int
     let sessionId: String
+    let messageId: UUID?
 
-    init(windowNumber: Int, sessionId: String) {
+    init(windowNumber: Int, sessionId: String, messageId: UUID? = UUID()) {
         self.type = "attach_iterm_window"
         self.windowNumber = windowNumber
         self.sessionId = sessionId
+        self.messageId = messageId
     }
 }
 
@@ -472,12 +487,15 @@ struct PastePromptMessage: Codable, Sendable {
     let id: String
     let windowId: String
     let pressReturn: Bool
+    let messageId: UUID?
 
-    init(id: String, windowId: String, pressReturn: Bool = false) {
+    init(id: String, windowId: String, pressReturn: Bool = false,
+         messageId: UUID? = UUID()) {
         self.type = "paste_prompt"
         self.id = id
         self.windowId = windowId
         self.pressReturn = pressReturn
+        self.messageId = messageId
     }
 }
 
