@@ -93,6 +93,19 @@ struct QuipApp: App {
     /// window's `waiting_for_input` events push. True → every enabled
     /// window's transitions push. Synced to Mac via PushPreferencesMessage.
     @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
+    /// Manual override for the system color scheme. "auto" follows
+    /// `UITraitCollection.userInterfaceStyle`; "light" / "dark" pin
+    /// the app regardless of system. Read at root via the
+    /// `appearancePreferred` computed `ColorScheme?` and applied via
+    /// `.preferredColorScheme(...)` on the WindowGroup root view.
+    @AppStorage("appearance.mode") private var appearanceModeRaw: String = "auto"
+    private var appearancePreferred: ColorScheme? {
+        switch appearanceModeRaw {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil // auto
+        }
+    }
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
     /// Pending image attachment — hoisted to QuipApp (from MainiOSView) so
@@ -136,6 +149,7 @@ struct QuipApp: App {
                 macPermissions: macPermissions
             )
             .environmentObject(pendingImage)
+            .preferredColorScheme(appearancePreferred)
             .onAppear {
                 setup()
                 bonjourBrowser.startBrowsing()
@@ -3206,11 +3220,11 @@ struct MainiOSView: View {
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
-                .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+                .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
                 .padding(.horizontal, 4)
                 .padding(.vertical, 5)
                 .frame(minWidth: 20)
-                .background(Color.white.opacity(0.15))
+                .background(colors.chipFill)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
@@ -3402,11 +3416,11 @@ struct MainiOSView: View {
                         .minimumScaleFactor(0.55)
                 }
             }
-            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+            .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
             .padding(.horizontal, 4)
             .padding(.vertical, 5)
             .frame(minWidth: 20)
-            .background(Color.white.opacity(0.15))
+            .background(colors.chipFill)
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
@@ -3439,11 +3453,11 @@ struct MainiOSView: View {
                         .minimumScaleFactor(0.55)
                 }
             }
-            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+            .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
             .padding(.horizontal, 4)
             .padding(.vertical, 5)
             .frame(minWidth: 20)
-            .background(Color.white.opacity(0.15))
+            .background(colors.chipFill)
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
@@ -4526,6 +4540,10 @@ struct SettingsSheet: View {
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
     @AppStorage("contentRenderMode") private var contentRenderModeRaw: String = ContentRenderMode.auto.rawValue
+    /// Manual override for system color scheme. Bound to the Settings →
+    /// Appearance picker; QuipApp's root view reads the same key and
+    /// applies `.preferredColorScheme(...)` accordingly.
+    @AppStorage("appearance.mode") private var appearanceModeRaw: String = "auto"
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -4557,6 +4575,12 @@ struct SettingsSheet: View {
                 // sits inline behind the toggle so enabling the tray doesn't
                 // spawn a second row.
                 Section {
+                    Picker("Theme", selection: $appearanceModeRaw) {
+                        Text("Auto").tag("auto")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
                     HStack {
                         Toggle("URL tray", isOn: $urlTrayEnabled)
@@ -4576,7 +4600,7 @@ struct SettingsSheet: View {
                 } header: {
                     Text("Appearance")
                 } footer: {
-                    Text("Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
+                    Text("Theme overrides the system Light/Dark setting (Auto follows system). Content mode: Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
                 }
 
                 // Keyboard — both keyboard-row customizers behind one
@@ -5067,6 +5091,8 @@ struct QuickButtonsSheet: View {
     var client: WebSocketClient?
     @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
+    @Environment(\.colorScheme) private var colorScheme
+    private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
     @State private var editingCustomID: UUID?
     @State private var addingCustom: Bool = false
@@ -5495,11 +5521,11 @@ struct QuickButtonsSheet: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(.white.opacity(0.9))
+        .foregroundStyle(colors.chipText)
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(Color.white.opacity(0.15))
+        .background(colors.chipFill)
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
@@ -5516,11 +5542,11 @@ struct QuickButtonsSheet: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(.white.opacity(0.9))
+        .foregroundStyle(colors.chipText)
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(Color.white.opacity(0.15))
+        .background(colors.chipFill)
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
