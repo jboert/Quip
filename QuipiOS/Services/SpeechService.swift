@@ -701,7 +701,27 @@ private class AudioWorker: @unchecked Sendable {
     func startForwarding(onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void,
                          onCaption: (@Sendable (String) -> Void)? = nil) {
         queue.async { [self] in
-            guard self.isArmed else { return }
+            // Cold-start fallback: if `arm()` never ran or its `audioEngine.start()`
+            // threw, `isArmed=false` and the prior silent-bail produced no audio
+            // chunks (Mac → no transcript) and no captions (§B8 path) — exactly
+            // the "PTT runs, captions blank, Whisper silent" symptom. Mirror the
+            // local-path `start(onUpdate:)` fallback so remote PTT degrades the
+            // same way: try to bring the engine up here, and only abort if even
+            // that fails.
+            if !self.isArmed {
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    try? session.setActive(true)
+                    self.audioEngine.prepare()
+                    try self.audioEngine.start()
+                    self.isArmed = true
+                    NSLog("[Quip][PTT] startForwarding cold-started engine (was not armed)")
+                } catch {
+                    NSLog("[Quip][PTT] startForwarding cold-start FAILED: %@",
+                          error.localizedDescription)
+                    return
+                }
+            }
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
             let format = input.outputFormat(forBus: 0)
