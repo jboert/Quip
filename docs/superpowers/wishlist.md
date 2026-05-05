@@ -326,24 +326,31 @@ As a quick-win, commit `(TBD)` added `print` statements to the `send_text` and `
 
 ---
 
-### 15. Push notifications when Claude asks the user for input
+### 15. Push notifications when Claude asks the user for input (✅ Done v1, eb-branch)
 
-**Status:** Wishlist
-**Context:** When Claude Code in a terminal window asks the user a question (e.g., "Do you want me to proceed? (y/n)" or "Which file should I edit?"), the user currently has to be actively looking at either the Mac screen or the iPhone Quip app to notice. They want a **push notification on the iPhone** that fires whenever ANY registered Claude Code window transitions into a "waiting for user input" state, so they can be heads-down on something else and still get pinged.
+**Status:** ✅ Done v1 on `eb-branch` 2026-05-05. Most of the APNs plumbing had already shipped (APNsClient, JWT signing, PushNotificationService, register/preferences messages, push.log) — what was missing per the user's 2026-05-05 input: per-device "all windows vs selected" toggle, batched body text, and minimal privacy-friendly copy.
 
-**Prerequisites:**
-- QuipMac already has a terminal state detector (`QuipMac/Services/TerminalStateDetector.swift`) that tracks per-window state. There's presumably a `waiting_for_input` or similar state. The detector's state-change events could drive notification sends.
-- The iPhone needs to register for remote or local push notifications. For local pushes (no APNS), `UNUserNotificationCenter.current().add(request:)` can schedule a notification from the iPhone side upon receiving a state-change message from the Mac. For remote pushes (background delivery when Quip isn't open), the Mac would need to send via APNS which requires a dev cert and APNS HTTP/2 plumbing — significant setup.
-- Entitlements: `aps-environment` for remote, none for local.
+**Decisions taken (locked with user 2026-05-05):**
+- All vs selected — `notifyAllWindows: Bool` toggle in Notification preferences. **Default false** (selected window only), preserving the prior "no flood from background Claudes" behavior.
+- Batching — yes. When ≥2 distinct windows hit `waiting_for_input` within a 30 s sliding window, body collapses to `"🤖 N AIs waiting"` instead of stacking N alerts.
+- Body text — minimal & privacy-friendly. `"🤖 AI is waiting"` for one window, `"🤖 N AIs waiting"` for many. No prompt content. Tap deep-links via existing `quip_window_id` payload key.
 
-**Design choices to resolve in brainstorming:**
-- **Local vs remote push**: local is dramatically simpler but only fires when Quip is open or recently backgrounded. Remote fires even when Quip is killed, but requires APNS setup. User's travel-mode use case suggests remote is better, but local is a cheap v1.
-- **Which windows trigger**: all enabled windows, or only the currently-selected one? User said "any window" — so all enabled.
-- **Rate limiting**: if Claude asks ten questions in 30 seconds, do we fire ten notifications or batch? Probably batch — "Claude is waiting for input on 3 windows" type summary.
-- **Content**: just "Claude is waiting" vs. showing the actual prompt text. Privacy implication if notification content contains code snippets.
-- **Tap behavior**: tapping the notification should open Quip and select the relevant window.
+**What shipped:**
+- `notifyAllWindows: Bool?` added to `PushPreferencesMessage` (optional → older clients decode as nil → Mac treats as false).
+- Same field added to `PreferencesSnapshot` so the toggle survives a phone reinstall via the existing Mac-side prefs backup.
+- `DevicePushPreferences.notifyAllWindows: Bool = false` — Mac's persisted per-device cache.
+- iOS Settings → Notifications: new "Notify on All Windows" toggle below "Banner When App Open". Wired to `pushNotifyAllWindows: @AppStorage`. `sendPrefs()` includes the field; both the at-registration prefs blast and the on-toggle send fire it.
+- Mac call site simplification: was gated `if windowId == clientSelectedWindowId { notify } else { skip diagnostic }`; now always calls `notifyWaitingForInput(..., selectedWindowId:)`. Per-device gate moved INSIDE the service so two phones attached to the same Mac can have different policies.
+- `PushNotificationService` per-device sliding window of recent waiting events (`recentWaitingByDevice`), pruned to the last 30 s on every send. Distinct-window count drives the body text. Same-window oscillation collapses to one entry — won't inflate the count.
+- APNs `collapseId` switched from per-window (`"waiting-\(windowId)"`) to a single shared key (`"waiting-batch"`). APNs replaces the prior unread alert with the latest one so the user sees ONE current alert on the lock screen instead of a stack of stale per-window notifications.
 
-**Dependencies:** None blocking. Needs its own brainstorm session.
+**Still owed:**
+- Hardware verify: install fresh build on Tim apple 17 (done), force-quit, then trigger waiting_for_input on the Mac with phone backgrounded → confirm push lands with the new copy. Toggle "Notify on All Windows" → confirm a different (non-selected) window now triggers a push.
+- v2 candidates: per-window mute (long-press the menubar perms section to silence one specific iTerm session), prompt-text in body as opt-in (privacy-aware), tap-to-respond actionable buttons.
+
+**Mac CFBundleShortVersionString bumped 1.4.0 → 1.4.1.**
+
+**Related code:** `Shared/MessageProtocol.swift` (PushPreferencesMessage + PreferencesSnapshot fields), `QuipMac/Services/PushNotificationService.swift` (notifyAllWindows gate + sliding-window batching + collapseId), `QuipMac/QuipMacApp.swift:push_preferences handler + waiting_for_input call site`, `QuipiOS/QuipApp.swift:NotificationsSheet toggle + sendPrefs`, `QuipiOS/Services/PreferencesSyncService.swift`.
 
 ---
 

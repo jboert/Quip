@@ -126,6 +126,7 @@ final class PreferencesSyncService {
         if let v = snapshot.pushQuietHoursEnabled { d.set(v, forKey: "pushQuietHoursEnabled") }
         if let v = snapshot.pushQuietHoursStart { d.set(v, forKey: "pushQuietHoursStart") }
         if let v = snapshot.pushQuietHoursEnd { d.set(v, forKey: "pushQuietHoursEnd") }
+        if let v = snapshot.pushNotifyAllWindows { d.set(v, forKey: "pushNotifyAllWindows") }
         if let v = snapshot.liveActivitiesEnabled { d.set(v, forKey: "liveActivitiesEnabled") }
         if let v = snapshot.ttsEnabled { d.set(v, forKey: "ttsEnabled") }
         if let v = snapshot.quickSlotsJSON { d.set(v, forKey: "quickSlotsJSON") }
@@ -182,6 +183,7 @@ final class PreferencesSyncService {
             pushQuietHoursEnabled: d.object(forKey: "pushQuietHoursEnabled") as? Bool,
             pushQuietHoursStart: d.object(forKey: "pushQuietHoursStart") as? Int,
             pushQuietHoursEnd: d.object(forKey: "pushQuietHoursEnd") as? Int,
+            pushNotifyAllWindows: d.object(forKey: "pushNotifyAllWindows") as? Bool,
             liveActivitiesEnabled: d.object(forKey: "liveActivitiesEnabled") as? Bool,
             ttsEnabled: d.object(forKey: "ttsEnabled") as? Bool,
             quickSlotsJSON: d.string(forKey: "quickSlotsJSON"),

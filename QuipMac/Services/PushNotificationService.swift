@@ -54,6 +54,10 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
     /// nil = legacy prefs row or legacy client — fall back to the Mac's
     /// own `Calendar.current`, which matches the pre-TZ behavior.
     var timeZone: String? = nil
+    /// (wishlist §15.) Notify on EVERY enabled window's
+    /// `waiting_for_input`, not just the selected one. Defaults false to
+    /// preserve the existing "no flood from background Claudes" behavior.
+    var notifyAllWindows: Bool = false
 
     static let defaults = DevicePushPreferences()
 
@@ -107,6 +111,13 @@ final class PushNotificationService {
 
     /// Max one push per window per this interval (per device).
     private let debounceInterval: TimeInterval = 30.0
+
+    /// Per-device sliding window of (windowId, eventTime) pairs used to
+    /// build the batched body text — `"🤖 AI is waiting"` for one,
+    /// `"🤖 N AIs waiting"` for many. Pruned to entries within the last
+    /// `batchWindow` on every send. (wishlist §15.)
+    private var recentWaitingByDevice: [String: [(windowId: String, at: Date)]] = [:]
+    private let batchWindow: TimeInterval = 30.0
 
     /// Shared APNs client — lifetime of the service so its JWT cache
     /// survives across Test Push clicks + real triggers. APNs rate-
@@ -245,7 +256,8 @@ final class PushNotificationService {
     ///
     /// Debounce: 30s per (windowId, device) pair. Global pause +
     /// quiet-hours + sound toggle honored per device.
-    func notifyWaitingForInput(windowId: String, windowName: String, projectName: String?, attentionCount: Int) {
+    func notifyWaitingForInput(windowId: String, windowName: String, projectName: String?,
+                               attentionCount: Int, selectedWindowId: String?) {
         guard !devices.isEmpty else { return }
 
         let keyId = UserDefaults.standard.string(forKey: "apnsKeyId") ?? ""
@@ -271,6 +283,13 @@ final class PushNotificationService {
         for device in devicesSnapshot {
             let prefs = prefsSnapshot[device.token] ?? .defaults
             let tokenPrefix = device.token.prefix(8)
+            // (wishlist §15.) Per-device "all windows" gate. Default false
+            // → only the phone's currently-selected window pushes for this
+            // device; the user can opt into all-windows in iOS settings.
+            if !prefs.notifyAllWindows, windowId != selectedWindowId {
+                quipPushLog("skip selection_mismatch — device=\(tokenPrefix) selected=\(selectedWindowId ?? "nil") event=\(windowId)")
+                continue
+            }
             if prefs.paused {
                 quipPushLog("skip paused — device=\(tokenPrefix) window=\(windowId)")
                 continue
@@ -296,19 +315,44 @@ final class PushNotificationService {
             }
             lastPushTimes[debounceKey] = now
 
+            // (wishlist §15.) Sliding window of recent waiting events for
+            // this device — drives the batched body text. Insert this
+            // event, prune anything past `batchWindow`.
+            var recent = recentWaitingByDevice[device.token] ?? []
+            let batchCutoff = now.addingTimeInterval(-batchWindow)
+            recent.removeAll { $0.at < batchCutoff }
+            // Replace any prior entry for the same window with the fresh
+            // one — a window oscillating in/out of waiting still counts
+            // as ONE distinct waiter, not many.
+            recent.removeAll { $0.windowId == windowId }
+            recent.append((windowId: windowId, at: now))
+            recentWaitingByDevice[device.token] = recent
+            let distinctCount = recent.count
+
             // Prefer the project (cwd basename like "Quip" or "credit-unions")
             // in the title — that's how users mentally identify which session
             // needs them. Fall back to "Quip" when we don't have a project.
             let title: String
-            if let p = projectName, !p.isEmpty {
+            if distinctCount >= 2 {
+                title = "Quip"
+            } else if let p = projectName, !p.isEmpty {
                 title = p
             } else {
                 title = "Quip"
             }
+            // Body deliberately minimal — privacy-friendly, no prompt
+            // content. Single = "🤖 AI is waiting"; multi = "🤖 N AIs
+            // waiting". Tap deep-links via `quip_window_id` payload key.
+            let body: String = {
+                if distinctCount >= 2 {
+                    return "🤖 \(distinctCount) AIs waiting"
+                }
+                return "🤖 AI is waiting"
+            }()
             var aps: [String: Any] = [
                 "alert": [
                     "title": title,
-                    "body": "\(windowName) is waiting for input"
+                    "body": body
                 ],
                 "badge": attentionCount
             ]
@@ -332,7 +376,12 @@ final class PushNotificationService {
             let capturedClient = client
             let capturedDevice = device
             let capturedToken = capturedDevice.token
-            let collapse = "waiting-\(windowId)"
+            // (wishlist §15.) Shared collapseId across all waiting events
+            // so APNs replaces the prior unread alert with the latest
+            // batched one. Prevents 5 separate banners stacking on the
+            // lock screen when 5 windows hit waiting_for_input within
+            // batchWindow.
+            let collapse = "waiting-batch"
             Task {
                 do {
                     try await capturedClient.send(

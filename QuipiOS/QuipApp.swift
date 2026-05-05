@@ -89,6 +89,10 @@ struct QuipApp: App {
     @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
     @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
     @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
+    /// (wishlist §15.) Default false → only the currently-selected
+    /// window's `waiting_for_input` events push. True → every enabled
+    /// window's transitions push. Synced to Mac via PushPreferencesMessage.
+    @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
     /// Pending image attachment — hoisted to QuipApp (from MainiOSView) so
@@ -506,7 +510,8 @@ struct QuipApp: App {
                                 sound: ud.object(forKey: "pushSound") as? Bool ?? true,
                                 foregroundBanner: ud.bool(forKey: "pushForegroundBanner"),
                                 bannerEnabled: ud.object(forKey: "pushBannerEnabled") as? Bool ?? true,
-                                timeZone: TimeZone.current.identifier
+                                timeZone: TimeZone.current.identifier,
+                                notifyAllWindows: ud.bool(forKey: "pushNotifyAllWindows")
                             )
                             client.send(prefs)
                         }
@@ -4394,6 +4399,10 @@ struct SettingsSheet: View {
     @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
     @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
     @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
+    /// (wishlist §15.) Default false → only the currently-selected
+    /// window's `waiting_for_input` events push. True → every enabled
+    /// window's transitions push. Synced to Mac via PushPreferencesMessage.
+    @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
     // Device-local only — Live Activities don't flow through the Mac's
     // APNs prefs, so no sendPrefs() wiring. The main app reads this
     // @AppStorage key too and gates its liveActivity.startOrUpdate calls.
@@ -4632,7 +4641,8 @@ struct SettingsSheet: View {
             sound: pushSound,
             foregroundBanner: pushForegroundBanner,
             bannerEnabled: pushBannerEnabled,
-            timeZone: TimeZone.current.identifier
+            timeZone: TimeZone.current.identifier,
+            notifyAllWindows: pushNotifyAllWindows
         )
         client.send(msg)
     }
@@ -4685,6 +4695,10 @@ struct NotificationsSettingsSheet: View {
     @AppStorage("pushQuietHoursEnabled") private var quietHoursEnabled = false
     @AppStorage("pushQuietHoursStart") private var quietHoursStart = 22
     @AppStorage("pushQuietHoursEnd") private var quietHoursEnd = 7
+    /// (wishlist §15.) Default false → only the currently-selected
+    /// window's `waiting_for_input` events push. True → every enabled
+    /// window's transitions push. Synced to Mac via PushPreferencesMessage.
+    @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
 
     var body: some View {
@@ -4696,6 +4710,11 @@ struct NotificationsSettingsSheet: View {
                     if pushBannerEnabled {
                         Toggle("Sound", isOn: $pushSound)
                         Toggle("Banner When App Open", isOn: $pushForegroundBanner)
+                        // (wishlist §15.) Default off → only the
+                        // currently-selected window's transitions push.
+                        // On → every enabled window pushes (still
+                        // batched into one alert via collapseId on Mac).
+                        Toggle("Notify on All Windows", isOn: $pushNotifyAllWindows)
                     }
                     Toggle("Live Activities", isOn: $liveActivitiesEnabled)
 
@@ -4727,6 +4746,7 @@ struct NotificationsSettingsSheet: View {
             .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
             .onChange(of: pushSound) { _, _ in sendPrefs() }
             .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
+            .onChange(of: pushNotifyAllWindows) { _, _ in sendPrefs() }
             .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
             .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
             .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }

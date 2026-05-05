@@ -257,27 +257,23 @@ struct QuipMacApp: App {
                 NSLog("[Quip] %@", diag)
                 appendPushDiagnostic(diag)
 
-                // Fire a push ONLY when the phone's current selection is
-                // this window — prevents a notification flood from every
-                // background Claude. Safe to call even when no devices
-                // are registered; it's a no-op in that case.
-                if windowId == clientSelectedWindowId {
-                    let window = windowManager.windows.first(where: { $0.id == windowId })
-                    let windowName = window?.name ?? "Terminal"
-                    // subtitle = directory basename (e.g. "Quip", "credit-unions")
-                    // via fetchSubtitles/applySubtitles. That's the project.
-                    let project = window?.subtitle
-                    pushNotificationService.notifyWaitingForInput(
-                        windowId: windowId,
-                        windowName: windowName,
-                        projectName: project,
-                        attentionCount: 1
-                    )
-                } else {
-                    let skip = "push SKIPPED — selection mismatch (selected=\(clientSelectedWindowId ?? "nil"), event=\(windowId))"
-                    NSLog("[Quip] %@", skip)
-                    appendPushDiagnostic(skip)
-                }
+                // (wishlist §15.) Always fire — per-device "selected only
+                // vs all windows" filter now lives inside
+                // notifyWaitingForInput so two phones attached to the
+                // same Mac can have different policies. Safe to call when
+                // no devices are registered; it's a no-op in that case.
+                let window = windowManager.windows.first(where: { $0.id == windowId })
+                let windowName = window?.name ?? "Terminal"
+                // subtitle = directory basename (e.g. "Quip", "credit-unions")
+                // via fetchSubtitles/applySubtitles. That's the project.
+                let project = window?.subtitle
+                pushNotificationService.notifyWaitingForInput(
+                    windowId: windowId,
+                    windowName: windowName,
+                    projectName: project,
+                    attentionCount: 1,
+                    selectedWindowId: clientSelectedWindowId
+                )
 
                 if pendingInputForWindow.contains(windowId) {
                     KokoroTTSDebug.log("TTS suppressed: \(windowId) still pending input response")
@@ -1035,10 +1031,13 @@ struct QuipMacApp: App {
                     // default to true here so existing phones keep getting
                     // banners until they upgrade.
                     bannerEnabled: msg.bannerEnabled ?? true,
-                    timeZone: msg.timeZone
+                    timeZone: msg.timeZone,
+                    // (wishlist §15.) Defaults false → "selected only" so
+                    // older clients keep the prior behavior.
+                    notifyAllWindows: msg.notifyAllWindows ?? false
                 )
                 pushNotificationService.updatePreferences(forDevice: msg.deviceToken, prefs: prefs)
-                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") tz=\(msg.timeZone ?? "nil") device=\(msg.deviceToken.prefix(8))")
+                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") tz=\(msg.timeZone ?? "nil") allWindows=\(msg.notifyAllWindows ?? false) device=\(msg.deviceToken.prefix(8))")
             }
 
         case "attach_iterm_window":
