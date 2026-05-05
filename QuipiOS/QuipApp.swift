@@ -2016,13 +2016,23 @@ struct MainiOSView: View {
             // Portrait-only secondary command-shortcut row. Slots render in
             // user-controlled order — they place `.spacer` slots themselves
             // via the editor (Apple-toolbar-style customization).
+            //
+            // Wrapped in a horizontal `ScrollView` so the row stays a single
+            // line no matter how many slots the user has placed — adding
+            // chips beyond what fits on-screen scrolls horizontally instead
+            // of pushing the parent VStack wider and clipping the window
+            // cards / "Connected" header above it. Indicators hidden so the
+            // chrome stays clean; users discover scroll via the natural
+            // truncation cue at the right edge.
             if isPortrait {
                 let slots = effectiveQuickSlots
                 if !slots.isEmpty {
-                    HStack(spacing: 3) {
-                        slotRowView(slots)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 3) {
+                            slotRowView(slots)
+                        }
+                        .padding(.horizontal, 6)
                     }
-                    .padding(.horizontal, 6)
                 }
             }
         }
