@@ -700,6 +700,26 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 
 ---
 
+### B15. iPhone accessibility hygiene — traits + image alt labels
+
+**Status:** Wishlist
+**Surfaced:** 2026-05-05 QA pass via `accessibility_audit.py` on the booted simulator (32 elements, 32 issues — 1 critical, 31 warnings).
+
+**Critical (1):** one image element on the main view has no `accessibilityLabel`. Likely the pending-image preview thumbnail or one of the window-card screenshots embedded in `WindowRectangle`. VoiceOver users hit a dead end when the element is focused.
+
+**Warnings (31):** every interactive icon button is missing explicit `accessibilityTraits(.isButton)`. Most affected: main-row chevrons / spawn / arrange / mic / photo / prompts / keyboard / return + slot-row chip pills + Settings gear. SwiftUI's `Button { ... } label: { Image(systemName: ...) }` infers the trait at runtime in normal use, but VoiceOver / Switch Control occasionally fail to announce them as tappable when the label is icon-only and short.
+
+**Likely shape:**
+- Sweep `QuipApp.swift` for `Button { ... } label: { Image(systemName: ...) ... }` patterns, add `.accessibilityLabel("...")` (descriptive verb, e.g. "Cycle to previous window" instead of "chevron.left") + `.accessibilityAddTraits(.isButton)` belt-and-suspenders.
+- Find the unlabeled image — most likely `PendingImagePreviewStrip` or the per-window screenshot inside `WindowRectangle`. Add `.accessibilityLabel("Pending image attachment, \(filename)")` / `.accessibilityLabel("Window screenshot: \(window.title)")`.
+- Run `accessibility_audit.py --json` again post-fix; target should be ≤2 critical + ≤5 warnings.
+
+**Why low priority:** no functional impact on the typical sighted user. Worth doing as a single sweep PR when next touching `QuipApp.swift` heavily; not a blocker for shipping.
+
+**Tooling:** `python3 ios-simulator-skill/scripts/accessibility_audit.py --udid <booted> --verbose` produces the per-element list. Re-run after each batch to see the count drop.
+
+---
+
 ## Tabled (parked, revisit on demand)
 
 - §52 iPad layout — tabled 2026-05-05 by user. No iPad to test on; not a current priority.
