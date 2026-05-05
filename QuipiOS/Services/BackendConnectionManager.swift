@@ -402,7 +402,15 @@ final class BackendConnectionManager {
     @discardableResult
     func addPaired(url: String, name: String = "Backend") -> String? {
         guard paired.count < Self.maxPairedBackends else { return nil }
-        if let existing = paired.first(where: { $0.url == url }) { return existing.id }
+        // Dedupe across the FULL urlsInOrder (primary + fallbacks), not just
+        // primary. The prior check matched only `$0.url == url` and missed
+        // the case where the same URL was stored as a fallback on an
+        // existing row — producing a duplicate "Backend" entry pointing at
+        // the same Mac (visible in QR-pair after a Bonjour-discovery row
+        // already had the same URL as a fallback).
+        if let existing = paired.first(where: { $0.urlsInOrder.contains(url) }) {
+            return existing.id
+        }
         let id = "legacy-\(UUID().uuidString)"
         paired.append(PairedBackend(id: id, url: url, name: name))
         savePaired()
@@ -493,6 +501,22 @@ final class BackendConnectionManager {
             if !defaults.bool(forKey: "pairedMultiURLMigrationV2Done") {
                 paired = Self.mergeSameIDRows(paired)
                 defaults.set(true, forKey: "pairedMultiURLMigrationV2Done")
+                savePaired()
+            }
+            // Always run merge on load. mergeSameIDRows is idempotent on
+            // already-deduped data (cheap O(n²) over typically 1-3 rows),
+            // so re-running every launch costs nothing and prevents the
+            // "two identical Backend rows" bug from sticking around once
+            // it's somehow snuck through addPaired / ensureImplicitDefault.
+            // The V2 one-shot above stays for the migration log line; this
+            // unconditional pass is the actual safety net.
+            let beforeCount = paired.count
+            paired = Self.mergeSameIDRows(paired)
+            if paired.count != beforeCount {
+                NSLog("[Quip][Backends] Deduped on load: %d → %d rows", beforeCount, paired.count)
+                if !paired.contains(where: { $0.id == activeBackendID }) {
+                    activeBackendID = paired.first?.id ?? ""
+                }
                 savePaired()
             }
             return
