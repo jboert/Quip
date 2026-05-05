@@ -1773,12 +1773,18 @@ struct MainiOSView: View {
         let windowColor = selectedWindow.map { Color(hex: $0.color) } ?? colors.textSecondary
         // Landscape is short on vertical space — tighten the button sizes so
         // the full row of controls + quick-button row fits without crowding.
+        // Portrait button widths shrunk so the full mainRow cluster
+        // (cycleLeft+cycleRight + spawn+arrange + mic + photo+prompts+keyboard+return)
+        // fits on a single 430pt-wide iPhone 17 Pro Max line. Old 56pt buttons
+        // summed to ~460pt with all toggles enabled, blowing the parent VStack
+        // wider than the screen and clipping the window-cards row + status header.
+        // 48pt × 6 + nav/ptt/aux + Spacers stays under 430.
         let btnH: CGFloat = isPortrait ? 56 : 40
-        let btnW: CGFloat = isPortrait ? 56 : 44
-        let pttW: CGFloat = isPortrait ? 72 : 56
-        let navW: CGFloat = isPortrait ? 26 : 22
+        let btnW: CGFloat = isPortrait ? 48 : 44
+        let pttW: CGFloat = isPortrait ? 64 : 56
+        let navW: CGFloat = isPortrait ? 24 : 22
         let navH: CGFloat = isPortrait ? 36 : 28
-        let auxW: CGFloat = isPortrait ? 40 : 32
+        let auxW: CGFloat = isPortrait ? 36 : 32
         let auxH: CGFloat = isPortrait ? 56 : 40
 
         return VStack(spacing: isPortrait ? 8 : 4) {
@@ -2033,6 +2039,15 @@ struct MainiOSView: View {
                         }
                         .padding(.horizontal, 6)
                     }
+                    // Pin ScrollView to parent's available width. Without
+                    // this, SwiftUI can propagate the inner HStack's
+                    // intrinsic content size up the layout tree, which on
+                    // a wide-enough chip row pushes the parent VStack out
+                    // beyond the screen and clips the window-cards row +
+                    // status header above. The frame caps width at parent
+                    // so overflow stays inside ScrollView (where it
+                    // scrolls) rather than leaking up.
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
