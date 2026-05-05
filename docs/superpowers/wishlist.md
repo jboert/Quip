@@ -55,10 +55,10 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §15 v2 — UNNotificationCategory yes/no/1/2 actions on lock screen + Watch (path A) | ✅ | `26e04a3` | yes (Yes button verified at 19:07:42 + 19:08:56 audit.log press_y) |
 | §15 v2 — Notifications settings sectioned + status footer + test-fire button | ✅ | `506c195` | yes (test fire round-trips to APNs; lock-screen banner renders) |
 | §15 v2 — test-fire bypass selection gate + per-tap synthetic id | ✅ | `b46b45d` | yes (push.log `test_push fired synthetic id=…` confirms branch hit) |
-| §49 follow-up — DiagnosticsBundle redacts IPv4s + hostname before share | ✅ | `439e94e` | 11 LogRedactor tests + 2 systemInfoText tests green; Tailscale + LAN + public IPv4 all masked, hostname → 8-char hash |
-| §22 follow-up — MacPermissionsStore aggregation tests | ✅ | `439e94e` | 8 tests covering nil/all-granted/all-denied/single/pair/replace |
-| §27 follow-up — dedupe wiring audit (no new handlers) | 📝 | `74990f9` | grep confirms all 7 side-effecting handlers (`send_text`/`quick_action` (covers `test_push`)/`duplicate_window`/`close_window`/`spawn_window`/`paste_prompt`/`attach_iterm_window`) still wrap `messageDedupe.checkAndRecord` post-`b46b45d`; no code change |
-| §B14 iOS quick-button row seed on fresh install (built-ins + demo custom) | ✅ | `0bf1b2b` | 7 new `QuickSlotStoreSeedTests` green; verified on `simctl erase`'d iPhone 17 — `customButtonsJSON` contains `/help` demo, `quickSlotsJSON` contains 11 slots including a `.custom` slot pointing at the demo def. iOS CFBundleShortVersionString bumped 1.4.0 → 1.5.2 |
+| §49 follow-up — DiagnosticsBundle redacts IPv4s + hostname before share | ✅ | `2dfccc8` | 11 LogRedactor tests + 2 systemInfoText tests green; Tailscale + LAN + public IPv4 all masked, hostname → 8-char hash |
+| §22 follow-up — MacPermissionsStore aggregation tests | ✅ | `2dfccc8` | 8 tests covering nil/all-granted/all-denied/single/pair/replace |
+| §27 follow-up — dedupe wiring audit (no new handlers) | 📝 | `8fdbd66` | grep confirms all 7 side-effecting handlers (`send_text`/`quick_action` (covers `test_push`)/`duplicate_window`/`close_window`/`spawn_window`/`paste_prompt`/`attach_iterm_window`) still wrap `messageDedupe.checkAndRecord` post-`b46b45d`; no code change |
+| §B14 iOS quick-button row seed on fresh install (built-ins + demo custom) | ✅ | `43dbbc5` | 7 new `QuickSlotStoreSeedTests` green; verified on `simctl erase`'d iPhone 17 — `customButtonsJSON` contains `/help` demo, `quickSlotsJSON` contains 11 slots including a `.custom` slot pointing at the demo def. iOS CFBundleShortVersionString bumped 1.4.0 → 1.5.2 |
 
 **Test still owed by user:**
 - §15 hardware verify: phone backgrounded → trigger `waiting_for_input` → push lands with `🤖 AI is waiting`. Trigger 2+ windows → batches to `🤖 N AIs waiting`. Toggle "Notify on All Windows" → non-selected window now pushes.
@@ -280,7 +280,7 @@ Mac CFBundleShortVersionString: 1.4.0 → 1.4.1 → 1.4.2 → 1.5.0 → 1.5.1.
 
 Local Network deliberately skipped — macOS lacks a clean public probe (no Mac counterpart to iOS `NWParameters.requiresLocalNetworkPermission`). Stance: "if you can read this, Local Network is working."
 
-Follow-up (`439e94e`): 8 unit tests on aggregation logic.
+Follow-up (`2dfccc8`): 8 unit tests on aggregation logic.
 
 **Related:** #12, #20.
 
@@ -330,7 +330,7 @@ Discovery: iTerm2 returns `miniaturized` Booleans as `typeTrue`/`typeFalse` rath
 
 Mac CFBundleShortVersionString 1.3.3 → 1.4.0.
 
-Follow-up audit (`74990f9`): all 7 wraps still cover post-`b46b45d`; no new side-effecting handlers added.
+Follow-up audit (`8fdbd66`): all 7 wraps still cover post-`b46b45d`; no new side-effecting handlers added.
 
 ---
 
@@ -513,7 +513,7 @@ Cuts typical photo payload 50-70% vs PNG.
 
 `DiagnosticsBundle.makeZip(maxBytes:)` writes `Quip-diagnostics-YYYYMMDD-HHMMSS.zip` to `NSTemporaryDirectory`; tolerates missing log files; throws `.overSizeCap` on budget exceed.
 
-Follow-up (`439e94e`): `LogRedactor` masks IPv4s (LAN/Tailscale/public — last two octets) + replaces hostname; `systemInfoText` ships salted SHA256 hash of host name instead of raw name.
+Follow-up (`2dfccc8`): `LogRedactor` masks IPv4s (LAN/Tailscale/public — last two octets) + replaces hostname; `systemInfoText` ships salted SHA256 hash of host name instead of raw name.
 
 ---
 
