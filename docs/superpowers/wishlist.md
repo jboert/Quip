@@ -31,9 +31,9 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §B10 Paired-backends dedupe on load + addPaired URL match | ✅ | `93cc9a8` | yes (iPhone) |
 | §B11 SpeechService weak-ref drop fix + 4 tests | ✅ | `059f614` + `314b37d` | yes (iPhone) |
 | §B12 Strip Whisper [BLANK_AUDIO] tokens + 8 tests | ✅ | `a6afdc5` | needs verify (Mac) |
-| §B4 Prompts paste-wrong-window — closure-resolver fix | ✅ | _pending_ | install only — needs verify |
-| §A1 Auto-enable mainRow.prompts on first non-empty catalog | ✅ | _pending_ | install only — needs verify |
-| §A4 Searchable PromptsQuickPickerSheet | ✅ | _pending_ | install only — needs verify |
+| §B4 Prompts paste-wrong-window — closure-resolver fix | ✅ | `bc39aaf` | install only — needs verify |
+| §A1 Auto-enable mainRow.prompts on first non-empty catalog | ✅ | `bc39aaf` | install only — needs verify |
+| §A4 Searchable PromptsQuickPickerSheet | ✅ | `bc39aaf` | install only — needs verify |
 
 **Test still owed by user:**
 - Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
@@ -55,6 +55,36 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 - §53 v2: complication via WidgetKit, slash-button send-back from wrist, per-window vs all-windows toggle.
 - §50 v2: TTL on QR payload, mid-pairing UX, universal-link entry from Mail/Messages.
 - §57 v2 (after current): chains support (multi-step prompts), search/filter when catalog grows past one screen.
+
+---
+
+## Session log — 2026-05-05 (continuation)
+
+7 commits on `eb-branch` after `bc39aaf`. Mac CFBundleShortVersionString stepped 1.3.3 → 1.4.0 → 1.4.1 → 1.4.2.
+
+| Section | Status | Commit | Hardware-tested |
+|---------|--------|--------|-----------------|
+| §B13 iOS PTT remote silent-bail when engine not armed | ✅ | `dc5e322` | yes (iPhone — captions + audio_chunks confirmed in Mac kokoro.log) |
+| §22 Visible Mac-side perms surface (menubar warning + wake re-probe) | ✅ | `40af168` | install only (warning glyph triggers when a TCC grant is revoked) |
+| §25 iTerm2 verb smoke tests (11 read-only verbs) | ✅ | `e6b3539` | green against current iTerm2 |
+| §23 Spawn-race dedupe + vanish toast | ✅ | `2701983` | unit-tested via `SpawnedWindowPicker` (7 tests) |
+| §27 Idempotent message IDs + Mac dedupe table v1 | ✅ | `e26a8f6` | 7 dedupe-table unit tests; manual not yet exercised |
+| §15 Push notifs — all-windows toggle + batched body | ✅ | `c15d575` | install only — needs hardware verify (push lands w/ 🤖 copy + collapsed batch) |
+| §15 follow-up — DevicePushPreferences decode tolerant of missing fields | ✅ | `6cdae55` | 4 regression tests; user confirmed pause-bug behavior on hardware |
+
+**Test still owed by user (today's batch):**
+- §15 hardware verify: phone backgrounded → trigger `waiting_for_input` → push lands with `🤖 AI is waiting`. Trigger 2+ windows → batches to `🤖 N AIs waiting`. Toggle "Notify on All Windows" → non-selected window now pushes.
+- §22: revoke Accessibility for Quip in System Settings → menubar icon flips to ⚠️ red triangle within 5s; "Permissions needed" section appears with click-to-open button.
+- §B13 iPhone caption + Whisper-quality transcript (verified live during the session).
+
+**Still owed from 2026-05-04:**
+- Watch app glance (§53 v1) — install only, needs Watch verify.
+- QR pairing end-to-end (§50 v1).
+- iPhone-side prompt CRUD (§57 v2).
+- Prompts as keyboard pills (§B3).
+
+**Open question raised today, still parked:**
+- Watch notifications give "dismiss only" — should we ship interactive `UNNotificationCategory` actions (yes/no/1/2) so the wrist can answer prompts, or push for §53 v2 (full Watch slash-button send-back)? Half-day for the iOS notification-categories path; bigger lift for the WCSession round-trip. Deferred to brainstorm.
 
 ---
 
@@ -745,8 +775,9 @@ The 1, 2, 3 quick-action buttons (added in jboert's commit `4e774e6`, tracked un
 
 ### 34. iPhone Quip never receives `mac_permissions` despite Mac broadcasting it
 
-**Status:** In Progress (debugging stuck) — eb-branch local
-**Context:** During the autonomous burn-down of #33 we discovered the iPhone Quip app's "Mac Permissions" SettingsSheet section is permanently stuck on "Waiting for Mac…". Captured iOS device console (`xcrun devicectl device process launch --console`) shows iOS receives `auth_result`, `layout_update`, and `project_directories` over WebSocket every ~2s — but **never** receives `mac_permissions`. A parallel Node.js fake-iOS-client (`/tmp/perms-watcher.js` style) connecting to the same Mac WebSocket with the same PIN consistently receives `mac_permissions acc=true ae=true sr=true` within ~22ms of auth. So the broadcast IS going out (proven via Node) but the iPhone specifically isn't seeing it.
+**Status:** ✅ Mitigated (root not nailed). Symptom no longer reaches the user thanks to the 5s periodic re-broadcast added in `QuipMacApp.swift:permsTimer` — even if the iPhone misses the auth-time `mac_permissions` for whatever reason, the next periodic tick (≤5s) re-stamps it. §22 (2026-05-05) further added a Mac-side menubar surface so the perms state isn't dependent on the phone receiving the broadcast at all. Original race may still exist as a transient first-second window after auth, but no longer produces the "stuck on Waiting for Mac…" UX.
+
+**Context (preserved from original investigation):** During the autonomous burn-down of #33 we discovered the iPhone Quip app's "Mac Permissions" SettingsSheet section is permanently stuck on "Waiting for Mac…". Captured iOS device console (`xcrun devicectl device process launch --console`) shows iOS receives `auth_result`, `layout_update`, and `project_directories` over WebSocket every ~2s — but **never** receives `mac_permissions`. A parallel Node.js fake-iOS-client (`/tmp/perms-watcher.js` style) connecting to the same Mac WebSocket with the same PIN consistently receives `mac_permissions acc=true ae=true sr=true` within ~22ms of auth. So the broadcast IS going out (proven via Node) but the iPhone specifically isn't seeing it.
 
 **What's been verified:**
 - Build binary HAS `case "mac_permissions":` in `WebSocketClient.swift:498` (confirmed via `nm` + `strings` on the installed `Quip.debug.dylib`).
