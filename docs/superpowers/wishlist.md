@@ -487,20 +487,21 @@ Every commit in this repo to date has been "build, install on physical device, m
 
 ---
 
-### 23. Race conditions in the just-shipped duplicate/close feature
+### 23. Race conditions in the just-shipped duplicate/close feature (✅ Audited + fixed v1, eb-branch)
 
-**Status:** Wishlist — surfaced from review of recently-merged code
-**Context:** The duplicate/close feature shipped in commits `44033ee → e37a9e9 → 564af08 → d9de9a6 → 75c2b95` (Tasks 1–5 of the iPhone tab management plan). The `KeystrokeInjector.spawnWindow` and `closeWindow` paths involve several async steps: AppleScript to iTerm, polling for the new window's CGWindowID, registering the window in `WindowManager`, broadcasting the new window list to the iPhone. Several plausible race conditions exist:
+**Status:** ✅ Audited 2026-05-05. Two of the three races had real symptoms and shipped fixes; the third (spawn-then-close-original) was confirmed benign by code review and left untouched.
 
-- **Spawn-then-immediately-close.** User taps Duplicate, then before the spawn AppleScript has finished running `claude` in the new window, taps Close on the *original*. The close runs, but `WindowManager` doesn't yet know about the (still-spawning) new window. The new window finishes spawning a moment later and shows up in the next broadcast. Probably benign but worth verifying that no zombie iTerm process is left behind.
-- **Duplicate the same source three times in 2 seconds.** Each spawn races for a CGWindowID on the same iTerm2 process. iTerm2's window enumeration order isn't guaranteed under fast spawns — possible that one of the three new windows is missed entirely until the next refresh, or that two get confusingly similar identities briefly.
-- **Close a window during a `pressReturn` keystroke that's targeting it.** If a quick action and Close fire in the same long-press flow, the keystroke could land in the wrong window because by the time `KeystrokeInjector` looks up the target, it's gone. Currently the lookup should silently no-op, but verify.
+**Race A — three rapid duplicates picked the same window** (REAL, fixed): when three spawns fire inside ~2s, all three pollers run with the same `knownIds` baseline — so each `currentIds.subtracting(knownIds)` returns OVERLAPPING sets and pollers race for the same just-discovered window. Last-spawn-wins (the user's expectation) was nondeterministic. Fix extracted the picking algorithm into `SpawnedWindowPicker.pick(currentIds:knownIds:claimed:candidates:)` — a pure function that excludes ids already claimed by an earlier poller. `selectNewWindowAfterSpawn` keeps `claimedSpawnedIds` accumulating and prunes dead ids each tick so the set stays bounded. Covered by `SpawnedWindowPickerTests` (7 cases, including the explicit three-rapid-spawn scenario).
 
-**Fix approach:** a stress-test pass with a manual matrix (three rapid duplicates, spawn-then-close, close mid-keystroke) before this code matures past two weeks old. If any of the races show real symptoms, capture them in their own wishlist items.
+**Race C — keystroke target vanished mid-async** (PARTIAL, fixed): `send_text` already broadcast `ErrorMessage("Window no longer exists")` at the synchronous existence check, but `ensureITermSessionResolved` had two silent-`return` paths (entry + post-session-id-refresh) that dropped keystrokes / image-pastes without telling the phone. Now both paths broadcast `ErrorMessage("Window closed mid-action")` so the user gets a toast instead of a silent no-op.
 
-**Out of scope:** building automated tests for these races — see #21 about why integration tests stay manual.
+**Race B — spawn-then-close-original** (BENIGN, no fix): Reviewed via code path — `keystrokeInjector.closeWindow` runs synchronously to completion before yielding, so the original closes before the spawn poller's next tick. Layout broadcast briefly shows fewer windows than the user expects, then converges on the next 1-second WindowManager refresh. No zombie processes — iTerm2 owns its own session lifecycle. No state corruption — `clientSelectedWindowId` survives a window vanishing because the picker re-resolves on every broadcast.
+
+**Out of scope:** integration tests against a live iTerm — the picker logic is now unit-testable as a pure function, which is the high-value piece.
 
 **Related:** #13 (multi-iTerm2-window keystroke targeting — same "AppleScript window addressing is fragile under concurrency" theme).
+
+**Related code:** `QuipMac/Services/SpawnedWindowPicker.swift` (new, pure picker), `QuipMac/Tests/SpawnedWindowPickerTests.swift`, `QuipMacApp.swift:selectNewWindowAfterSpawn + ensureITermSessionResolved`.
 
 ---
 

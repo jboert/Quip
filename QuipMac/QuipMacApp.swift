@@ -82,6 +82,11 @@ struct QuipMacApp: App {
     /// the current grant state without piping it through the wire envelope.
     /// (wishlist §22 — Mac-side surface for missing perms.)
     @State private var permissionsStore = MacPermissionsStore()
+    /// Window IDs already claimed by a `selectNewWindowAfterSpawn` poller.
+    /// Lets concurrent spawns (e.g. three rapid duplicates) each pick a
+    /// distinct new window instead of all racing to the same one
+    /// (wishlist §23 race A). Pruned every poll tick to stay bounded.
+    @State private var claimedSpawnedIds: Set<String> = []
 
     var body: some Scene {
         WindowGroup {
@@ -1360,13 +1365,24 @@ struct QuipMacApp: App {
             // Force a window list refresh so we don't wait for the 2-second timer
             windowManager.refreshWindowList()
             let currentIds = Set(windowManager.windows.map(\.id))
-            let newIds = currentIds.subtracting(knownIds)
-            // Prefer a terminal window (the one we just spawned) over any random
-            // app window that happened to appear in the same refresh cycle.
-            let newTerminalId = newIds.first(where: { id in
-                windowManager.windows.first(where: { $0.id == id })?.isTerminal == true
-            })
-            if let newId = newTerminalId ?? newIds.first {
+            // Wishlist §23 race A: when three spawns fire inside ~2s, all three
+            // pollers run with the same `knownIds` baseline and `subtracting`
+            // returns OVERLAPPING new-id sets — every poller would race to
+            // pick the same just-discovered window. SpawnedWindowPicker
+            // excludes ids an earlier poller already claimed so each spawn
+            // ends up selecting a distinct window (and the LAST spawn wins
+            // the active-selection bid, which is what the user expects).
+            let candidates = windowManager.windows.map {
+                SpawnedWindowPicker.Candidate(id: $0.id, isTerminal: $0.isTerminal)
+            }
+            let pick = SpawnedWindowPicker.pick(
+                currentIds: currentIds,
+                knownIds: knownIds,
+                claimed: claimedSpawnedIds,
+                candidates: candidates
+            )
+            if let newId = pick.pickedId {
+                claimedSpawnedIds.insert(newId)
                 print("[Quip] spawn: new window detected \(newId), enabling + switching selection")
                 windowManager.toggleWindow(newId, enabled: true)
                 clientSelectedWindowId = newId
@@ -1378,6 +1394,9 @@ struct QuipMacApp: App {
             } else {
                 print("[Quip] duplicate_window: no new window detected after 3s, skipping auto-select")
             }
+            // Drop claims for ids the WindowManager no longer knows about so
+            // the set can't grow unbounded across long sessions.
+            claimedSpawnedIds.formIntersection(currentIds)
         }
     }
 
@@ -1597,7 +1616,15 @@ struct QuipMacApp: App {
         for windowId: String,
         perform: @escaping @MainActor @Sendable (ManagedWindow) -> Void
     ) {
-        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else { return }
+        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
+            // Wishlist §23 race C: caller already passed an existence guard,
+            // but if a Close fired between the caller's check and our entry
+            // we'd silently drop the keystroke / image-paste with no feedback.
+            // Surface to the phone so the user knows the action was lost.
+            print("[Quip] ensureITermSessionResolved: window \(windowId) gone before resolve")
+            webSocketServer.broadcast(ErrorMessage(reason: "Window closed mid-action"))
+            return
+        }
         let needsResolve = window.bundleId == TerminalApp.iterm2.bundleIdentifier
             && window.iterm2SessionId == nil
         if !needsResolve {
@@ -1608,7 +1635,13 @@ struct QuipMacApp: App {
             let sessions = WindowManager.fetchIterm2SessionIds()
             Task { @MainActor in
                 self.windowManager.applyIterm2SessionIds(sessions)
-                guard let refreshed = self.windowManager.windows.first(where: { $0.id == windowId }) else { return }
+                guard let refreshed = self.windowManager.windows.first(where: { $0.id == windowId }) else {
+                    // Window closed during the off-main session-id refresh.
+                    // Same surfacing as the entry-time guard above.
+                    print("[Quip] ensureITermSessionResolved: window \(windowId) gone during session-id refresh")
+                    self.webSocketServer.broadcast(ErrorMessage(reason: "Window closed mid-action"))
+                    return
+                }
                 perform(refreshed)
             }
         }
