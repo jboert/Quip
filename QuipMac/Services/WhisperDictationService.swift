@@ -89,8 +89,13 @@ final class WhisperDictationService: @unchecked Sendable {
             return s
         }
         do {
-            let text = try await transcriber.transcribe(audioArray: samples)
-            send(TranscriptResultMessage(sessionId: sessionId, text: text, error: nil))
+            let raw = try await transcriber.transcribe(audioArray: samples)
+            // WhisperKit emits placeholder tokens like `[BLANK_AUDIO]`,
+            // `(silence)`, `[NO_SPEECH]` for non-speech segments. They get
+            // typed verbatim into the user's terminal as garbage if we
+            // ship them through. Strip before sending.
+            let cleaned = WhisperOutputCleaner.clean(raw)
+            send(TranscriptResultMessage(sessionId: sessionId, text: cleaned, error: nil))
         } catch {
             send(TranscriptResultMessage(sessionId: sessionId, text: "",
                                          error: error.localizedDescription))
