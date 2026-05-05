@@ -166,6 +166,30 @@ struct QuipApp: App {
                 pushDelegate.foregroundBannerEnabled = {
                     UserDefaults.standard.bool(forKey: "pushForegroundBanner")
                 }
+                // (wishlist §15 v2 / Watch-actions path A.) Inline action
+                // buttons surfaced on the lock screen + Apple Watch under
+                // the `waiting_for_input` category. Tap fires here; we
+                // dispatch over the active WebSocket so the Mac responds
+                // even when the iPhone app is locked.
+                pushDelegate.onActionResponse = { windowId, action in
+                    attentionCenter.clearAttention(for: windowId)
+                    switch action {
+                    case .yes:
+                        client.send(QuickActionMessage(windowId: windowId, action: "press_y"))
+                    case .no:
+                        client.send(QuickActionMessage(windowId: windowId, action: "press_n"))
+                    case .choiceOne:
+                        client.send(SendTextMessage(windowId: windowId, text: "1", pressReturn: true))
+                    case .choiceTwo:
+                        client.send(SendTextMessage(windowId: windowId, text: "2", pressReturn: true))
+                    }
+                }
+                // Register the category so iOS knows which actions to
+                // surface for any push whose `aps.category` matches.
+                // Idempotent; safe to call on every cold start.
+                UNUserNotificationCenter.current().setNotificationCategories(
+                    [WaitingNotificationCategory.makeCategory()]
+                )
             }
             .onChange(of: selectedWindowId) { _, newId in
                 // User engaged with a window — clear its attention flag so

@@ -67,6 +67,14 @@ final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDe
     /// Closure invoked when the user TAPS a push. Deep-link. Always on main.
     var onNotificationTap: ((String) -> Void)?
 
+    /// (wishlist §15 v2 / Watch-actions path A.) Fired when the user taps
+    /// one of the inline notification action buttons (yes / no / 1 / 2)
+    /// surfaced via `UNNotificationCategory("waiting_for_input")`.
+    /// QuipApp wires this to dispatch a quick_action / send_text over
+    /// the active WebSocket so the Mac responds even when the iPhone
+    /// (or paired Watch) is locked. Always invoked on main.
+    var onActionResponse: ((_ windowId: String, _ action: WaitingActionResponse) -> Void)?
+
     /// Returns whatever the user currently has selected on the phone so
     /// we can decide whether to suppress the banner. Called on main.
     var currentlySelectedWindowId: (() -> String?)?
@@ -106,11 +114,98 @@ final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDe
     ) {
         let userInfo = response.notification.request.content.userInfo
         let windowId = userInfo["quip_window_id"] as? String
+        let actionId = response.actionIdentifier
         let completion = UncheckedSendable(completionHandler)
         DispatchQueue.main.async { [weak self] in
-            if let windowId { self?.onNotificationTap?(windowId) }
+            guard let self else { completion.value(); return }
+            if let action = WaitingActionResponse(actionId: actionId), let windowId {
+                self.onActionResponse?(windowId, action)
+            } else if let windowId {
+                // UNNotificationDefaultActionIdentifier (tap body) or
+                // UNNotificationDismissActionIdentifier (swipe away) —
+                // tap is the deep-link path, dismiss does nothing.
+                if actionId == UNNotificationDefaultActionIdentifier {
+                    self.onNotificationTap?(windowId)
+                }
+            }
             completion.value()
         }
+    }
+}
+
+/// (wishlist §15 v2 / Watch-actions path A.) Action button identifier set
+/// surfaced under the `waiting_for_input` notification category. Each
+/// case maps to a discrete Mac-side action so the user can answer a
+/// Claude prompt straight from the lock screen — or from the paired
+/// Apple Watch, which renders these the same way as the phone.
+enum WaitingActionResponse: String, Sendable {
+    /// Claude's typical y/n affirmative — fires `quick_action press_y`.
+    case yes
+    /// Claude's typical y/n negative — fires `quick_action press_n`.
+    case no
+    /// Numbered-prompt answer "1" — fires `send_text "1"` w/ Return.
+    case choiceOne
+    /// Numbered-prompt answer "2" — fires `send_text "2"` w/ Return.
+    case choiceTwo
+
+    /// Identifier strings used in the `UNNotificationAction` registration
+    /// + the `actionIdentifier` we get back on tap.
+    var rawIdentifier: String {
+        switch self {
+        case .yes: return "QUIP_ACTION_YES"
+        case .no: return "QUIP_ACTION_NO"
+        case .choiceOne: return "QUIP_ACTION_CHOICE_1"
+        case .choiceTwo: return "QUIP_ACTION_CHOICE_2"
+        }
+    }
+
+    init?(actionId: String) {
+        switch actionId {
+        case "QUIP_ACTION_YES": self = .yes
+        case "QUIP_ACTION_NO": self = .no
+        case "QUIP_ACTION_CHOICE_1": self = .choiceOne
+        case "QUIP_ACTION_CHOICE_2": self = .choiceTwo
+        default: return nil
+        }
+    }
+}
+
+/// Build the `UNNotificationCategory` set Quip registers at launch so the
+/// system displays inline action buttons under any push whose payload
+/// carries `aps.category == "waiting_for_input"`. (wishlist §15 v2.)
+enum WaitingNotificationCategory {
+    static let identifier = "waiting_for_input"
+
+    static func makeCategory() -> UNNotificationCategory {
+        let yes = UNNotificationAction(
+            identifier: WaitingActionResponse.yes.rawIdentifier,
+            title: "Yes",
+            options: []
+        )
+        let no = UNNotificationAction(
+            identifier: WaitingActionResponse.no.rawIdentifier,
+            title: "No",
+            options: []
+        )
+        let one = UNNotificationAction(
+            identifier: WaitingActionResponse.choiceOne.rawIdentifier,
+            title: "1",
+            options: []
+        )
+        let two = UNNotificationAction(
+            identifier: WaitingActionResponse.choiceTwo.rawIdentifier,
+            title: "2",
+            options: []
+        )
+        // Order matters — iOS surfaces the first 4 inline on the lock
+        // screen + Watch. Yes/No come first because they're the most
+        // common Claude prompts; numbered choices follow.
+        return UNNotificationCategory(
+            identifier: identifier,
+            actions: [yes, no, one, two],
+            intentIdentifiers: [],
+            options: []
+        )
     }
 }
 
