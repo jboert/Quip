@@ -29,6 +29,11 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §B8 Live captions regressed on remote Whisper path | ✅ | `4751272` | yes (iPhone) |
 | §B9 Auto-pick first window on layout (PTT silent-fail fix) | ✅ | `6d47a51` | yes (iPhone) |
 | §B10 Paired-backends dedupe on load + addPaired URL match | ✅ | `93cc9a8` | yes (iPhone) |
+| §B11 SpeechService weak-ref drop fix + 4 tests | ✅ | `059f614` + `314b37d` | yes (iPhone) |
+| §B12 Strip Whisper [BLANK_AUDIO] tokens + 8 tests | ✅ | `a6afdc5` | needs verify (Mac) |
+| §B4 Prompts paste-wrong-window — closure-resolver fix | ✅ | _pending_ | install only — needs verify |
+| §A1 Auto-enable mainRow.prompts on first non-empty catalog | ✅ | _pending_ | install only — needs verify |
+| §A4 Searchable PromptsQuickPickerSheet | ✅ | _pending_ | install only — needs verify |
 
 **Test still owed by user:**
 - Watch app appears on Apple Watch Ultra 3 + state list renders + haptic on waiting_for_input.
@@ -1318,9 +1323,13 @@ Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bit
 
 ---
 
-### B4. Prompts pasting into wrong window (🔍 Open, deferred)
+### B4. Prompts pasting into wrong window (✅ Fixed, eb-branch)
 
-**Status:** 🔍 Open. User reported 2026-05-04 — after `2884682` shipped, tapping a prompt in the Prompts picker sheet still pastes into a window that doesn't match what the user thinks is "active." Need investigation — likely either Mac-side `handlePastePrompt` ignoring the message's `windowId` and falling back to focused/last-active, or phone-side `selectedWindowId` is stale when the picker fires.
+**Status:** ✅ Fixed 2026-05-04. Root cause: phone-side stale-capture, Mac-side `handlePastePrompt` was already correct (uses `msg.windowId` throughout). The Settings → Prompts NavigationLink passed `windowId: selectedWindowId` to `PromptLibrarySheet` — a stored `String?` value captured at NavigationLink construction. Once Settings was open, the sheet kept firing pastes at whatever window was active when the user opened Settings, even after they switched windows in the main view.
+
+**Fix:** converted both `SettingsSheet.selectedWindowId` and `PromptLibrarySheet.windowId` to closure resolvers (`windowIdProvider: () -> String?`). Each paste calls the resolver fresh, so `firePromptSlot`-style fires always read the *current* `selectedWindowId` from the parent view. Same pattern as the §B11 SpeechService weak-ref → resolver migration.
+
+**Files:** `QuipiOS/QuipApp.swift` — `SettingsSheet` parameter, `PromptLibrarySheet` parameter, call sites.
 
 **Files to start with:**
 - `QuipiOS/QuipApp.swift:firePromptSlot` — uses `selectedWindowId`
@@ -1432,3 +1441,19 @@ Wire reuses §57's existing `PastePromptMessage` handler — no new protocol bit
 **Files:** `QuipiOS/Services/BackendConnectionManager.swift` — `addPaired`, `loadPaired`.
 
 **Acceptance test:** Backends sheet now shows one row per Mac, even after multi-path pair (Bonjour + Tailscale) or repeated QR-pair attempts. Future stuck duplicates self-heal on next launch.
+
+---
+
+### A1. Auto-enable Prompts main-row button on first non-empty catalog (✅ Done, eb-branch)
+
+**Status:** ✅ Done 2026-05-04. New users with no prompts in their catalog get the toggle off (sensible default — no point showing a button that does nothing). First time the Mac broadcasts a non-empty `prompt_library`, an `.onChange` hook in `MainiOSView` flips `mainRow.prompts = true` AND records `mainRow.prompts.autoEnabledOnce = true`. The one-shot flag prevents re-flipping after a user explicitly turns the button off in Settings (catalog re-broadcasts every reconnect; without the flag the auto-on would fight the user forever).
+
+**Files:** `QuipiOS/QuipApp.swift` — `mainRow.prompts.autoEnabledOnce` AppStorage key + `.onChange(of: client.promptLibrary.count)` hook.
+
+---
+
+### A4. Searchable PromptsQuickPickerSheet (✅ Done, eb-branch)
+
+**Status:** ✅ Done 2026-05-04. Stream-Deck users with 30+ prompts couldn't easily find a specific entry past the MRU window. Added `.searchable($query, placement: .navigationBarDrawer(displayMode: .always))` to the picker; filter is case-insensitive and matches against `label`, `bodyPreview`, and raw `id`. Empty query returns the original MRU-sorted list. Empty result set shows "No matches for \"…\"" instead of a blank list.
+
+**Files:** `QuipiOS/QuipApp.swift` — `PromptsQuickPickerSheet` adds `@State query`, computed `filtered`, `.searchable` modifier.
