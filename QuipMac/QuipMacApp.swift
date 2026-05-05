@@ -814,6 +814,27 @@ struct QuipMacApp: App {
                 }
                 AuditLogger.log(messageType: "quick_action", clientIdentifier: "ws-client", textContent: msg.action)
                 print("[Quip] quick_action: action=\(msg.action) windowId=\(msg.windowId)")
+                // (wishlist §15 v2.) Phone-initiated test fire of the
+                // waiting_for_input push pipeline. Bypasses the
+                // window-id existence check (msg.windowId is empty
+                // for this case) and routes straight into the same
+                // notifyWaitingForInput path a real state transition
+                // would. Lets the user verify the entire stack —
+                // APNs delivery, category registration, action
+                // buttons — without waiting for Claude to actually
+                // ask a question.
+                if msg.action == "test_push" {
+                    let selected = clientSelectedWindowId
+                        ?? windowManager.windows.first(where: \.isEnabled)?.id
+                    pushNotificationService.notifyWaitingForInput(
+                        windowId: selected ?? "test",
+                        windowName: "Test",
+                        projectName: "Quip",
+                        attentionCount: 1,
+                        selectedWindowId: selected
+                    )
+                    break
+                }
                 thinkingWindows.insert(msg.windowId)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     handleQuickAction(msg.action, for: window)

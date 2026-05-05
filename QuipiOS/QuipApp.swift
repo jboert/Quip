@@ -4727,9 +4727,18 @@ struct NotificationsSettingsSheet: View {
 
     var body: some View {
         List {
+            // MARK: Master pause + status (always visible, even when paused)
             Section {
                 Toggle("Pause All", isOn: $pushPaused)
-                if !pushPaused {
+            } header: {
+                Text("Push Notifications")
+            } footer: {
+                statusFooter
+            }
+
+            // MARK: Banner / sound / scope (only when not paused)
+            if !pushPaused {
+                Section {
                     Toggle("Banner", isOn: $pushBannerEnabled)
                     if pushBannerEnabled {
                         Toggle("Sound", isOn: $pushSound)
@@ -4738,18 +4747,49 @@ struct NotificationsSettingsSheet: View {
                         // currently-selected window's transitions push.
                         // On → every enabled window pushes (still
                         // batched into one alert via collapseId on Mac).
-                        Toggle("Notify on All Windows", isOn: $pushNotifyAllWindows)
+                        Toggle("All Windows", isOn: $pushNotifyAllWindows)
                     }
-                    Toggle("Live Activities", isOn: $liveActivitiesEnabled)
+                } header: {
+                    Text("Banner")
+                } footer: {
+                    if pushBannerEnabled {
+                        Text(pushNotifyAllWindows
+                             ? "Pushes for any window's waiting prompt. Multiple within 30s collapse to one alert."
+                             : "Pushes only for the window you have selected.")
+                    } else {
+                        Text("Banner is off. Live Activities below will still update on the lock screen.")
+                    }
+                }
 
-                    // Quiet Hours kept to two rows max:
-                    //   row 1: "Quiet Hours" toggle
-                    //   row 2: "From [pill] to [pill]" range picker (only visible
-                    //          when the toggle is on)
-                    // Compact Menu pickers replace the old pair of full-width
-                    // Steppers — those took two rows by themselves and pushed the
-                    // section unnecessarily long.
-                    Toggle("Quiet Hours", isOn: $quietHoursEnabled)
+                // MARK: Action buttons info — discoverability for §15 v2 path A
+                Section {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Long-press an alert").font(.subheadline.weight(.medium))
+                            Text("Yes / No / 1 / 2 buttons appear inline on the lock screen and Apple Watch.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "hand.tap")
+                            .foregroundStyle(.tint)
+                    }
+                } header: {
+                    Text("Inline Actions")
+                }
+
+                // MARK: Live Activities — own section since it bypasses APNs
+                Section {
+                    Toggle("Live Activities", isOn: $liveActivitiesEnabled)
+                } header: {
+                    Text("Dynamic Island")
+                } footer: {
+                    Text("Driven directly by the Mac over WebSocket — works even when banners are off or paused.")
+                }
+
+                // MARK: Quiet Hours — own section, two rows max
+                Section {
+                    Toggle("Enable", isOn: $quietHoursEnabled)
                     if quietHoursEnabled {
                         HStack {
                             Text("From")
@@ -4760,23 +4800,74 @@ struct NotificationsSettingsSheet: View {
                             hourMenu(value: $quietHoursEnd)
                         }
                     }
+                } header: {
+                    Text("Quiet Hours")
+                } footer: {
+                    if quietHoursEnabled {
+                        Text("Banners suppressed during this window. Live Activities still update.")
+                    }
                 }
-            } footer: {
-                if pushRegistration.deviceToken == nil {
-                    Text("Notification permission not granted. Reconnect or check iOS Settings → Quip.")
+
+                // MARK: Test fire — sends a fake waiting_for_input from the
+                // phone over WebSocket so the Mac fires a real APNs push back.
+                // Round-trips the entire stack including action category.
+                Section {
+                    Button {
+                        fireTestNotification()
+                    } label: {
+                        Label("Send Test Notification", systemImage: "paperplane")
+                    }
+                    .disabled(pushRegistration.deviceToken == nil)
+                } footer: {
+                    Text("Triggers a real push from the Mac so you can verify banner + action buttons render.")
                 }
             }
-            .onChange(of: pushPaused) { _, _ in sendPrefs() }
-            .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
-            .onChange(of: pushSound) { _, _ in sendPrefs() }
-            .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
-            .onChange(of: pushNotifyAllWindows) { _, _ in sendPrefs() }
-            .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
-            .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
-            .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
         }
+        .onChange(of: pushPaused) { _, _ in sendPrefs() }
+        .onChange(of: pushBannerEnabled) { _, _ in sendPrefs() }
+        .onChange(of: pushSound) { _, _ in sendPrefs() }
+        .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
+        .onChange(of: pushNotifyAllWindows) { _, _ in sendPrefs() }
+        .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
+        .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
+        .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Status footer for the master section — green check or red caution
+    /// based on registration state. Single source of truth for "are
+    /// notifications actually wired up at all" so the user doesn't hunt
+    /// across iOS Settings + Quip toggles trying to figure out why
+    /// they're not getting alerts.
+    @ViewBuilder
+    private var statusFooter: some View {
+        if let token = pushRegistration.deviceToken {
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Registered · device …\(token.suffix(4))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Permission not granted. Open iOS Settings → Quip → Notifications.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Send a test push request to the Mac so it round-trips a real APNs
+    /// alert back. Uses the existing `quick_action` channel with a
+    /// recognizable sentinel value the Mac handler routes to
+    /// `notifyWaitingForInput`. (Path keeps protocol churn minimal — see
+    /// QuipMacApp's `test_push` quick_action handler.)
+    private func fireTestNotification() {
+        client.send(QuickActionMessage(windowId: "", action: "test_push"))
     }
 
     /// Compact 24-hour Menu picker. Renders the selected hour as a small pill
