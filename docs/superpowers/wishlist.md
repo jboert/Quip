@@ -71,6 +71,8 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 | §27 Idempotent message IDs + Mac dedupe table v1 | ✅ | `e26a8f6` | 7 dedupe-table unit tests; manual not yet exercised |
 | §15 Push notifs — all-windows toggle + batched body | ✅ | `c15d575` | install only — needs hardware verify (push lands w/ 🤖 copy + collapsed batch) |
 | §15 follow-up — DevicePushPreferences decode tolerant of missing fields | ✅ | `6cdae55` | 4 regression tests; user confirmed pause-bug behavior on hardware |
+| Wishlist sweep (2026-05-05 session log + §34 mitigated) | 📝 | `cceba7f` | n/a (docs) |
+| §15 v2 — UNNotificationCategory yes/no/1/2 actions on lock screen + Watch (path A) | ✅ | _pending_ | install only — needs hardware verify |
 
 **Test still owed by user (today's batch):**
 - §15 hardware verify: phone backgrounded → trigger `waiting_for_input` → push lands with `🤖 AI is waiting`. Trigger 2+ windows → batches to `🤖 N AIs waiting`. Toggle "Notify on All Windows" → non-selected window now pushes.
@@ -83,8 +85,8 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 - iPhone-side prompt CRUD (§57 v2).
 - Prompts as keyboard pills (§B3).
 
-**Open question raised today, still parked:**
-- Watch notifications give "dismiss only" — should we ship interactive `UNNotificationCategory` actions (yes/no/1/2) so the wrist can answer prompts, or push for §53 v2 (full Watch slash-button send-back)? Half-day for the iOS notification-categories path; bigger lift for the WCSession round-trip. Deferred to brainstorm.
+**Resolved today:**
+- Watch notifications gave "dismiss only" — picked path A (UNNotificationCategory inline actions). Yes / No / 1 / 2 buttons render on the lock screen and (via iOS forwarding) on the paired Watch. Tap on the wrist → iOS app dispatches `quick_action press_y` / `press_n` or `send_text "1"` / `"2"` over the active WebSocket. No new Watch UI work; §53 v2 (full Watch slash-button send-back) remains the bigger-lift v2 if interactivity past these four actions is needed. CFBundleShortVersionString bumped 1.4.2 → 1.5.0 because the wire payload now includes a `category` field.
 
 ---
 

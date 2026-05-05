@@ -394,7 +394,14 @@ final class PushNotificationService {
                     "title": title,
                     "body": body
                 ],
-                "badge": attentionCount
+                "badge": attentionCount,
+                // (wishlist §15 v2 / Watch-actions path A.) Surfaces the
+                // Yes / No / 1 / 2 inline buttons on the lock screen and
+                // the paired Apple Watch. iOS picks the action set up
+                // from its registered UNNotificationCategory of the
+                // matching identifier. Older iOS clients that don't
+                // register the category fall back to the plain banner.
+                "category": "waiting_for_input"
             ]
             if prefs.sound { aps["sound"] = "default" }
 
