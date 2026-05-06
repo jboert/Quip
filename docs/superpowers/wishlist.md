@@ -6,6 +6,21 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-05-06 (§B16 + log-spam burn-down)
+
+6 commits, all pushed to `origin/eb-branch`. Started after `c6eb974`.
+
+| Section | Status | Commit | Hardware-tested |
+|---------|--------|--------|-----------------|
+| §B16 Mac broadcast frontmost (NSWorkspace + 400ms AX poll + FrontmostChangedMessage + PreferencesSnapshot field) | ✅ | `b6ef907` | install only — needs phone follow-frontmost smoke |
+| §B16 iOS receive + Auto pill + manual-tap pin | ✅ | `918cb5c` | install only — needs phone smoke |
+| Continuation 3 handoff (recap + resume one-liner) | ✅ | `18cdf5b` | n/a (docs) |
+| Mac log-spam fix (NWProtocolWebSocket opcode filter + Kokoro log-once) | ✅ | `3a3a7c7` | yes (Mac live verify, control-frame filter shipped, kokoro log-once shipped) |
+| iOS prefs storm + select_window heal on reconnect | ✅ | `f471415` | yes (live monitor: 0 prefs_snapshot post-fix vs ~30/min before) |
+| §B17 wishlist file (4-byte unknown trace) | ✅ | `80d5d3c` | n/a (docs) |
+
+Tail finding: `type=unknown (4 bytes)` survived the opcode filter — the payload is a TEXT frame, not a control frame. Filed as §B17 for next-session trace.
+
 ## Session log — 2026-05-04 (autonomous burn-down)
 
 20 commits on `eb-branch`. Started after `64a8376` (§44 iOS WS resilience).
@@ -722,29 +737,7 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 
 ### B16. Phone follows Mac frontmost window (image+text routing)
 
-**Status:** Wishlist
-**Surfaced:** 2026-05-05 — user in image mode sent photo+text; iTerm running codex (NuggetExpo) was Mac frontmost, but payload landed in Claude Desktop window.
-
-**Root cause (two layers):**
-1. **Phone is sticky.** `selectedWindowId` (`QuipiOS/QuipApp.swift:50`) is manual `@State`. User must tap a window card to retarget. Phone never auto-tracks Mac frontmost; Mac never broadcasts its frontmost. layout_update carries the window list but no "currently focused" marker.
-2. **Claude branch is app-level, not window-level.** `KeystrokeInjector.swift:71` does `tell application "Claude" to activate` — pastes into frontmost-of-Claude regardless of which Claude window the phone selected. iTerm branch uses sessionId so it's window-specific; Claude branch isn't.
-
-**Likely shape (path #1 — recommended):**
-- **Mac:** add `frontmost_changed` WS message. Source = `NSWorkspace.shared.didActivateApplicationNotification` + AX focused-window observer. Payload = `{type: "frontmost_changed", windowId: <CGWindowID>}`. Throttle to coalesce rapid switches (~150ms).
-- **iOS:** parse `frontmost_changed` in `WebSocketClient.swift`; expose `onFrontmostChanged` callback. Wire bridge in `BackendConnectionManager.wire()` (per memory note about multi-backend bridge).
-- **iOS state:** add `followFrontmost: Bool = true` @AppStorage pref. When true, incoming `frontmost_changed` updates `selectedWindowId`. Manual tap on a window card pins (sets followFrontmost=false until next manual "Auto" toggle, OR auto-resumes after N seconds — pick one).
-- **UI:** small "Auto" pill / chip in window picker row. On = green dot or filled, Off = outline. Tap to toggle.
-- **Claude branch fix (Layer 2):** before AppleScript, raise the specific Claude window via AX (`AXUIElementSetAttribute(window, kAXMainAttribute)` + `kAXFocusedAttribute`) using cgWindowNumber the phone sent. Then `tell application "Claude" to activate` + Cmd+V. Falls back to current behavior if AX raise fails.
-
-**Acceptance:**
-- iTerm and Claude windows both open. Mac frontmost = iTerm. Phone in image mode, send photo+text. Lands in iTerm. ✓
-- Switch Mac focus to Claude. Phone still on Auto. Send. Lands in Claude. ✓
-- Tap iTerm card on phone (pin). Switch Mac focus to Claude. Send. Lands in iTerm (pinned wins). ✓
-- Tap Auto pill. Resumes follow-frontmost. ✓
-
-**Why path #1 over #3 (Layer 2 only):** path #3 fixes Claude multi-window but still requires phone tap to retarget app. User's complaint is the tap requirement.
-
-**Risk:** AX-based per-window raise needs Accessibility permission (already required by Quip). If phone-side `selectedWindowId` thrashes on every Mac focus change, image-mode send mid-encode could race — keep encode-time windowId snapshotted (already does via `sendPendingImageIfNeeded(windowId:)` capture).
+**Status:** ✅ Done 2026-05-06 (`b6ef907` Mac broadcast + `918cb5c` iOS follow + Auto pill, plus `f471415` companion fix that healed `clientSelectedWindowId` on phone reconnect). Mac broadcasts its current frontmost `ManagedWindow.id` via new `FrontmostChangedMessage` (NSWorkspace activation hook + 400ms AX focused-window poller). iOS auto-retargets `selectedWindowId` when `followFrontmost` pref is on; manual tap on a window card pins. Icon-only Auto pill in window-layout top-right (filled `cursorarrow.rays` when following / outlined `hand.point.up.left` when pinned). Layer 2 (per-window AX raise inside Claude branch) turned out to be unneeded — `WindowManager.focusWindow` already raises the specific window before keystroke fires.
 
 ---
 
@@ -772,5 +765,4 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 
 ## Tabled (parked, revisit on demand)
 
-- §52 iPad layout — tabled 2026-05-05 by user. No iPad to test on; not a current priority.
-- §55 Clipboard sync (Mac↔iPhone) — tabled 2026-05-05 by user. Apple's Universal Clipboard (Handoff) already covers when both devices share iCloud + Bluetooth + Wi-Fi. Revisit only if Quip ever needs to sync clipboards across users / devices not on the same iCloud.
+_Empty — entries previously parked here (§52 iPad, §55 Clipboard sync) were dropped 2026-05-06 by user request. Add new tabled items below as needed._
