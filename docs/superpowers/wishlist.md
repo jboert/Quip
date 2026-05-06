@@ -409,10 +409,9 @@ Follow-up audit (`8fdbd66`): all 7 wraps still cover post-`b46b45d`; no new side
 
 ### 35. Cross-app paste from iPhone clipboard into Quip terminal
 
-**Status:** Wishlist
-**Context:** Copy from any iOS app, switch to Quip, paste into selected terminal — text piped via WS, typed into active iTerm window.
-**Likely shape:** Paste button (clipboard icon) inline with text-input bar OR in QuickButton row. Tap reads `UIPasteboard.general.string`, sends via existing `SendTextMessage` with `pressReturn: false`. Long-press surfaces options (paste w/ return, raw multi-line, heredoc). Visual feedback ("Pasted N chars").
-**Open:** size cap (32KB?), multi-line handling (one chunk vs line-by-line), dedicated affordance vs long-press, inverse direction (terminal selection → iPhone clipboard)?
+**Status:** ✅ Done 2026-05-06 (commit shipping with this update). Long-press the keyboard main-row button reads `UIPasteboard.general.string` and ships it to the selected window via `SendTextMessage(pressReturn: false)`. Single-tap behavior unchanged (toggle text input panel). 32 KiB ceiling via pure helper `MainiOSView.clipText(_:maxBytes:)` that trims by character (not byte) so multi-byte glyphs never split into invalid UTF-8. Haptic feedback on success/warning. Accessibility hint on the keyboard button documents the gesture for VoiceOver users. 6 ClipTextTests cover empty / at-limit / over-limit / multi-byte glyph / sub-glyph cap.
+
+Deferred to follow-ups: dedicated paste button (vs long-press gesture), paste-with-return variant, line-by-line chunking for huge multi-line payloads, inverse direction (terminal selection → iPhone clipboard). The long-press shape ships a usable v1 without growing the main row.
 
 ---
 

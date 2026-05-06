@@ -2106,7 +2106,20 @@ struct MainiOSView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .accessibilityLabel(showTextInput ? "Hide keyboard" : "Show keyboard")
+                        .accessibilityHint("Long-press to paste from iPhone clipboard")
                         .accessibilityAddTraits(.isButton)
+                        .simultaneousGesture(
+                            // §35 Cross-app paste — long-press the keyboard
+                            // button to read iPhone's clipboard and ship it
+                            // straight to the selected window via send_text.
+                            // Single-tap behavior unchanged (toggle text
+                            // input). Skipped silently if no window selected
+                            // OR clipboard is empty — accessibility hint
+                            // documents the gesture so VoiceOver users find
+                            // it.
+                            LongPressGesture(minimumDuration: 0.4)
+                                .onEnded { _ in pasteClipboardToSelectedWindow() }
+                        )
                     }
                     if mainRowReturn {
                         Button { submitOrPressReturn() } label: {
@@ -2330,6 +2343,45 @@ struct MainiOSView: View {
         sendPendingImageIfNeeded(windowId: wid) { [client] in
             client.send(QuickActionMessage(windowId: wid, action: "press_return"))
         }
+    }
+
+    /// §35 — long-press on the keyboard main-row button reads the iPhone's
+    /// system clipboard and ships it to the selected window via send_text
+    /// with `pressReturn: false`. Triggers iOS's per-app paste-permission
+    /// prompt the first time the user does it (system standard). Skips
+    /// silently when no window selected or clipboard is empty/non-text;
+    /// the haptic at the end gives feedback even when nothing was pasted.
+    /// Truncated to a 32 KiB ceiling because larger payloads should use
+    /// the dedicated text-input panel + send path with proper batching.
+    @MainActor
+    fileprivate func pasteClipboardToSelectedWindow() {
+        guard let wid = selectedWindowId, !wid.isEmpty else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        guard let raw = UIPasteboard.general.string, !raw.isEmpty else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        let text = Self.clipText(raw, maxBytes: 32 * 1024)
+        client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    /// Cap clipboard payload at `maxBytes` UTF-8 bytes. Trims by character
+    /// (not byte) so we never split a multi-byte glyph. Pure helper so a
+    /// unit test can drive boundary cases without UIPasteboard.
+    static func clipText(_ s: String, maxBytes: Int) -> String {
+        if s.utf8.count <= maxBytes { return s }
+        var out = ""
+        var bytes = 0
+        for ch in s {
+            let n = String(ch).utf8.count
+            if bytes + n > maxBytes { break }
+            out.append(ch)
+            bytes += n
+        }
+        return out
     }
 
     // MARK: - Image Upload
