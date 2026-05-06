@@ -69,6 +69,9 @@ struct BackendPickerSheet: View {
         let session = manager.sessions[backend.id]
         let status = Self.classification(enabled: backend.enabled,
                                           reachability: session?.reachability)
+        let lastSeen = Self.lastSeenCaption(status: status,
+                                             lastConnectedAt: backend.lastConnectedAt,
+                                             now: Date())
         HStack(spacing: 10) {
             Circle()
                 .fill(status.dot(colors: colors))
@@ -100,6 +103,17 @@ struct BackendPickerSheet: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                        }
+                        // §J — second caption: relative time of last
+                        // successful connection. Hidden when row status
+                        // is .connected (timestamp would be misleading
+                        // — they're connected NOW). Shows "Last seen
+                        // 2m ago / 3d ago" or "Never connected" so the
+                        // user can spot stale entries at a glance.
+                        if let lastSeen {
+                            Text(lastSeen)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     Spacer(minLength: 4)
@@ -189,5 +203,39 @@ struct BackendPickerSheet: View {
         case .unreachable: return .unreachable
         case .needsAuth:   return .needsAuth
         }
+    }
+
+    /// Build the per-row "last seen" caption. Hidden (returns nil)
+    /// when the row is currently `.connected` — showing a stale
+    /// timestamp next to "Connected" would be confusing. Otherwise
+    /// returns "Last seen Xm ago / Xh ago / Xd ago" or
+    /// "Never connected" when no successful auth has ever been
+    /// recorded for this backend. Pure / time-injectable so unit
+    /// tests can drive every bucket. (§J.)
+    static func lastSeenCaption(status: RowStatus, lastConnectedAt: Date?, now: Date) -> String? {
+        if status == .connected { return nil }
+        guard let when = lastConnectedAt else {
+            return "Never connected"
+        }
+        let delta = now.timeIntervalSince(when)
+        if delta < 0 {
+            // Clock skew — treat as "just now" rather than negative duration.
+            return "Last seen just now"
+        }
+        return "Last seen " + relativeAgo(seconds: delta)
+    }
+
+    /// Compact relative-time formatter — "2m ago" / "5h ago" / "3d ago".
+    /// Bands are coarse on purpose: granularity below a minute is
+    /// noise; above 30 days flattens to "30d+ ago" so very-old entries
+    /// don't show months/years (which would just be a wall clock at
+    /// that point).
+    static func relativeAgo(seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        if s < 60        { return "just now" }
+        if s < 3_600     { return "\(s / 60)m ago" }
+        if s < 86_400    { return "\(s / 3_600)h ago" }
+        if s < 30 * 86_400 { return "\(s / 86_400)d ago" }
+        return "30d+ ago"
     }
 }

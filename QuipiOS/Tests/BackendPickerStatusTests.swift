@@ -54,4 +54,73 @@ final class BackendPickerStatusTests: XCTestCase {
                            "RowStatus.\(c.rawValue) caption is empty — picker would render a bare dot with no label")
         }
     }
+
+    // MARK: - §J last-seen caption
+
+    func test_lastSeen_connected_returnsNil() {
+        // Showing "last seen 2m ago" next to "Connected" is confusing —
+        // suppress the timestamp when the row is currently connected.
+        XCTAssertNil(BackendPickerSheet.lastSeenCaption(status: .connected,
+                                                         lastConnectedAt: Date(timeIntervalSinceNow: -120),
+                                                         now: Date()))
+    }
+
+    func test_lastSeen_neverConnected_returnsNeverString() {
+        XCTAssertEqual(BackendPickerSheet.lastSeenCaption(status: .unreachable,
+                                                           lastConnectedAt: nil,
+                                                           now: Date()),
+                       "Never connected")
+    }
+
+    func test_lastSeen_recent_returnsMinutes() {
+        let now = Date()
+        let when = now.addingTimeInterval(-120) // 2 min ago
+        XCTAssertEqual(BackendPickerSheet.lastSeenCaption(status: .unreachable,
+                                                           lastConnectedAt: when,
+                                                           now: now),
+                       "Last seen 2m ago")
+    }
+
+    func test_lastSeen_hours() {
+        let now = Date()
+        let when = now.addingTimeInterval(-3 * 3600 - 60) // 3h+
+        XCTAssertEqual(BackendPickerSheet.lastSeenCaption(status: .off,
+                                                           lastConnectedAt: when,
+                                                           now: now),
+                       "Last seen 3h ago")
+    }
+
+    func test_lastSeen_days() {
+        let now = Date()
+        let when = now.addingTimeInterval(-5 * 86400) // 5d
+        XCTAssertEqual(BackendPickerSheet.lastSeenCaption(status: .unreachable,
+                                                           lastConnectedAt: when,
+                                                           now: now),
+                       "Last seen 5d ago")
+    }
+
+    func test_lastSeen_veryOld_flattensTo30dPlus() {
+        let now = Date()
+        let when = now.addingTimeInterval(-100 * 86400)
+        XCTAssertEqual(BackendPickerSheet.lastSeenCaption(status: .unreachable,
+                                                           lastConnectedAt: when,
+                                                           now: now),
+                       "Last seen 30d+ ago",
+                       "Months/years would just be a wall clock — flatten to a single bucket")
+    }
+
+    func test_lastSeen_clockSkew_returnsJustNow() {
+        // Future timestamps (clock skew) should display gracefully, not
+        // as a negative duration.
+        let now = Date()
+        let when = now.addingTimeInterval(60) // 1 min in future
+        XCTAssertEqual(BackendPickerSheet.lastSeenCaption(status: .unreachable,
+                                                           lastConnectedAt: when,
+                                                           now: now),
+                       "Last seen just now")
+    }
+
+    func test_relativeAgo_belowOneMinute_collapsesToJustNow() {
+        XCTAssertEqual(BackendPickerSheet.relativeAgo(seconds: 30), "just now")
+    }
 }

@@ -682,7 +682,17 @@ final class BackendConnectionManager {
             session.windows = update.windows
             session.monitorName = update.monitor
             if let a = update.screenAspect, a > 0 { session.screenAspect = a }
-            if session.reachability != .connected { session.reachability = .connected }
+            let wasConnected = session.reachability == .connected
+            if !wasConnected { session.reachability = .connected }
+            // §J — stamp the paired-backend's lastConnectedAt on the
+            // first layout_update of a connection (i.e. the moment the
+            // session newly enters .connected). Throttled to once per
+            // connection cycle so the picker sees stable timestamps and
+            // we don't write UserDefaults every layout tick.
+            if !wasConnected, let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
+                self.paired[i].lastConnectedAt = Date()
+                self.savePaired()
+            }
             if let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
                 // Diff guard — only persist when the monitor name actually
                 // changed. Without this every layout_update (multiple per

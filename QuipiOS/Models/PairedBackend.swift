@@ -36,6 +36,16 @@ struct PairedBackend: Codable, Identifiable, Hashable {
     /// `urlsInOrder` list to `WebSocketClient.connect` which advances on
     /// TCP-fail / auth-timeout. Empty for single-URL entries.
     var fallbackURLs: [String]
+    /// Last time this backend was successfully authenticated. Distinct
+    /// from `lastUsed` (which tracks user-initiated interactions like
+    /// add / setActive / reauth) — `lastConnectedAt` is auto-updated by
+    /// `BackendConnectionManager.wire()` whenever the session reaches
+    /// `.connected`. Powers the "Connected 2m ago / 3d ago / Never"
+    /// caption in the picker so users can spot stale entries at a
+    /// glance. nil when the backend has never reached connected since
+    /// being paired (or when upgrading from a build that didn't track
+    /// this — Codable defaults to nil for missing field). (§J.)
+    var lastConnectedAt: Date?
 
     /// Primary + fallback URLs in connect-priority order. Always has at
     /// least one element (the primary `url`).
@@ -51,7 +61,8 @@ struct PairedBackend: Codable, Identifiable, Hashable {
          lastUsed: Date = Date(),
          pinned: Bool = false,
          enabled: Bool = true,
-         fallbackURLs: [String] = []) {
+         fallbackURLs: [String] = [],
+         lastConnectedAt: Date? = nil) {
         self.id = id
         self.url = url
         self.name = name
@@ -61,10 +72,11 @@ struct PairedBackend: Codable, Identifiable, Hashable {
         self.pinned = pinned
         self.enabled = enabled
         self.fallbackURLs = fallbackURLs
+        self.lastConnectedAt = lastConnectedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, url, name, lastSeenLayoutMonitorName, kind, lastUsed, pinned, enabled, fallbackURLs
+        case id, url, name, lastSeenLayoutMonitorName, kind, lastUsed, pinned, enabled, fallbackURLs, lastConnectedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -78,6 +90,7 @@ struct PairedBackend: Codable, Identifiable, Hashable {
         self.pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         self.fallbackURLs = try c.decodeIfPresent([String].self, forKey: .fallbackURLs) ?? []
+        self.lastConnectedAt = try c.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
     }
 }
 
