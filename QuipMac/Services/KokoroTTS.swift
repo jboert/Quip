@@ -50,6 +50,11 @@ final class KokoroTTS: @unchecked Sendable {
     private var process: Process?
     private var stdinHandle: FileHandle?
     private var stdoutHandle: FileHandle?
+    /// Log-once flag for the "no venv" / "no script" branches. Without it
+    /// every TTS-bound state_change retriggers `ensureDaemonRunning`,
+    /// which appends the same diagnostic to `~/Library/Logs/Quip/kokoro.log`
+    /// thousands of times during a session. Touched only from `queue`.
+    private var hasLoggedUnavailable = false
 
     private var venvPython: String {
         (NSHomeDirectory() as NSString).appendingPathComponent("Library/Application Support/Quip/venv/bin/python3")
@@ -68,13 +73,21 @@ final class KokoroTTS: @unchecked Sendable {
         if let p = process, p.isRunning { return true }
 
         guard let script = scriptPath else {
-            KokoroTTSDebug.log("daemon: no bundled script")
+            if !hasLoggedUnavailable {
+                KokoroTTSDebug.log("daemon: no bundled script")
+                hasLoggedUnavailable = true
+            }
             return false
         }
         guard FileManager.default.fileExists(atPath: venvPython) else {
-            KokoroTTSDebug.log("daemon: no venv at \(venvPython)")
+            if !hasLoggedUnavailable {
+                KokoroTTSDebug.log("daemon: no venv at \(venvPython); see KokoroTTS.swift setup block")
+                hasLoggedUnavailable = true
+            }
             return false
         }
+        // Daemon launching now — clear the flag so future failures still log.
+        hasLoggedUnavailable = false
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: venvPython)
@@ -198,9 +211,13 @@ final class KokoroTTS: @unchecked Sendable {
         }
     }
 
-    /// Pre-warm the daemon (load model) so first real synth is fast
+    /// Pre-warm the daemon (load model) so first real synth is fast.
+    /// Skips work entirely when the venv is missing — the log-once branch
+    /// in `ensureDaemonRunning` already records that fact, no need to spam
+    /// at every preload trigger.
     func preload() {
         queue.async { [self] in
+            guard isAvailable else { return }
             _ = ensureDaemonRunning()
         }
     }

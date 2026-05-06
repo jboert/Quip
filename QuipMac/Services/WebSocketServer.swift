@@ -628,6 +628,19 @@ final class WebSocketServer {
                 return
             }
 
+            // Skip non-text WS frames. NWProtocolWebSocket delivers ping/pong
+            // payloads here even with `autoReplyPing = true` — the framework
+            // sends the pong itself but the original ping bytes still surface
+            // as a "message" with opcode `.ping`. Without this filter every
+            // 10s iOS keepalive lands in the JSON dispatcher, fails to parse,
+            // and emits `type=unknown (4 bytes)` to kokoro.log forever.
+            if let metadata = contentContext?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                as? NWProtocolWebSocket.Metadata,
+               metadata.opcode != .text && metadata.opcode != .binary {
+                self.receiveMessage(on: connection)
+                return
+            }
+
             if let data = content, !data.isEmpty {
                 // Application-layer drop: matches the WebSocket protocol's
                 // maximumMessageSize above. Image uploads from the phone are
