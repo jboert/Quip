@@ -414,6 +414,13 @@ final class WebSocketClient {
         isAuthenticated = false
         authError = nil
         sessionPIN = nil
+        // Bug #1 — without these, the previous run's "Stalled 26s — resetting"
+        // watchdog message lingers in the top-bar lastError view even after
+        // disconnect/forget. Picker simultaneously shows "Enter tunnel URL"
+        // because urlText is empty — confusing contradiction at fresh launch
+        // when a previously-paired backend was forgotten.
+        lastError = nil
+        connectingStartedAt = nil
         NSLog("[WebSocketClient] Disconnected intentionally")
     }
 
