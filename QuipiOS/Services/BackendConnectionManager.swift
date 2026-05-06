@@ -684,8 +684,18 @@ final class BackendConnectionManager {
             if let a = update.screenAspect, a > 0 { session.screenAspect = a }
             if session.reachability != .connected { session.reachability = .connected }
             if let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
-                self.paired[i].lastSeenLayoutMonitorName = update.monitor
-                self.savePaired()
+                // Diff guard — only persist when the monitor name actually
+                // changed. Without this every layout_update (multiple per
+                // second during normal use) writes UserDefaults, which
+                // triggers `PreferencesSyncService`'s didChange observer,
+                // schedules a 0.5s-debounced snapshot upload, and feeds the
+                // Mac a 1369-byte preferences_snapshot frame at 1-3s
+                // cadence forever. Trigger source for the kokoro.log
+                // "preferences_snapshot" storm (~300:1 vs audio_chunk).
+                if self.paired[i].lastSeenLayoutMonitorName != update.monitor {
+                    self.paired[i].lastSeenLayoutMonitorName = update.monitor
+                    self.savePaired()
+                }
             }
             self.onLayoutUpdate?(session, update)
         }
@@ -779,6 +789,19 @@ final class BackendConnectionManager {
             guard let self, let session else { return }
             if success {
                 session.reachability = .connected
+                // Re-announce our currently-selected window so the Mac's
+                // `clientSelectedWindowId` lines up with what the phone is
+                // actually showing. After a Mac restart (or any phone
+                // reconnect post-NAT-idle drop) the Mac side resets to
+                // nil; without this re-send, every state-change push
+                // skipped via `selection_mismatch` until the user
+                // manually tapped a different window. push.log shows it
+                // as a long stream of `clientSelectedWindowId=nil,
+                // selection_mismatch` entries.
+                if let wid = session.selectedWindowId,
+                   session.windows.contains(where: { $0.id == wid }) {
+                    session.client.send(SelectWindowMessage(windowId: wid))
+                }
             } else {
                 session.reachability = .needsAuth
                 // Stale PIN — drop it from Keychain; user will be prompted on
