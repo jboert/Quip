@@ -311,9 +311,14 @@ Follow-up (`2dfccc8`): 8 unit tests on aggregation logic.
 
 ### 24. Crash recovery for QuipMac via launchd LaunchAgent
 
-**Status:** Wishlist
-**Context:** If QuipMac crashes (10GB memory leak fixed in `6599f02`), iPhone has no recovery — user has to walk to Mac, manually relaunch, re-pair.
-**Fix:** Ship `~/Library/LaunchAgents/com.quip.QuipMac.plist` LaunchAgent with `KeepAlive={"SuccessfulExit":false,"Crashed":true}` + `ThrottleInterval=30` (crash-loop guard) + `RunAtLoad=true`. Opt-in toggle in Settings (default off).
+**Status:** ✅ Done 2026-05-06 (commit shipping with this update). New `CrashRecoveryAgent` enum in `QuipMac/Services/` writes `~/Library/LaunchAgents/com.quip.QuipMac.crash-recovery.plist` and bootstraps via `launchctl bootstrap gui/$UID`. KeepAlive gated on `Crashed: true` + `SuccessfulExit: false` so Cmd+Q never triggers relaunch. ThrottleInterval=30 prevents tight crash loops. RunAtLoad=true also covers Mac-just-rebooted. ProcessType=Interactive lets the relaunched app draw windows + take focus.
+
+Settings UI: new "Reliability" section in GeneralTab between Startup and Phone Display. Toggle wired to `crashRecoveryEnabled` AppStorage; flip → install/uninstall via custom Binding. Errors surface inline in red below the caption (revert toggle visually if launchctl refuses).
+
+10 CrashRecoveryAgentTests cover: label stability, plist-URL location in user LaunchAgents, label/ProgramArguments/RunAtLoad/KeepAlive/ThrottleInterval/ProcessType plist content, XML round-trip, and unusual paths (spaces + version digits round-trip verbatim).
+
+**Hardware verification needed:** rebuild Mac + reinstall + toggle on → verify plist exists at `~/Library/LaunchAgents/com.quip.QuipMac.crash-recovery.plist`; force-crash via `kill -SEGV $(pgrep -f Quip.app)` → verify launchd relaunches within ~30s; toggle off → plist removed; Cmd+Q → no relaunch. Path captured at toggle-time = `Bundle.main.executablePath`, so users running from DerivedData and toggling on get a stale plist on next rebuild — opt-in footgun, acceptable for v1.
+
 **Related:** #20.
 
 ---

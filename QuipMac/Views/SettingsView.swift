@@ -235,6 +235,8 @@ private struct GeneralTab: View {
     @AppStorage("showInMenuBar") private var showInMenuBar = true
     @AppStorage("showInDock") private var showInDock = true
     @AppStorage("mirrorDesktop") private var mirrorDesktop = false
+    @AppStorage("crashRecoveryEnabled") private var crashRecoveryEnabled = false
+    @State private var crashRecoveryError: String?
 
     /// Re-probe TCC perms every 3s while this tab is visible so the row
     /// status flips green within seconds of the user granting in System
@@ -293,6 +295,22 @@ private struct GeneralTab: View {
                 Toggle("Show in Dock", isOn: $showInDock)
             }
 
+            Section("Reliability") {
+                Toggle("Auto-restart on crash", isOn: Binding(
+                    get: { crashRecoveryEnabled },
+                    set: { applyCrashRecoveryToggle($0) }
+                ))
+                Text("If Quip crashes, macOS launchd relaunches it after 30s. Cmd+Q and normal quits do not trigger relaunch. Installs ~/Library/LaunchAgents/\(CrashRecoveryAgent.label).plist.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let err = crashRecoveryError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            }
+
             Section("Phone Display") {
                 Toggle("Mirror desktop terminals", isOn: $mirrorDesktop)
                 Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible.")
@@ -314,6 +332,25 @@ private struct GeneralTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Wires the Reliability toggle: write AppStorage + invoke install/uninstall.
+    /// Failures revert the toggle and surface the error inline so the user sees
+    /// why launchd refused (typically: SIP-protected path, missing LaunchAgents
+    /// directory permissions, or a malformed plist payload).
+    private func applyCrashRecoveryToggle(_ newValue: Bool) {
+        crashRecoveryError = nil
+        do {
+            if newValue {
+                try CrashRecoveryAgent.install()
+            } else {
+                try CrashRecoveryAgent.uninstall()
+            }
+            crashRecoveryEnabled = newValue
+        } catch {
+            crashRecoveryError = "Could not \(newValue ? "install" : "remove") crash-recovery agent: \(error.localizedDescription)"
+            // Leave AppStorage unchanged — toggle visually reverts.
+        }
     }
 
     @ViewBuilder
