@@ -255,9 +255,13 @@ Mac CFBundleShortVersionString: 1.4.0 → 1.4.1 → 1.4.2 → 1.5.0 → 1.5.1.
 
 ### 18. Context-aware 1/2/3 buttons — auto-appear only when Claude shows numbered prompt
 
-**Status:** Wishlist
-**Depends on:** #7
-**Context:** Static 1/2/3 buttons (#8) ship in shortcut row, visible always. User wants smart variant: 1/2/3 auto-appear only when current window's Claude session presents a numbered prompt block (`❯ 1. Yes / 2. No / 3. Cancel`). Show only buttons matching option count. Disambiguation (real prompt vs prose list) is the hardest part — needs `❯` marker + last-block-before-cursor check.
+**Status:** ✅ Done 2026-05-06 (commit shipping with this update). Pure detector `NumberedPromptDetector.detect(in:)` in `QuipiOS/Services/NumberedPromptDetector.swift` scans the last 30 lines of `terminalContentText`, looks for contiguous numbered-option lines (`. ` or `) ` separators), requires at least one `❯` (or ASCII `>`) cursor marker in the run to disambiguate real prompts from prose with numbered lists. Strips ANSI color codes before matching. Returns `[Int]?` of contiguous option numbers (typically `[1,2,3]` or `[1,2]`).
+
+UI: when detector returns ≥2 options, a strip of small numbered chips renders inside `InlineTerminalContent` between the header and the URL tray. Tap fires `quick_action("select_<n>")` which the Mac handler maps to `sendText(digit, pressReturn: true)` — same shape as `press_y` / `press_n`. Hidden entirely when no prompt detected (compact-UI discipline preserved).
+
+12 NumberedPromptDetectorTests cover positive paths (3-options, 2-options, marker on second line, ASCII `>` fallback, `)` separator), negative cases (prose without marker, empty, out-of-order numbers, single option, prompt past scan-window cutoff, ANSI sequences stripped before match), and helper coverage (parseNumberedLine pickup).
+
+Deferred to follow-ups: option labels (currently shows "1 / 2 / 3" only, not "Yes / No / Cancel"), letter-marker prompts (a/b/c).
 
 ---
 

@@ -1600,6 +1600,19 @@ struct QuipMacApp: App {
             runAfterDelay {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
+        // §18 — context-aware numbered-prompt selection. Phone sends
+        // `select_<n>` (1-9) when the user taps a numbered chip in the
+        // terminal panel; Mac types the digit + Return into the target
+        // window the same way press_y/press_n work.
+        case "select_1", "select_2", "select_3", "select_4",
+             "select_5", "select_6", "select_7", "select_8", "select_9":
+            let digit = String(action.suffix(1))
+            runAfterDelay {
+                keystrokeInjector.sendText(digit, to: wid, pressReturn: true,
+                                            terminalApp: termApp, windowName: wname,
+                                            cgWindowNumber: wn,
+                                            iterm2SessionId: window.iterm2SessionId)
+            }
         // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
         // sends the iTerm2 menu shortcut for the corresponding action.
         // Scrollback state lives on the Mac side — the next screenshot

@@ -4277,6 +4277,42 @@ struct InlineTerminalContent: View {
             .padding(.vertical, 6)
             .background(Color.white.opacity(0.06))
 
+            // §18 — context-aware numbered-prompt chips. When the
+            // detector finds Claude's `❯ 1. Yes / 2. No / 3. Cancel`
+            // pattern in the current content, render a strip of small
+            // chips so the user can tap an answer without typing.
+            // Hidden entirely when no prompt detected — same compact-UI
+            // discipline as the rest of the panel.
+            if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
+                HStack(spacing: 6) {
+                    ForEach(options, id: \.self) { n in
+                        Button {
+                            // sendText "<n>" + press_return — same shape
+                            // as the press_y / press_n quick actions.
+                            // Phone-side helper would be cleaner; for
+                            // v1 reuse the existing action channel by
+                            // emitting a `select_<n>` action that the
+                            // Mac handler maps to sendText.
+                            onSendAction("select_\(n)")
+                        } label: {
+                            Text("\(n)")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.white)
+                                .frame(width: 28, height: 24)
+                                .background(Color.accentColor.opacity(0.85))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .accessibilityLabel("Pick option \(n)")
+                        .accessibilityHint("Submit \(n) to the current Claude prompt")
+                        .accessibilityAddTraits(.isButton)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
+            }
+
             // URL tray above the content area so users can open URLs from
             // the screenshot (which is pixels and can't be tapped in-situ).
             urlTray
