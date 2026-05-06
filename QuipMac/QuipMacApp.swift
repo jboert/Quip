@@ -663,7 +663,8 @@ struct QuipMacApp: App {
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
                 screenBounds: screenBounds,
                 isThinking: thinkingWindows.contains(window.id),
-                claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue
+                claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue,
+                cliKind: terminalStateDetector.windowCLIKind[window.id]
             )
         }
         let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
@@ -808,28 +809,46 @@ struct QuipMacApp: App {
                 }
 
                 ensureITermSessionResolved(for: msg.windowId) { window in
-                    // Paste the absolute path into the terminal input with a trailing space, no Return.
                     let termApp = self.terminalAppForWindow(window)
                     self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
+                    // GH I — branch by detected CLI:
+                    // - Codex CLI's interactive composer accepts pasted IMAGE
+                    //   bytes via Cmd+V; typing the path doesn't attach the
+                    //   image, just leaves a literal string.
+                    // - Claude Code accepts a typed absolute path inline.
+                    // - Default (.shell / unknown / nil) falls through to the
+                    //   path-typing behavior — same as before this branch
+                    //   existed, so a window we can't classify still works as
+                    //   before.
+                    let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
                     let delay = KeystrokeInjector.focusDelay(
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let textToInject = savedURL.path + " "
-                    let finishInjection = {
-                        let result = self.keystrokeInjector.sendText(
-                            textToInject, to: msg.windowId, pressReturn: false,
-                            terminalApp: termApp, windowName: name, cgWindowNumber: wn,
-                            iterm2SessionId: window.iterm2SessionId
-                        )
+                    let finishInjection: () -> Void = {
+                        let result: KeystrokeInjector.InjectionResult
+                        switch cliKind {
+                        case .codex:
+                            result = self.keystrokeInjector.pasteImage(
+                                at: savedURL, to: msg.windowId,
+                                terminalApp: termApp, iterm2SessionId: window.iterm2SessionId
+                            )
+                        case .claude, .shell:
+                            let textToInject = savedURL.path + " "
+                            result = self.keystrokeInjector.sendText(
+                                textToInject, to: msg.windowId, pressReturn: false,
+                                terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                                iterm2SessionId: window.iterm2SessionId
+                            )
+                        }
                         if result.success {
-                            print("[Quip] image_upload: typed path into windowId=\(msg.windowId) (\(textToInject.count) chars)")
+                            print("[Quip] image_upload: delivered to windowId=\(msg.windowId) cli=\(cliKind.rawValue)")
                             self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
                         } else {
-                            let err = result.error ?? "couldn't type path"
-                            print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId): \(err)")
+                            let err = result.error ?? "couldn't deliver image"
+                            print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId) cli=\(cliKind.rawValue): \(err)")
                             self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
                         }
                     }

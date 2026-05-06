@@ -24,6 +24,12 @@ final class TerminalStateDetector {
     /// Updated every poll cycle. Used to drive the "thinking" indicator on iOS.
     var windowsWithClaudeProcess: Set<String> = []
 
+    /// Per-window CLI kind, derived from process-tree sniffing in `detectState`.
+    /// Drives per-CLI input routing on the Mac side (notably image_upload —
+    /// Codex CLI's interactive composer takes pasted image bytes via Cmd+V,
+    /// Claude Code accepts an absolute path typed inline). (GH I.)
+    var windowCLIKind: [String: CLIKind] = [:]
+
     /// CPU threshold below which a process is considered idle
     var cpuIdleThreshold: Double = 5.0
 
@@ -62,13 +68,15 @@ final class TerminalStateDetector {
                 guard let self else { return }
                 var results: [(String, TerminalState)] = []
                 var claudePresence: [String: Bool] = [:]
+                var cliByWindow: [String: CLIKind] = [:]
                 // Collect child PIDs off main (spawns ps processes)
                 var childPidsByWindow: [String: Set<pid_t>] = [:]
                 for (windowId, shellPid) in tracked {
                     if sttWindows.contains(windowId) { continue }
-                    let (detected, hasClaude) = self.detectState(shellPid: shellPid, cpuThreshold: threshold)
+                    let (detected, hasClaude, cli) = self.detectState(shellPid: shellPid, cpuThreshold: threshold)
                     results.append((windowId, detected))
                     claudePresence[windowId] = hasClaude
+                    cliByWindow[windowId] = cli
                     if let children = self.getChildProcesses(of: shellPid) {
                         childPidsByWindow[windowId] = Set(children.map(\.pid))
                     }
@@ -83,6 +91,11 @@ final class TerminalStateDetector {
                         } else {
                             self.windowsWithClaudeProcess.remove(windowId)
                         }
+                    }
+                    // GH I — track per-window CLI kind so image_upload can
+                    // route to the right paste path.
+                    for (windowId, cli) in cliByWindow {
+                        self.windowCLIKind[windowId] = cli
                     }
                     // Install kqueue watches on main where MainActor state lives
                     for (windowId, currentPids) in childPidsByWindow {
@@ -269,45 +282,66 @@ final class TerminalStateDetector {
     private func pollAllWindows() {
         for (windowId, shellPid) in trackedWindows {
             if windowStates[windowId] == .sttActive { continue }
-            let (detected, hasClaude) = detectState(shellPid: shellPid, cpuThreshold: cpuIdleThreshold)
+            let (detected, hasClaude, cli) = detectState(shellPid: shellPid, cpuThreshold: cpuIdleThreshold)
             applyPollResults([(windowId, detected)])
             if hasClaude {
                 windowsWithClaudeProcess.insert(windowId)
             } else {
                 windowsWithClaudeProcess.remove(windowId)
             }
+            windowCLIKind[windowId] = cli
         }
     }
 
-    /// Detect whether a shell's child process (claude/node) is busy or idle.
-    /// Returns (state, hasClaudeProcess) — the bool tracks process presence
-    /// regardless of CPU for the "thinking" indicator.
-    private nonisolated func detectState(shellPid: pid_t, cpuThreshold: Double) -> (TerminalState, Bool) {
+    /// Detect whether a shell's child process (claude/codex/node) is busy or idle.
+    /// Returns (state, hasAIProcess, cliKind) — the bool tracks process presence
+    /// regardless of CPU for the "thinking" indicator; cliKind identifies which
+    /// CLI for input-routing decisions.
+    private nonisolated func detectState(shellPid: pid_t, cpuThreshold: Double) -> (TerminalState, Bool, CLIKind) {
         guard let children = getChildProcesses(of: shellPid) else {
-            return (.waitingForInput, false)
+            return (.waitingForInput, false, .shell)
         }
 
-        let claudeProcesses = children.filter { info in
-            let comm = info.command.lowercased()
-            return comm.contains("claude") || comm.contains("node")
+        let cliKind = Self.classifyCLI(children: children)
+        let aiProcesses = children.filter { Self.isAIProcess(comm: $0.command.lowercased()) }
+
+        if aiProcesses.isEmpty {
+            return (.waitingForInput, false, cliKind)
         }
 
-        if claudeProcesses.isEmpty {
-            return (.waitingForInput, false)
-        }
-
-        let totalCPU = claudeProcesses.reduce(0.0) { $0 + $1.cpuPercent }
+        let totalCPU = aiProcesses.reduce(0.0) { $0 + $1.cpuPercent }
 
         if totalCPU < cpuThreshold {
-            return (.waitingForInput, true)
+            return (.waitingForInput, true, cliKind)
         } else {
-            return (.neutral, true) // busy
+            return (.neutral, true, cliKind) // busy
         }
+    }
+
+    /// Classify which AI CLI (if any) is the dominant process running in
+    /// this shell. Order matters: an explicit `codex` match wins over
+    /// `claude`/`node` because Codex CLI also uses Node under the hood.
+    /// Pure function so tests can drive every combination without spawning
+    /// real processes. (GH I.)
+    nonisolated static func classifyCLI(children: [ProcessInfo]) -> CLIKind {
+        let comms = children.map { $0.command.lowercased() }
+        if comms.contains(where: { $0.contains("codex") }) { return .codex }
+        if comms.contains(where: { $0.contains("claude") || $0.contains("node") }) { return .claude }
+        return .shell
+    }
+
+    /// Is this process name part of the AI-CLI family we treat as
+    /// "thinking-eligible" for the busy/idle indicator? Currently
+    /// matches the same set as before plus codex.
+    nonisolated static func isAIProcess(comm: String) -> Bool {
+        comm.contains("claude") || comm.contains("node") || comm.contains("codex")
     }
 
     // MARK: - Process Info
 
-    private struct ProcessInfo {
+    /// Internal so static helpers like `classifyCLI(children:)` can be
+    /// driven by unit tests without needing to spawn real processes.
+    struct ProcessInfo {
         let pid: pid_t
         let cpuPercent: Double
         let command: String
