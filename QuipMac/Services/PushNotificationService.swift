@@ -193,13 +193,21 @@ final class PushNotificationService {
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(devices) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        do {
+            let data = try JSONEncoder().encode(devices)
+            UserDefaults.standard.set(data, forKey: Self.storageKey)
+        } catch {
+            quipPushLog("PERSIST FAILED — devices encode error: \(error.localizedDescription) (\(devices.count) devices not saved; will be lost on relaunch)")
+        }
     }
 
     private func persistPreferences() {
-        guard let data = try? JSONEncoder().encode(preferences) else { return }
-        UserDefaults.standard.set(data, forKey: Self.preferencesKey)
+        do {
+            let data = try JSONEncoder().encode(preferences)
+            UserDefaults.standard.set(data, forKey: Self.preferencesKey)
+        } catch {
+            quipPushLog("PERSIST FAILED — preferences encode error: \(error.localizedDescription) (\(preferences.count) prefs entries not saved; will be lost on relaunch)")
+        }
     }
 
     /// Update (or insert) prefs for a specific device. No-op if the

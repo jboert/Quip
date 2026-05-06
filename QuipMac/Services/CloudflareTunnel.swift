@@ -352,8 +352,12 @@ final class CloudflareTunnel {
         proc.arguments = ["-f", "cloudflared tunnel"]
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
-        try? proc.run()
-        proc.waitUntilExit()
+        do {
+            try proc.run()
+        } catch {
+            print("[CloudflareTunnel] pgrep launch failed: \(error.localizedDescription) — orphan check skipped (may leave stale cloudflared running)")
+            return
+        }
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let myPid = ProcessInfo.processInfo.processIdentifier
         for line in output.split(separator: "\n") {

@@ -8,10 +8,13 @@
 
 import Foundation
 import Observation
+import OSLog
 
 @MainActor
 @Observable
 final class PromptLibrary {
+
+    private static let logger = Logger(subsystem: "com.quip.mac", category: "PromptLibrary")
 
     /// Latest snapshot of prompts on disk. Updated on launch + whenever
     /// the directory's contents change (DispatchSourceFileSystemObject
@@ -153,8 +156,12 @@ final class PromptLibrary {
     /// body cache, fire onChange when the result differs from last scan.
     private func rescan() {
         let fm = FileManager.default
-        guard let urls = try? fm.contentsOfDirectory(at: Self.directory,
-                                                    includingPropertiesForKeys: nil) else {
+        let urls: [URL]
+        do {
+            urls = try fm.contentsOfDirectory(at: Self.directory,
+                                              includingPropertiesForKeys: nil)
+        } catch {
+            Self.logger.error("PromptLibrary directory listing failed at \(Self.directory.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return
         }
         let textFiles = urls
@@ -163,7 +170,13 @@ final class PromptLibrary {
 
         var newEntries: [PromptEntry] = []
         for url in textFiles {
-            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let raw: String
+            do {
+                raw = try String(contentsOf: url, encoding: .utf8)
+            } catch {
+                Self.logger.warning("PromptLibrary skipping \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                continue
+            }
             let id = url.deletingPathExtension().lastPathComponent
             let (label, body) = Self.extractLabelAndBody(filename: id, raw: raw)
             newEntries.append(PromptEntry(id: id, label: label, body: body))
