@@ -279,14 +279,31 @@ struct SpawnWindowMessage: Codable, Sendable {
 
 /// iPhone → Mac. Asks the Mac to evenly arrange all enabled windows on the
 /// main display, either side-by-side (`layout == "horizontal"`) or stacked
-/// top-to-bottom (`layout == "vertical"`). Any other value is rejected on
-/// the Mac side. Mac uses the existing LayoutCalculator + arrangeWindows
-/// path — same one the menu-bar "Arrange Windows" button triggers.
+/// Wire-level layout vocabulary spoken by the phone. Free-string was a
+/// silent-failure trap (typos / unknown layouts produced no error path),
+/// per GH #20. Codable round-trips through the lowercase rawValue so
+/// existing JSON ("horizontal" / "vertical") remains unchanged.
+///
+/// "grid" is intentionally NOT in this enum even though the iOS phone
+/// recently grew a 3-mode arrange-button cycle — phone-side grid does
+/// the arrangement *locally* (see `phoneLayoutOverrideRaw`) and does
+/// NOT send `arrange_windows` to the Mac. If a Mac-side grid arranger
+/// is ever added, extend this enum + `LayoutMode.from(arrangeLayout:)`
+/// + the Mac handler in lockstep.
+enum ArrangeLayout: String, Codable, Sendable, CaseIterable {
+    case horizontal
+    case vertical
+}
+
+/// top-to-bottom (`layout == .vertical`). Any other value fails Codable
+/// decode loudly — silent fallthrough was the bug GH #20 is about. Mac
+/// uses the existing LayoutCalculator + arrangeWindows path — same one
+/// the menu-bar "Arrange Windows" button triggers.
 struct ArrangeWindowsMessage: Codable, Sendable {
     let type: String
-    let layout: String  // "horizontal" or "vertical"
+    let layout: ArrangeLayout
 
-    init(layout: String) {
+    init(layout: ArrangeLayout) {
         self.type = "arrange_windows"
         self.layout = layout
     }

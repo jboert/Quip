@@ -28,16 +28,24 @@ enum LayoutMode: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Translate the `arrange_windows` protocol's layout string — which the
+    /// Translate the `arrange_windows` protocol's layout — which the
     /// phone speaks in user-facing vocabulary — into the internal LayoutMode.
-    /// Returns nil for any other value so the handler can reject unknown
-    /// layouts instead of silently picking a default.
-    static func fromArrangeLayout(_ layout: String) -> LayoutMode? {
-        switch layout {
-        case "horizontal": return .columns
-        case "vertical":   return .rows
-        default:           return nil
+    /// Total over the enum, so this can be `switch`-exhaustive.
+    static func from(arrangeLayout: ArrangeLayout) -> LayoutMode {
+        switch arrangeLayout {
+        case .horizontal: return .columns
+        case .vertical:   return .rows
         }
+    }
+
+    /// Legacy String-based variant. Kept so callers that haven't migrated
+    /// yet keep compiling; new code should pass `ArrangeLayout` directly.
+    /// Returns nil for unknown strings — same contract as the pre-enum
+    /// version. Marked deprecated so we get a warning trail.
+    @available(*, deprecated, message: "Pass ArrangeLayout directly; this overload exists only for callers being migrated.")
+    static func fromArrangeLayout(_ layout: String) -> LayoutMode? {
+        guard let parsed = ArrangeLayout(rawValue: layout) else { return nil }
+        return from(arrangeLayout: parsed)
     }
 }
 

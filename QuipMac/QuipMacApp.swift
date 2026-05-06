@@ -1046,8 +1046,14 @@ struct QuipMacApp: App {
 
         case "arrange_windows":
             if let msg = MessageCoder.decode(ArrangeWindowsMessage.self, from: data) {
-                print("[Quip] arrange_windows: layout=\(msg.layout)")
+                print("[Quip] arrange_windows: layout=\(msg.layout.rawValue)")
                 handleArrangeWindows(layout: msg.layout)
+            } else {
+                // GH #20: enum decode failed → log loud + send error back so
+                // a phone-side typo / future unknown layout isn't silent.
+                let raw = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                print("[Quip] arrange_windows: decode failed for payload=\(raw)")
+                webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement layout in arrange_windows payload"))
             }
 
         case "scan_iterm_windows":
@@ -1419,14 +1425,13 @@ struct QuipMacApp: App {
     /// Drives the "arrange horizontally/vertically" command coming from the
     /// phone. Mirrors MenuBarView's local "Arrange Windows" path: filter to
     /// enabled windows, pick the main display, hand over to LayoutCalculator
-    /// + WindowManager.arrangeWindows. Invalid layout strings are rejected
-    /// with an error toast the phone can show.
+    /// + WindowManager.arrangeWindows. Layout enum is total so the
+    /// switch in `LayoutMode.from(arrangeLayout:)` is exhaustive — no
+    /// "unknown" path here. Decode-time rejection of unknown wire
+    /// values lives in MessageCoder.decode (returns nil → caller logs).
     @MainActor
-    private func handleArrangeWindows(layout: String) {
-        guard let mode = LayoutMode.fromArrangeLayout(layout) else {
-            webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement: \(layout)"))
-            return
-        }
+    private func handleArrangeWindows(layout: ArrangeLayout) {
+        let mode = LayoutMode.from(arrangeLayout: layout)
         let enabled = windowManager.windows.filter(\.isEnabled)
         guard !enabled.isEmpty else {
             webSocketServer.broadcast(ErrorMessage(reason: "No enabled windows to arrange"))
