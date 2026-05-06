@@ -748,6 +748,28 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 
 ---
 
+### B17. Trace `type=unknown (4 bytes)` mystery frame
+
+**Status:** Wishlist
+**Surfaced:** 2026-05-06 — kokoro.log shows `WS received: type=unknown (4 bytes)` at ~10-15s cadence per connected client. Persisted after `3a3a7c7` shipped a Mac-side `NWProtocolWebSocket.Metadata.opcode != .text` filter, which proved the 4-byte payload is NOT a control frame (ping/pong/close) — it's arriving as a **text frame** that fails JSON parse.
+
+**Context:** Filter at `QuipMac/Services/WebSocketServer.swift:637-642` drops .ping/.pong/.close cleanly; everything else falls through to `MessageCoder.messageType(from: data)` which returns nil for non-JSON. The log line at `WebSocketServer.swift:661` then prints `"unknown"`. Cosmetic only — the frame is silently ignored downstream because no handler matches a nil messageType. But it pollutes the log and makes real signal harder to spot.
+
+**Hypotheses (rank by likelihood):**
+1. **Empty / minimal JSON literal sent somewhere** — `null` (4 bytes), `true` (4 bytes), or `[{}]` (4 bytes) encoded somewhere on iOS or Watch and shipped via `task.send(.string(s))`. Check every `JSONEncoder().encode(...)` call site that could pass a nil/Optional/single-Bool value.
+2. **Watch sync writing a stub** — `WatchSyncService.push` may emit a heartbeat / empty-list frame; check `QuipiOS/Services/WatchSyncService.swift` for any send path with a degenerate payload.
+3. **iOS `sendRaw` round-trip with empty JSON** — `WebSocketClient.sendRaw` (line 520) does `String(data: data, encoding: .utf8) ?? ""`. If `data` is exactly 4 bytes of valid UTF-8 that isn't valid JSON (e.g. literal `null` body without quotes — possible if MessageCoder somewhere encodes Optional.none), it sends 4 bytes that fail Mac's parse.
+
+**Likely shape:**
+- Add a one-shot diagnostic Mac-side: log the raw bytes (hex dump or UTF-8 string preview) the FIRST time `messageType(from:) == nil` per connection, then suppress further logs for that connection. Lets the next session capture exactly what the 4-byte payload contains without flooding logs.
+- Once the byte content is known, locate the iOS sender and either drop the send or wrap it in a typed message envelope so it parses correctly.
+
+**Why low priority:** silently ignored downstream — no functional impact. Fix it as a single-PR hygiene item the next time someone is touching `WebSocketServer.receiveMessage` or `WebSocketClient.send` paths.
+
+**Acceptance:** kokoro.log captures one `type=unknown` line per session with the raw bytes. Code change drops the empty-frame send. Subsequent sessions show zero `type=unknown` events.
+
+---
+
 ## Tabled (parked, revisit on demand)
 
 - §52 iPad layout — tabled 2026-05-05 by user. No iPad to test on; not a current priority.
