@@ -1705,6 +1705,14 @@ struct MainiOSView: View {
                     }
                 }
             }
+            .accessibilityLabel({
+                if let perms = macPermissions,
+                   !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
+                    return "Settings, Mac permission needed"
+                }
+                return "Settings"
+            }())
+            .accessibilityAddTraits(.isButton)
             // One-tap recovery: visible only while disconnected so the user
             // can break the "stuck on Connecting…" state without digging
             // through settings. Disconnects + reconnects to the active URL.
@@ -1860,6 +1868,8 @@ struct MainiOSView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .disabled(windows.count <= 1)
+                        .accessibilityLabel("Previous window")
+                        .accessibilityAddTraits(.isButton)
                     }
                     if mainRowCycleRight {
                         Button {
@@ -1873,6 +1883,8 @@ struct MainiOSView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .disabled(windows.count <= 1)
+                        .accessibilityLabel("Next window")
+                        .accessibilityAddTraits(.isButton)
                     }
                 }
 
@@ -1895,6 +1907,8 @@ struct MainiOSView: View {
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
+                        .accessibilityLabel("New window")
+                        .accessibilityAddTraits(.isButton)
                     }
 
                 // Arrange — phone-only display toggle. Cycles through
@@ -1953,6 +1967,9 @@ struct MainiOSView: View {
                             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         }
                     )
+                    .accessibilityLabel("Arrange windows")
+                    .accessibilityHint("Double tap to cycle layout. Long press to realign.")
+                    .accessibilityAddTraits(.isButton)
                 }
                 } // close LEFT cluster 2 HStack
 
@@ -1981,6 +1998,8 @@ struct MainiOSView: View {
                                 .strokeBorder(Color.red.opacity(0.7), lineWidth: isRecording ? 2 : 0)
                         )
                 }
+                .accessibilityLabel(isRecording ? "Stop recording" : "Push to talk")
+                .accessibilityAddTraits(.isButton)
                 Spacer(minLength: 12)
 
                 // RIGHT cluster 1: input attach (photo, prompts)
@@ -1996,7 +2015,8 @@ struct MainiOSView: View {
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .accessibilityLabel("Attach image")
+                        .accessibilityLabel(pendingImage.hasPendingImage ? "Attached image, tap to change" : "Attach image")
+                        .accessibilityAddTraits(.isButton)
                     }
                     if mainRowPrompts {
                         let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
@@ -2012,6 +2032,7 @@ struct MainiOSView: View {
                         }
                         .disabled(!canFire)
                         .accessibilityLabel("Prompts")
+                        .accessibilityAddTraits(.isButton)
                     }
                 }
 
@@ -2036,6 +2057,8 @@ struct MainiOSView: View {
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
+                        .accessibilityLabel(showTextInput ? "Hide keyboard" : "Show keyboard")
+                        .accessibilityAddTraits(.isButton)
                     }
                     if mainRowReturn {
                         Button { submitOrPressReturn() } label: {
@@ -2047,6 +2070,8 @@ struct MainiOSView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .disabled(selectedWindowId == nil)
+                        .accessibilityLabel("Send")
+                        .accessibilityAddTraits(.isButton)
                     }
                 }
 
