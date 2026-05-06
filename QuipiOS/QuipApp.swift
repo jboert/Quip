@@ -754,6 +754,67 @@ struct PTTBannerInfo: Equatable {
     let tint: Color
 }
 
+/// Top-bar connection-status pill. Replaces the prior binary
+/// (Connected / Connecting…) with five distinguishable states so the
+/// user can spot stalled / auth-failed / unpaired without digging into
+/// Settings or the picker. Pure classifier on WebSocketClient state +
+/// the paired-backends count. (§K.)
+enum TopBarStatus: String, Equatable, CaseIterable {
+    case unpaired
+    case connected
+    case connecting
+    case authFailed
+    case stalled
+
+    var label: String {
+        switch self {
+        case .unpaired:    return "Not paired"
+        case .connected:   return "Connected"
+        case .connecting:  return "Connecting\u{2026}"
+        case .authFailed:  return "Auth failed"
+        case .stalled:     return "Reconnecting\u{2026}"
+        }
+    }
+
+    func dot(colors: QuipColors) -> Color {
+        switch self {
+        case .unpaired:    return .secondary.opacity(0.4)
+        case .connected:   return colors.statusConnected
+        case .connecting:  return colors.statusConnecting
+        case .authFailed:  return .orange
+        case .stalled:     return .red.opacity(0.7)
+        }
+    }
+
+    /// Pure classifier so unit tests don't need a SwiftUI view + a live
+    /// WebSocketClient. Priority order matters: a connected client
+    /// supersedes everything; a stalled lastError outranks the
+    /// generic "Connecting…" because the user wants to see that
+    /// something's actively wrong.
+    static func classify(isConnected: Bool,
+                          isConnecting: Bool,
+                          isAuthenticated: Bool,
+                          lastError: String?,
+                          hasPaired: Bool) -> TopBarStatus {
+        if isConnected { return .connected }
+        if !hasPaired { return .unpaired }
+        if let err = lastError {
+            let lower = err.lowercased()
+            if lower.contains("auth") || lower.contains("pin") {
+                return .authFailed
+            }
+            if lower.contains("stalled") || lower.contains("no pong") || lower.contains("timed out") {
+                return .stalled
+            }
+        }
+        if isConnecting { return .connecting }
+        // Catch-all for "not connecting, not connected, paired, no
+        // explicit error" — usually transient between a forced
+        // disconnect and the auto-reconnect kicking in.
+        return .stalled
+    }
+}
+
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
     @Bindable var manager: BackendConnectionManager
@@ -1658,7 +1719,18 @@ struct MainiOSView: View {
     // MARK: - Connected Bar
 
     private var connectedBar: some View {
-        HStack(spacing: 4) {
+        // §K — top-bar 4-state pill. Binary green/yellow missed "stalled
+        // mid-handshake / NAT-idle drop / auth-failed / not-paired".
+        // Pure classifier `TopBarStatus.classify(...)` returns the right
+        // color + label; pinned by unit tests.
+        let topStatus = TopBarStatus.classify(
+            isConnected: client.isConnected,
+            isConnecting: client.isConnecting,
+            isAuthenticated: client.isAuthenticated,
+            lastError: client.lastError,
+            hasPaired: !manager.paired.isEmpty
+        )
+        return HStack(spacing: 4) {
             // Tap the dot+label to open the multi-backend picker. Hidden when
             // there's no paired entry yet (first launch) so the affordance
             // only shows up once it's actionable.
@@ -1669,9 +1741,9 @@ struct MainiOSView: View {
             } label: {
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(client.isConnected ? colors.statusConnected : colors.statusConnecting)
+                        .fill(topStatus.dot(colors: colors))
                         .frame(width: 6, height: 6)
-                    Text(client.isConnected ? "Connected" : "Connecting\u{2026}")
+                    Text(topStatus.label)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(colors.textSecondary)
                     if manager.paired.count > 1 {
@@ -1685,6 +1757,8 @@ struct MainiOSView: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Connection: \(topStatus.label)")
+            .accessibilityHint(manager.paired.isEmpty ? "No backends paired yet" : "Open backend picker")
             if let error = client.lastError {
                 Text(error)
                     .font(.system(size: 9))
