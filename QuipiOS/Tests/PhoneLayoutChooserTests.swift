@@ -145,4 +145,24 @@ final class PhoneLayoutChooserTests: XCTestCase {
         let drop = CGPoint(x: 1.0, y: 0.5)
         XCTAssertEqual(MainiOSView.nearestGridIndex(mode: "horizontal", total: 4, dropCenter: drop), 3)
     }
+
+    // MARK: nearestGridIndex — mode "grid"
+
+    func testNearestGridIndexGridDropOnTopRightCell() {
+        // total=4 → 2×2. Top-right cell (idx=1) center is at (0.75, 0.25).
+        let drop = CGPoint(x: 0.8, y: 0.2)
+        XCTAssertEqual(MainiOSView.nearestGridIndex(mode: "grid", total: 4, dropCenter: drop), 1)
+    }
+
+    func testNearestGridIndexGridDropOnBottomLeftCell() {
+        // total=4 → 2×2. Bottom-left cell (idx=2) center is at (0.25, 0.75).
+        let drop = CGPoint(x: 0.2, y: 0.8)
+        XCTAssertEqual(MainiOSView.nearestGridIndex(mode: "grid", total: 4, dropCenter: drop), 2)
+    }
+
+    func testNearestGridIndexGridSixWindowsBottomRight() {
+        // total=6 → 3 cols × 2 rows. Cell idx=5 center is at (5/6, 0.75).
+        let drop = CGPoint(x: 0.85, y: 0.8)
+        XCTAssertEqual(MainiOSView.nearestGridIndex(mode: "grid", total: 6, dropCenter: drop), 5)
+    }
 }

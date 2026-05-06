@@ -243,9 +243,7 @@ Mac CFBundleShortVersionString: 1.4.0 → 1.4.1 → 1.4.2 → 1.5.0 → 1.5.1.
 
 ### 16. Alternative window list arrangements (grid / compact / carousel)
 
-**Status:** Wishlist
-**Context:** iPhone window list is currently a vertical stack of full-width cards. May want grid (more sessions at once), compact (just names+dots), or carousel (one fullscreen card, swipe between). Open: triggered how (Settings picker / segmented control / long-press / auto-by-count), per-layout info density, persistence (per-device or session-only).
-**Related:** #9.
+**Status:** ✅ Done v1 — grid mode shipped 2026-05-06 (`93b5f23`). Arrange-button cycle: horizontal → vertical → grid → horizontal. Auto-chooser picks grid for 4+ windows. Compact + carousel modes deferred to future iterations; file as new entries if needed.
 
 ---
 
@@ -430,21 +428,13 @@ Follow-up audit (`8fdbd66`): all 7 wraps still cover post-`b46b45d`; no new side
 
 ### 39. Auto-arrange phone windows on open + manual realign button
 
-**Status:** Wishlist (run `/prd` to shape the chooser).
-**Context:** When iPhone opens and windows arrive from Mac, cards land at Mac's raw frame fractions. ≥3 windows on wide Mac display reads as cramped/overlapping. User wants sensible default phone-side layout + "realign" button.
-**Likely shape:** New default for `phoneLayoutOverride` (currently `nil`). On first non-empty windows snapshot per session, set chooser-picked value (`"horizontal"` for ≤3 wide, `"vertical"` otherwise, `"grid"` for 4+). Realign button in header.
-**Open:** auto-pick on every change vs first-only; persist across launches; realign behavior (reset vs open chooser sheet); interaction with §40 drag.
-**Related:** `QuipiOS/QuipApp.swift:655` (override state), `:1526` (arrange button cycle), `:2105` (`phoneLayoutFrame`).
+**Status:** ✅ Done (`runAutoChooser` + `chooseAutoLayout` + Realign-on-long-press of arrange button). 2026-05-06 v2 (`93b5f23`): chooser now picks `"grid"` for 4+ windows, full mode cycle is horizontal → vertical → grid → horizontal. Tests cover all chooser cases at counts 1-10.
 
 ---
 
 ### 40. Drag-to-move windows on the iPhone layout
 
-**Status:** Wishlist (run `/prd` to lock semantics).
-**Context:** Grab a card on iPhone preview, drop elsewhere. No per-window phone-side override today.
-**Likely shape:** `phoneFrameOverrides: [String: WindowFrame]` (@AppStorage keyed by Mac UUID + windowId). DragGesture on `WindowRectangle`. Snap behavior: free / grid / swap-on-overlap. Visual feedback during drag.
-**Open:** phone-only preview vs Mac mirror (heavier, needs `set bounds of window` + reflow); resize-with-drag too?; cross-display moves; interaction with §39.
-**Related:** `QuipiOS/QuipApp.swift:2036` (`ForEach`), `:2105` (`phoneLayoutFrame`), `:2119` (`windowRect`).
+**Status:** ✅ Done (FR-13 to FR-16 — drag-gesture in `WindowRectangle`, `phoneFrameOverrides` @AppStorage persistence, swap-on-overlap, snap-to-grid via `nearestGridIndex` + `gridFrame`). 2026-05-06: grid-mode `nearestGridIndex` test coverage added (`93b5f23`/`288b812` series). Resize-with-drag, cross-display moves, and free-drag (no snap) deferred — file as new wishlist items if needed.
 
 ---
 
