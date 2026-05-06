@@ -212,3 +212,94 @@ iOS sim launch on Quip QA (D853A014) shows simultaneous **"Connecting… Stalled
 ## Resume one-liner (continuation 3)
 
 > Continue Quip on `eb-branch` from `918cb5c`. §B16 follow-frontmost shipped: Mac broadcasts via `FrontmostChangedMessage` + 400ms poller + NSWorkspace hook (`b6ef907`); iOS receives + auto-follows + Auto pill in window picker (`918cb5c`). Both built + installed; physical iPhone 17 Pro Max needs force-quit + relaunch before smoke test. CI expansion plan approved at `/Users/erickbzovi/.claude/plans/a-async-sparkle.md` — local dry-run revealed 186,457 swiftformat violations + 300 cargo fmt hunks; user paused at picking strategy (a) defer lint / (b) advisory `continue-on-error` / (c) mass-format commit. Bug #1 from sim QA: empty-URL state shows "Connecting… Stalled 26s — resetting" simultaneously with "Enter tunnel URL" placeholder — wishlist-worthy two-line fix in iOS connection-state guard. PR #29 still conflicting against main; resolution path A/B/C unchanged from continuation 2. /Applications/Quip.app reflects today's build (binary mtime `May 5 21:12:48`, CFBundleShortVersionString 1.5.1); iPhone build at `databaseSequenceNumber 9272`. Two new commits NOT pushed yet pending eb-branch policy confirmation.
+
+## Continuation 4 — autonomous /loop burn-down + 5 GH issues closed
+
+Started after `18cdf5b`. **9 substantive commits, all pushed.** Plan file `/Users/erickbzovi/.claude/plans/a-async-sparkle.md` overwritten with the wishlist+GH-issue burn-down plan, approved, executed Stories 1-10 minus Story 8 (rolled into Story 1) and Story 2 partial (diagnostic shipped, root cause not yet captured).
+
+### Commits (this continuation)
+
+| Hash | Branch tip | Why |
+|------|-----------|-----|
+| `3a3a7c7` | Mac | WS opcode filter + Kokoro log-once. NWProtocolWebSocket.Metadata.opcode != .text/.binary skips before JSON parse so iOS keepalive pings stop spamming kokoro.log. KokoroTTS.ensureDaemonRunning + preload() guard the "no venv" diagnostic behind a hasLoggedUnavailable flag — one log per session instead of thousands. |
+| `f471415` | iOS | Prefs storm fix + select_window heal on reconnect. BackendConnectionManager.onLayoutUpdate now diff-checks lastSeenLayoutMonitorName before savePaired() — kills the every-1-3s preferences_snapshot upload. onAuthResult re-sends current selectedWindowId so Mac's clientSelectedWindowId rebuilds after Mac restart / NAT-idle drop. **Live-verified**: 0 prefs_snapshot in 3-min window post-fix vs ~30/min before. |
+| `80d5d3c` | docs | Wishlist §B17 — file the type=unknown 4-byte mystery (after the 3a3a7c7 opcode filter proved it's a TEXT frame, not a control frame). |
+| `18cdf5b` | docs | Continuation 3 handoff (this one's predecessor). |
+| `29b0c82` | docs+iOS | Story 1 — flip §B16 done in wishlist + iOS 1.5.2→1.5.3 + delete §52 §55 from Tabled (per user) + close GH #18 #23 (idempotency keys + CI both shipped). |
+| `288b812` | iOS | Story 3 — §B15 a11y labels + isButton traits on main-row icon-only buttons (chevrons, spawn, arrange, mic, photo, prompts, keyboard, return, gear). State-aware labels for buttons with toggleable icons (mic/stop, photo/photo.fill, keyboard/keyboard.chevron.compact.down). |
+| `93b5f23` | iOS | Stories 4+6 — grid arrangement mode (§16) + auto-pick grid for 4+ windows (§39 v2). gridFrame "grid" mode packs ceil(sqrt(total)) cols × ceil(total/cols) rows. Arrange-button cycle: horizontal → vertical → grid → horizontal. 7 new tests in PhoneLayoutChooserTests covering grid at 1/4/5/9 windows + chooser at 4/6/10. |
+| `af626b8` | iOS+docs | Story 5 — nearestGridIndex grid-mode test coverage (3 cases: top-right cell, bottom-left cell, 6-window bottom-right) + flip §16/§39/§40 to ✅ Done in wishlist. §40 drag-to-move was already shipped; coverage was the gap. |
+| `5cbe0df` | docs | Story 7 — protocol.md cross-cutting concerns added (versioning rules, heartbeat semantics, idempotency via §27 messageId, per-message HMAC out-of-scope, frame opcode filtering). Closes GH #25. |
+| `462db63` | Mac | Stories 9+10+§B17 diagnostic. **Story 9** (closes #21): WebSocketServer.requireAuth wrapped in OSAllocatedUnfairLock<Bool> with nonisolated getter+setter — kills the network-queue read vs main-thread write race during PIN-toggle. **Story 10** (closes #22): APNs metadata (keyId/teamId/bundleId) moved from UserDefaults to Keychain via new APNsMetadataStore.swift. One-shot migration on first read; service key `com.quip.mac.apns-metadata`. SettingsView + PushNotificationService updated. **§B17**: diagnostic patch logs raw bytes (UTF-8 + hex) of first messageType=nil frame per connection so next log capture identifies the iOS sender. ObjectIdentifier-keyed dedupe set cleared on connection drop. |
+
+### GitHub issues closed (this continuation)
+
+5 closed: **#18** (idempotency, shipped via §27 dedupe), **#23** (CI, already at .github/workflows/ci.yml), **#25** (protocol docs cross-cutting), **#21** (requireAuth race lock), **#22** (APNs Keychain).
+
+12 open issues remain — all in plan Tier 2 (#14 #15 #19 #20 #24 #13) or Tier 3 (#10 #11 #12 #16 #17 #4) per the plan file.
+
+### Wishlist status
+
+Flipped to ✅ Done this continuation: §B16, §16, §39, §40. Still active: §0c, §4, §5, §B15 (partial — main-row done, slot-row chips + reset/close not yet swept), §B17 (diagnostic shipped, capture pending), §18, §24, §26, §30, §35, §38, §56. Tabled section emptied (§52 §55 deleted per user).
+
+### Test counts after continuation 4
+
+| Suite | After continuation 3 | After continuation 4 | Delta |
+|-------|----------------------|----------------------|-------|
+| QuipiOSTests / PhoneLayoutChooserTests | 12 | 22 | +10 (3 chooser cases for grid + 4 gridFrame cases for grid + 3 nearestGridIndex grid cases) |
+| QuipMacTests | 249 | 249 | 0 (Stories 9+10 didn't add Mac-side tests this run; APNsMetadataStoreTests + requireAuthRaceTests are deferred — both are tractable but bundling for next loop) |
+
+### Install state (continuation 4)
+
+| Surface | Build identity | When | Status |
+|---------|---------------|------|--------|
+| `/Applications/Quip.app` | Release, signed `813F0602...`, mtime ~11:01 PT | re-signed + ditto'd after 462db63 | running, all this continuation's Mac changes live |
+| iPhone 17 Pro Max (`FA951BBB-...`) | Debug, `databaseSequenceNumber 9524` (latest install of Stories 4+6) | installed 11:33 PT | **NOT force-quit since last install** — needs relaunch to pick up Stories 3, 4, 5, 6 |
+| Quip QA sim (`D853A014-...`) | Debug, post-Story-3 build | installed + audited 11:24 PT | running. a11y baseline went from 23 warnings to 9 (Connecting state — full main-view audit needs a connected backend in the sim) |
+
+### Hardware-verified vs install-only matrix (continuation 4)
+
+| Surface / feature | Status |
+|---|---|
+| §B16 Mac broadcast (frontmost_changed) | install only — frame on wire not user-confirmed |
+| §B16 iOS Auto pill render | install only — phone needs force-quit |
+| §B16 end-to-end follow-frontmost | install only — needs Mac iTerm↔Claude focus toggle smoke |
+| Mac log-spam fix (3a3a7c7) | **live verified** — kokoro.log shows 0 type=unknown for ~3min after fix; "no venv" log fired ONCE then silent |
+| iOS prefs storm fix (f471415) | **live verified** — 0 preferences_snapshot in 3-min monitor window vs ~30/min before |
+| iOS select_window heal (f471415) | **live verified** — 2x select_window observed on phone reconnect to new Mac at 18:05:11Z |
+| Story 3 a11y main-row labels | install only — needs VoiceOver test |
+| Stories 4+6 grid mode | install only — needs phone tap arrange 3× to verify cycle |
+| Story 5 grid nearestGridIndex tests | unit-test verified (22 tests green) |
+| Story 7 protocol.md docs | n/a (pure docs) |
+| Story 9 requireAuth lock | install only — needs requirePIN setting toggle race-test |
+| Story 10 APNs Keychain migration | install only — needs `security find-generic-password -s com.quip.mac.apns-metadata` confirmation + UserDefaults purge check |
+| §B17 4-byte trace | **diagnostic live, capture pending** — phone hadn't reconnected through new Mac at recap time so the first-unknown emit hadn't fired in `kokoro.log` yet. Next session: tail kokoro.log right after a phone reconnect cycle, the §B17 line will identify the iOS sender. |
+
+### Open threads (priority for resume)
+
+1. **Force-quit + relaunch Quip on iPhone**, then run the Story 11 verification punch list:
+   - VoiceOver swipe through main view — every button announces as "<verb>, button"
+   - Spawn 3rd window → phone flips to vertical automatically (§39 v2)
+   - Spawn 4th window → phone flips to grid (§39 v2 + §16)
+   - Drag a window toward right edge → snap to right half (§40)
+   - Tap arrange 3× → cycles horizontal → vertical → grid (§16)
+   - Toggle requirePIN setting in Mac while phone is connecting → no misroute (#21)
+   - `security find-generic-password -s "com.quip.mac.apns-metadata" -g` shows entry; `defaults read com.quip.mac apnsKeyId` errors with "does not exist" (#22)
+2. **Capture §B17 trace** — tail `~/Library/Logs/Quip/kokoro.log | grep "§B17"` after phone reconnects to the post-462db63 Mac. The first unknown frame's UTF-8 + hex bytes will identify the iOS sender. Then write the iOS-side fix (likely WatchSyncService heartbeat or some `JSONEncoder().encode(Optional.none)` site).
+3. **Resume the Tier-2 queue** (per plan): #14 (PIN → Keychain, broader auth-state), #20 (enum tighten), #19 (Mac→iOS app-level heartbeat), #15 (CloudflareTunnel injection audit), #13 (hardened runtime + DEVELOPMENT_TEAM=D2PM6R797Q), #24 (test coverage gaps).
+4. **Tier-3 decisions** (still need user input): #10 TLS pinning strategy, #11 NSAllowsArbitraryLoads allowlist, #12 App Sandbox break-risk, #16 cloudflared filter-repo (RISKY — PR #29 conflict still open), #17 HMAC, #4 Linux duplicate/close, plus the original wishlist deferred items (§0c §4 §5 §18 §24 §26 §30 §35 §38 §56).
+5. **PR #29 conflict** (carried from continuation 2) — resolution path A/B/C unchanged.
+6. **CI lint expansion** plan superseded by this continuation's plan, but still relevant — 186k swiftformat + 300 cargo fmt debt; user paused at strategy pick before this continuation began. Re-engage once Tier-2 lands.
+7. **Bug #1 sim QA** — empty-URL state shows "Connecting… Stalled 26s" + "Enter tunnel URL" simultaneously. Two-line fix in iOS connection-state guard. Not yet wishlisted.
+
+### What this continuation deliberately did NOT do
+
+- §B17 root-cause fix — diagnostic is live, capture pending. Don't write the fix without seeing the actual byte content.
+- APNsMetadataStoreTests + requireAuthRaceTests — both bundled into the "Story 11 pause didn't pre-write tests for unverified Mac changes" bucket. Worth a small follow-up commit once Story 11 verification clears.
+- Tier-2 GH issues — all queued behind Story 11 user verification per plan.
+- §B15 slot-row chip pills + reset/close button labels — the audit improved baseline-9 in Connecting state but main-view audit (needs connected backend in sim) wasn't done.
+- Mass push of "all 12 commits in one batch" — pushed each story commit individually as they landed. eb-branch is clean ahead of origin.
+
+## Resume one-liner (continuation 4)
+
+> Continue Quip on `eb-branch` from `462db63`. Continuation 4 closed 5 GH issues (#18 #23 #25 #21 #22) and shipped §B16 (Mac broadcast + iOS Auto pill), log-spam fixes (Mac WS opcode filter + Kokoro log-once + iOS prefs-storm + select_window heal), §B15 main-row a11y labels, §16 grid arrangement + §39 v2 auto-pick grid for 4+ windows, §40 drag-snap test coverage, protocol.md cross-cutting docs, GH #21 requireAuth OSAllocatedUnfairLock, GH #22 APNs metadata to Keychain via new APNsMetadataStore (one-shot migration on first read), and a §B17 first-unknown-bytes diagnostic on Mac. **22 PhoneLayoutChooserTests green** (was 12). All 12 commits pushed to `origin/eb-branch`. /Applications/Quip.app at CFBundleShortVersionString 1.5.1, binary built ~11:01 PT 2026-05-06. iPhone 17 Pro Max databaseSequenceNumber 9524 — **needs force-quit + relaunch** to pick up Stories 3-6. **Story 11 pause** in plan `/Users/erickbzovi/.claude/plans/a-async-sparkle.md`: punch list at end of plan file enumerates VoiceOver / arrange-cycle / drag-snap / requireAuth-race / Keychain-migration smoke checks. **§B17 diagnostic is live but capture pending** — `tail -F ~/Library/Logs/Quip/kokoro.log | grep §B17` after phone reconnects will name the 4-byte sender for the iOS-side fix. PR #29 conflict against main still unresolved (continuation-2 issue, carry forward). 12 GH issues remain open (Tier 2: #14 #15 #19 #20 #24 #13; Tier 3: #10 #11 #12 #16 #17 #4). 12 wishlist items remain Wishlist (§0c §4 §5 §B15-partial §B17 §18 §24 §26 §30 §35 §38 §56).
