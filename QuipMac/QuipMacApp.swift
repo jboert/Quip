@@ -755,17 +755,40 @@ struct QuipMacApp: App {
                     self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    // When iTerm2 session-write can target the session by UUID,
-                    // the AX raise doesn't need to finish before AppleScript fires
-                    // — `write text` bypasses focus. `focusDelay` returns 0 in
-                    // that case. Otherwise we fall back to the old 80ms delay
-                    // that the System Events/front-window path needs.
+                    // GH I follow-up — branch by detected CLI:
+                    // - Codex CLI's interactive composer ignores PTY-typed
+                    //   bytes from `write text` (sendText's path); it only
+                    //   accepts macOS paste events. PTT transcripts vanished
+                    //   silently before this branch.
+                    // - Claude Code reads stdin in raw mode + echoes typed
+                    //   chars; `write text` works fine (and the
+                    //   character-id 13 CR fires submit reliably).
+                    // - Default (.shell / unknown / nil) preserves the
+                    //   pre-Story-I behavior.
+                    let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
                     let delay = KeystrokeInjector.focusDelay(
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let inject = {
-                        self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                    let inject: () -> Void
+                    if cliKind == .codex && termApp == .iterm2 {
+                        inject = {
+                            self.keystrokeInjector.pasteText(msg.text,
+                                                             to: msg.windowId,
+                                                             pressReturn: msg.pressReturn,
+                                                             terminalApp: termApp,
+                                                             iterm2SessionId: window.iterm2SessionId)
+                        }
+                    } else {
+                        inject = {
+                            self.keystrokeInjector.sendText(msg.text,
+                                                            to: msg.windowId,
+                                                            pressReturn: msg.pressReturn,
+                                                            terminalApp: termApp,
+                                                            windowName: name,
+                                                            cgWindowNumber: wn,
+                                                            iterm2SessionId: window.iterm2SessionId)
+                        }
                     }
                     if delay == 0 {
                         inject()

@@ -271,6 +271,112 @@ final class KeystrokeInjector {
         }
     }
 
+    // MARK: - Paste Text (Codex CLI path)
+
+    /// Paste a text string into a terminal window via the system clipboard +
+    /// Cmd+V. Used for AI CLIs (notably Codex) whose interactive composer
+    /// ignores PTY-typed bytes from `write text` — Codex's composer captures
+    /// real macOS paste events but discards raw stdin chars, so a PTT
+    /// transcript routed through `sendText`'s `write text` path silently
+    /// vanishes. Mirrors `pasteImage` and saves/restores the user's
+    /// clipboard.
+    ///
+    /// Sequence:
+    /// 1. Snapshot current clipboard string.
+    /// 2. Set clipboard to `text`.
+    /// 3. Activate iTerm2, focus target session, send Cmd+V.
+    /// 4. Optionally send Cmd+Enter (Codex's submit) when `pressReturn` is true.
+    /// 5. Restore the snapshotted clipboard string after a short delay.
+    ///
+    /// Codex submit: Codex CLI's interactive composer accepts a single
+    /// pasted blob and submits on Enter (key code 36). Cmd+Enter is the
+    /// "send and keep composer open" variant; we use plain Enter to match
+    /// the existing `pressReturn` semantics in `sendText`.
+    @discardableResult
+    func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
+                   terminalApp: TerminalApp, iterm2SessionId: String?) -> InjectionResult {
+        let pb = NSPasteboard.general
+        let previousString = pb.string(forType: .string)
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+
+        defer {
+            // Restore after a delay — same rationale as pasteImage. 0.6s is
+            // empirically the floor on a fast Mac; faster restore can race
+            // the paste keystroke and clobber the pasted text.
+            let restore = previousString
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                if let s = restore {
+                    pb.setString(s, forType: .string)
+                }
+            }
+        }
+
+        switch terminalApp {
+        case .iterm2:
+            guard let sessionId = iterm2SessionId else {
+                return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+            }
+            let script = Self.pasteTextScript(iterm2SessionId: sessionId, pressReturn: pressReturn)
+            return executeAppleScript(script, context: "pasteText to \(windowId) [iTerm2]")
+
+        case .terminal:
+            // Terminal.app accepts both keystroke chars AND clipboard paste;
+            // sendText already handles it via the keystroke path. Don't
+            // shadow that — fall back signal so caller can use sendText.
+            return InjectionResult(success: false, error: "Terminal.app uses sendText keystroke path")
+
+        case .claudeDesktop:
+            // Claude Desktop's sendText already routes through NSPasteboard
+            // + Cmd+V — that path is tuned for Electron quirks, don't
+            // duplicate here.
+            return InjectionResult(success: false, error: "Claude Desktop uses sendText paste path")
+        }
+    }
+
+    /// Pure script builder for `pasteText` so unit tests can lock the shape
+    /// without setting NSPasteboard or invoking osascript. Exposed
+    /// internal-only. `nonisolated` so tests on the default executor can
+    /// call without hopping the main actor.
+    nonisolated static func pasteTextScript(iterm2SessionId: String, pressReturn: Bool) -> String {
+        let escapedId = escapeForAppleScriptStatic(iterm2SessionId)
+        let returnCmd = pressReturn ? "\n                    key code 36" : ""
+        return """
+        tell application "iTerm2"
+            set quipFound to false
+            repeat with aWindow in windows
+                tell aWindow
+                    repeat with aTab in tabs
+                        tell aTab
+                            repeat with aSession in sessions
+                                if unique id of aSession is "\(escapedId)" then
+                                    select aSession
+                                    set quipFound to true
+                                    exit repeat
+                                end if
+                            end repeat
+                        end tell
+                        if quipFound then exit repeat
+                    end repeat
+                end tell
+                if quipFound then exit repeat
+            end repeat
+            if not quipFound then
+                error "Quip: iTerm2 session \(escapedId) not found"
+            end if
+            activate
+        end tell
+        delay 0.1
+        tell application "System Events"
+            tell process "iTerm2"
+                keystroke "v" using command down\(returnCmd)
+            end tell
+        end tell
+        """
+    }
+
     // MARK: - Send Keystroke
 
     /// Send a special keystroke (e.g., Ctrl+C, Return) to a specific terminal window.
@@ -799,6 +905,13 @@ final class KeystrokeInjector {
 
     /// Escape text for use inside AppleScript string literals
     private func escapeForAppleScript(_ text: String) -> String {
+        Self.escapeForAppleScriptStatic(text)
+    }
+
+    /// Static variant so pure script builders (e.g. `pasteTextScript`) can
+    /// produce the same escape without needing an instance. `nonisolated`
+    /// to let unit tests call without hopping the main actor.
+    nonisolated static func escapeForAppleScriptStatic(_ text: String) -> String {
         text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
