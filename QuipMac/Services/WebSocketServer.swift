@@ -43,6 +43,22 @@ final class WebSocketServer {
 
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
+    /// App-level heartbeat dispatcher. Fires every `heartbeatInterval` and
+    /// sends one `HeartbeatMessage` to each authenticated client. Started in
+    /// `start()`, invalidated in `stop()`. Detects wedged-but-TCP-alive
+    /// clients (background+suspended past OS keepalive grace, runloop stuck)
+    /// that the WebSocket-protocol pong path can't see. (GH #19.)
+    private var heartbeatTimer: Timer?
+    private var nextHeartbeatSeq: Int = 0
+    /// Seconds between heartbeat dispatches. Paired with iOS keepalive cadence
+    /// (10s ping + 3s pong timeout): heartbeat at 15s gives the iOS app room
+    /// to ack between its own keepalive cycles without overlap.
+    nonisolated static let heartbeatInterval: TimeInterval = 15
+    /// Seconds after which an outstanding heartbeat is considered "stale" and
+    /// we log it. Doesn't tear down the connection — TCP keepalive +
+    /// pendingBytes backpressure already cull dead sockets; this is
+    /// observability only.
+    nonisolated static let heartbeatStaleAfter: TimeInterval = 30
     /// §B17 — connections that have already had their first failed-JSON-parse
     /// dump emitted to kokoro.log. Membership-test gates the dump path so a
     /// noisy connection produces ONE diagnostic line per session instead of
@@ -80,6 +96,14 @@ final class WebSocketServer {
         var deviceID: String? = nil
         var deviceName: String? = nil
         var deviceKind: String? = nil
+        /// Seq of the most recent heartbeat sent to this client that has not
+        /// yet been acked. Cleared when matching `heartbeat_ack` arrives. The
+        /// dispatcher logs a one-line warning if a new heartbeat fires while
+        /// the previous one is still outstanding past `heartbeatStaleAfter`.
+        /// (GH #19.)
+        var pendingHeartbeatSeq: Int? = nil
+        var pendingHeartbeatSentAt: Date? = nil
+        var lastHeartbeatAckAt: Date? = nil
 
         static let maxMessagesPerSecond = 10
         /// Drop broadcasts once a single client has this much buffered. Chosen to
@@ -156,6 +180,44 @@ final class WebSocketServer {
         guard let listener = listener else { return }
         attachHandlers(to: listener)
         listener.start(queue: networkQueue)
+        startHeartbeatTimer()
+    }
+
+    /// Arm the per-server heartbeat dispatcher. Idempotent — invalidates any
+    /// previous timer before scheduling a new one. (GH #19.)
+    private func startHeartbeatTimer() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: Self.heartbeatInterval, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.dispatchHeartbeats()
+            }
+        }
+    }
+
+    /// Send one `HeartbeatMessage` to each authenticated direct-WS client.
+    /// If a client still has a previous heartbeat outstanding past the stale
+    /// threshold, log a one-line warning before firing the next one. Does
+    /// not tear down stale connections — TCP keepalive + pendingBytes
+    /// backpressure already handle that. (GH #19.)
+    private func dispatchHeartbeats() {
+        let now = Date()
+        for i in clients.indices {
+            guard clients[i].isAuthenticated else { continue }
+
+            if let pending = clients[i].pendingHeartbeatSeq,
+               let sentAt = clients[i].pendingHeartbeatSentAt,
+               now.timeIntervalSince(sentAt) > Self.heartbeatStaleAfter {
+                let remote = clients[i].remoteDescription
+                Self.wslog("heartbeat seq=\(pending) stale (>\(Int(Self.heartbeatStaleAfter))s) for \(remote)")
+            }
+
+            nextHeartbeatSeq &+= 1
+            let seq = nextHeartbeatSeq
+            let msg = HeartbeatMessage(seq: seq, ts: now.timeIntervalSince1970)
+            clients[i].pendingHeartbeatSeq = seq
+            clients[i].pendingHeartbeatSentAt = now
+            send(msg, to: clients[i].connection)
+        }
     }
 
     /// Build the IPv4-wildcard listener. Pinning the local endpoint via
@@ -332,6 +394,8 @@ final class WebSocketServer {
     func stop() {
         bindRetryWorkItem?.cancel()
         bindRetryWorkItem = nil
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
         listener?.cancel()
         listener = nil
         for client in clients {
@@ -539,6 +603,20 @@ final class WebSocketServer {
         }
     }
 
+    /// Match an inbound `heartbeat_ack` to its outstanding heartbeat and
+    /// clear the pending state for that client. If the seq doesn't match
+    /// the pending one (e.g. delayed ack after a newer heartbeat already
+    /// fired), still record `lastHeartbeatAckAt` since the connection
+    /// proved itself responsive. (GH #19.)
+    private func applyHeartbeatAck(_ msg: HeartbeatAckMessage, from connection: NWConnection) {
+        guard let idx = clients.firstIndex(where: { $0.connection === connection }) else { return }
+        clients[idx].lastHeartbeatAckAt = Date()
+        if clients[idx].pendingHeartbeatSeq == msg.seq {
+            clients[idx].pendingHeartbeatSeq = nil
+            clients[idx].pendingHeartbeatSentAt = nil
+        }
+    }
+
     /// Apply an inbound `device_identity` message from a peer (typically the
     /// phone after auth). Updates the matched client's metadata + republishes
     /// the public list so UI reflects the device name.
@@ -722,6 +800,16 @@ final class WebSocketServer {
                     if messageType == "device_identity",
                        let msg = MessageCoder.decode(DeviceIdentityMessage.self, from: receivedData) {
                         self.applyPeerIdentity(msg, from: connection)
+                        self.touchActivity(for: connection)
+                        return
+                    }
+
+                    // GH #19: heartbeat_ack from the iOS client. Match seq,
+                    // clear pending, update lastHeartbeatAckAt. Don't forward
+                    // to onMessageReceived — pure liveness metadata.
+                    if messageType == "heartbeat_ack",
+                       let ack = MessageCoder.decode(HeartbeatAckMessage.self, from: receivedData) {
+                        self.applyHeartbeatAck(ack, from: connection)
                         self.touchActivity(for: connection)
                         return
                     }

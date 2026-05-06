@@ -820,4 +820,42 @@ final class MessageProtocolTests: XCTestCase {
             XCTFail("expected .failed")
         }
     }
+
+    // MARK: - Heartbeat (GH #19)
+
+    func testHeartbeatMessageEncoding() throws {
+        let msg = HeartbeatMessage(seq: 42, ts: 1_700_000_000.5)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "heartbeat")
+        XCTAssertEqual(dict["seq"] as? Int, 42)
+        XCTAssertEqual(dict["ts"] as? Double, 1_700_000_000.5)
+    }
+
+    func testHeartbeatMessageRoundTrip() throws {
+        let msg = HeartbeatMessage(seq: 7, ts: 1_700_123_456.789)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(HeartbeatMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "heartbeat")
+        XCTAssertEqual(decoded.seq, 7)
+        XCTAssertEqual(decoded.ts, 1_700_123_456.789, accuracy: 0.001)
+    }
+
+    func testHeartbeatAckMessageEncoding() throws {
+        let msg = HeartbeatAckMessage(seq: 42)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "heartbeat_ack")
+        XCTAssertEqual(dict["seq"] as? Int, 42)
+    }
+
+    func testHeartbeatAckMessageRoundTrip() throws {
+        let msg = HeartbeatAckMessage(seq: 99)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(HeartbeatAckMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "heartbeat_ack")
+        XCTAssertEqual(decoded.seq, 99)
+    }
 }

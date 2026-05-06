@@ -137,7 +137,42 @@ struct FrontmostChangedMessage: Codable, Sendable {
     }
 }
 
+/// App-level heartbeat: Mac periodically asks each authenticated client
+/// "are you still processing messages?" so a wedged-but-TCP-alive iOS
+/// app (background+suspended past the OS keepalive grace, foreground
+/// but stuck on a runloop) gets detected at the application layer
+/// rather than waiting for a TCP-level error that may never come.
+/// iOS already pings Mac (WebSocket-protocol ping → pong) — this is
+/// the reverse direction. iOS replies with `HeartbeatAckMessage` echoing
+/// the same `seq`. (GH #19.)
+struct HeartbeatMessage: Codable, Sendable {
+    let type: String
+    let seq: Int
+    /// Mac wall-clock at send time, seconds since 1970. Diagnostic only;
+    /// receiver is not expected to compare against its own clock.
+    let ts: Double
+
+    init(seq: Int, ts: Double = Date().timeIntervalSince1970) {
+        self.type = "heartbeat"
+        self.seq = seq
+        self.ts = ts
+    }
+}
+
 // MARK: - iPhone → Mac Messages
+
+/// Reply to a Mac-side `HeartbeatMessage`. Echoes the seq so Mac can
+/// match the ack to the original send and measure round-trip latency
+/// if it cares to. (GH #19.)
+struct HeartbeatAckMessage: Codable, Sendable {
+    let type: String
+    let seq: Int
+
+    init(seq: Int) {
+        self.type = "heartbeat_ack"
+        self.seq = seq
+    }
+}
 
 struct SelectWindowMessage: Codable, Sendable {
     let type: String

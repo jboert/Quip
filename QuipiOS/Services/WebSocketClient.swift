@@ -757,6 +757,17 @@ final class WebSocketClient {
             if let msg = try? decoder.decode(FrontmostChangedMessage.self, from: data) {
                 onFrontmostChanged?(msg.windowId)
             }
+        case "heartbeat":
+            // GH #19: Mac→iOS app-level heartbeat. Reply with same seq so
+            // Mac knows the iOS app is still processing messages (not just
+            // alive at TCP). Do NOT gate on isAuthenticated — Mac only
+            // dispatches heartbeats to authenticated clients, so by the
+            // time we receive one we're already past auth from Mac's POV.
+            // Fail-soft: if decode fails, drop silently — Mac will log a
+            // stale-heartbeat warning and resync on the next dispatcher tick.
+            if let msg = try? decoder.decode(HeartbeatMessage.self, from: data) {
+                send(HeartbeatAckMessage(seq: msg.seq))
+            }
         case "preferences_restore":
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(PreferenceRestoreMessage.self, from: data) {
