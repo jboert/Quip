@@ -9,7 +9,8 @@ final class DiagnosticsSnapshotFormatterTests: XCTestCase {
 
     private static let frozenNow = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private func sample(events: [String] = []) -> DiagnosticsSnapshotFormatter.Input {
+    private func sample(events: [String] = [],
+                        reason: DisconnectReason? = nil) -> DiagnosticsSnapshotFormatter.Input {
         DiagnosticsSnapshotFormatter.Input(
             appVersion: "1.5.3",
             buildNumber: "9999",
@@ -17,6 +18,7 @@ final class DiagnosticsSnapshotFormatterTests: XCTestCase {
             isConnecting: false,
             isAuthenticated: true,
             lastError: nil,
+            lastDisconnectReason: reason,
             serverURL: "ws://192.168.4.34:8765",
             pairedCount: 2,
             activeBackendName: "Quip Mac Studio23",
@@ -47,10 +49,33 @@ final class DiagnosticsSnapshotFormatterTests: XCTestCase {
         inp = .init(appVersion: inp.appVersion, buildNumber: inp.buildNumber,
                     isConnected: false, isConnecting: true, isAuthenticated: false,
                     lastError: "Stalled 26s — resetting",
+                    lastDisconnectReason: nil,
                     serverURL: inp.serverURL, pairedCount: inp.pairedCount,
                     activeBackendName: inp.activeBackendName, connectionEvents: inp.connectionEvents)
         let out = DiagnosticsSnapshotFormatter.format(inp, now: Self.frozenNow)
         XCTAssertTrue(out.contains("lastError: Stalled 26s — resetting"))
+    }
+
+    func test_disconnectReasonNil_rendersAsNoneSentinel() {
+        let out = DiagnosticsSnapshotFormatter.format(sample(reason: nil), now: Self.frozenNow)
+        XCTAssertTrue(out.contains("lastDisconnectReason: <none>"))
+    }
+
+    func test_disconnectReasonPresent_rendersBareTagToken() {
+        // Tag is the bare case name (no associated values) — stays grep-friendly
+        // even when the human-readable label changes wording.
+        let out = DiagnosticsSnapshotFormatter.format(sample(reason: .stalled(seconds: 26)),
+                                                     now: Self.frozenNow)
+        XCTAssertTrue(out.contains("lastDisconnectReason: stalled"),
+                      "stalled tag should appear without the seconds payload")
+    }
+
+    func test_disconnectReasonAuthFailed_rendersAuthFailedTag() {
+        let out = DiagnosticsSnapshotFormatter.format(
+            sample(reason: .authFailed(message: "Wrong PIN")),
+            now: Self.frozenNow
+        )
+        XCTAssertTrue(out.contains("lastDisconnectReason: authFailed"))
     }
 
     func test_includesPairedCount_andActiveName() {

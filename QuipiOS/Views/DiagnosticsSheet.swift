@@ -98,6 +98,7 @@ enum DiagnosticsSnapshotFormatter {
         let isConnecting: Bool
         let isAuthenticated: Bool
         let lastError: String?
+        let lastDisconnectReason: DisconnectReason?
         let serverURL: String?
         let pairedCount: Int
         let activeBackendName: String?
@@ -116,6 +117,7 @@ enum DiagnosticsSnapshotFormatter {
         lines.append("authenticated: \(input.isAuthenticated)")
         lines.append("serverURL: \(input.serverURL ?? "<none>")")
         lines.append("lastError: \(input.lastError ?? "<none>")")
+        lines.append("lastDisconnectReason: \(input.lastDisconnectReason?.tag ?? "<none>")")
         lines.append("")
         lines.append("## Backends")
         lines.append("paired: \(input.pairedCount)")

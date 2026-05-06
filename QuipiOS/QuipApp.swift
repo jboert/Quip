@@ -813,6 +813,25 @@ enum TopBarStatus: String, Equatable, CaseIterable {
         // disconnect and the auto-reconnect kicking in.
         return .stalled
     }
+
+    /// Structured-reason variant. Same priority order as the lastError
+    /// classifier but reads the typed `DisconnectReason` instead of
+    /// keyword-matching a free-form string. Use this when the call site
+    /// has access to `WebSocketClient.lastDisconnectReason`. Falls back
+    /// to `.connecting` / `.stalled` when the reason is nil. (§30/2)
+    static func classify(isConnected: Bool,
+                          isConnecting: Bool,
+                          isAuthenticated: Bool,
+                          reason: DisconnectReason?,
+                          hasPaired: Bool) -> TopBarStatus {
+        if isConnected { return .connected }
+        if !hasPaired { return .unpaired }
+        if let mapped = reason?.topBarStatus {
+            return mapped
+        }
+        if isConnecting { return .connecting }
+        return .stalled
+    }
 }
 
 struct MainiOSView: View {
@@ -1753,7 +1772,7 @@ struct MainiOSView: View {
             isConnected: client.isConnected,
             isConnecting: client.isConnecting,
             isAuthenticated: client.isAuthenticated,
-            lastError: client.lastError,
+            reason: client.lastDisconnectReason,
             hasPaired: !manager.paired.isEmpty
         )
         return HStack(spacing: 4) {
@@ -2485,6 +2504,7 @@ struct MainiOSView: View {
             isConnecting: client.isConnecting,
             isAuthenticated: client.isAuthenticated,
             lastError: client.lastError,
+            lastDisconnectReason: client.lastDisconnectReason,
             serverURL: client.serverURL?.absoluteString,
             pairedCount: manager.paired.count,
             activeBackendName: activeName,

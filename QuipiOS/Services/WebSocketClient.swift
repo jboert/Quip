@@ -164,6 +164,12 @@ final class WebSocketClient {
     var authError: String?
     var serverURL: URL?
     var lastError: String?
+    /// Structured cause of the most recent disconnect. Set BEFORE clearing
+    /// `isConnected` / calling `handleDisconnect` so the §K pill and
+    /// DiagnosticsSheet render the typed reason instead of keyword-matching
+    /// the free-form `lastError` string. Cleared on a fresh connect attempt
+    /// and on `disconnect()` (user-initiated).
+    var lastDisconnectReason: DisconnectReason?
 
     var onLayoutUpdate: ((LayoutUpdate) -> Void)?
     var onStateChange: ((String, String) -> Void)?
@@ -325,7 +331,9 @@ final class WebSocketClient {
                    Date().timeIntervalSince(started) > Self.stuckThresholdSec {
                     let secs = Int(Date().timeIntervalSince(started))
                     self.logEvent("stall watchdog tripped after \(secs)s — forcing reconnect")
-                    self.lastError = "Stalled \(secs)s — resetting"
+                    let reason: DisconnectReason = .stalled(seconds: secs)
+                    self.lastDisconnectReason = reason
+                    self.lastError = reason.label
                     self.connectingStartedAt = Date()  // start clock for next attempt
                     self.handleDisconnect()
                 }
@@ -364,6 +372,7 @@ final class WebSocketClient {
         serverURL = first
         reconnectDelay = 1.0
         lastError = nil
+        lastDisconnectReason = nil
         isConnecting = true
         connectingStartedAt = Date()
         logEvent("connect(toURLs: \(urls.count) total, primary: \(first.absoluteString))")
@@ -420,6 +429,7 @@ final class WebSocketClient {
         // because urlText is empty — confusing contradiction at fresh launch
         // when a previously-paired backend was forgotten.
         lastError = nil
+        lastDisconnectReason = .userInitiated
         connectingStartedAt = nil
         NSLog("[WebSocketClient] Disconnected intentionally")
     }
@@ -586,7 +596,8 @@ final class WebSocketClient {
             guard let self, !Task.isCancelled else { return }
             if !self.isConnected && self.isConnecting {
                 NSLog("[WebSocketClient] Connection timeout")
-                self.lastError = "Connection timed out"
+                self.lastDisconnectReason = .timedOut
+                self.lastError = DisconnectReason.timedOut.label
                 self.handleDisconnect()
             }
         }
@@ -603,7 +614,9 @@ final class WebSocketClient {
 
                 if let error = error {
                     self.logEvent("initial ping failed: \(error.localizedDescription)")
-                    self.lastError = error.localizedDescription
+                    let reason: DisconnectReason = .networkError(error.localizedDescription)
+                    self.lastDisconnectReason = reason
+                    self.lastError = reason.label
                     self.handleDisconnect()
                 } else {
                     self.logEvent("connected, awaiting authentication")
@@ -612,6 +625,7 @@ final class WebSocketClient {
                     self.connectingStartedAt = nil
                     self.authError = nil
                     self.lastError = nil
+                    self.lastDisconnectReason = nil
                     self.reconnectDelay = 1.0
                     self.hasEverConnectedOnCurrentURL = true
                     self.startKeepalive()
@@ -673,6 +687,17 @@ final class WebSocketClient {
             case .failure(let error):
                 NSLog("[WebSocketClient] Receive error: %@", error.localizedDescription)
                 DispatchQueue.main.async {
+                    // Receive errors land here on socket close (normal or
+                    // abnormal). URLSession surfaces "Software caused
+                    // connection abort" on a server-side close, "The
+                    // operation couldn't be completed" on path drops, etc.
+                    // Map to networkError unless we already have a reason
+                    // set (e.g. stall watchdog tripped first).
+                    if self.lastDisconnectReason == nil {
+                        let reason: DisconnectReason = .networkError(error.localizedDescription)
+                        self.lastDisconnectReason = reason
+                        self.lastError = reason.label
+                    }
                     self.handleDisconnect()
                 }
             }
@@ -715,6 +740,14 @@ final class WebSocketClient {
                     isAuthenticated = false
                     authError = msg.error ?? "Invalid PIN"
                     sessionPIN = nil  // Clear bad PIN
+                    // Server rejected the PIN. Connection stays alive
+                    // (server keeps the WS open so phone can retry),
+                    // but record the typed reason so the §K pill can
+                    // surface "Auth failed" + the diagnostic sheet
+                    // shows the structured cause.
+                    let reason: DisconnectReason = .authFailed(message: msg.error)
+                    lastDisconnectReason = reason
+                    lastError = reason.label
                 }
                 onAuthResult?(msg.success, msg.error)
             }
@@ -886,7 +919,9 @@ final class WebSocketClient {
                 } else {
                     consecutiveMisses += 1
                     self.logEvent("keepalive pong missed (\(consecutiveMisses)/2)")
-                    self.lastError = "No pong (\(consecutiveMisses)/2)"
+                    let reason: DisconnectReason = .networkError("No pong (\(consecutiveMisses)/2)")
+                    self.lastDisconnectReason = reason
+                    self.lastError = reason.label
                     if consecutiveMisses >= 2 {
                         self.logEvent("two consecutive missed pongs — forcing reconnect")
                         self.handleDisconnect()
