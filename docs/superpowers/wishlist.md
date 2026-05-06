@@ -707,7 +707,7 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 
 ### B15. iPhone accessibility hygiene — traits + image alt labels
 
-**Status:** Wishlist
+**Status:** Partially done — main-row swept in cont-4 (`288b812`); slot-row chips + reset/disconnect/cancel-auth + prompt buttons swept in cont-5 (commit shipping with this update). Wishlist for any remaining elements not yet surfaced by the audit script (sim has to be paired + show slot row to render those elements).
 **Surfaced:** 2026-05-05 QA pass via `accessibility_audit.py` on the booted simulator (32 elements, 32 issues — 1 critical, 31 warnings).
 
 **Critical (1):** one image element on the main view has no `accessibilityLabel`. Likely the pending-image preview thumbnail or one of the window-card screenshots embedded in `WindowRectangle`. VoiceOver users hit a dead end when the element is focused.
@@ -750,6 +750,37 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 **Why low priority:** silently ignored downstream — no functional impact. Fix it as a single-PR hygiene item the next time someone is touching `WebSocketServer.receiveMessage` or `WebSocketClient.send` paths.
 
 **Acceptance:** kokoro.log captures one `type=unknown` line per session with the raw bytes. Code change drops the empty-frame send. Subsequent sessions show zero `type=unknown` events.
+
+---
+
+### Bug-1. Empty-URL stalled-state contradiction (sim QA)
+
+**Status:** ✅ Done 2026-05-06 (`f779bd3`). `WebSocketClient.disconnect()` now also clears `lastError` + `connectingStartedAt` — without this, a previous run's "Stalled Ns — resetting" watchdog message lingered in the top-bar `client.lastError` view after disconnect/forget, contradicting the empty-state "Enter tunnel URL" placeholder. Install-verified on QA sim (D853A014) at t=5s, t=40s, and t=4min — no stale watchdog text leaks. 3 WebSocketClientDisconnectTests cover the fix.
+
+---
+
+### G. Picker shows live per-backend reachability
+
+**Status:** ✅ Done 2026-05-06 (`0001371`). BackendPickerSheet now reads `manager.sessions[id].reachability` for every paired-backend row dot color AND adds a per-row caption above the URL: "Connected" / "Connecting…" / "Unreachable" / "PIN required" / "Off". Pure classifier `BackendPickerSheet.classification(enabled:reachability:)` mapped from `(Bool, Reachability?) → RowStatus`. 7 BackendPickerStatusTests lock the mapping. Surfaced from user feedback that "shows recent devices, but it's not clear if they're currently connected or can be currently connected."
+
+---
+
+### H. PTT health banner above mic button
+
+**Status:** ✅ Done 2026-05-06 (`0001371`). Single-line capsule above the main row, hidden by default, surfaces path-degraded states near the mic instead of leaving them buried in Settings → Diagnostics. Priority order: mid-press disconnect (red `wifi.exclamationmark`) → Whisper offline (orange `waveform.slash`, includes the `.failed` reason) → warming up / downloading (secondary, only during a press). Pure classifier `MainiOSView.classifyPTTBanner(isConnected:isRecording:whisperStatus:)`. 9 PTTBannerClassifierTests cover priority + percent rendering + idle-vs-recording gating. Surfaced from user feedback "couldn't tell what was working and what wasn't" with PTT/voice.
+
+---
+
+### I. Codex CLI image-paste path (per-CLI input routing)
+
+**Status:** ✅ Done 2026-05-06 (`6186fee`). Codex CLI's interactive composer accepts pasted IMAGE BYTES via Cmd+V (per OpenAI Codex docs), not a typed absolute path the way Claude Code does. Existing image_upload handler had been typing `<savedURL.path> ` into the window — Claude attaches the image, Codex left a literal string and never attached. Fix:
+- New `CLIKind: String, Codable, Sendable, CaseIterable { case claude, codex, shell }` in `Shared/MessageProtocol.swift` + optional `cliKind` field on WindowState (backward-compat).
+- `TerminalStateDetector.classifyCLI(children:)` static helper sniffs process names; codex match wins over claude/node because Codex is itself a Node app. Per-window `windowCLIKind` updated every poll cycle.
+- New `KeystrokeInjector.pasteImage(at:to:terminalApp:iterm2SessionId:)`: load NSImage from disk, write to NSPasteboard, activate iTerm2 + select target session via AppleScript walk, send Cmd+V via System Events. Restores the user's clipboard string after 0.6s.
+- image_upload handler in QuipMacApp branches by cliKind: `.codex` → pasteImage; `.claude / .shell` (default) → existing path-typing path, unchanged.
+- 8 CLIKindClassifierTests cover empty / shell / claude / bare node / codex / codex-under-node / both-present / isAIProcess. Live-verified against user's running setup: `node /usr/.../codex` + native `codex` on ttys001 → classifier returns `.codex`; `claude` on ttys002/3/5 → `.claude`.
+
+**Hardware verification needed:** rebuild Mac + send image upload from phone to a Codex window in iTerm2 — should Cmd+V the image into Codex's composer instead of typing the path. Subsequent PTT transcript continues to use existing send_text (write text via AppleScript, unchanged).
 
 ---
 

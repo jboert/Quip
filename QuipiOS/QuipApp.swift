@@ -1738,6 +1738,8 @@ struct MainiOSView: View {
                         .frame(width: 20, height: 20)
                 }
                 .accessibilityLabel("Reset connection")
+                .accessibilityHint("Disconnect and reconnect to the Mac")
+                .accessibilityAddTraits(.isButton)
             }
             Button {
                 client.disconnect()
@@ -1748,6 +1750,9 @@ struct MainiOSView: View {
                     .frame(width: 20, height: 20)
             }
             .padding(.trailing, 4)
+            .accessibilityLabel("Disconnect")
+            .accessibilityHint("Close the connection to the Mac")
+            .accessibilityAddTraits(.isButton)
         }
     }
 
@@ -1772,6 +1777,9 @@ struct MainiOSView: View {
                         .frame(width: 20, height: 20)
                 }
                 .padding(.trailing, 4)
+                .accessibilityLabel("Cancel authentication")
+                .accessibilityHint("Disconnect from the Mac")
+                .accessibilityAddTraits(.isButton)
             }
 
             if showPINEntry {
@@ -3491,6 +3499,9 @@ struct MainiOSView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canFire)
+        .accessibilityLabel("Prompt: \(label)")
+        .accessibilityHint(canFire ? "Tap to paste, long-press to paste and submit" : "Prompt unavailable")
+        .accessibilityAddTraits(.isButton)
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.4)
                 .onEnded { _ in firePromptSlot(promptID: promptID, pressReturn: true) }
@@ -3527,6 +3538,9 @@ struct MainiOSView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canFire)
+        .accessibilityLabel("Prompts library")
+        .accessibilityHint(canFire ? "Open prompt picker" : "No prompts available")
+        .accessibilityAddTraits(.isButton)
         // Sheet is hoisted to MainiOSView.body (`promptsPickerSheet` modifier)
         // so the main-row Prompts button can also present it when this slot
         // pill isn't placed in the Quick Buttons row.
@@ -3633,6 +3647,9 @@ struct MainiOSView: View {
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
+        .accessibilityLabel(btn.label)
+        .accessibilityHint(selectedWindowId == nil ? "No window selected" : "Custom shortcut")
+        .accessibilityAddTraits(.isButton)
     }
 
     @ViewBuilder
@@ -3670,6 +3687,9 @@ struct MainiOSView: View {
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
+        .accessibilityLabel(button.displayName)
+        .accessibilityHint(selectedWindowId == nil ? "No window selected" : "Quick action")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
