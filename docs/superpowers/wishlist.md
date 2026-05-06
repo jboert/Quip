@@ -330,14 +330,16 @@ Discovery: iTerm2 returns `miniaturized` Booleans as `typeTrue`/`typeFalse` rath
 
 ### 26. Diagnostic-capture ("share state") gesture on iPhone
 
-**Status:** Wishlist — observability infrastructure
-**Context:** When something doesn't work in Quip, relevant logs and state are on the Mac; by the time user walks over, state has often changed. Gesture (3-finger long-press on window list, or hidden tap sequence in Settings) snapshots last 200 lines of iPhone log buffer + WS state + Mac window list view + selected windowId + perms + versions + timestamp. Bundles into single JSON, share-sheet to AirDrop. Optionally fire `RequestMacDiagnosticMessage` so Mac dumps its own state into same bundle.
+**Status:** ✅ Done 2026-05-06 (commit shipping with this update). Shake the phone → DiagnosticsSheet presents with a frozen iPhone-side snapshot: app version + build, connection flags (connected/connecting/authenticated), serverURL, lastError, paired count, active backend name, last 30 lifecycle events from `WebSocketClient.recentConnectionEvents`. Sheet has a Copy button (writes the full snapshot to UIPasteboard) and a Request Mac bundle button (fires existing `RequestDiagnosticsMessage`; gated on `client.isAuthenticated` so dropped requests don't silently fail).
 
-**Note:** §49 Bundle-and-share already shipped the Mac→iOS direction. This entry is now narrowed to the "iPhone snapshots its own state on gesture" half.
+Pure formatter `DiagnosticsSnapshotFormatter.format(_:now:)` with stable line order — users grep for tokens like `connected: true` / `lastError: <none>`, so additions APPEND new sections rather than reshuffle. Shake detection via `ShakeDetector` (UIViewControllerRepresentable that becomes first responder + handles `motionEnded`) mounted as a 0×0 background view on MainiOSView, in the responder chain without taking layout space.
 
-**Related:** #12, #21, #49.
+8 DiagnosticsSnapshotFormatterTests cover: app-version line, all connection flags, lastError nil-sentinel + verbatim, paired count + active name, empty-events sentinel, events rendered in order, ISO8601 timestamp in header.
+
+Deferred to follow-ups: device shake-to-share UI tweak (haptic on detection), include `lastConnectedAt` per-backend in the snapshot block (now that §J ships), inverse-direction (Mac shake → request iOS bundle).
 
 ---
+
 
 ### 27. Idempotent message IDs + Mac-side dedupe table
 

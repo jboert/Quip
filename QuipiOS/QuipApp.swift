@@ -892,6 +892,12 @@ struct MainiOSView: View {
     /// shared UserDefaults backing — no manual fan-out needed.
     @AppStorage("followFrontmost") private var followFrontmost: Bool = true
     @State private var showSettings = false
+    /// §26 — shake-to-diagnose sheet trigger. Set to true when the
+    /// device shake gesture fires; the sheet reads from a snapshot
+    /// captured at present time so values don't churn while the user
+    /// is reading.
+    @State private var showDiagnosticsSheet = false
+    @State private var diagnosticsSnapshot: String = ""
     /// Multi-backend picker sheet trigger.
     @State private var showBackendPicker = false
     @State private var showQRScanner = false
@@ -1284,6 +1290,26 @@ struct MainiOSView: View {
                 client.disconnect()
             }
         }
+        .sheet(isPresented: $showDiagnosticsSheet) {
+            DiagnosticsSheet(
+                snapshot: diagnosticsSnapshot,
+                canRequestMacBundle: client.isAuthenticated,
+                onRequestMacBundle: {
+                    client.send(RequestDiagnosticsMessage())
+                }
+            )
+        }
+        .background(
+            // §26 — invisible shake detector mounted as a 0×0 background
+            // view so it sits in the responder chain without taking
+            // layout space. On shake, snapshot iPhone state into a
+            // monospaced text block + present the diagnostics sheet.
+            ShakeDetector {
+                diagnosticsSnapshot = buildDiagnosticsSnapshot()
+                showDiagnosticsSheet = true
+            }
+            .frame(width: 0, height: 0)
+        )
         // Image-attach sheets — hoisted to the body so both portrait and
         // landscape views can trigger them via the shared @State bindings.
         .confirmationDialog("Attach image", isPresented: $showingImageSourceSheet, titleVisibility: .hidden) {
@@ -2439,6 +2465,32 @@ struct MainiOSView: View {
         sendPendingImageIfNeeded(windowId: wid) { [client] in
             client.send(QuickActionMessage(windowId: wid, action: "press_return"))
         }
+    }
+
+    /// §26 — build the iPhone-side diagnostics snapshot. Captured at
+    /// shake time + frozen for the duration of the sheet so values
+    /// don't churn while the user is reading. Pulls from
+    /// `WebSocketClient.recentConnectionEvents` ring buffer for the
+    /// last 30 lifecycle events.
+    @MainActor
+    fileprivate func buildDiagnosticsSnapshot() -> String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let appVersion = info["CFBundleShortVersionString"] as? String ?? "?"
+        let buildNumber = info["CFBundleVersion"] as? String ?? "?"
+        let activeName = manager.paired.first(where: { $0.id == manager.activeBackendID })?.name
+        let snapshot = DiagnosticsSnapshotFormatter.Input(
+            appVersion: appVersion,
+            buildNumber: buildNumber,
+            isConnected: client.isConnected,
+            isConnecting: client.isConnecting,
+            isAuthenticated: client.isAuthenticated,
+            lastError: client.lastError,
+            serverURL: client.serverURL?.absoluteString,
+            pairedCount: manager.paired.count,
+            activeBackendName: activeName,
+            connectionEvents: client.recentConnectionEvents
+        )
+        return DiagnosticsSnapshotFormatter.format(snapshot)
     }
 
     /// §35 — long-press on the keyboard main-row button reads the iPhone's
