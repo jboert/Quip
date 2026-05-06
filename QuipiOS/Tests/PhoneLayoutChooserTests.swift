@@ -23,8 +23,16 @@ final class PhoneLayoutChooserTests: XCTestCase {
         XCTAssertEqual(MainiOSView.chooseAutoLayout(count: 3), "vertical")
     }
 
-    func testChooserPicksVerticalForManyWindows() {
-        XCTAssertEqual(MainiOSView.chooseAutoLayout(count: 10), "vertical")
+    func testChooserPicksGridForFourWindows() {
+        XCTAssertEqual(MainiOSView.chooseAutoLayout(count: 4), "grid")
+    }
+
+    func testChooserPicksGridForSixWindows() {
+        XCTAssertEqual(MainiOSView.chooseAutoLayout(count: 6), "grid")
+    }
+
+    func testChooserPicksGridForManyWindows() {
+        XCTAssertEqual(MainiOSView.chooseAutoLayout(count: 10), "grid")
     }
 
     // MARK: gridFrame
@@ -53,6 +61,54 @@ final class PhoneLayoutChooserTests: XCTestCase {
 
     func testGridFrameUnknownModeReturnsNil() {
         XCTAssertNil(MainiOSView.gridFrame(mode: "diagonal", index: 0, total: 4))
+    }
+
+    // MARK: gridFrame — mode "grid" (Story 6, 2026-05-06)
+
+    func testGridModeFourWindowsIsTwoByTwo() {
+        // total=4 → cols=ceil(sqrt(4))=2, rows=ceil(4/2)=2 → 2×2 grid
+        let frames = (0..<4).map { MainiOSView.gridFrame(mode: "grid", index: $0, total: 4)! }
+        XCTAssertEqual(frames[0].x, 0.0,  accuracy: 1e-9); XCTAssertEqual(frames[0].y, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(frames[1].x, 0.5,  accuracy: 1e-9); XCTAssertEqual(frames[1].y, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(frames[2].x, 0.0,  accuracy: 1e-9); XCTAssertEqual(frames[2].y, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(frames[3].x, 0.5,  accuracy: 1e-9); XCTAssertEqual(frames[3].y, 0.5, accuracy: 1e-9)
+        for f in frames {
+            XCTAssertEqual(f.width, 0.5,  accuracy: 1e-9)
+            XCTAssertEqual(f.height, 0.5, accuracy: 1e-9)
+        }
+    }
+
+    func testGridModeFiveWindowsIsThreeByTwoWithLeftover() {
+        // total=5 → cols=ceil(sqrt(5))=3, rows=ceil(5/3)=2 → 3×2 with one empty cell
+        let total = 5
+        let frames = (0..<total).map { MainiOSView.gridFrame(mode: "grid", index: $0, total: total)! }
+        XCTAssertEqual(frames[0].x, 0.0,        accuracy: 1e-9)
+        XCTAssertEqual(frames[1].x, 1.0/3.0,    accuracy: 1e-9)
+        XCTAssertEqual(frames[2].x, 2.0/3.0,    accuracy: 1e-9)
+        XCTAssertEqual(frames[3].x, 0.0,        accuracy: 1e-9)
+        XCTAssertEqual(frames[3].y, 0.5,        accuracy: 1e-9)
+        XCTAssertEqual(frames[4].x, 1.0/3.0,    accuracy: 1e-9)
+        for f in frames {
+            XCTAssertEqual(f.width, 1.0/3.0, accuracy: 1e-9)
+            XCTAssertEqual(f.height, 0.5,    accuracy: 1e-9)
+        }
+    }
+
+    func testGridModeNineWindowsIsThreeByThree() {
+        let total = 9
+        let f = MainiOSView.gridFrame(mode: "grid", index: 8, total: total)!
+        XCTAssertEqual(f.x, 2.0/3.0, accuracy: 1e-9)
+        XCTAssertEqual(f.y, 2.0/3.0, accuracy: 1e-9)
+        XCTAssertEqual(f.width, 1.0/3.0,  accuracy: 1e-9)
+        XCTAssertEqual(f.height, 1.0/3.0, accuracy: 1e-9)
+    }
+
+    func testGridModeOneWindowFullScreen() {
+        let f = MainiOSView.gridFrame(mode: "grid", index: 0, total: 1)!
+        XCTAssertEqual(f.x, 0.0)
+        XCTAssertEqual(f.y, 0.0)
+        XCTAssertEqual(f.width, 1.0)
+        XCTAssertEqual(f.height, 1.0)
     }
 
     func testGridFrameOutOfRangeReturnsNil() {

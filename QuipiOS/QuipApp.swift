@@ -1924,9 +1924,13 @@ struct MainiOSView: View {
                 // anymore; the auto-chooser owns "no override" now.
                 if mainRowArrange {
                     Button {
+                        // Three-mode cycle: horizontal → vertical → grid → horizontal.
+                        // Grid mode (added 2026-05-06) is the natural pick for 4+
+                        // windows where vertical strips get too narrow to read.
                         switch phoneLayoutOverride {
                         case "horizontal": phoneLayoutOverrideRaw = "vertical"
-                        default: phoneLayoutOverrideRaw = "horizontal"
+                        case "vertical":   phoneLayoutOverrideRaw = "grid"
+                        default:           phoneLayoutOverrideRaw = "horizontal"
                         }
                         manualLayoutSticky = true
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1934,8 +1938,9 @@ struct MainiOSView: View {
                         let icon: String = {
                             switch phoneLayoutOverride {
                             case "horizontal": return "rectangle.split.3x1"
-                            case "vertical": return "rectangle.split.1x3"
-                            default: return "rectangle.3.group"
+                            case "vertical":   return "rectangle.split.1x3"
+                            case "grid":       return "rectangle.grid.2x2"
+                            default:           return "rectangle.3.group"
                             }
                         }()
                         // ZStack with a text fallback so the button is never
@@ -2698,16 +2703,36 @@ struct MainiOSView: View {
         case "vertical":
             let h = 1.0 / Double(total)
             return WindowFrame(x: 0, y: Double(index) * h, width: 1.0, height: h)
+        case "grid":
+            // Packed grid — `cols = ceil(sqrt(total))` keeps the layout
+            // close to square, then rows = ceil(total/cols) fits the rest.
+            // For total=4 → 2×2, total=5-6 → 3×2, total=7-9 → 3×3, total=10-12 → 4×3.
+            // Last row's leftover cells stay empty (no row-padding hack) so cells
+            // keep a uniform aspect — matches the user's reading model better
+            // than centering a half-row.
+            let cols = max(1, Int(Double(total).squareRoot().rounded(.up)))
+            let rows = max(1, Int((Double(total) / Double(cols)).rounded(.up)))
+            let row = index / cols
+            let col = index % cols
+            let w = 1.0 / Double(cols)
+            let h = 1.0 / Double(rows)
+            return WindowFrame(x: Double(col) * w, y: Double(row) * h, width: w, height: h)
         default:
             return nil
         }
     }
 
-    /// Auto-arrange chooser. Pure fn — picks `"horizontal"` for ≤2 windows,
-    /// `"vertical"` for ≥3. Heuristic is documented in the PRD §9.1 and
-    /// expected to evolve based on device testing.
+    /// Auto-arrange chooser. Pure fn — picks layout based on count:
+    /// 1-2 windows → `"horizontal"` (side-by-side reads naturally on phone);
+    /// 3 windows → `"vertical"` (stacked rows fit before grid is needed);
+    /// 4+ windows → `"grid"` (2-or-3 column packed grid; vertical strips
+    /// at 4+ get too narrow to read).
     static func chooseAutoLayout(count: Int) -> String {
-        count <= 2 ? "horizontal" : "vertical"
+        switch count {
+        case ...2: return "horizontal"
+        case 3:    return "vertical"
+        default:   return "grid"
+        }
     }
 
     /// Re-fire the auto-chooser given the current windows count. Called from
