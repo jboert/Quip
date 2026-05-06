@@ -11,8 +11,11 @@ TODO.md
 .superpowers/
 docs/specs/
 
-# Claude local settings
-.claude/settings.local.json
+# Claude local — settings, memory dumps, transcripts. The user's
+# auto-memory lives at ~/.claude/projects/... outside the repo, but
+# any .claude/ contents that ever land INSIDE the repo are local-only
+# scratch and must never ship.
+.claude/
 
 # Machine-local scripts and build configs (carry signing / device IDs)
 *.local.sh

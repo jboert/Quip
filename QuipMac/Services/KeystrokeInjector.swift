@@ -167,6 +167,110 @@ final class KeystrokeInjector {
         return executeAppleScript(script, context: "sendText to \(windowId)")
     }
 
+    // MARK: - Paste Image (Codex CLI path)
+
+    /// Paste image bytes into a terminal window via the system clipboard +
+    /// Cmd+V. Used for AI CLIs (notably Codex) whose interactive composer
+    /// expects pasted *image data*, not a typed file path. Saves and
+    /// restores the user's existing clipboard string so we don't clobber
+    /// what they had copied. (GH I.)
+    ///
+    /// Sequence:
+    /// 1. Snapshot current clipboard string contents.
+    /// 2. Set clipboard to the image (NSImage from disk).
+    /// 3. Activate iTerm2, focus target session, send Cmd+V.
+    /// 4. Restore the snapshotted string contents after a short delay.
+    ///
+    /// Returns failure if the image can't be loaded; success codepath
+    /// trusts AppleScript (same as `sendText`'s iTerm2 path).
+    @discardableResult
+    func pasteImage(at imageURL: URL, to windowId: String, terminalApp: TerminalApp,
+                    iterm2SessionId: String?) -> InjectionResult {
+        guard let image = NSImage(contentsOf: imageURL) else {
+            return InjectionResult(success: false, error: "couldn't load image at \(imageURL.path)")
+        }
+
+        // Snapshot the user's current clipboard string so we can restore it.
+        // We don't snapshot non-string types — losing whatever NSImage was
+        // there is acceptable since this whole flow assumes the user wants
+        // an image on the clipboard for one moment anyway.
+        let pb = NSPasteboard.general
+        let previousString = pb.string(forType: .string)
+        pb.clearContents()
+        pb.writeObjects([image])
+
+        defer {
+            // Restore after a short delay — if we restore before AppleScript
+            // gets to the paste, Cmd+V grabs the wrong content. 0.6s is the
+            // empirical floor on a fast Mac; iTerm2's paste-confirm dialog
+            // (if enabled) extends past this but the paste itself completes
+            // in time.
+            let restore = previousString
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                if let s = restore {
+                    pb.setString(s, forType: .string)
+                }
+            }
+        }
+
+        switch terminalApp {
+        case .iterm2:
+            guard let sessionId = iterm2SessionId else {
+                return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+            }
+            let escapedId = escapeForAppleScript(sessionId)
+            // iTerm2 needs to be activated AND the target session selected
+            // before Cmd+V lands in the right pane. Walk window→tab→session
+            // (same shape as sendText) to flip selection, then activate
+            // iTerm2 process and send Cmd+V via System Events.
+            let script = """
+            tell application "iTerm2"
+                set quipFound to false
+                repeat with aWindow in windows
+                    tell aWindow
+                        repeat with aTab in tabs
+                            tell aTab
+                                repeat with aSession in sessions
+                                    if unique id of aSession is "\(escapedId)" then
+                                        select aSession
+                                        set quipFound to true
+                                        exit repeat
+                                    end if
+                                end repeat
+                            end tell
+                            if quipFound then exit repeat
+                        end repeat
+                    end tell
+                    if quipFound then exit repeat
+                end repeat
+                if not quipFound then
+                    error "Quip: iTerm2 session \(escapedId) not found"
+                end if
+                activate
+            end tell
+            delay 0.1
+            tell application "System Events"
+                tell process "iTerm2"
+                    keystroke "v" using command down
+                end tell
+            end tell
+            """
+            return executeAppleScript(script, context: "pasteImage to \(windowId) [iTerm2]")
+
+        case .terminal:
+            // Terminal.app doesn't support image paste (text-only); the
+            // caller should fall back to path-typing for this host.
+            return InjectionResult(success: false, error: "Terminal.app does not accept pasted images")
+
+        case .claudeDesktop:
+            // Claude Desktop has its own paste path in sendText that handles
+            // text via NSPasteboard; image-paste isn't routed here today.
+            return InjectionResult(success: false, error: "Claude Desktop image paste not implemented via this path")
+        }
+    }
+
     // MARK: - Send Keystroke
 
     /// Send a special keystroke (e.g., Ctrl+C, Return) to a specific terminal window.
@@ -329,6 +433,84 @@ final class KeystrokeInjector {
         case "shift+tab":            return #"((character id 27) & "[Z")"#
         default:                     return nil
         }
+    }
+
+    // MARK: - Scrollback (§38)
+
+    /// Direction of scrollback navigation in a terminal window. Mapped to
+    /// iTerm2's default menu shortcuts: Shift+PageUp/Down for one page,
+    /// Cmd+Home/End for top/bottom. Phone-driven; the user pans the
+    /// terminal panel and gets the corresponding action up here.
+    enum ScrollDirection: String, Sendable, CaseIterable {
+        case pageUp
+        case pageDown
+        case top
+        case bottom
+
+        /// Mac virtual keycode + modifier flags shipped to System Events.
+        /// Pulled out as a pure mapping so the unit tests don't need to
+        /// stand up an AppleScript runtime.
+        var iTerm2Keystroke: (keyCode: Int, modifiers: [String]) {
+            switch self {
+            case .pageUp:   return (116, ["shift down"])      // Shift+PageUp
+            case .pageDown: return (121, ["shift down"])      // Shift+PageDown
+            case .top:      return (115, ["command down"])    // Cmd+Home
+            case .bottom:   return (119, ["command down"])    // Cmd+End
+            }
+        }
+    }
+
+    /// Scroll the iTerm2 scrollback for a specific window. AppleScript
+    /// path: activate iTerm2, walk window→tab→session to select the
+    /// target session (so the menu shortcut applies to the right pane),
+    /// then send the corresponding keystroke via System Events. (§38.)
+    ///
+    /// Terminal.app + Claude Desktop are not supported; phone UI should
+    /// hide the scroll buttons for those host apps.
+    @discardableResult
+    func iterm2Scroll(_ direction: ScrollDirection,
+                      to windowId: String,
+                      iterm2SessionId: String?) -> InjectionResult {
+        guard let sessionId = iterm2SessionId else {
+            return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+        }
+        let escapedId = escapeForAppleScript(sessionId)
+        let (keyCode, modifiers) = direction.iTerm2Keystroke
+        let modSuffix = modifiers.isEmpty ? "" : " using {\(modifiers.joined(separator: ", "))}"
+
+        let script = """
+        tell application "iTerm2"
+            set quipFound to false
+            repeat with aWindow in windows
+                tell aWindow
+                    repeat with aTab in tabs
+                        tell aTab
+                            repeat with aSession in sessions
+                                if unique id of aSession is "\(escapedId)" then
+                                    select aSession
+                                    set quipFound to true
+                                    exit repeat
+                                end if
+                            end repeat
+                        end tell
+                        if quipFound then exit repeat
+                    end repeat
+                end tell
+                if quipFound then exit repeat
+            end repeat
+            if not quipFound then
+                error "Quip: iTerm2 session \(escapedId) not found"
+            end if
+            activate
+        end tell
+        delay 0.05
+        tell application "System Events"
+            tell process "iTerm2"
+                key code \(keyCode)\(modSuffix)
+            end tell
+        end tell
+        """
+        return executeAppleScript(script, context: "iterm2Scroll(\(direction.rawValue)) to \(windowId)")
     }
 
     // MARK: - Spawn Terminal

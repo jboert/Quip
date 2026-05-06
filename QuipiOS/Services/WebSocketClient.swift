@@ -174,6 +174,11 @@ final class WebSocketClient {
     /// Mac asks the phone to switch its selected window — fired when the Mac just
     /// spawned a new window (e.g. duplicate) and wants the phone to follow along.
     var onSelectWindow: ((String) -> Void)?
+    /// Mac broadcasts its current frontmost ManagedWindow.id (or nil if the
+    /// frontmost app is untracked). Phone uses this to auto-retarget
+    /// `selectedWindowId` when the user has the "Auto" pref enabled.
+    /// (wishlist §B16.)
+    var onFrontmostChanged: ((String?) -> Void)?
     var onProjectDirectories: (([String]) -> Void)?
     /// Mac responded to a `scan_iterm_windows` request with the full list of
     /// iTerm2 windows it can see. The iOS scan sheet listens for this.
@@ -409,6 +414,13 @@ final class WebSocketClient {
         isAuthenticated = false
         authError = nil
         sessionPIN = nil
+        // Bug #1 — without these, the previous run's "Stalled 26s — resetting"
+        // watchdog message lingers in the top-bar lastError view even after
+        // disconnect/forget. Picker simultaneously shows "Enter tunnel URL"
+        // because urlText is empty — confusing contradiction at fresh launch
+        // when a previously-paired backend was forgotten.
+        lastError = nil
+        connectingStartedAt = nil
         NSLog("[WebSocketClient] Disconnected intentionally")
     }
 
@@ -746,6 +758,22 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = try? decoder.decode(SelectWindowMessage.self, from: data) {
                 onSelectWindow?(msg.windowId)
+            }
+        case "frontmost_changed":
+            guard isAuthenticated else { return }
+            if let msg = try? decoder.decode(FrontmostChangedMessage.self, from: data) {
+                onFrontmostChanged?(msg.windowId)
+            }
+        case "heartbeat":
+            // GH #19: Mac→iOS app-level heartbeat. Reply with same seq so
+            // Mac knows the iOS app is still processing messages (not just
+            // alive at TCP). Do NOT gate on isAuthenticated — Mac only
+            // dispatches heartbeats to authenticated clients, so by the
+            // time we receive one we're already past auth from Mac's POV.
+            // Fail-soft: if decode fails, drop silently — Mac will log a
+            // stale-heartbeat warning and resync on the next dispatcher tick.
+            if let msg = try? decoder.decode(HeartbeatMessage.self, from: data) {
+                send(HeartbeatAckMessage(seq: msg.seq))
             }
         case "preferences_restore":
             guard isAuthenticated else { return }

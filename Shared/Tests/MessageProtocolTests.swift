@@ -75,7 +75,7 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testArrangeWindowsMessageHorizontalEncoding() throws {
-        let msg = ArrangeWindowsMessage(layout: "horizontal")
+        let msg = ArrangeWindowsMessage(layout: .horizontal)
         let data = try XCTUnwrap(MessageCoder.encode(msg))
         let dict = try jsonDict(from: data)
 
@@ -84,7 +84,7 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testArrangeWindowsMessageVerticalEncoding() throws {
-        let msg = ArrangeWindowsMessage(layout: "vertical")
+        let msg = ArrangeWindowsMessage(layout: .vertical)
         let data = try XCTUnwrap(MessageCoder.encode(msg))
         let dict = try jsonDict(from: data)
 
@@ -92,12 +92,32 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testArrangeWindowsRoundTrip() throws {
-        let original = ArrangeWindowsMessage(layout: "horizontal")
+        let original = ArrangeWindowsMessage(layout: .horizontal)
         let data = try XCTUnwrap(MessageCoder.encode(original))
         let decoded = try XCTUnwrap(MessageCoder.decode(ArrangeWindowsMessage.self, from: data))
 
         XCTAssertEqual(decoded.type, "arrange_windows")
-        XCTAssertEqual(decoded.layout, "horizontal")
+        XCTAssertEqual(decoded.layout, .horizontal)
+    }
+
+    /// GH #20 — unknown wire values must fail Codable decode loudly so
+    /// the Mac handler can log + reject instead of silently dropping.
+    func testArrangeWindowsRejectsUnknownLayout() throws {
+        let json = #"{"type":"arrange_windows","layout":"diagonal"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        XCTAssertNil(MessageCoder.decode(ArrangeWindowsMessage.self, from: data),
+                     "Unknown layout values must fail decode — silent fallthrough was the bug")
+    }
+
+    /// GH #20 — phone's local "grid" mode does NOT travel over the
+    /// wire, so the wire enum stays restricted. If a Mac-side grid
+    /// arranger is ever added, this test gets updated in lockstep with
+    /// the enum extension.
+    func testArrangeWindowsWireEnumStillRejectsGrid() throws {
+        let json = #"{"type":"arrange_windows","layout":"grid"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        XCTAssertNil(MessageCoder.decode(ArrangeWindowsMessage.self, from: data),
+                     "Phone-side grid arrangement is local; the wire enum stays {horizontal, vertical}")
     }
 
     // MARK: - Authentication messages
@@ -819,5 +839,43 @@ final class MessageProtocolTests: XCTestCase {
         } else {
             XCTFail("expected .failed")
         }
+    }
+
+    // MARK: - Heartbeat (GH #19)
+
+    func testHeartbeatMessageEncoding() throws {
+        let msg = HeartbeatMessage(seq: 42, ts: 1_700_000_000.5)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "heartbeat")
+        XCTAssertEqual(dict["seq"] as? Int, 42)
+        XCTAssertEqual(dict["ts"] as? Double, 1_700_000_000.5)
+    }
+
+    func testHeartbeatMessageRoundTrip() throws {
+        let msg = HeartbeatMessage(seq: 7, ts: 1_700_123_456.789)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(HeartbeatMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "heartbeat")
+        XCTAssertEqual(decoded.seq, 7)
+        XCTAssertEqual(decoded.ts, 1_700_123_456.789, accuracy: 0.001)
+    }
+
+    func testHeartbeatAckMessageEncoding() throws {
+        let msg = HeartbeatAckMessage(seq: 42)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "heartbeat_ack")
+        XCTAssertEqual(dict["seq"] as? Int, 42)
+    }
+
+    func testHeartbeatAckMessageRoundTrip() throws {
+        let msg = HeartbeatAckMessage(seq: 99)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(HeartbeatAckMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "heartbeat_ack")
+        XCTAssertEqual(decoded.seq, 99)
     }
 }

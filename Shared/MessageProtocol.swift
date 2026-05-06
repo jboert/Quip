@@ -23,6 +23,19 @@ struct LayoutUpdate: Codable, Sendable {
     }
 }
 
+/// Which AI-coding CLI is running inside a terminal window. Orthogonal to
+/// `TerminalApp` (the host app — iTerm2 / Terminal / Claude Desktop): a
+/// Codex CLI session lives inside an iTerm2 host. Drives per-CLI input
+/// routing: Codex's interactive composer takes pasted *image bytes* via
+/// Cmd+V, while Claude Code accepts an *absolute path* typed inline.
+/// Default `.shell` covers raw shells / unknown TUIs — same path-typing
+/// fallback as before this enum existed. (GH I.)
+enum CLIKind: String, Codable, Sendable, CaseIterable {
+    case claude
+    case codex
+    case shell
+}
+
 struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     let id: String
     let name: String
@@ -41,18 +54,23 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     /// "autoAccept", or nil if unknown / not yet detected / not a Claude window.
     /// Optional for backward compat; old Mac builds just won't populate it.
     let claudeMode: String?
+    /// Which AI-coding CLI is running inside this window. Drives per-CLI
+    /// input routing on the Mac (notably image upload). Optional for
+    /// backward compat with older Mac builds; nil = treat as `.shell`.
+    let cliKind: CLIKind?
 
     // Synthesized Equatable compares ALL fields including frame
 
     /// Backward-compat: default isThinking to false and claudeMode to nil if missing from JSON
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
-         claudeMode: String? = nil) {
+         claudeMode: String? = nil, cliKind: CLIKind? = nil) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
         self.isThinking = isThinking
         self.claudeMode = claudeMode
+        self.cliKind = cliKind
     }
 
     init(from decoder: Decoder) throws {
@@ -67,10 +85,11 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         color = try c.decode(String.self, forKey: .color)
         isThinking = (try? c.decode(Bool.self, forKey: .isThinking)) ?? false
         claudeMode = try? c.decode(String.self, forKey: .claudeMode)
+        cliKind = try? c.decode(CLIKind.self, forKey: .cliKind)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode
+        case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind
     }
 }
 
@@ -116,7 +135,63 @@ struct StateChangeMessage: Codable, Sendable {
     }
 }
 
+/// Mac → iPhone. Fired when the Mac's frontmost tracked window changes
+/// (NSWorkspace activation + AX focused-window observers, throttled). The
+/// phone uses this to follow Mac focus when the user has the "Auto" pref
+/// enabled — switching Mac focus from iTerm to Claude (or between two
+/// iTerm windows) auto-retargets `selectedWindowId` so the next image /
+/// text send lands in the window the user is actually looking at.
+///
+/// `windowId` is the matching `ManagedWindow.id` if Quip is currently
+/// tracking the frontmost CG window, or nil when the frontmost app is
+/// something Quip doesn't track (Finder, Mail, etc.) — in which case the
+/// phone leaves `selectedWindowId` alone rather than blanking it.
+struct FrontmostChangedMessage: Codable, Sendable {
+    let type: String
+    let windowId: String?
+
+    init(windowId: String?) {
+        self.type = "frontmost_changed"
+        self.windowId = windowId
+    }
+}
+
+/// App-level heartbeat: Mac periodically asks each authenticated client
+/// "are you still processing messages?" so a wedged-but-TCP-alive iOS
+/// app (background+suspended past the OS keepalive grace, foreground
+/// but stuck on a runloop) gets detected at the application layer
+/// rather than waiting for a TCP-level error that may never come.
+/// iOS already pings Mac (WebSocket-protocol ping → pong) — this is
+/// the reverse direction. iOS replies with `HeartbeatAckMessage` echoing
+/// the same `seq`. (GH #19.)
+struct HeartbeatMessage: Codable, Sendable {
+    let type: String
+    let seq: Int
+    /// Mac wall-clock at send time, seconds since 1970. Diagnostic only;
+    /// receiver is not expected to compare against its own clock.
+    let ts: Double
+
+    init(seq: Int, ts: Double = Date().timeIntervalSince1970) {
+        self.type = "heartbeat"
+        self.seq = seq
+        self.ts = ts
+    }
+}
+
 // MARK: - iPhone → Mac Messages
+
+/// Reply to a Mac-side `HeartbeatMessage`. Echoes the seq so Mac can
+/// match the ack to the original send and measure round-trip latency
+/// if it cares to. (GH #19.)
+struct HeartbeatAckMessage: Codable, Sendable {
+    let type: String
+    let seq: Int
+
+    init(seq: Int) {
+        self.type = "heartbeat_ack"
+        self.seq = seq
+    }
+}
 
 struct SelectWindowMessage: Codable, Sendable {
     let type: String
@@ -223,14 +298,31 @@ struct SpawnWindowMessage: Codable, Sendable {
 
 /// iPhone → Mac. Asks the Mac to evenly arrange all enabled windows on the
 /// main display, either side-by-side (`layout == "horizontal"`) or stacked
-/// top-to-bottom (`layout == "vertical"`). Any other value is rejected on
-/// the Mac side. Mac uses the existing LayoutCalculator + arrangeWindows
-/// path — same one the menu-bar "Arrange Windows" button triggers.
+/// Wire-level layout vocabulary spoken by the phone. Free-string was a
+/// silent-failure trap (typos / unknown layouts produced no error path),
+/// per GH #20. Codable round-trips through the lowercase rawValue so
+/// existing JSON ("horizontal" / "vertical") remains unchanged.
+///
+/// "grid" is intentionally NOT in this enum even though the iOS phone
+/// recently grew a 3-mode arrange-button cycle — phone-side grid does
+/// the arrangement *locally* (see `phoneLayoutOverrideRaw`) and does
+/// NOT send `arrange_windows` to the Mac. If a Mac-side grid arranger
+/// is ever added, extend this enum + `LayoutMode.from(arrangeLayout:)`
+/// + the Mac handler in lockstep.
+enum ArrangeLayout: String, Codable, Sendable, CaseIterable {
+    case horizontal
+    case vertical
+}
+
+/// top-to-bottom (`layout == .vertical`). Any other value fails Codable
+/// decode loudly — silent fallthrough was the bug GH #20 is about. Mac
+/// uses the existing LayoutCalculator + arrangeWindows path — same one
+/// the menu-bar "Arrange Windows" button triggers.
 struct ArrangeWindowsMessage: Codable, Sendable {
     let type: String
-    let layout: String  // "horizontal" or "vertical"
+    let layout: ArrangeLayout
 
-    init(layout: String) {
+    init(layout: ArrangeLayout) {
         self.type = "arrange_windows"
         self.layout = layout
     }
@@ -712,6 +804,10 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// slot list via UUID. Persisted separately so re-ordering doesn't
     /// rewrite definitions.
     var customButtonsJSON: String?
+    /// (wishlist §B16.) Whether the phone auto-retargets `selectedWindowId`
+    /// to follow the Mac's frontmost window. Optional so older Macs decode
+    /// cleanly as nil → phone keeps whatever local default it had.
+    var followFrontmost: Bool?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -730,7 +826,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         liveActivitiesEnabled: Bool? = nil,
         ttsEnabled: Bool? = nil,
         quickSlotsJSON: String? = nil,
-        customButtonsJSON: String? = nil
+        customButtonsJSON: String? = nil,
+        followFrontmost: Bool? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -749,6 +846,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.ttsEnabled = ttsEnabled
         self.quickSlotsJSON = quickSlotsJSON
         self.customButtonsJSON = customButtonsJSON
+        self.followFrontmost = followFrontmost
     }
 }
 

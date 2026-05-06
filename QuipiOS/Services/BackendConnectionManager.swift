@@ -50,6 +50,10 @@ final class BackendConnectionManager {
     var onOutputDelta: ((BackendSession, String, String, String, Bool) -> Void)?
     var onTTSAudio: ((BackendSession, String, String, String, Int, Bool, Data) -> Void)?
     var onSelectWindow: ((BackendSession, String) -> Void)?
+    /// Mac broadcasts its current frontmost ManagedWindow.id (or nil if
+    /// untracked). Host uses it for the "follow Mac frontmost" feature.
+    /// (wishlist §B16.)
+    var onFrontmostChanged: ((BackendSession, String?) -> Void)?
     var onProjectDirectories: ((BackendSession, [String]) -> Void)?
     var onITermWindowList: ((BackendSession, [ITermWindowInfo]) -> Void)?
     var onError: ((BackendSession, String) -> Void)?
@@ -678,10 +682,30 @@ final class BackendConnectionManager {
             session.windows = update.windows
             session.monitorName = update.monitor
             if let a = update.screenAspect, a > 0 { session.screenAspect = a }
-            if session.reachability != .connected { session.reachability = .connected }
-            if let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
-                self.paired[i].lastSeenLayoutMonitorName = update.monitor
+            let wasConnected = session.reachability == .connected
+            if !wasConnected { session.reachability = .connected }
+            // §J — stamp the paired-backend's lastConnectedAt on the
+            // first layout_update of a connection (i.e. the moment the
+            // session newly enters .connected). Throttled to once per
+            // connection cycle so the picker sees stable timestamps and
+            // we don't write UserDefaults every layout tick.
+            if !wasConnected, let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
+                self.paired[i].lastConnectedAt = Date()
                 self.savePaired()
+            }
+            if let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
+                // Diff guard — only persist when the monitor name actually
+                // changed. Without this every layout_update (multiple per
+                // second during normal use) writes UserDefaults, which
+                // triggers `PreferencesSyncService`'s didChange observer,
+                // schedules a 0.5s-debounced snapshot upload, and feeds the
+                // Mac a 1369-byte preferences_snapshot frame at 1-3s
+                // cadence forever. Trigger source for the kokoro.log
+                // "preferences_snapshot" storm (~300:1 vs audio_chunk).
+                if self.paired[i].lastSeenLayoutMonitorName != update.monitor {
+                    self.paired[i].lastSeenLayoutMonitorName = update.monitor
+                    self.savePaired()
+                }
             }
             self.onLayoutUpdate?(session, update)
         }
@@ -731,6 +755,11 @@ final class BackendConnectionManager {
             self.onSelectWindow?(session, windowId)
         }
 
+        c.onFrontmostChanged = { [weak self, weak session] windowId in
+            guard let self, let session else { return }
+            self.onFrontmostChanged?(session, windowId)
+        }
+
         c.onProjectDirectories = { [weak self, weak session] dirs in
             guard let self, let session else { return }
             session.projectDirectories = dirs
@@ -770,6 +799,19 @@ final class BackendConnectionManager {
             guard let self, let session else { return }
             if success {
                 session.reachability = .connected
+                // Re-announce our currently-selected window so the Mac's
+                // `clientSelectedWindowId` lines up with what the phone is
+                // actually showing. After a Mac restart (or any phone
+                // reconnect post-NAT-idle drop) the Mac side resets to
+                // nil; without this re-send, every state-change push
+                // skipped via `selection_mismatch` until the user
+                // manually tapped a different window. push.log shows it
+                // as a long stream of `clientSelectedWindowId=nil,
+                // selection_mismatch` entries.
+                if let wid = session.selectedWindowId,
+                   session.windows.contains(where: { $0.id == wid }) {
+                    session.client.send(SelectWindowMessage(windowId: wid))
+                }
             } else {
                 session.reachability = .needsAuth
                 // Stale PIN — drop it from Keychain; user will be prompted on

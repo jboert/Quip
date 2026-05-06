@@ -168,6 +168,20 @@ final class CloudflareTunnel {
         return cacheDir.appendingPathComponent("Quip/tunnel.log").path
     }
 
+    /// Build the cloudflared argv. Internal so the regression test can lock
+    /// the structure (GH #15 audit) without spinning up a real `Process`.
+    /// Pure function: no FileManager / Bundle / process state read.
+    nonisolated static func cloudflaredArguments(proxyPort: UInt16, logPath: String) -> [String] {
+        [
+            "tunnel",
+            "--url", "http://localhost:\(proxyPort)",
+            "--logfile", logPath,
+            "--log-format", "json",
+            "--loglevel", "info",
+            "--no-autoupdate",
+        ]
+    }
+
     func start(localPort: UInt16 = 8765) {
         guard !isRunning else { return }
         stoppedIntentionally = false
@@ -207,16 +221,11 @@ final class CloudflareTunnel {
         // child's --logfile flag rather than `> file 2>&1`. `--log-format json`
         // gives us per-line atomic records we can parse instead of grepping
         // formatted text that could change between cloudflared releases.
+        // GH #15 audit: argv built via `cloudflaredArguments(...)`; no shell.
+        // See docs/security/2026-05-06-cloudflared-process-audit.md.
         let shell = Process()
         shell.executableURL = URL(fileURLWithPath: cfPath)
-        shell.arguments = [
-            "tunnel",
-            "--url", "http://localhost:\(proxyPort)",
-            "--logfile", Self.logPath,
-            "--log-format", "json",
-            "--loglevel", "info",
-            "--no-autoupdate",
-        ]
+        shell.arguments = Self.cloudflaredArguments(proxyPort: proxyPort, logPath: Self.logPath)
 
         shell.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async { [weak self] in

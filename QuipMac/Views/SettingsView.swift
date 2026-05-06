@@ -75,9 +75,15 @@ struct SettingsView: View {
 private struct NotificationsTab: View {
     @Environment(PushNotificationService.self) private var pushService
 
-    @AppStorage("apnsKeyId") private var keyId: String = ""
-    @AppStorage("apnsTeamId") private var teamId: String = ""
-    @AppStorage("apnsBundleId") private var bundleId: String = "com.quip.QuipiOS"
+    // GH #22 — moved from @AppStorage("apnsKeyId" / "apnsTeamId" / "apnsBundleId")
+    // to APNsMetadataStore (Keychain). View holds @State copies for SwiftUI's
+    // two-way TextField binding; .onAppear hydrates from Keychain (which
+    // performs one-shot migration from UserDefaults if needed), and
+    // .onChange writes back. The bundleId default flows through the store
+    // (com.quip.QuipiOS).
+    @State private var keyId: String = APNsMetadataStore.keyId
+    @State private var teamId: String = APNsMetadataStore.teamId
+    @State private var bundleId: String = APNsMetadataStore.bundleId
 
     @State private var hasKey: Bool = APNsKeyStore.hasKey
     @State private var importStatus: String?
@@ -102,8 +108,11 @@ private struct NotificationsTab: View {
                         .foregroundStyle(importStatus.hasPrefix("Error") ? .red : .secondary)
                 }
                 TextField("Key ID", text: $keyId)
+                    .onChange(of: keyId) { _, new in APNsMetadataStore.keyId = new }
                 TextField("Team ID", text: $teamId)
+                    .onChange(of: teamId) { _, new in APNsMetadataStore.teamId = new }
                 TextField("Bundle ID", text: $bundleId)
+                    .onChange(of: bundleId) { _, new in APNsMetadataStore.bundleId = new }
             }
 
             Section("Registered Devices (\(pushService.devices.count))") {

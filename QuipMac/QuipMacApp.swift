@@ -92,6 +92,13 @@ struct QuipMacApp: App {
     /// retry-on-reconnect sends the same `messageId: UUID`; first
     /// arrival processes, second is silently dropped.
     private let messageDedupe = MessageDedupeTable()
+    /// Last frontmost windowId we broadcast so the 400ms poller can skip
+    /// no-op sends. `nil` is also a valid value (no tracked window
+    /// frontmost), so a separate "have we ever sent" flag is needed —
+    /// otherwise the first broadcast at launch is suppressed when the
+    /// frontmost happens to be untracked. (wishlist §B16.)
+    @State private var lastBroadcastFrontmostWindowId: String? = nil
+    @State private var hasBroadcastFrontmostOnce: Bool = false
 
     var body: some Scene {
         WindowGroup {
@@ -193,6 +200,12 @@ struct QuipMacApp: App {
                 self.webSocketServer.broadcast(
                     PromptLibraryMessage(prompts: entries)
                 )
+                // (wishlist §B16.) Send the current frontmost so a
+                // freshly-authenticated phone with "Auto" enabled
+                // doesn't wait up to 400ms for the timer to catch up.
+                // Force re-send by clearing the dedupe sentinel.
+                self.hasBroadcastFrontmostOnce = false
+                self.broadcastFrontmostIfChanged()
             }
         }
 
@@ -231,8 +244,30 @@ struct QuipMacApp: App {
                 if networkMode == .tailscale {
                     tailscale.refresh()
                 }
+                // (wishlist §B16.) Frontmost-app change → broadcast the
+                // matching ManagedWindow.id so phones with the "Auto"
+                // pref enabled retarget without a manual tap. Within-app
+                // window switches (e.g. iTerm A → iTerm B) don't fire
+                // this notification — the 400ms timer below covers those.
+                self.broadcastFrontmostIfChanged()
             }
         }
+
+        // (wishlist §B16.) Within-app window-switch poller. NSWorkspace's
+        // didActivateApplicationNotification only fires on cross-app
+        // changes; cycling between two iTerm windows or two Claude
+        // Desktop windows would otherwise leave the phone targeting the
+        // last-broadcast window. 400ms is fast enough to feel
+        // instantaneous and the diff check inside
+        // `broadcastFrontmostIfChanged` keeps the wire silent during
+        // steady state. .common mode so it keeps firing while a menu /
+        // popover (MenuBarExtra) is being tracked.
+        let frontmostTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+            DispatchQueue.main.async {
+                self.broadcastFrontmostIfChanged()
+            }
+        }
+        RunLoop.main.add(frontmostTimer, forMode: .common)
 
         Task { await setupWhisper() }
 
@@ -628,7 +663,8 @@ struct QuipMacApp: App {
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
                 screenBounds: screenBounds,
                 isThinking: thinkingWindows.contains(window.id),
-                claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue
+                claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue,
+                cliKind: terminalStateDetector.windowCLIKind[window.id]
             )
         }
         let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
@@ -773,28 +809,46 @@ struct QuipMacApp: App {
                 }
 
                 ensureITermSessionResolved(for: msg.windowId) { window in
-                    // Paste the absolute path into the terminal input with a trailing space, no Return.
                     let termApp = self.terminalAppForWindow(window)
                     self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
+                    // GH I — branch by detected CLI:
+                    // - Codex CLI's interactive composer accepts pasted IMAGE
+                    //   bytes via Cmd+V; typing the path doesn't attach the
+                    //   image, just leaves a literal string.
+                    // - Claude Code accepts a typed absolute path inline.
+                    // - Default (.shell / unknown / nil) falls through to the
+                    //   path-typing behavior — same as before this branch
+                    //   existed, so a window we can't classify still works as
+                    //   before.
+                    let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
                     let delay = KeystrokeInjector.focusDelay(
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let textToInject = savedURL.path + " "
-                    let finishInjection = {
-                        let result = self.keystrokeInjector.sendText(
-                            textToInject, to: msg.windowId, pressReturn: false,
-                            terminalApp: termApp, windowName: name, cgWindowNumber: wn,
-                            iterm2SessionId: window.iterm2SessionId
-                        )
+                    let finishInjection: () -> Void = {
+                        let result: KeystrokeInjector.InjectionResult
+                        switch cliKind {
+                        case .codex:
+                            result = self.keystrokeInjector.pasteImage(
+                                at: savedURL, to: msg.windowId,
+                                terminalApp: termApp, iterm2SessionId: window.iterm2SessionId
+                            )
+                        case .claude, .shell:
+                            let textToInject = savedURL.path + " "
+                            result = self.keystrokeInjector.sendText(
+                                textToInject, to: msg.windowId, pressReturn: false,
+                                terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                                iterm2SessionId: window.iterm2SessionId
+                            )
+                        }
                         if result.success {
-                            print("[Quip] image_upload: typed path into windowId=\(msg.windowId) (\(textToInject.count) chars)")
+                            print("[Quip] image_upload: delivered to windowId=\(msg.windowId) cli=\(cliKind.rawValue)")
                             self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
                         } else {
-                            let err = result.error ?? "couldn't type path"
-                            print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId): \(err)")
+                            let err = result.error ?? "couldn't deliver image"
+                            print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId) cli=\(cliKind.rawValue): \(err)")
                             self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
                         }
                     }
@@ -1011,8 +1065,14 @@ struct QuipMacApp: App {
 
         case "arrange_windows":
             if let msg = MessageCoder.decode(ArrangeWindowsMessage.self, from: data) {
-                print("[Quip] arrange_windows: layout=\(msg.layout)")
+                print("[Quip] arrange_windows: layout=\(msg.layout.rawValue)")
                 handleArrangeWindows(layout: msg.layout)
+            } else {
+                // GH #20: enum decode failed → log loud + send error back so
+                // a phone-side typo / future unknown layout isn't silent.
+                let raw = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                print("[Quip] arrange_windows: decode failed for payload=\(raw)")
+                webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement layout in arrange_windows payload"))
             }
 
         case "scan_iterm_windows":
@@ -1384,14 +1444,13 @@ struct QuipMacApp: App {
     /// Drives the "arrange horizontally/vertically" command coming from the
     /// phone. Mirrors MenuBarView's local "Arrange Windows" path: filter to
     /// enabled windows, pick the main display, hand over to LayoutCalculator
-    /// + WindowManager.arrangeWindows. Invalid layout strings are rejected
-    /// with an error toast the phone can show.
+    /// + WindowManager.arrangeWindows. Layout enum is total so the
+    /// switch in `LayoutMode.from(arrangeLayout:)` is exhaustive — no
+    /// "unknown" path here. Decode-time rejection of unknown wire
+    /// values lives in MessageCoder.decode (returns nil → caller logs).
     @MainActor
-    private func handleArrangeWindows(layout: String) {
-        guard let mode = LayoutMode.fromArrangeLayout(layout) else {
-            webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement: \(layout)"))
-            return
-        }
+    private func handleArrangeWindows(layout: ArrangeLayout) {
+        let mode = LayoutMode.from(arrangeLayout: layout)
         let enabled = windowManager.windows.filter(\.isEnabled)
         guard !enabled.isEmpty else {
             webSocketServer.broadcast(ErrorMessage(reason: "No enabled windows to arrange"))
@@ -1540,6 +1599,39 @@ struct QuipMacApp: App {
         case "press_y":
             runAfterDelay {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            }
+        // §18 — context-aware numbered-prompt selection. Phone sends
+        // `select_<n>` (1-9) when the user taps a numbered chip in the
+        // terminal panel; Mac types the digit + Return into the target
+        // window the same way press_y/press_n work.
+        case "select_1", "select_2", "select_3", "select_4",
+             "select_5", "select_6", "select_7", "select_8", "select_9":
+            let digit = String(action.suffix(1))
+            runAfterDelay {
+                keystrokeInjector.sendText(digit, to: wid, pressReturn: true,
+                                            terminalApp: termApp, windowName: wname,
+                                            cgWindowNumber: wn,
+                                            iterm2SessionId: window.iterm2SessionId)
+            }
+        // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
+        // sends the iTerm2 menu shortcut for the corresponding action.
+        // Scrollback state lives on the Mac side — the next screenshot
+        // capture will reflect the scrolled viewport, no extra plumbing.
+        case "scroll_page_up", "scroll_page_down", "scroll_top", "scroll_bottom":
+            guard termApp == .iterm2 else {
+                webSocketServer.broadcast(ErrorMessage(reason: "Scrollback only supported in iTerm2 windows"))
+                break
+            }
+            let dir: KeystrokeInjector.ScrollDirection = {
+                switch action {
+                case "scroll_page_up":   return .pageUp
+                case "scroll_page_down": return .pageDown
+                case "scroll_top":       return .top
+                default:                 return .bottom // scroll_bottom
+                }
+            }()
+            runAfterDelay {
+                keystrokeInjector.iterm2Scroll(dir, to: wid, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_n":
             runAfterDelay {
@@ -1803,6 +1895,62 @@ struct QuipMacApp: App {
         case TerminalApp.claudeDesktop.bundleIdentifier: return .claudeDesktop
         default: return .terminal
         }
+    }
+
+    /// Resolve the OS's currently-focused window to a ManagedWindow.id, or
+    /// nil when the frontmost app is untracked or the AX query fails.
+    /// Matches by (pid, nearest origin) — same pattern WindowManager uses
+    /// for arrange/focus AX-window lookup.
+    ///
+    /// Returns nil when frontmost is e.g. Finder/Mail/Safari — the phone
+    /// then leaves `selectedWindowId` alone instead of blanking it, so the
+    /// user's last terminal stays the target until focus returns to a
+    /// tracked window. (wishlist §B16.)
+    private func currentFrontmostManagedWindowId() -> String? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = app.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowRef: CFTypeRef?
+        let attrResult = AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedWindowAttribute as CFString, &windowRef
+        )
+        guard attrResult == .success, let raw = windowRef else { return nil }
+        let axWindow = raw as! AXUIElement
+        var posRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
+              let posValue = posRef else { return nil }
+        var axPos = CGPoint.zero
+        AXValueGetValue(posValue as! AXValue, .cgPoint, &axPos)
+        let candidates = windowManager.windows.filter { $0.pid == pid }
+        guard !candidates.isEmpty else { return nil }
+        // 50pt origin tolerance — CG and AX coords are both top-left, so
+        // typical drift is sub-pixel. A larger gap means we matched the
+        // wrong window (e.g. position-tying close on overlapping windows
+        // would still pick *a* candidate, but past 50pt that's a guess and
+        // we'd rather send nil than mis-route).
+        var best: (window: ManagedWindow, distSq: CGFloat)? = nil
+        for w in candidates {
+            let dx = w.bounds.origin.x - axPos.x
+            let dy = w.bounds.origin.y - axPos.y
+            let d = dx * dx + dy * dy
+            if best == nil || d < best!.distSq {
+                best = (w, d)
+            }
+        }
+        guard let pick = best, pick.distSq <= 2500 else { return nil }
+        return pick.window.id
+    }
+
+    /// Compute the current frontmost ManagedWindow.id and broadcast a
+    /// `frontmost_changed` frame iff it differs from the last value we
+    /// sent. Cheap to call on a tight cadence — the AX query is the only
+    /// real cost. (wishlist §B16.)
+    private func broadcastFrontmostIfChanged() {
+        let current = currentFrontmostManagedWindowId()
+        if hasBroadcastFrontmostOnce && current == lastBroadcastFrontmostWindowId { return }
+        lastBroadcastFrontmostWindowId = current
+        hasBroadcastFrontmostOnce = true
+        webSocketServer.broadcast(FrontmostChangedMessage(windowId: current))
     }
 
     /// Find the 1-based window index in the terminal app by matching

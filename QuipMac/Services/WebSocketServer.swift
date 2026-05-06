@@ -4,6 +4,7 @@
 
 import Foundation
 import Network
+import os
 import Observation
 
 @MainActor
@@ -25,13 +26,44 @@ final class WebSocketServer {
     /// it in yet. The server feeds events (connect/disconnect/auth), the
     /// Settings panel reads them.
     var connectionLog: ConnectionLog?
-    /// Read from the network queue during connection handshake, so it can't live
-    /// on the MainActor. It's a plain Bool — atomic reads/writes are fine.
+    /// Read from the network queue during connection handshake; written on
+    /// MainActor when the user toggles `requirePINForLocal` in Settings.
+    /// Bool reads/writes aren't actually atomic across all hardware, and a
+    /// half-applied flip during a handshake could let an unauthenticated
+    /// connection slip into the authenticated state (or vice versa).
+    /// Wrap in an unfair lock — both sides serialize through the same
+    /// critical section, the cost is ~10ns, and the race window closes.
+    /// (GH #21.)
     @ObservationIgnored
-    nonisolated(unsafe) var requireAuth: Bool = true
+    nonisolated private let requireAuthLock = OSAllocatedUnfairLock<Bool>(initialState: true)
+    nonisolated var requireAuth: Bool {
+        get { requireAuthLock.withLock { $0 } }
+        set { requireAuthLock.withLock { $0 = newValue } }
+    }
 
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
+    /// App-level heartbeat dispatcher. Fires every `heartbeatInterval` and
+    /// sends one `HeartbeatMessage` to each authenticated client. Started in
+    /// `start()`, invalidated in `stop()`. Detects wedged-but-TCP-alive
+    /// clients (background+suspended past OS keepalive grace, runloop stuck)
+    /// that the WebSocket-protocol pong path can't see. (GH #19.)
+    private var heartbeatTimer: Timer?
+    private var nextHeartbeatSeq: Int = 0
+    /// Seconds between heartbeat dispatches. Paired with iOS keepalive cadence
+    /// (10s ping + 3s pong timeout): heartbeat at 15s gives the iOS app room
+    /// to ack between its own keepalive cycles without overlap.
+    nonisolated static let heartbeatInterval: TimeInterval = 15
+    /// Seconds after which an outstanding heartbeat is considered "stale" and
+    /// we log it. Doesn't tear down the connection — TCP keepalive +
+    /// pendingBytes backpressure already cull dead sockets; this is
+    /// observability only.
+    nonisolated static let heartbeatStaleAfter: TimeInterval = 30
+    /// §B17 — connections that have already had their first failed-JSON-parse
+    /// dump emitted to kokoro.log. Membership-test gates the dump path so a
+    /// noisy connection produces ONE diagnostic line per session instead of
+    /// thousands. Cleared in `removeConnection`.
+    private var unknownFrameLogged: Set<ObjectIdentifier> = []
     private let networkQueue = DispatchQueue(label: "quip.websocket", qos: .userInitiated)
     /// Retry interval when the listener can't bind (e.g. port 8765 squatted by
     /// another process). Without this the server would give up silently and the
@@ -64,6 +96,14 @@ final class WebSocketServer {
         var deviceID: String? = nil
         var deviceName: String? = nil
         var deviceKind: String? = nil
+        /// Seq of the most recent heartbeat sent to this client that has not
+        /// yet been acked. Cleared when matching `heartbeat_ack` arrives. The
+        /// dispatcher logs a one-line warning if a new heartbeat fires while
+        /// the previous one is still outstanding past `heartbeatStaleAfter`.
+        /// (GH #19.)
+        var pendingHeartbeatSeq: Int? = nil
+        var pendingHeartbeatSentAt: Date? = nil
+        var lastHeartbeatAckAt: Date? = nil
 
         static let maxMessagesPerSecond = 10
         /// Drop broadcasts once a single client has this much buffered. Chosen to
@@ -140,6 +180,44 @@ final class WebSocketServer {
         guard let listener = listener else { return }
         attachHandlers(to: listener)
         listener.start(queue: networkQueue)
+        startHeartbeatTimer()
+    }
+
+    /// Arm the per-server heartbeat dispatcher. Idempotent — invalidates any
+    /// previous timer before scheduling a new one. (GH #19.)
+    private func startHeartbeatTimer() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: Self.heartbeatInterval, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.dispatchHeartbeats()
+            }
+        }
+    }
+
+    /// Send one `HeartbeatMessage` to each authenticated direct-WS client.
+    /// If a client still has a previous heartbeat outstanding past the stale
+    /// threshold, log a one-line warning before firing the next one. Does
+    /// not tear down stale connections — TCP keepalive + pendingBytes
+    /// backpressure already handle that. (GH #19.)
+    private func dispatchHeartbeats() {
+        let now = Date()
+        for i in clients.indices {
+            guard clients[i].isAuthenticated else { continue }
+
+            if let pending = clients[i].pendingHeartbeatSeq,
+               let sentAt = clients[i].pendingHeartbeatSentAt,
+               now.timeIntervalSince(sentAt) > Self.heartbeatStaleAfter {
+                let remote = clients[i].remoteDescription
+                Self.wslog("heartbeat seq=\(pending) stale (>\(Int(Self.heartbeatStaleAfter))s) for \(remote)")
+            }
+
+            nextHeartbeatSeq &+= 1
+            let seq = nextHeartbeatSeq
+            let msg = HeartbeatMessage(seq: seq, ts: now.timeIntervalSince1970)
+            clients[i].pendingHeartbeatSeq = seq
+            clients[i].pendingHeartbeatSentAt = now
+            send(msg, to: clients[i].connection)
+        }
     }
 
     /// Build the IPv4-wildcard listener. Pinning the local endpoint via
@@ -316,6 +394,8 @@ final class WebSocketServer {
     func stop() {
         bindRetryWorkItem?.cancel()
         bindRetryWorkItem = nil
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
         listener?.cancel()
         listener = nil
         for client in clients {
@@ -499,6 +579,10 @@ final class WebSocketServer {
         clients.removeAll(where: { $0.connection === connection })
         connectedClientCount = clients.count
         refreshConnectedClients()
+        // §B17 — drop the per-connection log-once flag so reconnects of the
+        // same logical client get a fresh diagnostic. Without this, a noisy
+        // connection's UUID would never re-emit even after a real reconnect.
+        unknownFrameLogged.remove(ObjectIdentifier(connection))
         // Force the NWConnection to tear down immediately. Without this the
         // socket's send buffer can sit on queued bytes (layout updates, TTS
         // chunks) until the kernel notices — which on a dead Wi-Fi link can
@@ -516,6 +600,20 @@ final class WebSocketServer {
         if let index = clients.firstIndex(where: { $0.connection === connection }) {
             clients[index].isAuthenticated = true
             refreshConnectedClients()
+        }
+    }
+
+    /// Match an inbound `heartbeat_ack` to its outstanding heartbeat and
+    /// clear the pending state for that client. If the seq doesn't match
+    /// the pending one (e.g. delayed ack after a newer heartbeat already
+    /// fired), still record `lastHeartbeatAckAt` since the connection
+    /// proved itself responsive. (GH #19.)
+    private func applyHeartbeatAck(_ msg: HeartbeatAckMessage, from connection: NWConnection) {
+        guard let idx = clients.firstIndex(where: { $0.connection === connection }) else { return }
+        clients[idx].lastHeartbeatAckAt = Date()
+        if clients[idx].pendingHeartbeatSeq == msg.seq {
+            clients[idx].pendingHeartbeatSeq = nil
+            clients[idx].pendingHeartbeatSentAt = nil
         }
     }
 
@@ -628,6 +726,19 @@ final class WebSocketServer {
                 return
             }
 
+            // Skip non-text WS frames. NWProtocolWebSocket delivers ping/pong
+            // payloads here even with `autoReplyPing = true` — the framework
+            // sends the pong itself but the original ping bytes still surface
+            // as a "message" with opcode `.ping`. Without this filter every
+            // 10s iOS keepalive lands in the JSON dispatcher, fails to parse,
+            // and emits `type=unknown (4 bytes)` to kokoro.log forever.
+            if let metadata = contentContext?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                as? NWProtocolWebSocket.Metadata,
+               metadata.opcode != .text && metadata.opcode != .binary {
+                self.receiveMessage(on: connection)
+                return
+            }
+
             if let data = content, !data.isEmpty {
                 // Application-layer drop: matches the WebSocket protocol's
                 // maximumMessageSize above. Image uploads from the phone are
@@ -646,6 +757,22 @@ final class WebSocketServer {
                 DispatchQueue.main.async {
                     let messageType = MessageCoder.messageType(from: receivedData)
                     KokoroTTSDebug.log("WS received: type=\(messageType ?? "unknown") (\(receivedData.count) bytes)")
+
+                    // §B17 — when a frame fails JSON parse (messageType nil),
+                    // dump the raw bytes the FIRST time per connection so the
+                    // next session can identify what's leaking through. After
+                    // the first dump per connection, suppress further `type=
+                    // unknown` log entries so the log doesn't flood. Cleared
+                    // when the connection drops via `removeConnection`.
+                    if messageType == nil {
+                        let cid = ObjectIdentifier(connection)
+                        if !self.unknownFrameLogged.contains(cid) {
+                            self.unknownFrameLogged.insert(cid)
+                            let utf8 = String(data: receivedData, encoding: .utf8) ?? "<non-utf8>"
+                            let hex = receivedData.map { String(format: "%02x", $0) }.joined(separator: " ")
+                            KokoroTTSDebug.log("§B17 first-unknown bytes utf8=\"\(utf8)\" hex=[\(hex)]")
+                        }
+                    }
 
                     // Auth messages bypass rate limiting and auth checks
                     if messageType == "auth" {
@@ -673,6 +800,16 @@ final class WebSocketServer {
                     if messageType == "device_identity",
                        let msg = MessageCoder.decode(DeviceIdentityMessage.self, from: receivedData) {
                         self.applyPeerIdentity(msg, from: connection)
+                        self.touchActivity(for: connection)
+                        return
+                    }
+
+                    // GH #19: heartbeat_ack from the iOS client. Match seq,
+                    // clear pending, update lastHeartbeatAckAt. Don't forward
+                    // to onMessageReceived — pure liveness metadata.
+                    if messageType == "heartbeat_ack",
+                       let ack = MessageCoder.decode(HeartbeatAckMessage.self, from: receivedData) {
+                        self.applyHeartbeatAck(ack, from: connection)
                         self.touchActivity(for: connection)
                         return
                     }
