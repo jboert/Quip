@@ -124,6 +124,91 @@ Recommend **A** (force-push main with rewritten history) since:
 
 If you want `B` or `C` instead, say so before resuming.
 
-## Resume one-liner
+## Continuation 3 — §B16 follow-frontmost + CI plan + sim QA pass
 
-> Continue Quip work on `eb-branch` from `dcd8946`. The 2026-05-05 continuation shipped 13 substantive commits + 4 doc/handoff commits = 17 total: §49 redaction + §22 perms-store tests + §27 dedupe audit + wishlist scrub (1520→705 lines) + §B14 iOS fresh-install seed + device-name redact across docs (filter-repo'd `71af40e` and force-pushed) + `.claude/` gitignore broadening + up-arrow ↔ Return ⏎ parity + slot row horizontal ScrollView + main row 430pt fit + `/help` demo label-only render + light-mode chip tokens + Settings → Appearance Auto/Light/Dark picker + §B15 a11y wishlist + visual-diff baselines under `docs/qa-baselines/`. **All pushed** to `origin/eb-branch`. 435 tests green (249 Mac + 186 iOS). **PR #29 open against `main` — CONFLICTING because of the filter-repo rewrite (see Open PR section above for resolution options).** Physical iPhone 17 Pro Max running `1.5.2` (installed 14:55 PT, databaseSequenceNumber 9248). /Applications/Quip.app still 1.5.1 (no Mac-app version bump this continuation — Mac LogRedactor + DiagnosticsBundle changes build into the same 1.5.1 .app). Quip QA simulator: UDID `D853A014-E5D8-46F1-A81D-37860AA9DFA2` ("Quip QA — iPhone 17 Pro Max 26.4") — dedicated cloned device per `feedback_default_qa_simulator.md`. iOS-simulator-skill is installed and proven (drives sim taps via accessibility tree + `idb ui tap`); use it for any future visual QA.
+Started after `c6eb974`. Two substantive commits + plan doc + this handoff refresh.
+
+### Commits
+
+| Hash | Branch tip | Why |
+|------|-----------|-----|
+| `b6ef907` | Mac+Shared+docs | **§B16 Mac side.** Adds `FrontmostChangedMessage` to `Shared/MessageProtocol.swift` + a 400ms poller + NSWorkspace activation hook in `QuipMacApp.swift` that diff-broadcasts the current frontmost `ManagedWindow.id` (or nil when frontmost is untracked). Re-broadcast forced on every successful client auth so a freshly-connecting phone gets the current value within 0ms instead of waiting up to 400ms for the timer. Resolution = `NSWorkspace.frontmostApplication.processIdentifier` → `AXUIElementCopyAttributeValue(kAXFocusedWindowAttribute)` → 50pt origin tolerance match against `windowManager.windows` filtered by pid. Also extends `PreferencesSnapshot` with `followFrontmost: Bool?` so the iOS pref survives reinstalls. Wishlist §B16 written same commit. |
+| `918cb5c` | iOS | **§B16 iOS side.** Wires `frontmost_changed` through `WebSocketClient.onFrontmostChanged` → `BackendConnectionManager.wire()` bridge → `manager.onFrontmostChanged` host hook in `QuipApp.swift`. New `@AppStorage("followFrontmost")` (default true). When pref is on AND incoming windowId is in current windows list → `selectedWindowId = wid` + send `SelectWindowMessage` so Mac focuses the same window. Manual tap on a `WindowRectangle` card sets `followFrontmost = false` (pin). Re-enable via new icon-only Auto pill at top-right of `windowLayout` ZStack: `cursorarrow.rays` filled-accent when following, `hand.point.up.left` outlined when pinned. Hidden in empty-windows state. `PreferencesSyncService` reads + writes `followFrontmost` via UserDefaults observer + `applyRestore` + `currentSnapshot`. |
+
+### Why this work
+
+User reported: "in image mode, push the text and it lands in a window that Code is using, the Codex window. Frontmost is iTerm but lands in Claude window." Two-layer investigation (caveman investigator agents):
+
+- **Layer 1 (real bug):** phone's `selectedWindowId` is sticky. User had tapped Claude card in a prior session; switching Mac focus to iTerm did NOT retarget because phone never auto-tracks Mac frontmost — Mac never broadcasts it.
+- **Layer 2 (theoretical, unneeded):** `KeystrokeInjector.swift:71` does `tell application "Claude" to activate` regardless of which Claude window the phone targeted. But `WindowManager.focusWindow` already does per-window `AXRaiseAction` before keystroke fires, so the right Claude window IS frontmost-of-Claude when Cmd+V lands. No bug here.
+
+§B16 fixes Layer 1 with the path the wishlist called "Path #1" — Mac broadcasts frontmost, iOS auto-follows when Auto pill is on, manual tap pins.
+
+### Test counts after continuation 3
+
+No tests added in this continuation — §B16 is wire-format + observer plumbing; the existing `MessageProtocolTests` pattern would catch decode regressions but we deferred the test addition to a follow-up. Combined still 434 (249 Mac + 185 iOS) green.
+
+### CI expansion plan (approved, not started)
+
+Plan file: `/Users/erickbzovi/.claude/plans/a-async-sparkle.md` — approved via `/plan` flow.
+
+**Scope:** add lint, coverage, artifact jobs to `.github/workflows/ci.yml`. Keep existing 4 jobs untouched. Defer TestFlight + notarization.
+
+**Local dry-run revealed massive lint debt:**
+- `swiftformat --lint .` → 186,457 violations across 1,422 of 1,464 Swift files (97%)
+- `cargo fmt --check` → ~300 diff hunks in QuipLinux/src
+- `cargo clippy --features whisper -- -D warnings` → can't run locally on macOS (graphene-sys / gtk4-sys build fails without GTK4 system deps); CI ubuntu-latest can validate
+- Existing `.swiftformat` config and `rustfmt.toml` exist but neither has ever been enforced
+
+**Strategy options surfaced (user picking next):**
+- **(a)** Defer lint entirely. Ship only coverage + artifacts. Smallest blast radius.
+- **(b)** Add lint jobs as `continue-on-error: true` (advisory). Surfaces violations on PR comments without blocking. Required-promotion later.
+- **(c)** Mass-format commit (`swiftformat .` + `cargo fmt`) → review the 100k+ line diff → land it → enable required lint check. Single noise commit, then clean baseline.
+
+User had not selected when context-window stop hook fired.
+
+### Bug #1 found in sim QA pass
+
+iOS sim launch on Quip QA (D853A014) shows simultaneous **"Connecting… Stalled 26s — resetting"** in the top bar AND **"Enter tunnel URL"** placeholder in the empty-state center. State machine inconsistency — when no URL is set, the connection layer should be idle, not in stall-watchdog territory. Likely root cause: `lastURL` persisted as empty string (not nil), so the WS client treats it as "valid URL, attempt connect" then NWConnection fails immediately, watchdog counts up. Visible symptom: alarming "stalled" red text on a fresh install before the user has even entered a URL.
+
+**Not filed yet** — wishlist candidate, fix is small (treat empty `lastURL` as "no URL set" → suppress connect path). Save before /clear or it will be lost.
+
+### Install state (continuation 3)
+
+| Surface | Build identity | When | Status |
+|---------|---------------|------|--------|
+| `/Applications/Quip.app` | binary mtime `May 5 21:12:48` (CFBundleShortVersionString still `1.5.1`) | re-signed `813F0602...` cert + ditto'd 21:13 | running, §B16 broadcaster live |
+| iPhone 17 Pro Max (`FA951BBB-...`) | `databaseSequenceNumber 9272` | installed 21:15 | **NOT force-quit yet** — needs relaunch to pick up §B16 |
+| Quip QA sim (`D853A014-...`) | Debug-iphonesimulator build | installed + launched 21:18 | running but disconnected (no URL set); Bug #1 surfaced |
+
+### Hardware-verified vs install-only matrix (continuation 3)
+
+| Surface / feature | Status |
+|---|---|
+| §B16 Mac broadcast (400ms poller + NSWorkspace hook) | **install only** — Mac is running but no on-device verify that `frontmost_changed` frames are actually serializing on the wire |
+| §B16 iOS receive + Auto pill render | **install only** — phone build replaced but app still has stale process; user must force-quit + relaunch |
+| §B16 end-to-end (Mac focus iTerm ↔ Claude → phone retargets) | **not verified** — blocked on phone relaunch |
+| §B16 manual tap pin | **not verified** — same |
+| Sim Bug #1 reproduction | **observed once** — screen mapped + screenshot captured at `/tmp/qa-screen1.png` |
+
+### Open threads (in priority order for resume)
+
+1. **User force-quit + relaunch Quip on physical iPhone**, smoke-test §B16:
+   - Auto pill visible top-right of window layout?
+   - Mac focus switches iTerm → Claude → phone selection follows within ~400ms?
+   - Tap a window card → pill flips to outlined `hand.point.up.left`, switches Mac focus do NOT retarget?
+2. **Pick CI rollout strategy** (a/b/c above). Lint debt sizing already known: 186k swiftformat + 300 cargo fmt. Recommend (b) advisory unless user wants the mass-format pain now.
+3. **File Bug #1 to wishlist** — sim's Connecting+Stalled with empty URL contradiction. Two-line fix in `MainiOSView`'s connection state guard. Easy when picked up.
+4. **Add MessageProtocol decode test** for `FrontmostChangedMessage` so CI catches Mac/iOS wire drift on this type — the §B16 work is exactly the kind that benefits from the existing `MessageProtocolTests` pattern.
+5. **PR #29 conflict still open** (carried from continuation 2). Resolution options A/B/C unchanged.
+
+### What this session deliberately did NOT do
+
+- No `swiftformat .` / `cargo fmt` mass write — debt sizing was read-only, no formatter writes.
+- No CI yaml changes — plan approved, paused at strategy-pick before touching `.github/workflows/ci.yml`.
+- No push to `origin/eb-branch` — eb-branch policy stands. Resume session must explicitly authorize push of `b6ef907` + `918cb5c`.
+- No Mac-side AX per-window raise tweak — investigation showed `WindowManager.focusWindow` already does it, so Layer 2 of §B16 wasn't needed.
+
+## Resume one-liner (continuation 3)
+
+> Continue Quip on `eb-branch` from `918cb5c`. §B16 follow-frontmost shipped: Mac broadcasts via `FrontmostChangedMessage` + 400ms poller + NSWorkspace hook (`b6ef907`); iOS receives + auto-follows + Auto pill in window picker (`918cb5c`). Both built + installed; physical iPhone 17 Pro Max needs force-quit + relaunch before smoke test. CI expansion plan approved at `/Users/erickbzovi/.claude/plans/a-async-sparkle.md` — local dry-run revealed 186,457 swiftformat violations + 300 cargo fmt hunks; user paused at picking strategy (a) defer lint / (b) advisory `continue-on-error` / (c) mass-format commit. Bug #1 from sim QA: empty-URL state shows "Connecting… Stalled 26s — resetting" simultaneously with "Enter tunnel URL" placeholder — wishlist-worthy two-line fix in iOS connection-state guard. PR #29 still conflicting against main; resolution path A/B/C unchanged from continuation 2. /Applications/Quip.app reflects today's build (binary mtime `May 5 21:12:48`, CFBundleShortVersionString 1.5.1); iPhone build at `databaseSequenceNumber 9272`. Two new commits NOT pushed yet pending eb-branch policy confirmation.
