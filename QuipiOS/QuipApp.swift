@@ -743,6 +743,17 @@ struct QuipApp: App {
 
 // MARK: - Main iOS View
 
+/// Single-line capsule descriptor for the PTT health banner rendered just
+/// above the main row. Surfaces path-degraded states (Whisper offline,
+/// mid-press disconnect, model warming up) that were previously NSLog-only
+/// or buried in Settings → Diagnostics. Built by
+/// `MainiOSView.classifyPTTBanner(...)`. (GH H.)
+struct PTTBannerInfo: Equatable {
+    let icon: String
+    let message: String
+    let tint: Color
+}
+
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
     @Bindable var manager: BackendConnectionManager
@@ -1843,6 +1854,30 @@ struct MainiOSView: View {
             // Pending image thumbnail — only takes space when an image is attached.
             PendingImagePreviewStrip(state: pendingImage)
 
+            // GH H: PTT health banner — single-line capsule that surfaces
+            // path-degraded states near the mic button instead of leaving
+            // them buried in Settings. Hidden when nothing notable;
+            // collapses cleanly so the row layout doesn't shift.
+            if let info = pttHealthBanner {
+                HStack(spacing: 6) {
+                    Image(systemName: info.icon)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(info.tint)
+                    Text(info.message)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(info.tint)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(info.tint.opacity(0.12))
+                .clipShape(Capsule())
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Voice input status: \(info.message)")
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
             // Cluster gating — small gap (10pt) appears between adjacent
             // clusters when both have visible buttons. PTT mic is always
             // visible and stays geometrically centered via flexible
@@ -2126,6 +2161,61 @@ struct MainiOSView: View {
             }
         }
         .padding(.vertical, isPortrait ? 8 : 4)
+    }
+
+    /// Compact one-line description of any notable PTT/voice path state
+    /// for the banner just above the main row. nil when nothing notable —
+    /// the banner stays collapsed. (GH H.)
+    var pttHealthBanner: PTTBannerInfo? {
+        Self.classifyPTTBanner(isConnected: client.isConnected,
+                               isRecording: isRecording,
+                               whisperStatus: client.whisperStatus)
+    }
+
+    /// Pure classification — kept static so unit tests can drive every
+    /// combination without standing up the SwiftUI view hierarchy.
+    static func classifyPTTBanner(isConnected: Bool,
+                                  isRecording: Bool,
+                                  whisperStatus: WhisperState) -> PTTBannerInfo? {
+        // Mid-press disconnect is the loudest failure mode — surface first.
+        if isRecording && !isConnected {
+            return PTTBannerInfo(
+                icon: "wifi.exclamationmark",
+                message: "Mac disconnected mid-press — falling back to local",
+                tint: .red
+            )
+        }
+        // Whisper failed on the Mac side — remote path will silently fall
+        // through to local each press unless the user knows.
+        if case .failed(let reason) = whisperStatus {
+            return PTTBannerInfo(
+                icon: "waveform.slash",
+                message: "Whisper offline (\(reason)) — using local",
+                tint: .orange
+            )
+        }
+        // Whisper still warming up — the next press uses local until ready.
+        // Only show this banner while the user is mid-press; otherwise it's
+        // routine startup chatter.
+        if isRecording {
+            switch whisperStatus {
+            case .preparing:
+                return PTTBannerInfo(
+                    icon: "hourglass",
+                    message: "Whisper warming up — using local for this press",
+                    tint: .secondary
+                )
+            case .downloading(let p):
+                return PTTBannerInfo(
+                    icon: "arrow.down.circle",
+                    message: "Whisper downloading \(Int(p * 100))% — using local",
+                    tint: .secondary
+                )
+            default:
+                break
+            }
+        }
+        return nil
     }
 
     private func cycleWindow(direction: Int) {
