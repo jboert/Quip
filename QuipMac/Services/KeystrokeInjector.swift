@@ -435,6 +435,84 @@ final class KeystrokeInjector {
         }
     }
 
+    // MARK: - Scrollback (§38)
+
+    /// Direction of scrollback navigation in a terminal window. Mapped to
+    /// iTerm2's default menu shortcuts: Shift+PageUp/Down for one page,
+    /// Cmd+Home/End for top/bottom. Phone-driven; the user pans the
+    /// terminal panel and gets the corresponding action up here.
+    enum ScrollDirection: String, Sendable, CaseIterable {
+        case pageUp
+        case pageDown
+        case top
+        case bottom
+
+        /// Mac virtual keycode + modifier flags shipped to System Events.
+        /// Pulled out as a pure mapping so the unit tests don't need to
+        /// stand up an AppleScript runtime.
+        var iTerm2Keystroke: (keyCode: Int, modifiers: [String]) {
+            switch self {
+            case .pageUp:   return (116, ["shift down"])      // Shift+PageUp
+            case .pageDown: return (121, ["shift down"])      // Shift+PageDown
+            case .top:      return (115, ["command down"])    // Cmd+Home
+            case .bottom:   return (119, ["command down"])    // Cmd+End
+            }
+        }
+    }
+
+    /// Scroll the iTerm2 scrollback for a specific window. AppleScript
+    /// path: activate iTerm2, walk window→tab→session to select the
+    /// target session (so the menu shortcut applies to the right pane),
+    /// then send the corresponding keystroke via System Events. (§38.)
+    ///
+    /// Terminal.app + Claude Desktop are not supported; phone UI should
+    /// hide the scroll buttons for those host apps.
+    @discardableResult
+    func iterm2Scroll(_ direction: ScrollDirection,
+                      to windowId: String,
+                      iterm2SessionId: String?) -> InjectionResult {
+        guard let sessionId = iterm2SessionId else {
+            return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+        }
+        let escapedId = escapeForAppleScript(sessionId)
+        let (keyCode, modifiers) = direction.iTerm2Keystroke
+        let modSuffix = modifiers.isEmpty ? "" : " using {\(modifiers.joined(separator: ", "))}"
+
+        let script = """
+        tell application "iTerm2"
+            set quipFound to false
+            repeat with aWindow in windows
+                tell aWindow
+                    repeat with aTab in tabs
+                        tell aTab
+                            repeat with aSession in sessions
+                                if unique id of aSession is "\(escapedId)" then
+                                    select aSession
+                                    set quipFound to true
+                                    exit repeat
+                                end if
+                            end repeat
+                        end tell
+                        if quipFound then exit repeat
+                    end repeat
+                end tell
+                if quipFound then exit repeat
+            end repeat
+            if not quipFound then
+                error "Quip: iTerm2 session \(escapedId) not found"
+            end if
+            activate
+        end tell
+        delay 0.05
+        tell application "System Events"
+            tell process "iTerm2"
+                key code \(keyCode)\(modSuffix)
+            end tell
+        end tell
+        """
+        return executeAppleScript(script, context: "iterm2Scroll(\(direction.rawValue)) to \(windowId)")
+    }
+
     // MARK: - Spawn Terminal
 
     /// Open a new terminal window, cd to a directory, and run `claude`.

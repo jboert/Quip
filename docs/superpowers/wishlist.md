@@ -417,10 +417,9 @@ Deferred to follow-ups: dedicated paste button (vs long-press gesture), paste-wi
 
 ### 38. iTerm scrollback navigation from the iPhone
 
-**Status:** Wishlist (replaces misread half of #7).
-**Context:** Pan up/down on iPhone terminal panel to reveal lines that scrolled off iTerm window on Mac. Today Mac captures only visible viewport; scrollback invisible to phone.
-**Likely shape:** New `scroll_event` message `{ sessionId, windowId, direction, lines }`. Phone vertical drag on `InlineTerminalContent` image branch → throttled `scroll_event` per ~20pt drag travel. Mac posts `CGEventScrollWheel` or AppleScript `tell iTerm2 to scroll`. Snap-to-bottom button + "scrolled up by N lines" indicator.
-**Open:** gesture (plain vertical drag vs two-finger vs scroll thumb), iTerm AppleScript vs CGEventScrollWheel, Cmd+Shift+Up/Down (iTerm's built-in), no-more-scrollback edge.
+**Status:** ✅ Done 2026-05-06 (commit shipping with this update). MVP shipped via two new buttons in the InlineTerminalContent panel header (chevron-up / chevron-down). Tap = scroll one page; long-press = scroll to top/bottom. Routes through existing `quick_action` channel with new action strings `scroll_page_up` / `scroll_page_down` / `scroll_top` / `scroll_bottom`. Mac handler restricted to iTerm2 (broadcasts ErrorMessage for Terminal.app / Claude Desktop). New `KeystrokeInjector.ScrollDirection` enum + `iterm2Scroll(_:to:iterm2SessionId:)` method walk window→tab→session in AppleScript and send the corresponding modifier+key via System Events: Shift+PageUp/Down for one-page, Cmd+Home/End for top/bottom — these are iTerm2's default scrollback shortcuts (bare keys go to the running program). State stays Mac-side; the existing screenshot capture loop reflects scrolled viewport on the next snapshot. 5 Iterm2ScrollKeystrokeTests lock the keycode + modifier mapping so a future refactor can't silently flip a direction or drop a modifier.
+
+Deferred to follow-ups: pan-gesture (vs button) trigger, "scrolled up by N lines" indicator, snap-to-bottom button, no-more-scrollback edge feedback. The button shape ships a usable v1.
 **Related:** `QuipiOS/QuipApp.swift:~2892` (image branch). Reopened from https://github.com/jboert/Quip/issues/7.
 
 ---

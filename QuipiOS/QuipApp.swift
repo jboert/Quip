@@ -4234,6 +4234,39 @@ struct InlineTerminalContent: View {
                         .font(.system(size: 13))
                         .foregroundStyle(Color.white.opacity(0.5))
                 }
+                // §38 — iTerm scrollback nav. Two buttons in the header
+                // (page up / page down) with long-press for top / bottom.
+                // Sends quick_action strings; Mac side translates to
+                // Shift+PageUp/Down or Cmd+Home/End via System Events.
+                // Mac throttles per-window so rapid taps still fire.
+                Button {
+                    onSendAction("scroll_page_up")
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
+                .accessibilityLabel("Scroll up one page")
+                .accessibilityHint("Long-press to scroll to top")
+                .accessibilityAddTraits(.isButton)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.4)
+                        .onEnded { _ in onSendAction("scroll_top") }
+                )
+                Button {
+                    onSendAction("scroll_page_down")
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
+                .accessibilityLabel("Scroll down one page")
+                .accessibilityHint("Long-press to scroll to bottom (live)")
+                .accessibilityAddTraits(.isButton)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.4)
+                        .onEnded { _ in onSendAction("scroll_bottom") }
+                )
                 Button { onRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13))

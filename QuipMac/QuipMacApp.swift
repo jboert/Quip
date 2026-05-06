@@ -1600,6 +1600,26 @@ struct QuipMacApp: App {
             runAfterDelay {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
+        // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
+        // sends the iTerm2 menu shortcut for the corresponding action.
+        // Scrollback state lives on the Mac side — the next screenshot
+        // capture will reflect the scrolled viewport, no extra plumbing.
+        case "scroll_page_up", "scroll_page_down", "scroll_top", "scroll_bottom":
+            guard termApp == .iterm2 else {
+                webSocketServer.broadcast(ErrorMessage(reason: "Scrollback only supported in iTerm2 windows"))
+                break
+            }
+            let dir: KeystrokeInjector.ScrollDirection = {
+                switch action {
+                case "scroll_page_up":   return .pageUp
+                case "scroll_page_down": return .pageDown
+                case "scroll_top":       return .top
+                default:                 return .bottom // scroll_bottom
+                }
+            }()
+            runAfterDelay {
+                keystrokeInjector.iterm2Scroll(dir, to: wid, iterm2SessionId: window.iterm2SessionId)
+            }
         case "press_n":
             runAfterDelay {
                 keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
