@@ -99,6 +99,14 @@ struct QuipApp: App {
     /// `appearancePreferred` computed `ColorScheme?` and applied via
     /// `.preferredColorScheme(...)` on the WindowGroup root view.
     @AppStorage("appearance.mode") private var appearanceModeRaw: String = "auto"
+    /// (wishlist §B16.) When true, incoming `frontmost_changed` from the
+    /// Mac auto-retargets `selectedWindowId` so image / text sends land in
+    /// whatever window the user is currently looking at on the Mac.
+    /// Manually tapping a window card pins (sets this to false); the user
+    /// re-enables follow-mode via the Auto pill in the picker row.
+    /// Default true — matches the user's expectation that "the phone
+    /// follows the Mac" without an explicit step.
+    @AppStorage("followFrontmost") private var followFrontmost = true
     private var appearancePreferred: ColorScheme? {
         switch appearanceModeRaw {
         case "light": return .light
@@ -390,6 +398,24 @@ struct QuipApp: App {
             DispatchQueue.main.async {
                 guard windows.contains(where: { $0.id == windowId }) else { return }
                 selectedWindowId = windowId
+            }
+        }
+
+        // (wishlist §B16.) Mac broadcasts its current frontmost ManagedWindow.id
+        // on every cross-app activation + every 400ms within-app poll. When the
+        // user has the Auto pref enabled AND the broadcast id is in our current
+        // window list, retarget. nil broadcasts (frontmost is something Quip
+        // doesn't track — Finder, Mail, etc.) are ignored so the user's last
+        // terminal stays selected until focus returns to a tracked window.
+        manager.onFrontmostChanged = { session, windowId in
+            guard session.backendID == manager.activeBackendID else { return }
+            DispatchQueue.main.async {
+                guard followFrontmost else { return }
+                guard let wid = windowId,
+                      windows.contains(where: { $0.id == wid }) else { return }
+                if selectedWindowId == wid { return }
+                selectedWindowId = wid
+                session.client.send(SelectWindowMessage(windowId: wid))
             }
         }
 
@@ -789,6 +815,10 @@ struct MainiOSView: View {
     @AppStorage("mainRow.prompts.autoEnabledOnce") private var promptsAutoEnabledOnce: Bool = false
     @AppStorage("mainRow.keyboard") private var mainRowKeyboard: Bool = true
     @AppStorage("mainRow.return") private var mainRowReturn: Bool = true
+    /// (wishlist §B16.) Mirrors the QuipApp-level pref so the Auto pill in
+    /// the window picker can read + toggle it. Stays in sync via @AppStorage's
+    /// shared UserDefaults backing — no manual fan-out needed.
+    @AppStorage("followFrontmost") private var followFrontmost: Bool = true
     @State private var showSettings = false
     /// Multi-backend picker sheet trigger.
     @State private var showBackendPicker = false
@@ -2499,6 +2529,13 @@ struct MainiOSView: View {
                                     withAnimation(.spring(duration: 0.2)) {
                                         selectedWindowId = window.id
                                     }
+                                    // (wishlist §B16.) Manual tap pins this window — turns
+                                    // off follow-Mac-frontmost so the next Mac focus change
+                                    // doesn't pull the rug out from under the user. They
+                                    // re-enable follow-mode via the Auto pill.
+                                    if followFrontmost {
+                                        followFrontmost = false
+                                    }
                                     // Tell Mac to focus this window
                                     client.send(SelectWindowMessage(windowId: window.id))
                                 },
@@ -2561,8 +2598,40 @@ struct MainiOSView: View {
                 }
                 .frame(width: mac.width, height: mac.height)
                 .offset(x: mac.minX, y: mac.minY)
+                // (wishlist §B16.) Auto-follow pill, top-right corner of
+                // the mac-screen rect. Tap toggles followFrontmost. Only
+                // shown once windows exist — the empty-state already has
+                // its own focal CTA and the pill would just be noise.
+                .overlay(alignment: .topTrailing) {
+                    if !windows.isEmpty {
+                        autoFollowPill
+                            .padding(6)
+                    }
+                }
             }
         }
+    }
+
+    /// Compact pill that toggles `followFrontmost`. Filled accent when on
+    /// (phone is following Mac focus); outlined when off (phone is pinned
+    /// to whatever the user last tapped). Icon-only per compact-UI rules.
+    private var autoFollowPill: some View {
+        Button {
+            followFrontmost.toggle()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } label: {
+            Image(systemName: followFrontmost ? "cursorarrow.rays" : "hand.point.up.left")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(followFrontmost ? .white : colors.textPrimary)
+                .frame(width: 22, height: 22)
+                .background(followFrontmost ? Color.accentColor : colors.surface.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(colors.surfaceBorder, lineWidth: 0.5)
+                )
+        }
+        .accessibilityLabel(followFrontmost ? "Following Mac frontmost window. Tap to pin." : "Pinned to selected window. Tap to follow Mac.")
     }
 
     /// Largest rect with the given aspect ratio (width/height) that fits inside `size`, centered.

@@ -50,6 +50,10 @@ final class BackendConnectionManager {
     var onOutputDelta: ((BackendSession, String, String, String, Bool) -> Void)?
     var onTTSAudio: ((BackendSession, String, String, String, Int, Bool, Data) -> Void)?
     var onSelectWindow: ((BackendSession, String) -> Void)?
+    /// Mac broadcasts its current frontmost ManagedWindow.id (or nil if
+    /// untracked). Host uses it for the "follow Mac frontmost" feature.
+    /// (wishlist §B16.)
+    var onFrontmostChanged: ((BackendSession, String?) -> Void)?
     var onProjectDirectories: ((BackendSession, [String]) -> Void)?
     var onITermWindowList: ((BackendSession, [ITermWindowInfo]) -> Void)?
     var onError: ((BackendSession, String) -> Void)?
@@ -729,6 +733,11 @@ final class BackendConnectionManager {
                 session.selectedWindowId = windowId
             }
             self.onSelectWindow?(session, windowId)
+        }
+
+        c.onFrontmostChanged = { [weak self, weak session] windowId in
+            guard let self, let session else { return }
+            self.onFrontmostChanged?(session, windowId)
         }
 
         c.onProjectDirectories = { [weak self, weak session] dirs in
