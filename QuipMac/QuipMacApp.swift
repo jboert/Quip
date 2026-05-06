@@ -772,6 +772,7 @@ struct QuipMacApp: App {
                     )
                     let inject: () -> Void
                     if cliKind == .codex && termApp == .iterm2 {
+                        NSLog("[Quip] send_text routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
                         inject = {
                             self.keystrokeInjector.pasteText(msg.text,
                                                              to: msg.windowId,
@@ -780,6 +781,7 @@ struct QuipMacApp: App {
                                                              iterm2SessionId: window.iterm2SessionId)
                         }
                     } else {
+                        NSLog("[Quip] send_text routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
                         inject = {
                             self.keystrokeInjector.sendText(msg.text,
                                                             to: msg.windowId,
