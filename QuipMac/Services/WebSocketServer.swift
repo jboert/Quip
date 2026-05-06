@@ -4,6 +4,7 @@
 
 import Foundation
 import Network
+import os
 import Observation
 
 @MainActor
@@ -25,13 +26,28 @@ final class WebSocketServer {
     /// it in yet. The server feeds events (connect/disconnect/auth), the
     /// Settings panel reads them.
     var connectionLog: ConnectionLog?
-    /// Read from the network queue during connection handshake, so it can't live
-    /// on the MainActor. It's a plain Bool — atomic reads/writes are fine.
+    /// Read from the network queue during connection handshake; written on
+    /// MainActor when the user toggles `requirePINForLocal` in Settings.
+    /// Bool reads/writes aren't actually atomic across all hardware, and a
+    /// half-applied flip during a handshake could let an unauthenticated
+    /// connection slip into the authenticated state (or vice versa).
+    /// Wrap in an unfair lock — both sides serialize through the same
+    /// critical section, the cost is ~10ns, and the race window closes.
+    /// (GH #21.)
     @ObservationIgnored
-    nonisolated(unsafe) var requireAuth: Bool = true
+    nonisolated private let requireAuthLock = OSAllocatedUnfairLock<Bool>(initialState: true)
+    nonisolated var requireAuth: Bool {
+        get { requireAuthLock.withLock { $0 } }
+        set { requireAuthLock.withLock { $0 = newValue } }
+    }
 
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
+    /// §B17 — connections that have already had their first failed-JSON-parse
+    /// dump emitted to kokoro.log. Membership-test gates the dump path so a
+    /// noisy connection produces ONE diagnostic line per session instead of
+    /// thousands. Cleared in `removeConnection`.
+    private var unknownFrameLogged: Set<ObjectIdentifier> = []
     private let networkQueue = DispatchQueue(label: "quip.websocket", qos: .userInitiated)
     /// Retry interval when the listener can't bind (e.g. port 8765 squatted by
     /// another process). Without this the server would give up silently and the
@@ -499,6 +515,10 @@ final class WebSocketServer {
         clients.removeAll(where: { $0.connection === connection })
         connectedClientCount = clients.count
         refreshConnectedClients()
+        // §B17 — drop the per-connection log-once flag so reconnects of the
+        // same logical client get a fresh diagnostic. Without this, a noisy
+        // connection's UUID would never re-emit even after a real reconnect.
+        unknownFrameLogged.remove(ObjectIdentifier(connection))
         // Force the NWConnection to tear down immediately. Without this the
         // socket's send buffer can sit on queued bytes (layout updates, TTS
         // chunks) until the kernel notices — which on a dead Wi-Fi link can
@@ -659,6 +679,22 @@ final class WebSocketServer {
                 DispatchQueue.main.async {
                     let messageType = MessageCoder.messageType(from: receivedData)
                     KokoroTTSDebug.log("WS received: type=\(messageType ?? "unknown") (\(receivedData.count) bytes)")
+
+                    // §B17 — when a frame fails JSON parse (messageType nil),
+                    // dump the raw bytes the FIRST time per connection so the
+                    // next session can identify what's leaking through. After
+                    // the first dump per connection, suppress further `type=
+                    // unknown` log entries so the log doesn't flood. Cleared
+                    // when the connection drops via `removeConnection`.
+                    if messageType == nil {
+                        let cid = ObjectIdentifier(connection)
+                        if !self.unknownFrameLogged.contains(cid) {
+                            self.unknownFrameLogged.insert(cid)
+                            let utf8 = String(data: receivedData, encoding: .utf8) ?? "<non-utf8>"
+                            let hex = receivedData.map { String(format: "%02x", $0) }.joined(separator: " ")
+                            KokoroTTSDebug.log("§B17 first-unknown bytes utf8=\"\(utf8)\" hex=[\(hex)]")
+                        }
+                    }
 
                     // Auth messages bypass rate limiting and auth checks
                     if messageType == "auth" {

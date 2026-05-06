@@ -300,9 +300,12 @@ final class PushNotificationService {
                                attentionCount: Int, selectedWindowId: String?) {
         guard !devices.isEmpty else { return }
 
-        let keyId = UserDefaults.standard.string(forKey: "apnsKeyId") ?? ""
-        let teamId = UserDefaults.standard.string(forKey: "apnsTeamId") ?? ""
-        let bundleId = UserDefaults.standard.string(forKey: "apnsBundleId") ?? "com.quip.QuipiOS"
+        // GH #22 — APNs metadata moved from UserDefaults to Keychain via
+        // APNsMetadataStore. The accessor handles the one-shot migration on
+        // first read so existing installs don't need to re-enter values.
+        let keyId = APNsMetadataStore.keyId
+        let teamId = APNsMetadataStore.teamId
+        let bundleId = APNsMetadataStore.bundleId
         guard !keyId.isEmpty, !teamId.isEmpty, !bundleId.isEmpty else {
             quipPushLog("waiting_for_input skipped — APNs not configured in Settings → Notifications")
             return
