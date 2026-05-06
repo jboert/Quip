@@ -116,6 +116,27 @@ struct StateChangeMessage: Codable, Sendable {
     }
 }
 
+/// Mac → iPhone. Fired when the Mac's frontmost tracked window changes
+/// (NSWorkspace activation + AX focused-window observers, throttled). The
+/// phone uses this to follow Mac focus when the user has the "Auto" pref
+/// enabled — switching Mac focus from iTerm to Claude (or between two
+/// iTerm windows) auto-retargets `selectedWindowId` so the next image /
+/// text send lands in the window the user is actually looking at.
+///
+/// `windowId` is the matching `ManagedWindow.id` if Quip is currently
+/// tracking the frontmost CG window, or nil when the frontmost app is
+/// something Quip doesn't track (Finder, Mail, etc.) — in which case the
+/// phone leaves `selectedWindowId` alone rather than blanking it.
+struct FrontmostChangedMessage: Codable, Sendable {
+    let type: String
+    let windowId: String?
+
+    init(windowId: String?) {
+        self.type = "frontmost_changed"
+        self.windowId = windowId
+    }
+}
+
 // MARK: - iPhone → Mac Messages
 
 struct SelectWindowMessage: Codable, Sendable {
@@ -712,6 +733,10 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// slot list via UUID. Persisted separately so re-ordering doesn't
     /// rewrite definitions.
     var customButtonsJSON: String?
+    /// (wishlist §B16.) Whether the phone auto-retargets `selectedWindowId`
+    /// to follow the Mac's frontmost window. Optional so older Macs decode
+    /// cleanly as nil → phone keeps whatever local default it had.
+    var followFrontmost: Bool?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -730,7 +755,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         liveActivitiesEnabled: Bool? = nil,
         ttsEnabled: Bool? = nil,
         quickSlotsJSON: String? = nil,
-        customButtonsJSON: String? = nil
+        customButtonsJSON: String? = nil,
+        followFrontmost: Bool? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -749,6 +775,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.ttsEnabled = ttsEnabled
         self.quickSlotsJSON = quickSlotsJSON
         self.customButtonsJSON = customButtonsJSON
+        self.followFrontmost = followFrontmost
     }
 }
 

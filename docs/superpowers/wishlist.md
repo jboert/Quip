@@ -720,6 +720,34 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 
 ---
 
+### B16. Phone follows Mac frontmost window (image+text routing)
+
+**Status:** Wishlist
+**Surfaced:** 2026-05-05 — user in image mode sent photo+text; iTerm running codex (NuggetExpo) was Mac frontmost, but payload landed in Claude Desktop window.
+
+**Root cause (two layers):**
+1. **Phone is sticky.** `selectedWindowId` (`QuipiOS/QuipApp.swift:50`) is manual `@State`. User must tap a window card to retarget. Phone never auto-tracks Mac frontmost; Mac never broadcasts its frontmost. layout_update carries the window list but no "currently focused" marker.
+2. **Claude branch is app-level, not window-level.** `KeystrokeInjector.swift:71` does `tell application "Claude" to activate` — pastes into frontmost-of-Claude regardless of which Claude window the phone selected. iTerm branch uses sessionId so it's window-specific; Claude branch isn't.
+
+**Likely shape (path #1 — recommended):**
+- **Mac:** add `frontmost_changed` WS message. Source = `NSWorkspace.shared.didActivateApplicationNotification` + AX focused-window observer. Payload = `{type: "frontmost_changed", windowId: <CGWindowID>}`. Throttle to coalesce rapid switches (~150ms).
+- **iOS:** parse `frontmost_changed` in `WebSocketClient.swift`; expose `onFrontmostChanged` callback. Wire bridge in `BackendConnectionManager.wire()` (per memory note about multi-backend bridge).
+- **iOS state:** add `followFrontmost: Bool = true` @AppStorage pref. When true, incoming `frontmost_changed` updates `selectedWindowId`. Manual tap on a window card pins (sets followFrontmost=false until next manual "Auto" toggle, OR auto-resumes after N seconds — pick one).
+- **UI:** small "Auto" pill / chip in window picker row. On = green dot or filled, Off = outline. Tap to toggle.
+- **Claude branch fix (Layer 2):** before AppleScript, raise the specific Claude window via AX (`AXUIElementSetAttribute(window, kAXMainAttribute)` + `kAXFocusedAttribute`) using cgWindowNumber the phone sent. Then `tell application "Claude" to activate` + Cmd+V. Falls back to current behavior if AX raise fails.
+
+**Acceptance:**
+- iTerm and Claude windows both open. Mac frontmost = iTerm. Phone in image mode, send photo+text. Lands in iTerm. ✓
+- Switch Mac focus to Claude. Phone still on Auto. Send. Lands in Claude. ✓
+- Tap iTerm card on phone (pin). Switch Mac focus to Claude. Send. Lands in iTerm (pinned wins). ✓
+- Tap Auto pill. Resumes follow-frontmost. ✓
+
+**Why path #1 over #3 (Layer 2 only):** path #3 fixes Claude multi-window but still requires phone tap to retarget app. User's complaint is the tap requirement.
+
+**Risk:** AX-based per-window raise needs Accessibility permission (already required by Quip). If phone-side `selectedWindowId` thrashes on every Mac focus change, image-mode send mid-encode could race — keep encode-time windowId snapshotted (already does via `sendPendingImageIfNeeded(windowId:)` capture).
+
+---
+
 ## Tabled (parked, revisit on demand)
 
 - §52 iPad layout — tabled 2026-05-05 by user. No iPad to test on; not a current priority.

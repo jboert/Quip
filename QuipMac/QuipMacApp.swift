@@ -92,6 +92,13 @@ struct QuipMacApp: App {
     /// retry-on-reconnect sends the same `messageId: UUID`; first
     /// arrival processes, second is silently dropped.
     private let messageDedupe = MessageDedupeTable()
+    /// Last frontmost windowId we broadcast so the 400ms poller can skip
+    /// no-op sends. `nil` is also a valid value (no tracked window
+    /// frontmost), so a separate "have we ever sent" flag is needed —
+    /// otherwise the first broadcast at launch is suppressed when the
+    /// frontmost happens to be untracked. (wishlist §B16.)
+    @State private var lastBroadcastFrontmostWindowId: String? = nil
+    @State private var hasBroadcastFrontmostOnce: Bool = false
 
     var body: some Scene {
         WindowGroup {
@@ -193,6 +200,12 @@ struct QuipMacApp: App {
                 self.webSocketServer.broadcast(
                     PromptLibraryMessage(prompts: entries)
                 )
+                // (wishlist §B16.) Send the current frontmost so a
+                // freshly-authenticated phone with "Auto" enabled
+                // doesn't wait up to 400ms for the timer to catch up.
+                // Force re-send by clearing the dedupe sentinel.
+                self.hasBroadcastFrontmostOnce = false
+                self.broadcastFrontmostIfChanged()
             }
         }
 
@@ -231,8 +244,30 @@ struct QuipMacApp: App {
                 if networkMode == .tailscale {
                     tailscale.refresh()
                 }
+                // (wishlist §B16.) Frontmost-app change → broadcast the
+                // matching ManagedWindow.id so phones with the "Auto"
+                // pref enabled retarget without a manual tap. Within-app
+                // window switches (e.g. iTerm A → iTerm B) don't fire
+                // this notification — the 400ms timer below covers those.
+                self.broadcastFrontmostIfChanged()
             }
         }
+
+        // (wishlist §B16.) Within-app window-switch poller. NSWorkspace's
+        // didActivateApplicationNotification only fires on cross-app
+        // changes; cycling between two iTerm windows or two Claude
+        // Desktop windows would otherwise leave the phone targeting the
+        // last-broadcast window. 400ms is fast enough to feel
+        // instantaneous and the diff check inside
+        // `broadcastFrontmostIfChanged` keeps the wire silent during
+        // steady state. .common mode so it keeps firing while a menu /
+        // popover (MenuBarExtra) is being tracked.
+        let frontmostTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+            DispatchQueue.main.async {
+                self.broadcastFrontmostIfChanged()
+            }
+        }
+        RunLoop.main.add(frontmostTimer, forMode: .common)
 
         Task { await setupWhisper() }
 
@@ -1803,6 +1838,62 @@ struct QuipMacApp: App {
         case TerminalApp.claudeDesktop.bundleIdentifier: return .claudeDesktop
         default: return .terminal
         }
+    }
+
+    /// Resolve the OS's currently-focused window to a ManagedWindow.id, or
+    /// nil when the frontmost app is untracked or the AX query fails.
+    /// Matches by (pid, nearest origin) — same pattern WindowManager uses
+    /// for arrange/focus AX-window lookup.
+    ///
+    /// Returns nil when frontmost is e.g. Finder/Mail/Safari — the phone
+    /// then leaves `selectedWindowId` alone instead of blanking it, so the
+    /// user's last terminal stays the target until focus returns to a
+    /// tracked window. (wishlist §B16.)
+    private func currentFrontmostManagedWindowId() -> String? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = app.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowRef: CFTypeRef?
+        let attrResult = AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedWindowAttribute as CFString, &windowRef
+        )
+        guard attrResult == .success, let raw = windowRef else { return nil }
+        let axWindow = raw as! AXUIElement
+        var posRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
+              let posValue = posRef else { return nil }
+        var axPos = CGPoint.zero
+        AXValueGetValue(posValue as! AXValue, .cgPoint, &axPos)
+        let candidates = windowManager.windows.filter { $0.pid == pid }
+        guard !candidates.isEmpty else { return nil }
+        // 50pt origin tolerance — CG and AX coords are both top-left, so
+        // typical drift is sub-pixel. A larger gap means we matched the
+        // wrong window (e.g. position-tying close on overlapping windows
+        // would still pick *a* candidate, but past 50pt that's a guess and
+        // we'd rather send nil than mis-route).
+        var best: (window: ManagedWindow, distSq: CGFloat)? = nil
+        for w in candidates {
+            let dx = w.bounds.origin.x - axPos.x
+            let dy = w.bounds.origin.y - axPos.y
+            let d = dx * dx + dy * dy
+            if best == nil || d < best!.distSq {
+                best = (w, d)
+            }
+        }
+        guard let pick = best, pick.distSq <= 2500 else { return nil }
+        return pick.window.id
+    }
+
+    /// Compute the current frontmost ManagedWindow.id and broadcast a
+    /// `frontmost_changed` frame iff it differs from the last value we
+    /// sent. Cheap to call on a tight cadence — the AX query is the only
+    /// real cost. (wishlist §B16.)
+    private func broadcastFrontmostIfChanged() {
+        let current = currentFrontmostManagedWindowId()
+        if hasBroadcastFrontmostOnce && current == lastBroadcastFrontmostWindowId { return }
+        lastBroadcastFrontmostWindowId = current
+        hasBroadcastFrontmostOnce = true
+        webSocketServer.broadcast(FrontmostChangedMessage(windowId: current))
     }
 
     /// Find the 1-based window index in the terminal app by matching
