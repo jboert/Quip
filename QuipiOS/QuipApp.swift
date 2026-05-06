@@ -1934,7 +1934,29 @@ struct MainiOSView: View {
 
         return VStack(spacing: isPortrait ? 8 : 4) {
             // Pending image thumbnail — only takes space when an image is attached.
-            PendingImagePreviewStrip(state: pendingImage)
+            // §L — host wires the recovery affordance so the user has an
+            // actionable next step when the watchdog trips. Each
+            // category routes somewhere useful: timeout → reset socket
+            // (forces reconnect via existing client.disconnect/connect
+            // dance); window-closed → re-open the picker; data-invalid →
+            // clear the pending image so the user can try another;
+            // disk-write → just clear so they can retry. The host
+            // controls these so the strip stays a dumb renderer.
+            PendingImagePreviewStrip(state: pendingImage, onRecoveryAction: { category in
+                switch category {
+                case .timeout:
+                    if let url = client.serverURL {
+                        client.disconnect()
+                        client.connect(to: url)
+                    }
+                    pendingImage.clear()
+                case .unknownWindow:
+                    pendingImage.clear()
+                    showBackendPicker = true
+                case .invalidData, .macDiskWrite, .other:
+                    pendingImage.clear()
+                }
+            })
 
             // GH H: PTT health banner — single-line capsule that surfaces
             // path-degraded states near the mic button instead of leaving

@@ -15,6 +15,7 @@
 		0586F04BFC108610CED09909 /* PTTBannerClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD332B740FB015E64C5007C5 /* PTTBannerClassifierTests.swift */; };
 		0AA0F2FFEDD25846D8E8E6A0 /* AudioRingBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30CED6C2881B9B0070767205 /* AudioRingBuffer.swift */; };
 		0DB71EDB9501F21F1248DF62 /* QuipMacPermsActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46181BEC707D4C04671D336E /* QuipMacPermsActivityWidget.swift */; };
+		18A4E909F7DB2D6235FB747A /* ImageUploadFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0C4B009323C19ADC62F972 /* ImageUploadFailureTests.swift */; };
 		192A0DA56B5881A451A18799 /* RecognizerRolloverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0C4B6E9EA1F79748808978 /* RecognizerRolloverTests.swift */; };
 		1FED4AB0761613E80C3FAC9D /* SpeechServicePathSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47C70308C62E57B9CBBEFF9E /* SpeechServicePathSelectionTests.swift */; };
 		20FE94C556B5D03097FB0030 /* PreferencesSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D94647DAF2E9DB9470CB5FF5 /* PreferencesSyncService.swift */; };
@@ -152,6 +153,7 @@
 		44DB6CA6BFA3AC43DFF6F885 /* BackendSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendSession.swift; sourceTree = "<group>"; };
 		46181BEC707D4C04671D336E /* QuipMacPermsActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacPermsActivityWidget.swift; sourceTree = "<group>"; };
 		47C70308C62E57B9CBBEFF9E /* SpeechServicePathSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServicePathSelectionTests.swift; sourceTree = "<group>"; };
+		4A0C4B009323C19ADC62F972 /* ImageUploadFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageUploadFailureTests.swift; sourceTree = "<group>"; };
 		4A833238659B2E7E8D205F45 /* WhisperAudioSenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSenderTests.swift; sourceTree = "<group>"; };
 		4B7A2E5808A455F967117889 /* PCMChunkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMChunkerTests.swift; sourceTree = "<group>"; };
 		4E556291C05B9A0CF7C50AA5 /* WhisperAudioSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSender.swift; sourceTree = "<group>"; };
@@ -283,6 +285,7 @@
 				0492B1EE50BF52FEDD6F440F /* BackendPickerStatusTests.swift */,
 				B8444F84725ACF68F985C743 /* ClipTextTests.swift */,
 				F37E465512A160C3F0FE0310 /* ImageRecompressorTests.swift */,
+				4A0C4B009323C19ADC62F972 /* ImageUploadFailureTests.swift */,
 				AD67F0481CA1F97EEB2F5D7C /* InlineTerminalContentBranchTests.swift */,
 				D6D5159A24459D33F4AE547B /* LinkifiedTerminalContentTests.swift */,
 				E4292A437D9ACE85DBAE881F /* NumberedPromptDetectorTests.swift */,
@@ -562,6 +565,7 @@
 				524831EBD9DC1A1C1BE61A9C /* BackendPickerStatusTests.swift in Sources */,
 				F3517C7EF645E2CA6F048E18 /* ClipTextTests.swift in Sources */,
 				2E6A08D65DF1E6DCC0BB7E79 /* ImageRecompressorTests.swift in Sources */,
+				18A4E909F7DB2D6235FB747A /* ImageUploadFailureTests.swift in Sources */,
 				2F94D38C500B41994A45596A /* ImageUploadMessageTests.swift in Sources */,
 				413005C731BCDCED5438E47F /* InlineTerminalContentBranchTests.swift in Sources */,
 				261C1C66A5F75E185F591DD1 /* KeystrokeFocusDelayTests.swift in Sources */,
