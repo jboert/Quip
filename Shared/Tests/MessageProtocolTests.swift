@@ -878,4 +878,38 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(decoded.type, "heartbeat_ack")
         XCTAssertEqual(decoded.seq, 99)
     }
+
+    // MARK: - QA Mode
+
+    func testSetQAPairRoundTrip() {
+        let msg = SetQAPairMessage(targetId: "com.apple.iphonesimulator.42",
+                                   terminalId: "com.googlecode.iterm2.117")
+        let data = try! JSONEncoder().encode(msg)
+        let decoded = try! JSONDecoder().decode(SetQAPairMessage.self, from: data)
+        XCTAssertEqual(decoded.type, "set_qa_pair")
+        XCTAssertEqual(decoded.targetId, "com.apple.iphonesimulator.42")
+        XCTAssertEqual(decoded.terminalId, "com.googlecode.iterm2.117")
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"target_id\""), "Wire key must be snake_case: \(json)")
+        XCTAssertTrue(json.contains("\"terminal_id\""), "Wire key must be snake_case: \(json)")
+    }
+
+    func testClearQAPairRoundTrip() {
+        let msg = ClearQAPairMessage()
+        let data = try! JSONEncoder().encode(msg)
+        let decoded = try! JSONDecoder().decode(ClearQAPairMessage.self, from: data)
+        XCTAssertEqual(decoded.type, "clear_qa_pair")
+    }
+
+    func testQAPairLostRoundTrip() {
+        let msg = QAPairLostMessage(missingId: "com.apple.iphonesimulator.42",
+                                    reason: "window_closed")
+        let data = try! JSONEncoder().encode(msg)
+        let decoded = try! JSONDecoder().decode(QAPairLostMessage.self, from: data)
+        XCTAssertEqual(decoded.type, "qa_pair_lost")
+        XCTAssertEqual(decoded.missingId, "com.apple.iphonesimulator.42")
+        XCTAssertEqual(decoded.reason, "window_closed")
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"missing_id\""), "Wire key must be snake_case: \(json)")
+    }
 }

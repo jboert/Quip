@@ -923,6 +923,67 @@ struct PreferenceRestoreMessage: Codable, Sendable {
     }
 }
 
+// MARK: - QA Mode
+
+/// iPhone → Mac. Set the QA pair for THIS connection. Mac will filter
+/// its `LayoutUpdate` broadcast to ONLY these two windows for this
+/// client. Pair is per-connection — one phone in QA mode does not affect
+/// other phones connected to the same Mac.
+struct SetQAPairMessage: Codable, Sendable {
+    let type: String
+    let targetId: String
+    let terminalId: String
+
+    init(targetId: String, terminalId: String) {
+        self.type = "set_qa_pair"
+        self.targetId = targetId
+        self.terminalId = terminalId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case targetId = "target_id"
+        case terminalId = "terminal_id"
+    }
+}
+
+/// iPhone → Mac. Drops the QA pair for this connection. Subsequent
+/// `LayoutUpdate` broadcasts return to the unfiltered (mirrorDesktop +
+/// isEnabled) rules.
+struct ClearQAPairMessage: Codable, Sendable {
+    let type: String
+
+    init() {
+        self.type = "clear_qa_pair"
+    }
+}
+
+/// Mac → iPhone. Either paired window vanished from the snapshot, or the
+/// pair the phone replayed on reconnect doesn't match a current window.
+/// Phone exits QA mode and shows a toast.
+///
+/// `reason` is a free-form string for forward compat:
+/// - `"window_closed"` — window left the snapshot
+/// - `"window_offscreen"` — `isOnVisibleScreen == false` for >5s
+/// - `"connection_reset"` — Mac doesn't recognize the IDs (post-restart replay)
+struct QAPairLostMessage: Codable, Sendable {
+    let type: String
+    let missingId: String
+    let reason: String
+
+    init(missingId: String, reason: String) {
+        self.type = "qa_pair_lost"
+        self.missingId = missingId
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case missingId = "missing_id"
+        case reason
+    }
+}
+
 // MARK: - Authentication Messages
 
 struct AuthMessage: Codable, Sendable {
