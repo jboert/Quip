@@ -46,6 +46,20 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             || bundleId == TerminalApp.iterm2.bundleIdentifier
     }
 
+    /// Whether this window is eligible to be the "target" half of a QA mode pair.
+    /// v1: Simulator only. v2: extend to browsers pointed at `localhost:<port>`.
+    var isTarget: Bool {
+        bundleId == "com.apple.iphonesimulator"
+    }
+
+    /// Wire-format target classification. Surfaced on `WindowState.targetKind`
+    /// so the phone's QA mode picker can filter without re-deriving from
+    /// bundleId. v1: `"simulator"` or `nil`.
+    var targetKind: String? {
+        if bundleId == "com.apple.iphonesimulator" { return "simulator" }
+        return nil
+    }
+
     /// Convert to shared WindowState for protocol messages.
     /// Frame is normalized to 0-1 relative to the given screen bounds.
     func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false, claudeMode: String? = nil, cliKind: CLIKind? = nil) -> WindowState {
@@ -76,7 +90,8 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             color: assignedColor,
             isThinking: isThinking,
             claudeMode: claudeMode,
-            cliKind: cliKind
+            cliKind: cliKind,
+            targetKind: targetKind
         )
     }
 }
