@@ -378,20 +378,23 @@ Follow-up audit (`8fdbd66`): all 7 wraps still cover post-`b46b45d`; no new side
 
 ### 30. Reliability & UX hardening pass (5-thread backlog)
 
-**Status:** Wishlist (brainstorm paused 2026-04-18)
+**Status:** Half-eaten 2026-05-06 (continuation 7). Threads #1, #2, #4 shipped; #3 + #5 still wishlist.
 
-**5 threads identified:**
-1. **Diagnostic tooling / observability** — extend the loud-drop logging pattern (commit `8517835` push-service prototype) across Mac/iOS/Shared services.
-2. **Connection truth / status pill honesty** — surface *why* a disconnect happened (pong timeout / explicit close / network loss / auth failure), not just binary.
-3. **State invariants across app lifecycle** — audit `willResignActive` / `didEnterBackground` / `willEnterForeground` / `didBecomeActive` on iOS + Mac equivalents. Known offenders: `isPTTActive`, Live Activity handles, `PreferencesSyncService.suppressUntil`, force-quit-after-install.
-4. **Error-handling gaps** — repo-wide audit of `try?`, silent `if let / else { return }`, empty `catch {}`, swallowing `guard`. Convert real ones to loud logs or typed errors.
-5. **Notification triage in-app** — surface recent push attempts + skip reasons in Mac Settings → Notifications (instead of `tail push.log`).
+**5 threads:**
+1. **Diagnostic tooling / observability** — extend the loud-drop logging pattern. ✅ **Shipped 2026-05-06** (`5b2a6a8`): WatchSyncService + PromptLibrary + CloudflareTunnel + PushNotificationService + MessageDedupeTable now log enough context to spot the cause.
+2. **Connection truth / status pill honesty** — surface *why* a disconnect happened. ✅ **Shipped 2026-05-06** (`9f382ef`): `DisconnectReason` enum (userInitiated / timedOut / stalled / authFailed / networkError / serverClosed / unknown). `lastDisconnectReason` set BEFORE clearing isConnected. `TopBarStatus.classify(reason:)` overload prefers structured signal over keyword-matching `lastError`. DiagnosticsSheet renders the typed tag.
+3. **State invariants across app lifecycle** — audit `willResignActive` / `didEnterBackground` / `willEnterForeground` / `didBecomeActive` on iOS + Mac equivalents. Known offenders: `isPTTActive`, Live Activity handles, `PreferencesSyncService.suppressUntil`, force-quit-after-install. **Untouched.**
+4. **Error-handling gaps** — `try?`, silent `if let { } else { return }`, empty `catch {}`, swallowing `guard`. ✅ **Shipped 2026-05-06** (`cc3bddc` + `6aca7d8`):
+   - `WebSocketClient.decodeMessage` helper replaces 22 silent `try? decoder.decode(...)` sites in `handleMessage`. Failures now log `[WebSocketClient] decode FAILED type=<wire-tag> kind=<Swift.Type> bytes=<N> err=<...>`. Helper is `nonisolated static` + log-injected; 6 new tests assert the exact format.
+   - Encode side: Mac `WebSocketServer.broadcast<T>` + Mac `WebSocketServer.send<T>` + iOS `WebSocketClient.send<T>` log `kind=<Swift.Type>` so a per-type encode regression is identifiable without backpressure-log spelunking.
+   - **Remaining audit hits not yet converted:** `PinManifest` decode from disk in `WebSocketClient` (config layer, different blast radius). Most other `try?` in the repo are FileManager / Task.sleep / defer-close — legit silent. If a new swallow site shows up in production, mirror the helper pattern.
+5. **Notification triage in-app** — surface recent push attempts + skip reasons in Mac Settings → Notifications (instead of `tail push.log`). **Untouched.**
 
-**Decisions made (paused session):** Shape A (strategy spec covering all 5 + sequencing). Top pain: silent correctness failures. Appetite: weekend.
+**Tests added:** `DecodeMessageHelperTests` (6) — success path, malformed JSON, missing-key drift, type mismatch, empty payload, opaque-tag passthrough.
 
-**When picking up:** resume from Option A (#1+#4 together, deep) unless constraints shifted.
+**When picking up:** §30 is now a meta tracker. If reliability work resumes, threads #3 (lifecycle) and #5 (in-app triage view) are the remaining open bets.
 
-**Related:** `8517835` (push-service loud-drop seed), `843fb68` (volume KVO guard), `3431046` (keepalive-pong fix).
+**Related:** `8517835` (push-service loud-drop seed), `843fb68` (volume KVO guard), `3431046` (keepalive-pong fix), `5b2a6a8` (#1 ship), `9f382ef` (#2 ship), `cc3bddc` + `6aca7d8` (#4 ship).
 
 ---
 
