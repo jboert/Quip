@@ -47,17 +47,22 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
     }
 
     /// Whether this window is eligible to be the "target" half of a QA mode pair.
-    /// v1: Simulator only. v2: extend to browsers pointed at `localhost:<port>`.
-    var isTarget: Bool {
-        bundleId == "com.apple.iphonesimulator"
-    }
+    /// Derived from `targetKind` so there's one source of truth for the
+    /// classification — `targetKind` defines the value space, `isTarget`
+    /// is just the "any kind" boolean.
+    var isTarget: Bool { targetKind != nil }
 
     /// Wire-format target classification. Surfaced on `WindowState.targetKind`
     /// so the phone's QA mode picker can filter without re-deriving from
-    /// bundleId. v1: `"simulator"` or `nil`.
+    /// bundleId. Values must stay in sync with the phone-side picker's filter
+    /// (see `QAPairPickerSheet`). v1: `"simulator"` or `nil`.
+    /// v2: extend the switch with `"browser_localhost"` for browsers pointed
+    /// at `localhost:<port>` (requires URL extraction beyond bundleId).
     var targetKind: String? {
-        if bundleId == "com.apple.iphonesimulator" { return "simulator" }
-        return nil
+        switch bundleId {
+        case "com.apple.iphonesimulator": return "simulator"
+        default: return nil
+        }
     }
 
     /// Convert to shared WindowState for protocol messages.
