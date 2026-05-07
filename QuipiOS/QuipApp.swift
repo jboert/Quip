@@ -439,6 +439,24 @@ struct QuipApp: App {
             }
         }
 
+        // Task 16 — QA pair invalidated by Mac (the paired window closed
+        // or otherwise vanished). `BackendConnectionManager.wire()` has
+        // already nilled `session.qaPair`, so the conditional in
+        // MainiOSView's body falls back to the regular grid; this hook
+        // just surfaces a user-facing toast so the user knows why the QA
+        // layout disappeared.
+        manager.onQAPairLost = { session, missingId, _ in
+            guard session.backendID == manager.activeBackendID else { return }
+            DispatchQueue.main.async {
+                let appName = windows.first(where: { $0.id == missingId })?.app ?? "Window"
+                let reason = "\(appName) closed. Exited QA mode."
+                errorToast = reason
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if errorToast == reason { errorToast = nil }
+                }
+            }
+        }
+
         manager.onStateChange = { session, windowId, newState in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
@@ -1119,39 +1137,74 @@ struct MainiOSView: View {
     @State private var showingLibraryPicker = false
     @State private var showingCameraPicker = false
 
+    // QA mode picker — set when user long-presses a window and taps
+    // "Pair for QA" in the context menu. `qaPickerSourceWindow` holds the
+    // long-pressed window's id (one half); the sheet picks the OTHER half.
+    @State private var showQAPicker: Bool = false
+    @State private var qaPickerSourceWindow: String? = nil
+
     var body: some View {
         ZStack {
             colors.background
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                if !client.isConnected && !client.isConnecting {
-                    connectBar
-                        .padding(.horizontal, 6)
-                        .padding(.top, 4)
-                } else if client.isConnected && !client.isAuthenticated {
-                    authenticatingBar
-                        .padding(.horizontal, 6)
-                        .padding(.top, 2)
+                // QA mode replaces the status bar + grid + terminal +
+                // controls with a side-by-side pair view. The bottomBar
+                // (settings / connection menu) stays visible so the user
+                // always has an escape hatch even if the header chip's
+                // exit button is somehow obscured. (Task 16.)
+                if let pair = manager.active.qaPair,
+                   let target = windows.first(where: { $0.id == pair.targetId }),
+                   let terminal = windows.first(where: { $0.id == pair.terminalId }) {
+                    QAPairLayoutView(
+                        target: target,
+                        terminal: terminal,
+                        selectedWindowId: $selectedWindowId,
+                        backendId: manager.activeBackendID,
+                        onSendText: { text in
+                            client.send(SendTextMessage(windowId: selectedWindowId ?? "",
+                                                        text: text,
+                                                        pressReturn: true))
+                        },
+                        onExit: {
+                            manager.active.updateQAPair(nil)
+                            client.clearQAPair()
+                        },
+                        onRePair: {
+                            qaPickerSourceWindow = pair.targetId
+                            showQAPicker = true
+                        }
+                    )
                 } else {
-                    connectedBar
-                        .padding(.horizontal, 6)
-                        .padding(.top, 2)
-                }
-
-                if isPortrait {
-                    portraitContentSection
-                } else {
-                    landscapeContentSection
-                    if showTextInput {
-                        textInputBar
+                    if !client.isConnected && !client.isConnecting {
+                        connectBar
+                            .padding(.horizontal, 6)
+                            .padding(.top, 4)
+                    } else if client.isConnected && !client.isAuthenticated {
+                        authenticatingBar
+                            .padding(.horizontal, 6)
+                            .padding(.top, 2)
+                    } else {
+                        connectedBar
+                            .padding(.horizontal, 6)
+                            .padding(.top, 2)
                     }
-                }
 
-                if client.isAuthenticated && !windows.isEmpty {
-                    portraitControls
-                        .padding(.horizontal, 8)
-                        .padding(.top, 4)
+                    if isPortrait {
+                        portraitContentSection
+                    } else {
+                        landscapeContentSection
+                        if showTextInput {
+                            textInputBar
+                        }
+                    }
+
+                    if client.isAuthenticated && !windows.isEmpty {
+                        portraitControls
+                            .padding(.horizontal, 8)
+                            .padding(.top, 4)
+                    }
                 }
 
                 bottomBar
@@ -1444,6 +1497,39 @@ struct MainiOSView: View {
                     client.send(RequestDiagnosticsMessage())
                 }
             )
+        }
+        // Task 16 — QA-mode pair picker. Triggered by long-press → "Pair
+        // for QA" in WindowRectangle's context menu, OR by the re-pair
+        // button in the QAPairLayoutView header chip. The long-pressed
+        // window IS one half; the sheet picks the OTHER half. Mode is
+        // derived from the source window's classification — long-pressed
+        // a Simulator → pick a terminal; long-pressed a terminal → pick
+        // a Simulator.
+        .sheet(isPresented: $showQAPicker) {
+            if let sourceId = qaPickerSourceWindow,
+               let source = windows.first(where: { $0.id == sourceId }) {
+                let mode: QAPairPickerSheet.Mode = source.isTarget ? .terminal : .target
+                QAPairPickerSheet(
+                    mode: mode,
+                    windows: windows,
+                    onSelect: { other in
+                        let pair: QAPair
+                        if source.isTarget {
+                            pair = QAPair(targetId: source.id, terminalId: other.id)
+                        } else {
+                            pair = QAPair(targetId: other.id, terminalId: source.id)
+                        }
+                        manager.active.updateQAPair(pair)
+                        client.setQAPair(targetId: pair.targetId, terminalId: pair.terminalId)
+                        showQAPicker = false
+                        qaPickerSourceWindow = nil
+                    },
+                    onCancel: {
+                        showQAPicker = false
+                        qaPickerSourceWindow = nil
+                    }
+                )
+            }
         }
         .background(
             // §26 — invisible shake detector mounted as a 0×0 background
@@ -3586,7 +3672,10 @@ struct MainiOSView: View {
         case .viewOutput: return // handled above
         case .duplicate: return  // handled above
         case .closeWindow: return // handled above
-        case .pairForQA: return // Wired in Task 16 — picker entry point.
+        case .pairForQA:
+            qaPickerSourceWindow = windowId
+            showQAPicker = true
+            return
         }
         client.send(QuickActionMessage(windowId: windowId, action: str))
     }
