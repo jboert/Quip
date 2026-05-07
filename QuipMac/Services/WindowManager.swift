@@ -501,19 +501,27 @@ final class WindowManager {
         applyIterm2SessionIds(sessions)
     }
 
-    /// Filter the window list for LayoutUpdate broadcasts.
+    /// Filter the window list for a single client's `LayoutUpdate` broadcast.
     ///
-    /// Mirror OFF (default): only windows the user has explicitly enabled —
-    /// Quip is an allowlist.
+    /// `qaPair` (if set) wins outright: only the two paired windows are
+    /// returned, regardless of `mirrorDesktop` / `isEnabled` / visibility.
+    /// If one half of the pair is missing from `all`, the present half still
+    /// rides out — the snapshot validator emits a separate `qa_pair_lost`
+    /// to drop the pair.
     ///
-    /// Mirror ON: every terminal currently drawn on a connected screen goes
-    /// out, so the phone shows the *visible* desktop at a glance. Off-screen
-    /// terminals (inactive Space, disconnected monitor) are filtered out —
-    /// CG's `.optionOnScreenOnly` isn't reliable here, so we re-check in
-    /// `applyWindowSnapshot`. Enabled windows always ride along regardless
-    /// of visibility, so a browser the user turned on, or a terminal that
-    /// later slipped off-screen, doesn't disappear from the phone.
-    nonisolated static func windowsForBroadcast(_ all: [ManagedWindow], mirrorDesktop: Bool) -> [ManagedWindow] {
+    /// `mirrorDesktop=true` (no pair): every visible terminal + every
+    /// enabled non-terminal.
+    ///
+    /// `mirrorDesktop=false` (no pair, default): only enabled windows.
+    nonisolated static func windowsForBroadcast(
+        _ all: [ManagedWindow],
+        mirrorDesktop: Bool,
+        qaPair: (String, String)? = nil
+    ) -> [ManagedWindow] {
+        if let pair = qaPair {
+            let want: Set<String> = [pair.0, pair.1]
+            return all.filter { want.contains($0.id) }
+        }
         if mirrorDesktop {
             return all.filter { ($0.isTerminal && $0.isOnVisibleScreen) || $0.isEnabled }
         }
