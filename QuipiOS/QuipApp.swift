@@ -884,6 +884,25 @@ enum PTTReadiness: String, Equatable, CaseIterable {
         if !isAuthenticated { return .offline }
         return selectedCLI == .codex ? .ready : .wrongCLI
     }
+
+    /// Tiny inline tag shown next to the icon when the state isn't `.ready`.
+    /// Returns nil when the icon alone (or the connection dot for `.offline`)
+    /// already conveys the reason — keeps the row from getting noisy when
+    /// nothing is wrong.
+    func shortHint(selectedCLI: CLIKind?) -> String? {
+        switch self {
+        case .ready:     return nil
+        case .wrongCLI:
+            switch selectedCLI {
+            case .claude:  return "claude"
+            case .shell:   return "shell"
+            case .none:    return "?"
+            case .codex:   return nil  // Defensive: classify() shouldn't put us here
+            }
+        case .offline:   return nil    // Top-bar status pill already covers it
+        case .micDenied: return "no mic"
+        }
+    }
 }
 
 struct MainiOSView: View {
@@ -1859,15 +1878,27 @@ struct MainiOSView: View {
             // PTT readiness — green only when a volume-button press would
             // actually reach Codex. Yellow when connected but selected
             // window is Claude / shell. Red when mic permission is denied.
+            // The optional shortHint surfaces *which* CLI is foregrounded
+            // (or "no mic") so the user knows why it's not green without
+            // having to dig into Settings.
+            let pttSelectedCLI = windows.first(where: { $0.id == selectedWindowId })?.cliKind
             let ptt = PTTReadiness.classify(
                 isAuthenticated: client.isAuthenticated,
                 isAuthorized: speech.isAuthorized,
-                selectedCLI: windows.first(where: { $0.id == selectedWindowId })?.cliKind
+                selectedCLI: pttSelectedCLI
             )
-            Image(systemName: ptt.symbol)
-                .font(.system(size: 11))
-                .foregroundStyle(ptt.color(colors: colors))
-                .accessibilityLabel("Push-to-talk: \(ptt.label)")
+            HStack(spacing: 2) {
+                Image(systemName: ptt.symbol)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ptt.color(colors: colors))
+                if let hint = ptt.shortHint(selectedCLI: pttSelectedCLI) {
+                    Text(hint)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(ptt.color(colors: colors))
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Push-to-talk: \(ptt.label)")
             if let error = client.lastError {
                 Text(error)
                     .font(.system(size: 9))
