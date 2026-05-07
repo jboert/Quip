@@ -58,19 +58,26 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     /// input routing on the Mac (notably image upload). Optional for
     /// backward compat with older Mac builds; nil = treat as `.shell`.
     let cliKind: CLIKind?
+    /// Marks windows eligible to be the "target" half of a QA mode pair.
+    /// `"simulator"` for iOS Simulator (v1). `"browser_localhost"` reserved
+    /// for browser-on-localhost (v2). `nil` for everything else (terminals,
+    /// generic apps). Optional + string-typed for forward compat — older
+    /// Mac builds omit it; older clients ignore unknown values.
+    let targetKind: String?
 
     // Synthesized Equatable compares ALL fields including frame
 
     /// Backward-compat: default isThinking to false and claudeMode to nil if missing from JSON
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
-         claudeMode: String? = nil, cliKind: CLIKind? = nil) {
+         claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
         self.isThinking = isThinking
         self.claudeMode = claudeMode
         self.cliKind = cliKind
+        self.targetKind = targetKind
     }
 
     init(from decoder: Decoder) throws {
@@ -86,10 +93,11 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         isThinking = (try? c.decode(Bool.self, forKey: .isThinking)) ?? false
         claudeMode = try? c.decode(String.self, forKey: .claudeMode)
         cliKind = try? c.decode(CLIKind.self, forKey: .cliKind)
+        targetKind = try? c.decode(String.self, forKey: .targetKind)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind
+        case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind, targetKind
     }
 }
 

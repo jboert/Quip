@@ -912,4 +912,40 @@ final class MessageProtocolTests: XCTestCase {
         let json = String(data: data, encoding: .utf8) ?? ""
         XCTAssertTrue(json.contains("\"missing_id\""), "Wire key must be snake_case: \(json)")
     }
+
+    func testWindowStateTargetKindEncodes() {
+        let w = WindowState(
+            id: "1", name: "iPhone 17 Pro Max", app: "Simulator",
+            enabled: true,
+            frame: WindowFrame(x: 0, y: 0, width: 0.5, height: 0.5),
+            state: "neutral", color: "#3a4a6b", targetKind: "simulator"
+        )
+        let data = try! MessageCoder.encoder.encode(w)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"targetKind\":\"simulator\""), json)
+    }
+
+    func testWindowStateTargetKindDecodesNilWhenMissing() {
+        // Older Mac builds don't include the field. Phone must decode cleanly.
+        let json = """
+        {"id":"1","name":"iTerm","app":"iTerm2","enabled":false,
+         "frame":{"x":0,"y":0,"width":1,"height":1},
+         "state":"neutral","color":"#fff","isThinking":false}
+        """
+        let data = Data(json.utf8)
+        let decoded = try! MessageCoder.decoder.decode(WindowState.self, from: data)
+        XCTAssertNil(decoded.targetKind)
+    }
+
+    func testWindowStateTargetKindDecodesValueWhenPresent() {
+        let json = """
+        {"id":"1","name":"Sim","app":"Simulator","enabled":false,
+         "frame":{"x":0,"y":0,"width":1,"height":1},
+         "state":"neutral","color":"#fff","isThinking":false,
+         "targetKind":"simulator"}
+        """
+        let data = Data(json.utf8)
+        let decoded = try! MessageCoder.decoder.decode(WindowState.self, from: data)
+        XCTAssertEqual(decoded.targetKind, "simulator")
+    }
 }
