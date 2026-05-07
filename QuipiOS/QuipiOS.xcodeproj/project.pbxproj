@@ -24,6 +24,7 @@
 		261C1C66A5F75E185F591DD1 /* KeystrokeFocusDelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A76C509CF77201B2EB8B5677 /* KeystrokeFocusDelayTests.swift */; };
 		27B8C39B88FB6144FECCDC55 /* PCMChunkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7A2E5808A455F967117889 /* PCMChunkerTests.swift */; };
 		289E8EEFA09B796BF3BE0844 /* WebSocketClientDisconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920D8C375CB17F6D732D5F4E /* WebSocketClientDisconnectTests.swift */; };
+		2B5E56AEE4D362C985F1C0FA /* QAPairPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94FA5C2A4E68BD3594AAD1EF /* QAPairPickerSheet.swift */; };
 		2C52F265432CF7E5BFF28F68 /* QuipLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */; };
 		2E3F0351CC5E90C934E0F0B2 /* HardwareButtonHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A7D08ECBB0B1EFA3F77328 /* HardwareButtonHandler.swift */; };
 		2E6A08D65DF1E6DCC0BB7E79 /* ImageRecompressorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F37E465512A160C3F0FE0310 /* ImageRecompressorTests.swift */; };
@@ -188,6 +189,7 @@
 		89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSNotificationOverlay.swift; sourceTree = "<group>"; };
 		8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
 		920D8C375CB17F6D732D5F4E /* WebSocketClientDisconnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClientDisconnectTests.swift; sourceTree = "<group>"; };
+		94FA5C2A4E68BD3594AAD1EF /* QAPairPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QAPairPickerSheet.swift; sourceTree = "<group>"; };
 		959643D7FC10BD21E0FDE409 /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
 		9883079F39A65B1627B0A274 /* URLSwapPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLSwapPolicyTests.swift; sourceTree = "<group>"; };
 		9BAE6A8EDAED117D04D2161D /* MirrorDesktopFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorDesktopFilterTests.swift; sourceTree = "<group>"; };
@@ -344,6 +346,7 @@
 				466A4F2906BA7B078608620E /* DiagnosticsSheet.swift */,
 				3150B50687617E509C16EC1D /* ImagePickerPresenter.swift */,
 				BE0BC3568ECDD8FC3E78B940 /* PendingImagePreviewStrip.swift */,
+				94FA5C2A4E68BD3594AAD1EF /* QAPairPickerSheet.swift */,
 				BE693F49CD672CFD1507FDC6 /* QuipTheme.swift */,
 				8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */,
 				591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */,
@@ -675,6 +678,7 @@
 				C048886FBB8F8115ED5B1964 /* PushNotificationCenter.swift in Sources */,
 				67348F3277C90D577C7D95D3 /* PushRegistrationService.swift in Sources */,
 				B7A0D44EB5C6E674A83BAD07 /* QAPair.swift in Sources */,
+				2B5E56AEE4D362C985F1C0FA /* QAPairPickerSheet.swift in Sources */,
 				6441F32153F6E86CF6529571 /* QuipApp.swift in Sources */,
 				2C52F265432CF7E5BFF28F68 /* QuipLiveActivityAttributes.swift in Sources */,
 				035352DA912748C3F99D4D6C /* QuipMacPermsActivityAttributes.swift in Sources */,
