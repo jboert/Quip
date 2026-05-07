@@ -29,6 +29,38 @@ class AppOrientationDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
+/// Pure helpers for mutating the per-windowId content state maps that
+/// QA mode (and the inline single-window flow) read through. Pulled out
+/// of MainiOSView so unit tests don't have to instantiate the whole view.
+enum ContentMapMutations {
+    static func applyContent(
+        windowId: String,
+        text: String?,
+        screenshot: String?,
+        urls: [String],
+        into textMap: inout [String: String],
+        _ screenshotMap: inout [String: String],
+        _ urlsMap: inout [String: [String]]
+    ) {
+        if let text { textMap[windowId] = text } else { textMap.removeValue(forKey: windowId) }
+        if let screenshot { screenshotMap[windowId] = screenshot } else { screenshotMap.removeValue(forKey: windowId) }
+        urlsMap[windowId] = urls
+    }
+
+    static func purgePairContent(
+        pair: (String, String),
+        from textMap: inout [String: String],
+        _ screenshotMap: inout [String: String],
+        _ urlsMap: inout [String: [String]]
+    ) {
+        for id in [pair.0, pair.1] {
+            textMap.removeValue(forKey: id)
+            screenshotMap.removeValue(forKey: id)
+            urlsMap.removeValue(forKey: id)
+        }
+    }
+}
+
 @main
 struct QuipApp: App {
     @UIApplicationDelegateAdaptor(AppOrientationDelegate.self) var appDelegate
@@ -63,6 +95,11 @@ struct QuipApp: App {
     /// build (pre-tray) reads as "no URLs" and hides the tray.
     @State private var terminalContentURLs: [String]?
     @State private var terminalContentWindowId: String?
+    // Per-windowId content maps — populated alongside the single-state properties
+    // during the dual-state transition period. Task 5 migrates read sites to these.
+    @State private var terminalContentTextById: [String: String] = [:]
+    @State private var terminalContentScreenshotById: [String: String] = [:]
+    @State private var terminalContentURLsById: [String: [String]] = [:]
     @State private var showPINEntry = false
     @State private var pinText = ""
     @State private var projectDirectories: [String] = []
@@ -137,6 +174,9 @@ struct QuipApp: App {
                 terminalContentScreenshot: $terminalContentScreenshot,
                 terminalContentURLs: $terminalContentURLs,
                 terminalContentWindowId: $terminalContentWindowId,
+                terminalContentTextById: $terminalContentTextById,
+                terminalContentScreenshotById: $terminalContentScreenshotById,
+                terminalContentURLsById: $terminalContentURLsById,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
@@ -515,6 +555,17 @@ struct QuipApp: App {
                 if let urls, !urls.isEmpty {
                     terminalContentURLs = urls
                 }
+                // Per-windowId map writes (dual-state: single-state reads still active
+                // in Task 4; Task 5 migrates read sites to use these maps instead).
+                ContentMapMutations.applyContent(
+                    windowId: windowId,
+                    text: content,
+                    screenshot: screenshot.flatMap { $0.isEmpty ? nil : $0 },
+                    urls: urls ?? [],
+                    into: &terminalContentTextById,
+                    &terminalContentScreenshotById,
+                    &terminalContentURLsById
+                )
             }
         }
 
@@ -991,6 +1042,9 @@ struct MainiOSView: View {
     @Binding var terminalContentScreenshot: String?
     @Binding var terminalContentURLs: [String]?
     @Binding var terminalContentWindowId: String?
+    @Binding var terminalContentTextById: [String: String]
+    @Binding var terminalContentScreenshotById: [String: String]
+    @Binding var terminalContentURLsById: [String: [String]]
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
     var projectDirectories: [String]
