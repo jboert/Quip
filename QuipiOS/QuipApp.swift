@@ -5143,6 +5143,15 @@ struct SettingsSheet: View {
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
     @Environment(\.dismiss) private var dismiss
 
+    /// "1.5.4 (1)" formatted from CFBundleShortVersionString + CFBundleVersion.
+    /// Static so we read Bundle.main once per launch, not on every body redraw.
+    static let appVersionDisplay: String = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return short == build ? short : "\(short) (\(build))"
+    }()
+
     var body: some View {
         NavigationStack {
             List {
@@ -5268,6 +5277,18 @@ struct SettingsSheet: View {
                     }
                 } header: {
                     Text("Diagnostics")
+                }
+
+                Section {
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text(Self.appVersionDisplay)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                } header: {
+                    Text("About")
                 }
             }
             .listStyle(.insetGrouped)
