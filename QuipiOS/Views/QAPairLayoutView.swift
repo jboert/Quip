@@ -170,26 +170,37 @@ struct QAPairLayoutView: View {
     // MARK: - Divider
 
     private func divider(totalWidth: CGFloat, height: CGFloat) -> some View {
-        Rectangle()
-            .fill(colors.divider)
-            .frame(height: height)
-            .contentShape(Rectangle().inset(by: -3))  // 10pt total hit zone
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        let proposed = dividerRatio + Double(value.translation.width / totalWidth)
-                        dividerRatio = max(0.30, min(0.70, proposed))
-                    }
-                    .onEnded { _ in
-                        // Snap to nearest of [0.30, 0.50, 0.70] for tactile feel.
-                        let snaps = [0.30, 0.50, 0.70]
-                        if let nearest = snaps.min(by: { abs($0 - dividerRatio) < abs($1 - dividerRatio) }) {
-                            withAnimation(.spring(duration: 0.18, bounce: 0.1)) {
-                                dividerRatio = nearest
-                            }
+        ZStack {
+            Rectangle()
+                .fill(colors.divider)
+                .frame(height: height)
+            Capsule()
+                .fill(colors.textTertiary.opacity(0.5))
+                .frame(width: 3, height: 24)
+        }
+        .contentShape(Rectangle().inset(by: -20))  // ~44pt hit zone (4pt visible + 40pt invisible)
+        .highPriorityGesture(  // Win over parent swipeFlipGesture on slow drags.
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let proposed = dividerRatio + Double(value.translation.width / totalWidth)
+                    dividerRatio = max(0.30, min(0.70, proposed))
+                }
+                .onEnded { _ in
+                    let snaps = [0.30, 0.50, 0.70]
+                    if let nearest = snaps.min(by: { abs($0 - dividerRatio) < abs($1 - dividerRatio) }) {
+                        withAnimation(.spring(duration: 0.18, bounce: 0.1)) {
+                            dividerRatio = nearest
                         }
                     }
-            )
+                }
+        )
+        .onTapGesture(count: 2) {
+            withAnimation(.spring(duration: 0.18, bounce: 0.1)) {
+                dividerRatio = 0.5
+            }
+        }
+        .accessibilityLabel("Pane divider")
+        .accessibilityHint("Drag to resize panes; double-tap to reset to 50/50.")
     }
 
     // MARK: - Swipe-to-flip selection
