@@ -6,6 +6,51 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-05-07 (QA mode v1 — paired Simulator + terminal layout)
+
+19 commits on `eb-branch`. Started after `b4a9090`. Spec at `docs/superpowers/specs/2026-05-07-qa-mode-design.md`. Plan at `docs/superpowers/plans/2026-05-07-qa-mode.md`.
+
+| Section | Status | Commit | Hardware-tested |
+|---------|--------|--------|-----------------|
+| Tasks 1–8: Shared protocol + entire Mac side (set/clear/lost messages, WindowState.targetKind, ManagedWindow.isTarget+targetKind, windowsForBroadcast(qaPair:), per-connection storage, message handlers, per-client filter, snapshot validator, Mac unit tests) | ✅ | through `d672f343` | n/a (Mac unit tests pass — 333/333) |
+| iOS deployment-target fix — `onScrollGeometryChange` gated on iOS 18 (pre-existing break from `02f6457`) | ✅ | `e342b178` | n/a (build fix) |
+| Tasks 9–16: phone side (QAPair model + tests, WebSocketClient send/recv, BackendSession persistence + reconnect replay, picker sheet, WindowAction.pairForQA + context menu row, QAPairLayoutView, RemoteLayoutView branch, QuipApp wiring) | ✅ | through `11c7bbd4` | install + 16-step smoke pass DEFERRED to user (Task 17) |
+| Task 18: throttled broadcast_filter log line | ✅ | `bea56c7` | n/a (Mac code) |
+| Task 19: CLAUDE.md QA mode docs | ✅ | `a2e8777` | n/a (docs) |
+| Task 20: final acceptance — all tests passing (333 Mac + 349 iOS = 682) | ✅ tests pass; manual smoke deferred | tests verified | DEFERRED |
+
+### v1 scope shipped
+
+- Pair source: target (Simulator only in v1) + terminal. Never two terminals or two targets.
+- Phone-side picker sheet, long-press → "Pair for QA" entry, header chip with re-pair + exit, side-by-side 50/50 with draggable divider (clamps 0.30–0.70, snaps to [0.30, 0.50, 0.70]), horizontal swipe-to-flip selection.
+- Mac per-connection broadcast filter (only the 2 paired windows ride out for that connection); tunnel broadcasters always get unfiltered.
+- Snapshot-tick validator with 5s grace for off-screen; immediate `qa_pair_lost` for closed windows.
+- Pair persistence per-backend via `UserDefaults` keyed `"qaPair.<backendID>"`; `dividerRatio` per-backend in `@AppStorage`.
+- Sim is read-only (TextField + Send disabled when target selected; "Read-only — switch to terminal to type" hint).
+- Reason constants on `QAPairLostMessage.Reason` (windowClosed / windowOffscreen / connectionReset).
+- Toast on `qa_pair_lost`: `<App name> closed. Exited QA mode.` (3s auto-dismiss, mirrors existing `errorToast` path).
+- Per-tick throttled `broadcast_filter` log to `~/Library/Logs/Quip/qa-mode.log` (5s OR count-change).
+
+### Outstanding (DEFERRED to user)
+
+- **Task 17 — manual hardware smoke pass**: Mac install via stable-signing recipe (`reference_quip_install_recipe.md`), iPhone install via `devicectl` to UDID for "iPhone 17 Pro Max", then run the 16-step flow documented in `docs/superpowers/plans/2026-05-07-qa-mode.md` Task 17. Required to validate visual layout, gesture feel, end-to-end pair lifecycle, and toast behavior in real conditions.
+- **Task 20 — final acceptance**: re-run Task 17 smoke after any user-found polish iterations.
+
+### v2 hooks (deferred — design accommodates)
+
+- **Browser-on-localhost target**: `WindowState.targetKind` is a string for forward compat. Add `"browser_localhost"` value + a Mac-side `BrowserURLExtractor` (parallel to `TerminalURLExtractor`) that AX-scrapes Safari/Chrome/Arc URLs and returns true when matching `localhost|127\.0\.0\.1|:\d+`. No protocol changes needed.
+- **Sim text injection**: extend `KeystrokeInjector` with a non-terminal paste path (focus Sim via `NSRunningApplication.activate`, then `NSPasteboard.general` + simulated `⌘V`). Toggle Sim from read-only to writable when this lands.
+- **Named/saved multi-pair management**: not asked for in v1; would require Mac-side pair store + UI for pair selector. v1 has single active pair per backend.
+- **Refresh-rate boost on the pair**: bandwidth is freed up by the filter, so the pair's screenshots could push at higher fps. Currently keeps existing snapshot cadence.
+- **Backend cycle while in QA**: spec called for a header-chip chevron menu to switch backends without leaving QA. v1 expects the user to tap ✕ to exit QA, switch backends via existing chrome, and re-enter QA on the new backend. Header chip already has the affordance space for a chevron when v1.5 lands.
+- **Push-to-text** as primary input affordance (vs PTT). v1 keeps PTT prominent + Enter prominent + manual chevron-down minimize. Future iteration when push-to-text UX is designed.
+
+### Notes / minor follow-ups
+
+- `RemoteLayoutView.swift` was extended with a QA-mode branch (Task 15) but the iOS app actually renders the grid inline in `MainiOSView.body` — not via `RemoteLayoutView`. The Task 15 changes are dead code. Either wire `RemoteLayoutView` into the iOS app (cleanup), or remove the QA branching from `RemoteLayoutView` and document it as the inline-only path.
+- `BackendSession.qaPair` UserDefaults entries under the synthetic legacy backend ID get orphaned when `onDeviceIdentity` rekeys to the real UUID. Harmless (key namespaced, never collides), but a future cleanup could add `UserDefaults.standard.removeObject(forKey: "qaPair.\(oldID)")` in the rebuild path.
+- Phone-side `WindowState.isTerminal` matches by exact lowercased app name (`"iterm2"` / `"terminal"`). Adding a new terminal emulator on the Mac requires updating this set or QA-mode pairing will silently exclude it. Documented at `QuipiOS/Models/WindowState+QAMode.swift`.
+
 ## Session log — 2026-05-06 (§B16 + log-spam burn-down)
 
 6 commits, all pushed to `origin/eb-branch`. Started after `c6eb974`.
