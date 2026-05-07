@@ -1489,7 +1489,7 @@ struct MainiOSView: View {
             terminalContentURLs = nil
             terminalContentWindowId = newId
             // Auto-fetch terminal output for the inline view in portrait.
-            if isPortrait, let id = newId { onRequestContent(id) }
+            if isPortrait, newId != nil { requestActiveContent() }
         }
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { code in
@@ -2672,6 +2672,21 @@ struct MainiOSView: View {
             }
         }
         return nil
+    }
+
+    /// Send `RequestContentMessage` for every windowId we want content for —
+    /// the selected window in normal mode, OR both pair halves in QA mode.
+    /// Mac handles each request independently; payloads land in
+    /// per-windowId state via the receive-side write in TerminalContentMessage.
+    private func requestActiveContent() {
+        if let pair = manager.active.qaPair {
+            client.send(RequestContentMessage(windowId: pair.targetId))
+            client.send(RequestContentMessage(windowId: pair.terminalId))
+            return
+        }
+        if let wid = selectedWindowId {
+            client.send(RequestContentMessage(windowId: wid))
+        }
     }
 
     private func cycleWindow(direction: Int) {
