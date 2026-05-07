@@ -905,6 +905,62 @@ enum PTTReadiness: String, Equatable, CaseIterable {
     }
 }
 
+/// Friendly classification of round-trip text-land latency. Three buckets
+/// matched to user perception, not engineering targets — at <250ms voice
+/// transcripts feel instant, at 250–600ms there's a noticeable lag but
+/// the loop still works, past 600ms users start retyping. The badge is
+/// the at-a-glance answer to "is the link snappy right now?" — the
+/// detail sheet is for when the user wants to dig.
+enum LatencySummary: Equatable {
+    case empty                  // No samples yet — first run or post-disconnect
+    case snappy(avgMs: Int)     // < 250ms p50
+    case ok(avgMs: Int)         // 250 – 600ms
+    case slow(avgMs: Int)       // > 600ms
+
+    /// Build from the last N samples (or all if fewer). Computes the median
+    /// total RTT — median over mean so a single 5s outlier doesn't mask an
+    /// otherwise-snappy distribution.
+    static func from(samples: [WebSocketClient.LatencySample], window: Int = 20) -> LatencySummary {
+        let recent = samples.suffix(window)
+        guard !recent.isEmpty else { return .empty }
+        let sorted = recent.map(\.totalRtt).sorted()
+        let median = sorted[sorted.count / 2]
+        if median < 250 { return .snappy(avgMs: median) }
+        if median < 600 { return .ok(avgMs: median) }
+        return .slow(avgMs: median)
+    }
+
+    var color: Color {
+        switch self {
+        case .empty:  return .secondary.opacity(0.5)
+        case .snappy: return .green
+        case .ok:     return .yellow
+        case .slow:   return .red
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .empty:                return "—"
+        case .snappy(let ms):       return "Snappy \(ms)ms"
+        case .ok(let ms):           return "OK \(ms)ms"
+        case .slow(let ms):         return "Slow \(ms)ms"
+        }
+    }
+
+    /// Compact pill suitable for a Settings list row's accessory area.
+    @ViewBuilder
+    func badgeView() -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+}
+
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
     @Bindable var manager: BackendConnectionManager
@@ -5310,6 +5366,16 @@ struct SettingsSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    NavigationLink {
+                        LatencyDiagnosticsSheet(client: client)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("Latency")
+                            Spacer()
+                            LatencySummary.from(samples: client.latencySamples)
+                                .badgeView()
+                        }
+                    }
                 } header: {
                     Text("Diagnostics")
                 }
@@ -6941,6 +7007,122 @@ struct ConnectionDiagnosticsSheet: View {
         case .ready: return ("ready", .green)
         case .failed(let m): return ("failed: \(m)", .red)
         }
+    }
+}
+
+/// "Why is text taking so long to land?" view. Three friendly numbers up top
+/// (median total / network / Mac-side), then a compact sparkline of recent
+/// samples, then a per-path table so the user can tell at a glance whether
+/// Codex (pasteText) or Claude (sendText) is the slow one. No raw timestamps —
+/// the spec is "approachable", not "engineering dashboard".
+struct LatencyDiagnosticsSheet: View {
+    @Bindable var client: WebSocketClient
+
+    var body: some View {
+        List {
+            Section {
+                let summary = LatencySummary.from(samples: client.latencySamples)
+                HStack(spacing: 10) {
+                    Circle().fill(summary.color).frame(width: 12, height: 12)
+                    Text(summary.label)
+                        .font(.system(size: 17, weight: .semibold))
+                        .monospacedDigit()
+                }
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+                if client.latencySamples.isEmpty {
+                    Text("No samples yet. Send a few messages from a Codex / Claude window — the numbers fill in as round-trips complete.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Round-trip")
+            } footer: {
+                Text("Median of the last 20 text-land round-trips. Snappy = under 250ms; OK up to 600ms; Slow past that.")
+            }
+
+            if !client.latencySamples.isEmpty {
+                Section {
+                    medianRow("Network", samples: client.latencySamples.map(\.netRtt))
+                    medianRow("Mac processing", samples: client.latencySamples.map(\.totalMs))
+                    medianRow("AppleScript / paste", samples: client.latencySamples.map(\.injectMs))
+                } header: {
+                    Text("Where the time goes")
+                } footer: {
+                    Text("Network = phone↔Mac alone. Mac processing = arrival to text landed. AppleScript / paste is the inject step itself.")
+                }
+
+                let codex = client.latencySamples.filter { $0.path == "pasteText" }
+                let other = client.latencySamples.filter { $0.path == "sendText" }
+                Section {
+                    if !codex.isEmpty {
+                        medianRow("Codex (pasteText)", samples: codex.map(\.totalRtt))
+                    }
+                    if !other.isEmpty {
+                        medianRow("Claude / shell (sendText)", samples: other.map(\.totalRtt))
+                    }
+                    if codex.isEmpty && other.isEmpty {
+                        Text("—")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("By routing path")
+                }
+
+                Section {
+                    LatencySparkline(samples: client.latencySamples)
+                        .frame(height: 60)
+                        .padding(.vertical, 4)
+                } header: {
+                    Text("Recent (\(client.latencySamples.count) samples)")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Latency")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private func medianRow(_ title: String, samples: [Int]) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text("\(median(samples))ms")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+
+    private func median(_ values: [Int]) -> Int {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+}
+
+/// Tiny inline sparkline of recent total-RTT samples. Bar heights normalized
+/// to the max in the buffer so the chart auto-scales as conditions change —
+/// the user looks for *shape* (climbing? stable? spiky?) more than absolute
+/// height. Bar color follows the LatencySummary bucket of that single sample.
+private struct LatencySparkline: View {
+    let samples: [WebSocketClient.LatencySample]
+
+    var body: some View {
+        let maxRtt = max(1, samples.map(\.totalRtt).max() ?? 1)
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 1) {
+                ForEach(samples.indices, id: \.self) { i in
+                    let s = samples[i]
+                    let h = max(2, CGFloat(s.totalRtt) / CGFloat(maxRtt) * geo.size.height)
+                    Rectangle()
+                        .fill(LatencySummary.from(samples: [s]).color)
+                        .frame(width: max(1, (geo.size.width - CGFloat(samples.count - 1)) / CGFloat(samples.count)),
+                               height: h)
+                }
+            }
+        }
+        .accessibilityLabel("Latency sparkline of \(samples.count) recent samples")
     }
 }
 

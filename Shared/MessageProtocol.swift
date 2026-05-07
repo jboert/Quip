@@ -222,6 +222,38 @@ struct SendTextMessage: Codable, Sendable {
     }
 }
 
+/// Round-trip acknowledgement Mac → iOS, sent after the keystroke / paste
+/// completes. Lets the phone derive `net_rtt = total_rtt - mac_ms`, which
+/// separates network latency from Mac-side processing — necessary for
+/// the regression detector to fire on real Mac-side slowdown without
+/// crying wolf when the user is on weak Wi-Fi. Older Macs that don't
+/// emit this message simply produce no ack — iOS treats absence as
+/// "Mac doesn't support latency reporting" and shows --, not a fault.
+struct SendTextAckMessage: Codable, Sendable {
+    let type: String
+    /// Echo of SendTextMessage.messageId — anchors the ack to its outbound
+    /// message regardless of WS message ordering.
+    let messageId: UUID
+    /// Mac-side processing duration: AppleScript / paste injection only.
+    /// Excludes WS handshake, focusDelay, and iTerm session resolution.
+    let injectMs: Int
+    /// Total Mac-side: from message-arrival on the WS to "text landed".
+    /// Always >= injectMs. Difference is overhead (focusDelay, etc.).
+    let totalMs: Int
+    /// Routing branch — "pasteText" | "sendText". Different perf profiles;
+    /// the detector buckets averages by path so a Codex-only regression
+    /// doesn't get smeared by Claude's faster path.
+    let path: String
+
+    init(messageId: UUID, injectMs: Int, totalMs: Int, path: String) {
+        self.type = "send_text_ack"
+        self.messageId = messageId
+        self.injectMs = injectMs
+        self.totalMs = totalMs
+        self.path = path
+    }
+}
+
 struct QuickActionMessage: Codable, Sendable {
     let type: String
     let windowId: String

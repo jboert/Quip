@@ -268,6 +268,32 @@ final class WebSocketClient {
     private var connectionEvents: [String] = []
     var recentConnectionEvents: [String] { connectionEvents }
 
+    /// One round-trip text-land sample. `totalRtt` is observed end-to-end on
+    /// the phone (send→ack); `injectMs` is what the Mac reports for its own
+    /// AppleScript / paste duration; `netRtt = totalRtt - injectMs` isolates
+    /// the network from the Mac. Path is "pasteText" or "sendText" so a
+    /// Codex-only regression doesn't smear the Claude bucket.
+    struct LatencySample: Equatable {
+        let timestamp: Date
+        let totalRtt: Int   // ms — phone send to phone ack-receive
+        let injectMs: Int   // ms — Mac AppleScript / paste alone
+        let totalMs: Int    // ms — Mac message-arrival to text-landed
+        let netRtt: Int     // ms — totalRtt - totalMs
+        let path: String    // "pasteText" | "sendText"
+    }
+
+    /// Rolling buffer of recent text-land samples (cap 100). Read by
+    /// SettingsSheet → Diagnostics to render the friendly average +
+    /// sparkline. Triggers @Observable redraws on each append.
+    private(set) var latencySamples: [LatencySample] = []
+    private static let latencySampleCap = 100
+
+    /// Outbound send_text bookkeeping: messageId → moment we put it on the
+    /// wire. The ack handler looks up by messageId, computes deltas, and
+    /// removes the entry. Capped at 32 — anything older than that has
+    /// almost certainly been dropped on the floor by the Mac.
+    private var pendingSendTexts: [UUID: Date] = [:]
+
     init() {
         startPathMonitor()
         startStuckWatchdog()
@@ -517,8 +543,51 @@ final class WebSocketClient {
         send(DeviceIdentityMessage(deviceID: id, deviceKind: "ios", displayName: name))
     }
 
+    /// Round-trip a SendTextAckMessage into a LatencySample. Drops samples
+    /// for messageIds we never sent (or whose entry has aged out of the
+    /// pending-bookkeeping cap) so a stale ack from a prior session can't
+    /// poison the rolling buffer.
+    private func handleSendTextAck(_ msg: SendTextAckMessage) {
+        guard let sentAt = pendingSendTexts.removeValue(forKey: msg.messageId) else {
+            NSLog("[WebSocketClient] send_text_ack with unknown messageId %@", msg.messageId.uuidString)
+            return
+        }
+        let totalRtt = Int(Date().timeIntervalSince(sentAt) * 1000)
+        // Mac's totalMs covers message-arrival → text-landed (Mac-side end-to-end).
+        // Subtracting from the phone-observed RTT gives a clean network-only
+        // figure. Clamp at 0 to defend against clock skew putting it negative.
+        let netRtt = max(0, totalRtt - msg.totalMs)
+        let sample = LatencySample(
+            timestamp: Date(),
+            totalRtt: totalRtt,
+            injectMs: msg.injectMs,
+            totalMs: msg.totalMs,
+            netRtt: netRtt,
+            path: msg.path
+        )
+        latencySamples.append(sample)
+        if latencySamples.count > Self.latencySampleCap {
+            latencySamples.removeFirst(latencySamples.count - Self.latencySampleCap)
+        }
+        NSLog("[Quip][LATENCY] path=%@ totalRtt=%d netRtt=%d injectMs=%d macTotal=%d",
+              msg.path, totalRtt, netRtt, msg.injectMs, msg.totalMs)
+    }
+
     func send<T: Codable>(_ message: T) {
         guard let task = webSocketTask else { return }
+        // Latency tracking — record the moment we put a SendTextMessage on
+        // the wire so the SendTextAck handler can compute total round-trip.
+        // Messages without a messageId are ignored (older protocol, Mac can't
+        // ack them anyway). Cap the dict so a Mac that never acks doesn't
+        // grow this unbounded.
+        if let stm = message as? SendTextMessage, let mid = stm.messageId {
+            pendingSendTexts[mid] = Date()
+            if pendingSendTexts.count > 32 {
+                if let oldest = pendingSendTexts.min(by: { $0.value < $1.value }) {
+                    pendingSendTexts.removeValue(forKey: oldest.key)
+                }
+            }
+        }
         do {
             let data = try JSONEncoder().encode(message)
             let string = String(data: data, encoding: .utf8) ?? ""
@@ -775,6 +844,10 @@ final class WebSocketClient {
         case "device_identity":
             if let msg = Self.decodeMessage(DeviceIdentityMessage.self, from: data, msgType: peek.type) {
                 onDeviceIdentity?(msg)
+            }
+        case "send_text_ack":
+            if let msg = Self.decodeMessage(SendTextAckMessage.self, from: data, msgType: peek.type) {
+                handleSendTextAck(msg)
             }
         case "layout_update":
             guard isAuthenticated else { return }

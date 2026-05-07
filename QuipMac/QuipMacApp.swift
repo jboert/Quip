@@ -828,6 +828,18 @@ struct QuipMacApp: App {
                         let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
                         let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
                         appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs)")
+                        // Round-trip ack — phone subtracts injectMs/totalMs
+                        // from its own send→ack delta to derive net_rtt.
+                        // Skipped if no messageId (older client) — phone has
+                        // no way to correlate the ack back to its outbound.
+                        if let mid = msg.messageId {
+                            self.webSocketServer.broadcast(SendTextAckMessage(
+                                messageId: mid,
+                                injectMs: injectMs,
+                                totalMs: totalMs,
+                                path: routingPath
+                            ))
+                        }
                     }
                     if delay == 0 {
                         injectAndLog()
