@@ -517,18 +517,20 @@ final class WebSocketClient {
         send(DeviceIdentityMessage(deviceID: id, deviceKind: "ios", displayName: name))
     }
 
-    func send(_ message: some Codable) {
+    func send<T: Codable>(_ message: T) {
         guard let task = webSocketTask else { return }
         do {
             let data = try JSONEncoder().encode(message)
             let string = String(data: data, encoding: .utf8) ?? ""
             task.send(.string(string)) { error in
                 if let error = error {
-                    NSLog("[WebSocketClient] Send error: %@", error.localizedDescription)
+                    NSLog("[WebSocketClient] send transport FAILED kind=%@ err=%@",
+                          String(describing: T.self), error.localizedDescription)
                 }
             }
         } catch {
-            NSLog("[WebSocketClient] Encode error: %@", error.localizedDescription)
+            NSLog("[WebSocketClient] send encode FAILED kind=%@ err=%@",
+                  String(describing: T.self), error.localizedDescription)
         }
     }
 

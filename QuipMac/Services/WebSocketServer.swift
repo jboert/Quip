@@ -494,7 +494,7 @@ final class WebSocketServer {
         do {
             data = try JSONEncoder().encode(message)
         } catch {
-            print("[WebSocketServer] Encode error: \(error)")
+            print("[WebSocketServer] broadcast encode FAILED kind=\(String(describing: T.self)) err=\(error)")
             return
         }
 
@@ -542,7 +542,7 @@ final class WebSocketServer {
         do {
             data = try JSONEncoder().encode(message)
         } catch {
-            print("[WebSocketServer] Encode error: \(error)")
+            print("[WebSocketServer] send encode FAILED kind=\(String(describing: T.self)) err=\(error)")
             return
         }
 
