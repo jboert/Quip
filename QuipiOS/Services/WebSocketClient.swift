@@ -198,6 +198,11 @@ final class WebSocketClient {
     /// Mac is sending back a preferences snapshot the phone previously
     /// uploaded — used to repopulate UserDefaults after a reinstall.
     var onPreferencesRestore: ((PreferencesSnapshot) -> Void)?
+    /// Mac dropped the QA pair on this connection — either a paired window
+    /// vanished, went off-screen sustained ≥5s, or the IDs the phone replayed
+    /// post-reconnect don't match. Phone exits QA mode and shows a toast.
+    /// Args: (missingId, reason).
+    var onQAPairLost: ((String, String) -> Void)?
     /// Mac sent its current TCC permission status. Phone surfaces it in the
     /// settings sheet + as a badge on the main screen when anything is denied.
     var onMacPermissions: ((MacPermissionsMessage) -> Void)?
@@ -620,6 +625,17 @@ final class WebSocketClient {
         NSLog("[WebSocketClient] Sent auth message")
     }
 
+    /// QA mode — set the pair for THIS connection. Mac will filter its
+    /// LayoutUpdate broadcast to only these two windows for this client.
+    func setQAPair(targetId: String, terminalId: String) {
+        send(SetQAPairMessage(targetId: targetId, terminalId: terminalId))
+    }
+
+    /// QA mode — clear the pair for THIS connection.
+    func clearQAPair() {
+        send(ClearQAPairMessage())
+    }
+
     /// Tell the Mac who this phone is so its connected-clients table can
     /// show a human label instead of an endpoint string. Reuses
     /// `DeviceIdentityMessage` (Mac→phone uses the same shape going the
@@ -1018,6 +1034,11 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = Self.decodeMessage(FrontmostChangedMessage.self, from: data, msgType: peek.type) {
                 onFrontmostChanged?(msg.windowId)
+            }
+        case "qa_pair_lost":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(QAPairLostMessage.self, from: data, msgType: peek.type) {
+                onQAPairLost?(msg.missingId, msg.reason)
             }
         case "heartbeat":
             // GH #19: Mac→iOS app-level heartbeat. Reply with same seq so
