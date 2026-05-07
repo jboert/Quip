@@ -64,6 +64,47 @@ final class WebSocketServer {
     /// noisy connection produces ONE diagnostic line per session instead of
     /// thousands. Cleared in `removeConnection`.
     private var unknownFrameLogged: Set<ObjectIdentifier> = []
+    /// Per-connection QA mode pair. Key = `ObjectIdentifier(connection)`,
+    /// value = (targetWindowId, terminalWindowId). Drives per-client
+    /// `LayoutUpdate` filtering. Cleared on `removeConnection`.
+    private var qaPairByConnection: [ObjectIdentifier: (String, String)] = [:]
+
+    /// Set the QA pair for the given connection. Idempotent — same value
+    /// overwrites in place.
+    func setQAPair(targetId: String, terminalId: String, for connection: NWConnection) {
+        qaPairByConnection[ObjectIdentifier(connection)] = (targetId, terminalId)
+    }
+
+    /// Drop the QA pair for the given connection.
+    func clearQAPair(for connection: NWConnection) {
+        qaPairByConnection.removeValue(forKey: ObjectIdentifier(connection))
+    }
+
+    /// Read the current QA pair for the given connection, or nil if none.
+    func qaPair(for connection: NWConnection) -> (String, String)? {
+        qaPairByConnection[ObjectIdentifier(connection)]
+    }
+
+    /// Snapshot of all (connection, pair) entries — used by the snapshot
+    /// validator to check each pair against the current window list and
+    /// emit `qa_pair_lost` for missing windows.
+    func qaPairSnapshot() -> [(NWConnection, (String, String))] {
+        clients.compactMap { client in
+            guard client.isAuthenticated,
+                  let pair = qaPairByConnection[ObjectIdentifier(client.connection)]
+            else { return nil }
+            return (client.connection, pair)
+        }
+    }
+
+    /// Iterate authenticated clients with their per-client QA pair (or nil).
+    /// Used by `broadcastLayout` to build a custom-filtered `LayoutUpdate`
+    /// per client when at least one phone is in QA mode.
+    func forEachAuthenticatedClient(_ body: (NWConnection, (String, String)?) -> Void) {
+        for client in clients where client.isAuthenticated {
+            body(client.connection, qaPairByConnection[ObjectIdentifier(client.connection)])
+        }
+    }
     private let networkQueue = DispatchQueue(label: "quip.websocket", qos: .userInitiated)
     /// Retry interval when the listener can't bind (e.g. port 8765 squatted by
     /// another process). Without this the server would give up silently and the
@@ -583,6 +624,7 @@ final class WebSocketServer {
         // same logical client get a fresh diagnostic. Without this, a noisy
         // connection's UUID would never re-emit even after a real reconnect.
         unknownFrameLogged.remove(ObjectIdentifier(connection))
+        qaPairByConnection.removeValue(forKey: ObjectIdentifier(connection))
         // Force the NWConnection to tear down immediately. Without this the
         // socket's send buffer can sit on queued bytes (layout updates, TTS
         // chunks) until the kernel notices — which on a dead Wi-Fi link can
