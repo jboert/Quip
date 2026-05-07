@@ -109,6 +109,29 @@ final class MirrorDesktopFilterTests: XCTestCase {
                        "Off: only enabled windows are broadcast, regardless of on-screen status. The visibility filter must not leak into the Mirror-OFF path.")
     }
 
+    func testMirrorOffIncludesVisibleTargetsForQADiscoverability() {
+        // Without this, QA mode is unreachable: the user can't long-press a
+        // Simulator tile that the grid never renders. Targets ride along the
+        // default broadcast even when isEnabled=false, as long as they're
+        // on-visible-screen.
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false, onVisibleScreen: true),
+            mw(id: "term", bundleId: iterm2, enabled: false, onVisibleScreen: true),
+        ]
+        let ids = WindowManager.windowsForBroadcast(all, mirrorDesktop: false).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["sim"]),
+                       "Mirror off: visible targets ride along disabled (so QA pair is reachable); disabled terminals stay filtered.")
+    }
+
+    func testMirrorOffOffscreenDisabledTargetStillFiltered() {
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false, onVisibleScreen: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(all, mirrorDesktop: false).map(\.id)
+        XCTAssertTrue(ids.isEmpty,
+                       "Off-screen disabled target stays filtered — only the visibility-on path qualifies.")
+    }
+
     func testQAPairOverridesEnabledAndMirror() {
         let all = [
             mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false),

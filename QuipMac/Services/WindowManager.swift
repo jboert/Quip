@@ -510,9 +510,11 @@ final class WindowManager {
     /// to drop the pair.
     ///
     /// `mirrorDesktop=true` (no pair): every visible terminal + every
-    /// enabled non-terminal.
+    /// visible target (Simulator etc.) + every enabled non-terminal.
     ///
-    /// `mirrorDesktop=false` (no pair, default): only enabled windows.
+    /// `mirrorDesktop=false` (no pair, default): enabled windows + visible
+    /// targets (Simulator etc.). Targets ride along even when disabled so
+    /// QA-mode pairing is discoverable without a manual enable step.
     nonisolated static func windowsForBroadcast(
         _ all: [ManagedWindow],
         mirrorDesktop: Bool,
@@ -523,9 +525,11 @@ final class WindowManager {
             return all.filter { want.contains($0.id) }
         }
         if mirrorDesktop {
-            return all.filter { ($0.isTerminal && $0.isOnVisibleScreen) || $0.isEnabled }
+            return all.filter {
+                (($0.isTerminal || $0.isTarget) && $0.isOnVisibleScreen) || $0.isEnabled
+            }
         }
-        return all.filter(\.isEnabled)
+        return all.filter { $0.isEnabled || ($0.isTarget && $0.isOnVisibleScreen) }
     }
 
     /// True when any tracked iTerm2 window is missing its session UUID — the
