@@ -624,6 +624,28 @@ final class WebSocketServer {
         }
     }
 
+    /// Send a message to authenticated tunnel clients ONLY — does not touch
+    /// direct `clients`. Used by `broadcastLayout` when at least one direct
+    /// client is in QA mode: direct clients get per-client filtered updates
+    /// via `sendToClient`, but tunnel-routed phones can't have per-connection
+    /// pair state (the tunnel doesn't surface per-phone identity), so they
+    /// always receive the unfiltered LayoutUpdate.
+    func broadcastTunnelsOnly<T: Encodable & Sendable>(_ message: T) {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(message)
+        } catch {
+            print("[WebSocketServer] broadcastTunnelsOnly encode FAILED kind=\(String(describing: T.self)) err=\(error)")
+            return
+        }
+        tunnelBroadcastersLock.lock()
+        let broadcasters = tunnelBroadcasters
+        tunnelBroadcastersLock.unlock()
+        for broadcaster in broadcasters {
+            broadcaster.sender(data)
+        }
+    }
+
     /// Send a message to a specific connection (used for auth results).
     /// `nonisolated` because it's a pure encode-then-write helper that touches
     /// no `self` state — safe to call from the network queue during handshake.

@@ -752,31 +752,45 @@ struct QuipMacApp: App {
                 qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(pair.0) reason=\(QAPairLostMessage.Reason.windowClosed)")
                 sendQAPairLost(missingId: pair.0, reason: QAPairLostMessage.Reason.windowClosed, to: connection)
                 webSocketServer.clearQAPair(for: connection)
+                qaPairOffscreenSince = qaPairOffscreenSince.filter { !$0.key.hasPrefix("\(ObjectIdentifier(connection)):") }
                 continue
             }
             if !knownIds.contains(pair.1) {
                 qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(pair.1) reason=\(QAPairLostMessage.Reason.windowClosed)")
                 sendQAPairLost(missingId: pair.1, reason: QAPairLostMessage.Reason.windowClosed, to: connection)
                 webSocketServer.clearQAPair(for: connection)
+                qaPairOffscreenSince = qaPairOffscreenSince.filter { !$0.key.hasPrefix("\(ObjectIdentifier(connection)):") }
                 continue
             }
 
             // Off-screen >5s path: bookkeep first-seen, expire after 5s.
+            // Iterate WITHOUT `break` so both ids' timestamps stay maintained
+            // even when the first triggers — the loop fires `qa_pair_lost`
+            // for the first stale id only (one message is enough — phone
+            // exits QA mode either way), then purges all entries for the
+            // affected connection so leftover timestamps don't outlive the pair.
             let offscreenIds = windowManager.windows
                 .filter { (pair.0 == $0.id || pair.1 == $0.id) && !$0.isOnVisibleScreen }
                 .map(\.id)
             let now = Date()
+            var pairCleared = false
             for id in offscreenIds {
                 let key = "\(ObjectIdentifier(connection)):\(id)"
                 let since = qaPairOffscreenSince[key] ?? now
                 qaPairOffscreenSince[key] = since
-                if now.timeIntervalSince(since) >= 5.0 {
+                if !pairCleared, now.timeIntervalSince(since) >= 5.0 {
                     qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(id) reason=\(QAPairLostMessage.Reason.windowOffscreen)")
                     sendQAPairLost(missingId: id, reason: QAPairLostMessage.Reason.windowOffscreen, to: connection)
                     webSocketServer.clearQAPair(for: connection)
-                    qaPairOffscreenSince.removeValue(forKey: key)
-                    break
+                    pairCleared = true
                 }
+            }
+            if pairCleared {
+                // Pair is gone — purge ALL offscreen-since entries for this
+                // connection so the second id's timestamp doesn't leak.
+                let prefix = "\(ObjectIdentifier(connection)):"
+                qaPairOffscreenSince = qaPairOffscreenSince.filter { !$0.key.hasPrefix(prefix) }
+                continue
             }
             // Reset clocks for any pair-id that returned on-screen.
             let onscreen = windowManager.windows.filter {
@@ -820,6 +834,13 @@ struct QuipMacApp: App {
             let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
             self.webSocketServer.sendToClient(update, connection: connection)
         }
+        // Tunnel broadcasters can't have per-connection QA pair state, so
+        // they always receive the unfiltered LayoutUpdate. Build it once and
+        // push.
+        let unfilteredVisible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop)
+        let unfilteredStates = stateize(unfilteredVisible, screenBounds: screenBounds)
+        let unfilteredUpdate = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: unfilteredStates)
+        webSocketServer.broadcastTunnelsOnly(unfilteredUpdate)
         broadcastProjectDirectories()
     }
 
