@@ -12,6 +12,9 @@ struct QAPairLayoutView: View {
     let target: WindowState
     let terminal: WindowState
     @Binding var selectedWindowId: String?
+    @Binding var contentTextById: [String: String]
+    @Binding var contentScreenshotById: [String: String]
+    @Binding var contentURLsById: [String: [String]]
     let backendId: String
     var onSendText: (String) -> Void
     var onExit: () -> Void
@@ -24,15 +27,24 @@ struct QAPairLayoutView: View {
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
-    init(target: WindowState, terminal: WindowState,
-         selectedWindowId: Binding<String?>,
-         backendId: String,
-         onSendText: @escaping (String) -> Void,
-         onExit: @escaping () -> Void,
-         onRePair: @escaping () -> Void) {
+    init(
+        target: WindowState,
+        terminal: WindowState,
+        selectedWindowId: Binding<String?>,
+        contentTextById: Binding<[String: String]>,
+        contentScreenshotById: Binding<[String: String]>,
+        contentURLsById: Binding<[String: [String]]>,
+        backendId: String,
+        onSendText: @escaping (String) -> Void,
+        onExit: @escaping () -> Void,
+        onRePair: @escaping () -> Void
+    ) {
         self.target = target
         self.terminal = terminal
         self._selectedWindowId = selectedWindowId
+        self._contentTextById = contentTextById
+        self._contentScreenshotById = contentScreenshotById
+        self._contentURLsById = contentURLsById
         self.backendId = backendId
         self._dividerRatio = AppStorage(wrappedValue: 0.5,
                                         "qaPair.dividerRatio.\(backendId)")

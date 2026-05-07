@@ -3,6 +3,9 @@ import SwiftUI
 struct RemoteLayoutView: View {
     @Binding var windows: [WindowState]
     @Binding var selectedWindowId: String?
+    @Binding var contentTextById: [String: String]
+    @Binding var contentScreenshotById: [String: String]
+    @Binding var contentURLsById: [String: [String]]
     var isConnected: Bool
     var macName: String = "Mac"
     var onConnect: ((String) -> Void)? = nil
@@ -50,6 +53,9 @@ struct RemoteLayoutView: View {
                     target: target,
                     terminal: terminal,
                     selectedWindowId: $selectedWindowId,
+                    contentTextById: $contentTextById,
+                    contentScreenshotById: $contentScreenshotById,
+                    contentURLsById: $contentURLsById,
                     backendId: backendId,
                     onSendText: onSendText,
                     onExit: onExitQA,

@@ -1215,6 +1215,9 @@ struct MainiOSView: View {
                         target: target,
                         terminal: terminal,
                         selectedWindowId: $selectedWindowId,
+                        contentTextById: $terminalContentTextById,
+                        contentScreenshotById: $terminalContentScreenshotById,
+                        contentURLsById: $terminalContentURLsById,
                         backendId: manager.activeBackendID,
                         onSendText: { text in
                             client.send(SendTextMessage(windowId: selectedWindowId ?? "",
