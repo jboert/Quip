@@ -48,6 +48,13 @@ enum LogPaths {
         return directory.appendingPathComponent("latency.log").path
     }
 
+    /// QA mode pair lifecycle: set/clear/lost events + per-tick broadcast
+    /// filter counts. One line per event.
+    static var qaModePath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("qa-mode.log").path
+    }
+
     private static func ensureDirectoryExists() {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }

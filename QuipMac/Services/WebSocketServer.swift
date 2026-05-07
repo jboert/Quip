@@ -20,6 +20,10 @@ final class WebSocketServer {
     /// can render the per-client list (§B5). UI-thread observable.
     var connectedClients: [ConnectedClientInfo] = []
     var onMessageReceived: ((Data) -> Void)?
+    /// Like `onMessageReceived` but also surfaces the originating connection.
+    /// Used for per-connection state (e.g. QA pair) where the bare bytes
+    /// aren't enough — we need to know which client sent them.
+    var onMessageWithConnection: ((Data, NWConnection) -> Void)?
     var onClientAuthenticated: (() -> Void)?
     var pinManager: PINManager?
     /// Diagnostics log — optional so nothing breaks if the app hasn't wired
@@ -859,6 +863,7 @@ final class WebSocketServer {
                     }
 
                     self.touchActivity(for: connection)
+                    self.onMessageWithConnection?(receivedData, connection)
                     self.onMessageReceived?(receivedData)
                 }
             }

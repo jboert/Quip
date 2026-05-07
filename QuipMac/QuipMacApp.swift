@@ -1,5 +1,6 @@
 import SwiftUI
 import WhisperKit
+import Network
 
 // WhisperKit (upstream) doesn't declare Sendable conformance. Swift 6 strict
 // concurrency then rejects sending an awaited WhisperKit instance back into
@@ -203,6 +204,24 @@ struct QuipMacApp: App {
         webSocketServer.onMessageReceived = { [self] data in
             DispatchQueue.main.async {
                 self.handleIncomingMessage(data)
+            }
+        }
+
+        webSocketServer.onMessageWithConnection = { [self] data, connection in
+            guard let type = MessageCoder.messageType(from: data) else { return }
+            switch type {
+            case "set_qa_pair":
+                if let msg = MessageCoder.decode(SetQAPairMessage.self, from: data) {
+                    DispatchQueue.main.async {
+                        self.applySetQAPair(msg, connection: connection)
+                    }
+                }
+            case "clear_qa_pair":
+                DispatchQueue.main.async {
+                    self.applyClearQAPair(connection: connection)
+                }
+            default:
+                break
             }
         }
 
@@ -667,6 +686,61 @@ struct QuipMacApp: App {
                     KokoroTTSDebug.log("BROADCAST final marker session=\(sessionId.prefix(8))")
                 }
             })
+    }
+
+    @MainActor
+    private func applySetQAPair(_ msg: SetQAPairMessage, connection: NWConnection) {
+        // Validate ids exist in the current snapshot. Reject (and notify)
+        // if either is missing — this is the catches-stale-IDs path on
+        // reconnect-after-Mac-restart.
+        let knownIds = Set(windowManager.windows.map(\.id))
+        if !knownIds.contains(msg.targetId) {
+            self.qaModeLog("set_qa_pair rejected: targetId=\(msg.targetId) missing")
+            self.sendQAPairLost(missingId: msg.targetId, reason: "connection_reset", to: connection)
+            return
+        }
+        if !knownIds.contains(msg.terminalId) {
+            self.qaModeLog("set_qa_pair rejected: terminalId=\(msg.terminalId) missing")
+            self.sendQAPairLost(missingId: msg.terminalId, reason: "connection_reset", to: connection)
+            return
+        }
+        webSocketServer.setQAPair(targetId: msg.targetId, terminalId: msg.terminalId, for: connection)
+        self.qaModeLog("set_qa_pair connId=\(ObjectIdentifier(connection)) target=\(msg.targetId) terminal=\(msg.terminalId)")
+        // Push an immediate filtered update so the phone doesn't have to
+        // wait for the next snapshot tick to switch into QA layout.
+        self.broadcastLayout()
+    }
+
+    @MainActor
+    private func applyClearQAPair(connection: NWConnection) {
+        webSocketServer.clearQAPair(for: connection)
+        self.qaModeLog("clear_qa_pair connId=\(ObjectIdentifier(connection))")
+        self.broadcastLayout()
+    }
+
+    /// Send `qa_pair_lost` to a single connection (not a broadcast — only the
+    /// affected client should exit QA mode). Caller logs separately.
+    private func sendQAPairLost(missingId: String, reason: String, to connection: NWConnection) {
+        let msg = QAPairLostMessage(missingId: missingId, reason: reason)
+        guard let data = try? JSONEncoder().encode(msg) else { return }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
+        connection.send(content: data, contentContext: context, isComplete: true,
+                        completion: .contentProcessed({ _ in }))
+    }
+
+    private func qaModeLog(_ msg: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(msg)\n"
+        let path = LogPaths.qaModePath
+        if let fh = FileHandle(forWritingAtPath: path) {
+            fh.seekToEndOfFile()
+            fh.write(Data(line.utf8))
+            fh.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
+        }
+        print("[QAMode] \(msg)")
     }
 
     @MainActor
