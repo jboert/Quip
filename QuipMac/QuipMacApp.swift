@@ -76,6 +76,10 @@ struct QuipMacApp: App {
     /// First-seen-offscreen timestamp keyed by "<connId>:<windowId>". Drives
     /// the 5s grace period before emitting `qa_pair_lost { reason: "window_offscreen" }`.
     @State private var qaPairOffscreenSince: [String: Date] = [:]
+    /// Per-connection throttle for the broadcast_filter log line. Logs at most
+    /// once per 5s OR when the filtered window count changes — whichever
+    /// comes first — so qa-mode.log doesn't flood with one-line-per-tick.
+    @State private var lastQAFilterLogAt: [ObjectIdentifier: (Date, Int)] = [:]
     /// Last window the phone client selected — only this one gets TTS synthesis
     @State private var clientSelectedWindowId: String? = nil
     /// Windows that must see a "busy" state (Claude processing) before the next
@@ -833,6 +837,16 @@ struct QuipMacApp: App {
             let states = self.stateize(visible, screenBounds: screenBounds)
             let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
             self.webSocketServer.sendToClient(update, connection: connection)
+            if let p = pair {
+                _ = p
+                let key = ObjectIdentifier(connection)
+                let now = Date()
+                let prev = self.lastQAFilterLogAt[key]
+                if prev == nil || prev!.1 != visible.count || now.timeIntervalSince(prev!.0) >= 5.0 {
+                    self.qaModeLog("broadcast_filter connId=\(key) in=\(allWindows.count) out=\(visible.count)")
+                    self.lastQAFilterLogAt[key] = (now, visible.count)
+                }
+            }
         }
         // Tunnel broadcasters can't have per-connection QA pair state, so
         // they always receive the unfiltered LayoutUpdate. Build it once and
