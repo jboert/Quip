@@ -536,6 +536,49 @@ final class WebSocketServer {
         print("[WebSocketServer] Tunnel client unregistered. \(count) tunnel client(s)")
     }
 
+    /// Send a `LayoutUpdate` (or any other message) to a specific
+    /// authenticated connection. Used by `broadcastLayout` when at least
+    /// one phone is in QA mode and each client needs a per-pair filtered
+    /// window list. Tracks `pendingBytes` like `broadcast(_:)` does so
+    /// backpressure logic stays consistent.
+    func sendToClient<T: Encodable & Sendable>(_ message: T, connection: NWConnection) {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(message)
+        } catch {
+            print("[WebSocketServer] sendToClient encode FAILED kind=\(String(describing: T.self)) err=\(error)")
+            return
+        }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
+        let payloadSize = data.count
+        guard let idx = clients.firstIndex(where: { $0.connection === connection }),
+              clients[idx].isAuthenticated else { return }
+        if clients[idx].pendingBytes + payloadSize > ClientConnection.maxPendingBytes { return }
+        clients[idx].pendingBytes += payloadSize
+        let conn = connection
+        conn.send(content: data, contentContext: context, isComplete: true,
+                  completion: .contentProcessed({ [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let i = self.clients.firstIndex(where: { $0.connection === conn }) {
+                    self.clients[i].pendingBytes = max(0, self.clients[i].pendingBytes - payloadSize)
+                }
+                if error != nil { self.removeConnection(conn) }
+            }
+        }))
+    }
+
+    /// True when at least one authenticated client has a QA pair set.
+    /// Drives the broadcastLayout fast path: when no pair is active, encode
+    /// the LayoutUpdate once and broadcast (existing behavior). When at
+    /// least one is active, encode per-client.
+    var anyQAPairActive: Bool {
+        clients.contains { client in
+            client.isAuthenticated && qaPairByConnection[ObjectIdentifier(client.connection)] != nil
+        }
+    }
+
     func broadcast<T: Encodable & Sendable>(_ message: T) {
         let data: Data
         do {

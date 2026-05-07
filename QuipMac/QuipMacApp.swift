@@ -73,6 +73,9 @@ struct QuipMacApp: App {
     @State private var ttsGeneration: [String: Int] = [:]
     /// Windows where Claude is actively thinking (detected from terminal content)
     @State private var thinkingWindows: Set<String> = []
+    /// First-seen-offscreen timestamp keyed by "<connId>:<windowId>". Drives
+    /// the 5s grace period before emitting `qa_pair_lost { reason: "window_offscreen" }`.
+    @State private var qaPairOffscreenSince: [String: Date] = [:]
     /// Last window the phone client selected — only this one gets TTS synthesis
     @State private var clientSelectedWindowId: String? = nil
     /// Windows that must see a "busy" state (Claude processing) before the next
@@ -406,6 +409,7 @@ struct QuipMacApp: App {
                         // picker again without a round-trip.
                         windowManager.enableAttachedWindows()
                         self.syncTrackedWindows()
+                        validateQAPairs()
                         broadcastLayout()
                     }
                 }
@@ -722,11 +726,7 @@ struct QuipMacApp: App {
     /// affected client should exit QA mode). Caller logs separately.
     private func sendQAPairLost(missingId: String, reason: String, to connection: NWConnection) {
         let msg = QAPairLostMessage(missingId: missingId, reason: reason)
-        guard let data = try? JSONEncoder().encode(msg) else { return }
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-        let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
-        connection.send(content: data, contentContext: context, isComplete: true,
-                        completion: .contentProcessed({ _ in }))
+        webSocketServer.sendToClient(msg, connection: connection)
     }
 
     private func qaModeLog(_ msg: String) {
@@ -744,14 +744,89 @@ struct QuipMacApp: App {
     }
 
     @MainActor
+    private func validateQAPairs() {
+        let knownIds = Set(windowManager.windows.map(\.id))
+        for (connection, pair) in webSocketServer.qaPairSnapshot() {
+            // Closed-window path: id no longer in snapshot.
+            if !knownIds.contains(pair.0) {
+                qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(pair.0) reason=\(QAPairLostMessage.Reason.windowClosed)")
+                sendQAPairLost(missingId: pair.0, reason: QAPairLostMessage.Reason.windowClosed, to: connection)
+                webSocketServer.clearQAPair(for: connection)
+                continue
+            }
+            if !knownIds.contains(pair.1) {
+                qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(pair.1) reason=\(QAPairLostMessage.Reason.windowClosed)")
+                sendQAPairLost(missingId: pair.1, reason: QAPairLostMessage.Reason.windowClosed, to: connection)
+                webSocketServer.clearQAPair(for: connection)
+                continue
+            }
+
+            // Off-screen >5s path: bookkeep first-seen, expire after 5s.
+            let offscreenIds = windowManager.windows
+                .filter { (pair.0 == $0.id || pair.1 == $0.id) && !$0.isOnVisibleScreen }
+                .map(\.id)
+            let now = Date()
+            for id in offscreenIds {
+                let key = "\(ObjectIdentifier(connection)):\(id)"
+                let since = qaPairOffscreenSince[key] ?? now
+                qaPairOffscreenSince[key] = since
+                if now.timeIntervalSince(since) >= 5.0 {
+                    qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(id) reason=\(QAPairLostMessage.Reason.windowOffscreen)")
+                    sendQAPairLost(missingId: id, reason: QAPairLostMessage.Reason.windowOffscreen, to: connection)
+                    webSocketServer.clearQAPair(for: connection)
+                    qaPairOffscreenSince.removeValue(forKey: key)
+                    break
+                }
+            }
+            // Reset clocks for any pair-id that returned on-screen.
+            let onscreen = windowManager.windows.filter {
+                (pair.0 == $0.id || pair.1 == $0.id) && $0.isOnVisibleScreen
+            }.map(\.id)
+            for id in onscreen {
+                qaPairOffscreenSince.removeValue(forKey: "\(ObjectIdentifier(connection)):\(id)")
+            }
+        }
+    }
+
+    @MainActor
     private func broadcastLayout() {
         guard webSocketServer.hasConnectedClients else { return }
         let display = windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first
         let screenBounds = display?.frame ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
 
         let mirrorDesktop = UserDefaults.standard.bool(forKey: "mirrorDesktop")
-        let visible = WindowManager.windowsForBroadcast(windowManager.windows, mirrorDesktop: mirrorDesktop)
-        let states = visible.map { window in
+        let monitor = display?.name ?? "Display 1"
+        let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
+        let allWindows = windowManager.windows
+
+        // Fast path: no client is in QA mode → encode once, broadcast as before.
+        if !webSocketServer.anyQAPairActive {
+            let visible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop)
+            let states = stateize(visible, screenBounds: screenBounds)
+            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
+            webSocketServer.broadcast(update)
+            broadcastProjectDirectories()
+            return
+        }
+
+        // Per-client path: at least one phone is in QA mode. Build each
+        // client's LayoutUpdate with its own filter so QA-paired phones
+        // get exactly two windows and non-QA phones get the unfiltered list.
+        webSocketServer.forEachAuthenticatedClientWithQAPair { connection, pair in
+            let visible = WindowManager.windowsForBroadcast(
+                allWindows, mirrorDesktop: mirrorDesktop, qaPair: pair
+            )
+            let states = self.stateize(visible, screenBounds: screenBounds)
+            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
+            self.webSocketServer.sendToClient(update, connection: connection)
+        }
+        broadcastProjectDirectories()
+    }
+
+    /// Build the `WindowState` array from a filtered `ManagedWindow` slice.
+    /// Pulled out so the QA-mode per-client path doesn't duplicate the loop.
+    private func stateize(_ windows: [ManagedWindow], screenBounds: CGRect) -> [WindowState] {
+        windows.map { window in
             window.toWindowState(
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
                 screenBounds: screenBounds,
@@ -760,10 +835,6 @@ struct QuipMacApp: App {
                 cliKind: terminalStateDetector.windowCLIKind[window.id]
             )
         }
-        let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
-        let update = LayoutUpdate(monitor: display?.name ?? "Display 1", screenAspect: aspect, windows: states)
-        webSocketServer.broadcast(update)
-        broadcastProjectDirectories()
     }
 
     private func broadcastProjectDirectories() {
