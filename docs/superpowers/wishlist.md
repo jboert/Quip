@@ -6,6 +6,48 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-05-07 cont-3 (QA mode v1.5 — live content + focus mode + a11y)
+
+HEAD `4f2c8c8` (pushed pending). Eleven-task plan from `docs/superpowers/plans/2026-05-07-qa-mode-v1.5.md` driven via subagent-driven-development. 354/354 iOS tests passing, 335/335 Mac tests passing.
+
+### v1.5 scope shipped (16 commits this round)
+
+- **Live per-pane content**: per-windowId state maps (`terminalContent{Text,Screenshot,URLs}ById`) replace the single-window state slots in QA panes. Both pair halves refresh simultaneously on the existing screenshot cadence. Bug fix `4964df5` plumbed `onRefresh` so the periodic timer chain still fires; `4102841` purges both slots on QA exit / `qa_pair_lost`.
+- **Focus mode**: cycle arrows, follow-frontmost auto-pin, spawn / arrange / photo / prompts buttons all gated `&& !isQAModeActive` in `MainiOSView`. PTT mic, keyboard, Send still visible. `cycleWindow(direction:)` early-returns in QA. Final-review fix added the same guard to `volumeHandler.onSelectionChanged` so volume-button cycling honors QA mode.
+- **Accessibility labels**: `WindowRectangle` now exposes `accessibilityLabel("Window: \(app) — \(folder ?? name)")` + `accessibilityHint(...)` so VoiceOver and `ios-simulator-skill`'s `screen_mapper.py` can address grid tiles by meaning.
+- **Position-swap chip**: `arrow.left.arrow.right` button in the header chip swaps which window renders left vs right. Persisted per-backend via `BackendSession.swapKey(forBackendId:)` → `UserDefaults("qaPair.swapped.\(backendId)")`. `init` re-seeds `@State` from defaults so the choice survives view recycling.
+- **Divider drag UX (cont-3 user-feedback iteration, `3ecde3f`)**: 4pt visible line + 3×24pt low-opacity grip pill + 44pt invisible hit zone via `.contextShape(Rectangle().inset(by: -20))`. `.highPriorityGesture` on the divider so its `DragGesture(minimumDistance: 1)` wins over the parent HStack `swipeFlipGesture` (was eating slow drags). Double-tap divider snaps to 50/50.
+- **Final review fixes (`4f2c8c8`)**: sticky content writes (no flicker on transient `screencapture` failure), volume-cycle gated in QA, header separator changed from `arrow.left.arrow.right` to `circle.fill` so it stops looking like the swap button.
+
+### Bugs caught by review (all fixed)
+
+1. `applyContent` was clearing the screenshot/urls slots on nil/empty input while legacy single-state was sticky → QA panes flickered for one tick on transient capture fails. Fixed with sticky semantics + `testApplyContentIsStickyOnNilScreenshotAndEmptyURLs`.
+2. `volumeHandler.onSelectionChanged` not gated on QA mode → volume buttons could change selection out from under the pair, second pane went stale. Fixed with same `manager.active.qaPair != nil` early-return as `cycleWindow`.
+3. Header chip used `arrow.left.arrow.right` for both static separator AND swap button → visually ambiguous. Static separator changed to a small filled dot.
+
+### Skipped / future work
+
+- **Task 11 — full single-state cleanup**: `BackendSession.swift` and `BackendConnectionManager.swift` still hold legacy `terminalContentText/Screenshot/URLs/WindowId` for the phone-prefs-backup mechanism. Removing them without migrating the prefs backup would break sync. Documented as v1.6+ work.
+- **Sim writability** (KeystrokeInjector): out of scope per use case (agent drives the Sim, not the human).
+- **Browser-on-localhost target type**: separate spec, ships as v2.
+- **Multi-pair management**: single pair per backend stays the limit.
+- **Refresh-rate boost**: only if v1.5 field testing shows lag.
+
+### Smoke pass (driven this session)
+
+| Step | Status | Notes |
+|------|--------|-------|
+| Sim tile in grid + long-press → "Pair for QA" → picker → side-by-side | ✅ | Carried over from cont-2 fixes |
+| **Live content in BOTH panes** | ✅ | Headline v1.5 deliverable confirmed on physical iPhone |
+| Position-swap chip swaps left↔right + persists | ✅ | User confirmed |
+| Focus mode hides cycle/spawn/arrange/photo/prompts | ✅ | User confirmed |
+| Divider drag with grip pill + 44pt hit zone | ✅ | User-driven UX iteration mid-session |
+| Double-tap divider → 50/50 snap | ✅ | New escape hatch |
+| All 354 iOS tests passing | ✅ | +1 sticky-write test added in final-review pass |
+| All 335 Mac tests passing | ✅ | No Mac-side changes this round |
+
+---
+
 ## Session log — 2026-05-07 (QA mode v1 — paired Simulator + terminal layout)
 
 19 commits on `eb-branch`. Started after `b4a9090`. Spec at `docs/superpowers/specs/2026-05-07-qa-mode-design.md`. Plan at `docs/superpowers/plans/2026-05-07-qa-mode.md`.
