@@ -4,9 +4,9 @@ import SwiftUI
 /// point in `ContextMenuView` — the long-pressed window IS one half, and
 /// the sheet picks the other half.
 ///
-/// `.target` mode lists windows where `targetKind != nil` (Simulators in v1).
-/// `.terminal` mode lists windows where `app` matches a known terminal bundle
-/// (the phone-side equivalent of `ManagedWindow.isTerminal`).
+/// Filtering uses `WindowState.isTarget` / `WindowState.isTerminal` (see
+/// `Models/WindowState+QAMode.swift`) — the same predicates anywhere in
+/// the iOS app needs to classify windows for QA mode.
 struct QAPairPickerSheet: View {
     enum Mode {
         case target    // pick a target — partner is a known terminal
@@ -24,9 +24,9 @@ struct QAPairPickerSheet: View {
     private var filtered: [WindowState] {
         switch mode {
         case .target:
-            return windows.filter { $0.targetKind != nil }
+            return windows.filter(\.isTarget)
         case .terminal:
-            return windows.filter { Self.isTerminal($0) }
+            return windows.filter(\.isTerminal)
         }
     }
 
@@ -91,14 +91,5 @@ struct QAPairPickerSheet: View {
                 }
             }
         }
-    }
-
-    /// Phone-side terminal classification — must mirror
-    /// `ManagedWindow.isTerminal` on the Mac. The wire format doesn't
-    /// surface a `bundleId` field, so we match by app name. The two
-    /// strings the Mac currently uses are "iTerm2" and "Terminal".
-    static func isTerminal(_ w: WindowState) -> Bool {
-        let app = w.app.lowercased()
-        return app == "iterm2" || app.contains("iterm") || app == "terminal"
     }
 }
