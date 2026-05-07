@@ -17,6 +17,7 @@ struct QAPairLayoutView: View {
     var onRePair: () -> Void
 
     @AppStorage private var dividerRatio: Double
+    @State private var positionSwapped: Bool = false
     @State private var draftText: String = ""
     @FocusState private var inputFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
@@ -81,6 +82,17 @@ struct QAPairLayoutView: View {
                 .foregroundStyle(Color(hex: terminal.color))
 
             Spacer()
+
+            Button {
+                withAnimation(.spring(duration: 0.2, bounce: 0.15)) {
+                    positionSwapped.toggle()
+                }
+            } label: {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(colors.textTertiary)
+            }
+            .accessibilityLabel("Swap pane positions")
 
             Button { onRePair() } label: {
                 Image(systemName: "rectangle.split.2x1")
