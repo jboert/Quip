@@ -90,11 +90,12 @@ struct QAPairLayoutView: View {
             Spacer()
 
             Button {
+                let newValue = !positionSwapped
                 withAnimation(.spring(duration: 0.2, bounce: 0.15)) {
-                    positionSwapped.toggle()
+                    positionSwapped = newValue
                 }
                 let key = BackendSession.swapKey(forBackendId: backendId)
-                UserDefaults.standard.set(positionSwapped, forKey: key)
+                UserDefaults.standard.set(newValue, forKey: key)
             } label: {
                 Image(systemName: "arrow.left.arrow.right")
                     .font(.system(size: 14, weight: .medium))
