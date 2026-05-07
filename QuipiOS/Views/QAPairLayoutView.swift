@@ -136,18 +136,32 @@ struct QAPairLayoutView: View {
 
     private func pane(window: WindowState, width: CGFloat) -> some View {
         let isSelected = selectedWindowId == window.id
-        return WindowRectangle(
-            window: window,
-            isSelected: isSelected,
-            onSelect: {
-                withAnimation(.spring(duration: 0.2, bounce: 0.15)) {
-                    selectedWindowId = window.id
-                }
-            },
-            onAction: { _ in /* QA pane suppresses per-window actions */ }
+        let text = contentTextById[window.id] ?? ""
+        let screenshot = contentScreenshotById[window.id]
+        let urls = contentURLsById[window.id] ?? []
+        return InlineTerminalContent(
+            content: text,
+            screenshot: screenshot,
+            urls: urls,
+            windowName: window.folder?.isEmpty == false ? window.folder! : window.name,
+            windowColor: Color(hex: window.color),
+            isExpanded: .constant(false),
+            onRefresh: { },
+            onSendAction: { _ in },
+            onCycleWindow: nil
         )
         .frame(width: max(0, width))
         .padding(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(duration: 0.2, bounce: 0.15)) {
+                selectedWindowId = window.id
+            }
+        }
     }
 
     // MARK: - Divider
