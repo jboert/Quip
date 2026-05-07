@@ -977,7 +977,7 @@ final class BackendConnectionManager {
             rebuilt.macPermissions = session.macPermissions
             rebuilt.ttsOverlayTexts = session.ttsOverlayTexts
             rebuilt.reachability = session.reachability
-            rebuilt.qaPair = session.qaPair
+            rebuilt.updateQAPair(session.qaPair)
             self.wire(session: rebuilt)
             self.sessions[identity.deviceID] = rebuilt
             if let i = self.paired.firstIndex(where: { $0.id == oldID }) {

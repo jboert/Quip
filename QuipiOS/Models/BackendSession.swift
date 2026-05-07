@@ -22,6 +22,10 @@ final class BackendSession {
     let backendID: String
     let client: WebSocketClient
 
+    /// UserDefaults key for the persisted QA pair. Computed from `backendID`.
+    /// Centralized so init + `updateQAPair` can't drift.
+    private var qaPairUserDefaultsKey: String { "qaPair.\(backendID)" }
+
     var windows: [WindowState] = []
     var selectedWindowId: String?
     var monitorName: String = "Mac"
@@ -40,13 +44,13 @@ final class BackendSession {
     /// QA mode pair for this backend. nil = not in QA mode. Persisted to
     /// `UserDefaults` under "qaPair.\(backendID)" as JSON-encoded `QAPair`.
     /// Use `updateQAPair(_:)` to mutate so persistence stays in sync.
-    var qaPair: QAPair?
+    private(set) var qaPair: QAPair?
 
     init(backendID: String, client: WebSocketClient) {
         self.backendID = backendID
         self.client = client
         // Hydrate persisted QA pair if present.
-        if let blob = UserDefaults.standard.data(forKey: "qaPair.\(backendID)"),
+        if let blob = UserDefaults.standard.data(forKey: qaPairUserDefaultsKey),
            let pair = try? JSONDecoder().decode(QAPair.self, from: blob) {
             self.qaPair = pair
         }
@@ -57,11 +61,10 @@ final class BackendSession {
     /// lines up with the in-memory value.
     func updateQAPair(_ pair: QAPair?) {
         self.qaPair = pair
-        let key = "qaPair.\(backendID)"
         if let pair, let blob = try? JSONEncoder().encode(pair) {
-            UserDefaults.standard.set(blob, forKey: key)
+            UserDefaults.standard.set(blob, forKey: qaPairUserDefaultsKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: key)
+            UserDefaults.standard.removeObject(forKey: qaPairUserDefaultsKey)
         }
     }
 }
