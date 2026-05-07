@@ -4660,23 +4660,29 @@ struct InlineTerminalContent: View {
                     // ~40pt of the floor (close enough that they were
                     // clearly following the live tail).
                     ScrollViewReader { proxy in
-                        ScrollView {
+                        let baseScroll = ScrollView {
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFit()
                                 .frame(maxWidth: .infinity)
                                 .id("bottom")
                         }
-                        .onScrollGeometryChange(for: Bool.self) { geo in
-                            let distance = geo.contentSize.height
-                                - (geo.contentOffset.y + geo.containerSize.height)
-                            return distance < 40
-                        } action: { _, atBottom in
-                            isPinnedToBottom = atBottom
-                        }
-                        .onChange(of: screenshot) { _, _ in
-                            guard isPinnedToBottom else { return }
-                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+
+                        if #available(iOS 18.0, *) {
+                            baseScroll
+                                .onScrollGeometryChange(for: Bool.self) { geo in
+                                    let distance = geo.contentSize.height
+                                        - (geo.contentOffset.y + geo.containerSize.height)
+                                    return distance < 40
+                                } action: { _, atBottom in
+                                    isPinnedToBottom = atBottom
+                                }
+                                .onChange(of: screenshot) { _, _ in
+                                    guard isPinnedToBottom else { return }
+                                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                                }
+                        } else {
+                            baseScroll
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
