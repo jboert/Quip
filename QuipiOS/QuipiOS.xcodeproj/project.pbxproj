@@ -72,6 +72,7 @@
 		A7FF24EE28418D741E642E55 /* LatencyTaggingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9FD1759EACD71B9E57C25E1 /* LatencyTaggingTests.swift */; };
 		A83DA871E1C581C5B55B2853 /* PairedBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C9266FDBE3CF14DDC598A9C /* PairedBackend.swift */; };
 		A977CCC72BA863A04F17FB77 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 07BAAAC4E0E8051B6FF2664E /* Assets.xcassets */; };
+		AB8EB1C085A7E375EECDE0D8 /* QAPairLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46EF93D7DE43B8C363C6D49D /* QAPairLayoutView.swift */; };
 		AC12BD221896070181F785DC /* QuipLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109D3594919D4EF54DE97C72 /* QuipLiveActivityWidget.swift */; };
 		B614CDB22648303AA8D60A75 /* DisconnectReason.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2248221E38F20DE3A6CDDAE /* DisconnectReason.swift */; };
 		B712CA6389A8643DAA92C4FE /* CertPins.json in Resources */ = {isa = PBXBuildFile; fileRef = 50991F62509F0EBB3C8037B9 /* CertPins.json */; };
@@ -168,6 +169,7 @@
 		451D008AD329E15F102F2D8D /* ShakeDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShakeDetector.swift; sourceTree = "<group>"; };
 		46181BEC707D4C04671D336E /* QuipMacPermsActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacPermsActivityWidget.swift; sourceTree = "<group>"; };
 		466A4F2906BA7B078608620E /* DiagnosticsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsSheet.swift; sourceTree = "<group>"; };
+		46EF93D7DE43B8C363C6D49D /* QAPairLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QAPairLayoutView.swift; sourceTree = "<group>"; };
 		47C70308C62E57B9CBBEFF9E /* SpeechServicePathSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServicePathSelectionTests.swift; sourceTree = "<group>"; };
 		4A0C4B009323C19ADC62F972 /* ImageUploadFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageUploadFailureTests.swift; sourceTree = "<group>"; };
 		4A833238659B2E7E8D205F45 /* WhisperAudioSenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperAudioSenderTests.swift; sourceTree = "<group>"; };
@@ -348,6 +350,7 @@
 				466A4F2906BA7B078608620E /* DiagnosticsSheet.swift */,
 				3150B50687617E509C16EC1D /* ImagePickerPresenter.swift */,
 				BE0BC3568ECDD8FC3E78B940 /* PendingImagePreviewStrip.swift */,
+				46EF93D7DE43B8C363C6D49D /* QAPairLayoutView.swift */,
 				94FA5C2A4E68BD3594AAD1EF /* QAPairPickerSheet.swift */,
 				BE693F49CD672CFD1507FDC6 /* QuipTheme.swift */,
 				8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */,
@@ -681,6 +684,7 @@
 				C048886FBB8F8115ED5B1964 /* PushNotificationCenter.swift in Sources */,
 				67348F3277C90D577C7D95D3 /* PushRegistrationService.swift in Sources */,
 				B7A0D44EB5C6E674A83BAD07 /* QAPair.swift in Sources */,
+				AB8EB1C085A7E375EECDE0D8 /* QAPairLayoutView.swift in Sources */,
 				2B5E56AEE4D362C985F1C0FA /* QAPairPickerSheet.swift in Sources */,
 				6441F32153F6E86CF6529571 /* QuipApp.swift in Sources */,
 				2C52F265432CF7E5BFF28F68 /* QuipLiveActivityAttributes.swift in Sources */,
