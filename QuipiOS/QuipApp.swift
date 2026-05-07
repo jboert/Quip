@@ -450,6 +450,8 @@ struct QuipApp: App {
         manager.onFrontmostChanged = { session, windowId in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
+                // QA mode owns selection between the pair halves — frontmost autonomy here would yank selection out of the pane.
+                guard manager.active.qaPair == nil else { return }
                 guard followFrontmost else { return }
                 guard let wid = windowId,
                       windows.contains(where: { $0.id == wid }) else { return }
@@ -2326,15 +2328,15 @@ struct MainiOSView: View {
             // visible and stays geometrically centered via flexible
             // Spacers on each side. Adding/removing buttons recenters
             // automatically because the Spacers absorb the slack.
-            let leftNavOn = mainRowCycleLeft || mainRowCycleRight
-            let leftMgmtOn = mainRowSpawn || mainRowArrange
+            let leftNavOn = !isQAModeActive && (mainRowCycleLeft || mainRowCycleRight)
+            let leftMgmtOn = !isQAModeActive && (mainRowSpawn || mainRowArrange)
             let rightSendOn = mainRowKeyboard || mainRowReturn
 
             // Control buttons
             HStack(spacing: 0) {
                 // LEFT cluster 1: window nav (chevrons)
                 HStack(spacing: 6) {
-                    if mainRowCycleLeft {
+                    if mainRowCycleLeft && !isQAModeActive {
                         Button {
                             cycleWindow(direction: -1)
                         } label: {
@@ -2349,7 +2351,7 @@ struct MainiOSView: View {
                         .accessibilityLabel("Previous window")
                         .accessibilityAddTraits(.isButton)
                     }
-                    if mainRowCycleRight {
+                    if mainRowCycleRight && !isQAModeActive {
                         Button {
                             cycleWindow(direction: 1)
                         } label: {
@@ -2374,7 +2376,7 @@ struct MainiOSView: View {
 
                 // LEFT cluster 2: window mgmt (spawn, arrange)
                 HStack(spacing: 6) {
-                    if mainRowSpawn {
+                    if mainRowSpawn && !isQAModeActive {
                         Button {
                             showSpawnPicker = true
                         } label: {
@@ -2400,7 +2402,7 @@ struct MainiOSView: View {
                 // auto-chooser). Combined into one slot per `feedback_compact_ui`
                 // so the row doesn't overflow. nil isn't a tap-cycle step
                 // anymore; the auto-chooser owns "no override" now.
-                if mainRowArrange {
+                if mainRowArrange && !isQAModeActive {
                     Button {
                         // Three-mode cycle: horizontal → vertical → grid → horizontal.
                         // Grid mode (added 2026-05-06) is the natural pick for 4+
@@ -2487,7 +2489,7 @@ struct MainiOSView: View {
 
                 // RIGHT cluster 1: input attach (photo, prompts)
                 HStack(spacing: 6) {
-                    if mainRowPhoto {
+                    if mainRowPhoto && !isQAModeActive {
                         Button {
                             showingImageSourceSheet = true
                         } label: {
@@ -2501,7 +2503,7 @@ struct MainiOSView: View {
                         .accessibilityLabel(pendingImage.hasPendingImage ? "Attached image, tap to change" : "Attach image")
                         .accessibilityAddTraits(.isButton)
                     }
-                    if mainRowPrompts {
+                    if mainRowPrompts && !isQAModeActive {
                         let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
                         Button {
                             showPromptsPickerSheet = true
@@ -2520,7 +2522,7 @@ struct MainiOSView: View {
                 }
 
                 // Visual gap between photo and send-cluster (keyboard/return).
-                if (mainRowPhoto || mainRowPrompts) && rightSendOn {
+                if !isQAModeActive && (mainRowPhoto || mainRowPrompts) && rightSendOn {
                     Spacer().frame(width: 10)
                 }
 
@@ -2689,7 +2691,14 @@ struct MainiOSView: View {
         }
     }
 
+    /// True when the active backend has a QA pair set. Used to gate every
+    /// piece of UI that targets a non-pair window so QA is a focus mode.
+    private var isQAModeActive: Bool {
+        manager.active.qaPair != nil
+    }
+
     private func cycleWindow(direction: Int) {
+        guard !isQAModeActive else { return }
         guard windows.count > 1 else { return }
         let currentIndex = windows.firstIndex(where: { $0.id == selectedWindowId }) ?? 0
         let nextIndex = (currentIndex + direction + windows.count) % windows.count
