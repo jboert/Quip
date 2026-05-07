@@ -4405,6 +4405,12 @@ struct InlineTerminalContent: View {
     /// isn't hit. Zero when idle.
     @State private var swipeOffset: CGFloat = 0
 
+    /// True when the screenshot ScrollView is at-or-near the bottom — gates
+    /// the auto-scroll-to-bottom that fires on every screenshot refresh.
+    /// Default true so the very first screenshot lands at the live tail
+    /// (matches the pre-§36 behavior for users who don't manually scroll).
+    @State private var isPinnedToBottom = true
+
     /// 0…1 normalized swipe magnitude, derived from swipeOffset. Used to
     /// drive the lift-off shadow and the scale-down so the card reads as
     /// "coming off the top of the deck" rather than just a flat slide.
@@ -4646,6 +4652,13 @@ struct InlineTerminalContent: View {
             case .image:
                 if let screenshot, let imageData = Data(base64Encoded: screenshot),
                    let uiImage = UIImage(data: imageData) {
+                    // §36 — only auto-scroll to the new bottom when the
+                    // user was already pinned there. If they scrolled up
+                    // to read older content, the 2s screenshot refresh
+                    // used to yank them right back down. Now we track
+                    // distance-from-bottom and only re-pin when within
+                    // ~40pt of the floor (close enough that they were
+                    // clearly following the live tail).
                     ScrollViewReader { proxy in
                         ScrollView {
                             Image(uiImage: uiImage)
@@ -4654,7 +4667,15 @@ struct InlineTerminalContent: View {
                                 .frame(maxWidth: .infinity)
                                 .id("bottom")
                         }
+                        .onScrollGeometryChange(for: Bool.self) { geo in
+                            let distance = geo.contentSize.height
+                                - (geo.contentOffset.y + geo.containerSize.height)
+                            return distance < 40
+                        } action: { _, atBottom in
+                            isPinnedToBottom = atBottom
+                        }
                         .onChange(of: screenshot) { _, _ in
+                            guard isPinnedToBottom else { return }
                             withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                         }
                     }
