@@ -870,8 +870,9 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 
 ### B17. Trace `type=unknown (4 bytes)` mystery frame
 
-**Status:** Wishlist
-**Surfaced:** 2026-05-06 — kokoro.log shows `WS received: type=unknown (4 bytes)` at ~10-15s cadence per connected client. Persisted after `3a3a7c7` shipped a Mac-side `NWProtocolWebSocket.Metadata.opcode != .text` filter, which proved the 4-byte payload is NOT a control frame (ping/pong/close) — it's arriving as a **text frame** that fails JSON parse.
+**Status:** ✅ Closed 2026-05-07 — self-resolved by `3a3a7c7` once running. Initial reading was wrong: the 4-byte payload IS a ping/pong control frame (the fix shipped 2026-05-06 11:46 in source but the running Mac binary was old; the 17:49–17:54 unknowns on May 6 came from the pre-fix binary). After the May 7 13:29:45 rebuild + ditto of `/Applications/Quip.app`, kokoro.log shows zero `type=unknown` lines despite normal traffic (47+ `type=request_content` etc per session). The §B17 diagnostic at `WebSocketServer.swift:874-888` (commit `462db63`) is standing by to dump bytes if any non-control frame ever fails JSON parse, but the receiveMessage opcode filter eats every 4-byte frame before JSON dispatch.
+
+**Surfaced:** 2026-05-06 — kokoro.log showed `WS received: type=unknown (4 bytes)` at ~10-15s cadence per connected client. Initial hypothesis was that `3a3a7c7`'s `NWProtocolWebSocket.Metadata.opcode != .text` filter wasn't catching them, but it was — just running the old binary at the time.
 
 **Context:** Filter at `QuipMac/Services/WebSocketServer.swift:637-642` drops .ping/.pong/.close cleanly; everything else falls through to `MessageCoder.messageType(from: data)` which returns nil for non-JSON. The log line at `WebSocketServer.swift:661` then prints `"unknown"`. Cosmetic only — the frame is silently ignored downstream because no handler matches a nil messageType. But it pollutes the log and makes real signal harder to spot.
 
