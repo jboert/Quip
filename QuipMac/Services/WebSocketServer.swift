@@ -85,9 +85,10 @@ final class WebSocketServer {
         qaPairByConnection[ObjectIdentifier(connection)]
     }
 
-    /// Snapshot of all (connection, pair) entries — used by the snapshot
-    /// validator to check each pair against the current window list and
-    /// emit `qa_pair_lost` for missing windows.
+    /// Snapshot of all (connection, pair) entries for clients that currently
+    /// have a QA pair set. Filtered: clients without a pair are NOT in the
+    /// returned array. Used by the snapshot-tick pair validator (Task 7) to
+    /// scan only the pairs that need checking.
     func qaPairSnapshot() -> [(NWConnection, (String, String))] {
         clients.compactMap { client in
             guard client.isAuthenticated,
@@ -97,10 +98,11 @@ final class WebSocketServer {
         }
     }
 
-    /// Iterate authenticated clients with their per-client QA pair (or nil).
-    /// Used by `broadcastLayout` to build a custom-filtered `LayoutUpdate`
-    /// per client when at least one phone is in QA mode.
-    func forEachAuthenticatedClient(_ body: (NWConnection, (String, String)?) -> Void) {
+    /// Iterate ALL authenticated clients with their per-client QA pair (or
+    /// nil if not in QA mode). Unlike `qaPairSnapshot()`, this visits every
+    /// authenticated client — the broadcast loop needs this so non-QA
+    /// phones still receive the unfiltered `LayoutUpdate`.
+    func forEachAuthenticatedClientWithQAPair(_ body: (NWConnection, (String, String)?) -> Void) {
         for client in clients where client.isAuthenticated {
             body(client.connection, qaPairByConnection[ObjectIdentifier(client.connection)])
         }
