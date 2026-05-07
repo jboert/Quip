@@ -70,7 +70,8 @@ final class LatencyTaggingTests: XCTestCase {
             path: "sendText",
             transport: .localWS,
             networkClass: .wifi,
-            netVariance: 0
+            netVariance: 0,
+            serverURLHost: "192.168.1.50"
         )
     }
 
@@ -105,8 +106,7 @@ final class LatencyTaggingTests: XCTestCase {
 
     func testLatencySampleEqualityIncludesTransport() {
         let a = sample(100)
-        var b = a
-        b = WebSocketClient.LatencySample(
+        let b = WebSocketClient.LatencySample(
             timestamp: a.timestamp,
             totalRtt: a.totalRtt,
             injectMs: a.injectMs,
@@ -115,7 +115,8 @@ final class LatencyTaggingTests: XCTestCase {
             path: a.path,
             transport: .cloudflareTunnel,  // changed
             networkClass: a.networkClass,
-            netVariance: a.netVariance
+            netVariance: a.netVariance,
+            serverURLHost: a.serverURLHost
         )
         XCTAssertNotEqual(a, b, "Samples differing only in transport must not compare equal")
     }
@@ -131,8 +132,26 @@ final class LatencyTaggingTests: XCTestCase {
             path: a.path,
             transport: a.transport,
             networkClass: .cellular,  // changed
-            netVariance: a.netVariance
+            netVariance: a.netVariance,
+            serverURLHost: a.serverURLHost
         )
         XCTAssertNotEqual(a, b, "Samples differing only in networkClass must not compare equal")
+    }
+
+    func testLatencySampleEqualityIncludesServerURLHost() {
+        let a = sample(100)
+        let b = WebSocketClient.LatencySample(
+            timestamp: a.timestamp,
+            totalRtt: a.totalRtt,
+            injectMs: a.injectMs,
+            totalMs: a.totalMs,
+            netRtt: a.netRtt,
+            path: a.path,
+            transport: a.transport,
+            networkClass: a.networkClass,
+            netVariance: a.netVariance,
+            serverURLHost: "100.71.210.27"  // changed: same transport bucket, different host
+        )
+        XCTAssertNotEqual(a, b, "Samples differing only in serverURLHost must not compare equal — URLSwapPolicy needs per-host bucketing")
     }
 }

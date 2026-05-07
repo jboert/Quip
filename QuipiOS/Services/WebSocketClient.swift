@@ -346,13 +346,21 @@ final class WebSocketClient {
         let injectMs: Int   // ms — Mac AppleScript / paste alone
         let totalMs: Int    // ms — Mac message-arrival to text-landed
         let netRtt: Int     // ms — totalRtt - totalMs
-        let path: String    // "pasteText" | "sendText"
+        let path: String    // "pasteText" | "sendText" | "probe"
         let transport: LatencyTransport
         let networkClass: LatencyNetworkClass
         /// ms — population std-dev of the last (≤10) `netRtt` samples for
         /// the same transport bucket on this client at insert time. High
         /// variance = lossy / weak link → Phase 3 scorer penalizes it.
         let netVariance: Int
+        /// Phase 3 commit 2: URL host portion (no scheme, no port) of the
+        /// connection that produced this sample. `transport` alone lumps
+        /// Bonjour LAN and Tailscale CGNAT together; `serverURLHost` is
+        /// what URLSwapPolicy needs to address per-URL buckets when
+        /// deciding whether an alt path is faster than the current one.
+        /// Empty string when the sample was recorded without a known URL
+        /// (legacy paths; shouldn't happen post-migration).
+        let serverURLHost: String
     }
 
     /// Rolling buffer of recent text-land samples (cap 100). Read by
@@ -648,6 +656,7 @@ final class WebSocketClient {
             .filter { $0.transport == transport }
             .suffix(10)
         let variance = Self.netVariance(of: Array(recentSameTransport))
+        let host = serverURL?.host ?? ""
         let sample = LatencySample(
             timestamp: Date(),
             totalRtt: totalRtt,
@@ -657,15 +666,16 @@ final class WebSocketClient {
             path: msg.path,
             transport: transport,
             networkClass: currentNetworkClass,
-            netVariance: variance
+            netVariance: variance,
+            serverURLHost: host
         )
         latencySamples.append(sample)
         if latencySamples.count > Self.latencySampleCap {
             latencySamples.removeFirst(latencySamples.count - Self.latencySampleCap)
         }
-        NSLog("[Quip][LATENCY] path=%@ totalRtt=%d netRtt=%d injectMs=%d macTotal=%d transport=%@ net=%@ var=%d",
+        NSLog("[Quip][LATENCY] path=%@ totalRtt=%d netRtt=%d injectMs=%d macTotal=%d transport=%@ net=%@ var=%d host=%@",
               msg.path, totalRtt, netRtt, msg.injectMs, msg.totalMs,
-              transport.rawValue, currentNetworkClass.rawValue, variance)
+              transport.rawValue, currentNetworkClass.rawValue, variance, host)
     }
 
     func send<T: Codable>(_ message: T) {
