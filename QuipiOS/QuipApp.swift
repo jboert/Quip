@@ -33,6 +33,10 @@ class AppOrientationDelegate: NSObject, UIApplicationDelegate {
 /// QA mode (and the inline single-window flow) read through. Pulled out
 /// of MainiOSView so unit tests don't have to instantiate the whole view.
 enum ContentMapMutations {
+    /// Sticky writes for screenshot/urls so a refresh whose capture transiently
+    /// fails (Mac sends nil/empty) does not blank the pane. Matches the legacy
+    /// single-state semantics in `onTerminalContent`. Text always overwrites
+    /// (Mac always sends current text).
     static func applyContent(
         windowId: String,
         text: String?,
@@ -42,9 +46,9 @@ enum ContentMapMutations {
         _ screenshotMap: inout [String: String],
         _ urlsMap: inout [String: [String]]
     ) {
-        if let text { textMap[windowId] = text } else { textMap.removeValue(forKey: windowId) }
-        if let screenshot { screenshotMap[windowId] = screenshot } else { screenshotMap.removeValue(forKey: windowId) }
-        urlsMap[windowId] = urls
+        if let text { textMap[windowId] = text }
+        if let screenshot, !screenshot.isEmpty { screenshotMap[windowId] = screenshot }
+        if !urls.isEmpty { urlsMap[windowId] = urls }
     }
 
     static func purgePairContent(
@@ -542,6 +546,11 @@ struct QuipApp: App {
 
         volumeHandler.onSelectionChanged = { index in
             DispatchQueue.main.async {
+                // Volume-button cycling is suppressed in QA mode for the same
+                // reason cycleWindow is — pair scope must stay locked. Otherwise
+                // a volume cycle would change selectedWindowId out from under the
+                // pair and the second pane would go stale.
+                if manager.active.qaPair != nil { return }
                 guard index >= 0, index < windows.count else { return }
                 let newId = windows[index].id
                 selectedWindowId = newId

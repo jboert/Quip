@@ -31,7 +31,45 @@ final class QAModePerWindowContentTests: XCTestCase {
         XCTAssertEqual(screenshot["win-A"], "data:imageA")
         XCTAssertNil(screenshot["win-B"])
         XCTAssertEqual(urls["win-A"], ["http://localhost:3000"])
-        XCTAssertEqual(urls["win-B"], [])
+        // Sticky semantics: empty urls leaves slot unwritten (no prior, so nil).
+        XCTAssertNil(urls["win-B"])
+    }
+
+    /// A refresh whose Mac-side capture transiently fails (nil/empty screenshot
+    /// or empty urls) must not drop the prior content. Otherwise the QA pane
+    /// blanks for one tick every time a screencapture call hiccups.
+    func testApplyContentIsStickyOnNilScreenshotAndEmptyURLs() {
+        var text: [String: String] = [:]
+        var screenshot: [String: String] = [:]
+        var urls: [String: [String]] = [:]
+
+        ContentMapMutations.applyContent(
+            windowId: "win-A",
+            text: "first",
+            screenshot: "data:imageA",
+            urls: ["http://localhost:3000"],
+            into: &text, &screenshot, &urls
+        )
+        ContentMapMutations.applyContent(
+            windowId: "win-A",
+            text: "second",
+            screenshot: nil,
+            urls: [],
+            into: &text, &screenshot, &urls
+        )
+
+        XCTAssertEqual(text["win-A"], "second", "text always overwrites")
+        XCTAssertEqual(screenshot["win-A"], "data:imageA", "nil screenshot must not clear prior")
+        XCTAssertEqual(urls["win-A"], ["http://localhost:3000"], "empty urls must not clear prior")
+
+        ContentMapMutations.applyContent(
+            windowId: "win-A",
+            text: "third",
+            screenshot: "",
+            urls: [],
+            into: &text, &screenshot, &urls
+        )
+        XCTAssertEqual(screenshot["win-A"], "data:imageA", "empty-string screenshot must not clear prior")
     }
 
     /// Pair-clear purges both windowIds' slots so v1's "exit QA returns to grid"
