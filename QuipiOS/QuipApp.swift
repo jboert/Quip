@@ -3044,10 +3044,14 @@ struct MainiOSView: View {
     }
 
     private var terminalContentView: some View {
-        InlineTerminalContent(
-            content: terminalContentText ?? "",
-            screenshot: terminalContentScreenshot,
-            urls: terminalContentURLs ?? [],
+        let wid = selectedWindowId ?? ""
+        let text = terminalContentTextById[wid] ?? terminalContentText ?? ""
+        let screenshot = terminalContentScreenshotById[wid] ?? terminalContentScreenshot
+        let urls = terminalContentURLsById[wid] ?? terminalContentURLs ?? []
+        return InlineTerminalContent(
+            content: text,
+            screenshot: screenshot,
+            urls: urls,
             windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
             windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
             isExpanded: $isTerminalExpanded,
