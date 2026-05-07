@@ -704,17 +704,36 @@ final class WebSocketClient {
         }
     }
 
+    /// §30/4 loud-drop helper. `try? decoder.decode(...)` silently swallows
+    /// schema drift / version skew / corrupt frames — phone shows a "feature
+    /// broken" symptom with zero log evidence. Helper logs the failure with
+    /// enough context (msg type tag + decode target type + payload size +
+    /// underlying error) to triage without re-running. Pure + nonisolated
+    /// + log-injected so tests can assert format without trapping NSLog.
+    nonisolated static func decodeMessage<T: Decodable>(
+        _ type: T.Type,
+        from data: Data,
+        msgType: String,
+        log: (String) -> Void = { NSLog("%@", $0) }
+    ) -> T? {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            log("[WebSocketClient] decode FAILED type=\(msgType) kind=\(String(describing: T.self)) bytes=\(data.count) err=\(error)")
+            return nil
+        }
+    }
+
     private func handleMessage(_ data: Data) {
-        let decoder = JSONDecoder()
         struct TypePeek: Codable { let type: String }
-        guard let peek = try? decoder.decode(TypePeek.self, from: data) else {
+        guard let peek = Self.decodeMessage(TypePeek.self, from: data, msgType: "<peek>") else {
             NSLog("[WebSocketClient] Could not peek type from %d bytes", data.count)
             return
         }
 
         switch peek.type {
         case "auth_result":
-            if let msg = try? decoder.decode(AuthResultMessage.self, from: data) {
+            if let msg = Self.decodeMessage(AuthResultMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] auth_result: success=%d error=%@", msg.success ? 1 : 0, msg.error ?? "none")
                 // "auth_required" is the server's connection-ready signal —
                 // server wants a PIN. Send the cached one if we have it,
@@ -752,49 +771,46 @@ final class WebSocketClient {
                 onAuthResult?(msg.success, msg.error)
             }
         case "device_identity":
-            if let msg = try? decoder.decode(DeviceIdentityMessage.self, from: data) {
+            if let msg = Self.decodeMessage(DeviceIdentityMessage.self, from: data, msgType: peek.type) {
                 onDeviceIdentity?(msg)
             }
         case "layout_update":
             guard isAuthenticated else { return }
-            do {
-                let update = try decoder.decode(LayoutUpdate.self, from: data)
+            if let update = Self.decodeMessage(LayoutUpdate.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] layout_update: %d windows", update.windows.count)
                 onLayoutUpdate?(update)
-            } catch {
-                NSLog("[WebSocketClient] decode error: %@", "\(error)")
             }
         case "state_change":
             guard isAuthenticated else { return }
             struct SC: Codable { let windowId: String; let state: String }
-            if let c = try? decoder.decode(SC.self, from: data) {
+            if let c = Self.decodeMessage(SC.self, from: data, msgType: peek.type) {
                 onStateChange?(c.windowId, c.state)
             }
         case "terminal_content":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(TerminalContentMessage.self, from: data) {
+            if let msg = Self.decodeMessage(TerminalContentMessage.self, from: data, msgType: peek.type) {
                 onTerminalContent?(msg.windowId, msg.content, msg.screenshot, msg.urls)
             }
         case "output_delta":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(OutputDeltaMessage.self, from: data) {
+            if let msg = Self.decodeMessage(OutputDeltaMessage.self, from: data, msgType: peek.type) {
                 onOutputDelta?(msg.windowId, msg.windowName, msg.text, msg.isFinal)
             }
         case "tts_audio":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(TTSAudioMessage.self, from: data) {
+            if let msg = Self.decodeMessage(TTSAudioMessage.self, from: data, msgType: peek.type) {
                 // Empty audioBase64 can happen on the final marker message
                 let wavData = Data(base64Encoded: msg.audioBase64) ?? Data()
                 onTTSAudio?(msg.windowId, msg.windowName, msg.sessionId, msg.sequence, msg.isFinal, wavData)
             }
         case "select_window":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(SelectWindowMessage.self, from: data) {
+            if let msg = Self.decodeMessage(SelectWindowMessage.self, from: data, msgType: peek.type) {
                 onSelectWindow?(msg.windowId)
             }
         case "frontmost_changed":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(FrontmostChangedMessage.self, from: data) {
+            if let msg = Self.decodeMessage(FrontmostChangedMessage.self, from: data, msgType: peek.type) {
                 onFrontmostChanged?(msg.windowId)
             }
         case "heartbeat":
@@ -805,49 +821,49 @@ final class WebSocketClient {
             // time we receive one we're already past auth from Mac's POV.
             // Fail-soft: if decode fails, drop silently — Mac will log a
             // stale-heartbeat warning and resync on the next dispatcher tick.
-            if let msg = try? decoder.decode(HeartbeatMessage.self, from: data) {
+            if let msg = Self.decodeMessage(HeartbeatMessage.self, from: data, msgType: peek.type) {
                 send(HeartbeatAckMessage(seq: msg.seq))
             }
         case "preferences_restore":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(PreferenceRestoreMessage.self, from: data) {
+            if let msg = Self.decodeMessage(PreferenceRestoreMessage.self, from: data, msgType: peek.type) {
                 onPreferencesRestore?(msg.preferences)
             }
         case "project_directories":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ProjectDirectoriesMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ProjectDirectoriesMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] Received %d project directories", msg.directories.count)
                 onProjectDirectories?(msg.directories)
             }
         case "iterm_window_list":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ITermWindowListMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ITermWindowListMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] iterm_window_list: %d windows", msg.windows.count)
                 onITermWindowList?(msg.windows)
             }
         case "error":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ErrorMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ErrorMessage.self, from: data, msgType: peek.type) {
                 onError?(msg.reason)
             }
         case "image_upload_ack":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ImageUploadAckMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ImageUploadAckMessage.self, from: data, msgType: peek.type) {
                 onImageUploadAck?(msg.savedPath)
             }
         case "image_upload_error":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ImageUploadErrorMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ImageUploadErrorMessage.self, from: data, msgType: peek.type) {
                 onImageUploadError?(msg.reason)
             }
         case "mac_permissions":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(MacPermissionsMessage.self, from: data) {
+            if let msg = Self.decodeMessage(MacPermissionsMessage.self, from: data, msgType: peek.type) {
                 onMacPermissions?(msg)
             }
         case "transcript_result":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(TranscriptResultMessage.self, from: data) {
+            if let msg = Self.decodeMessage(TranscriptResultMessage.self, from: data, msgType: peek.type) {
                 NSLog("[Quip][PTT] transcript_result arrived textLen=%d errNil=%d",
                       msg.text.count, msg.error == nil ? 1 : 0)
                 onTranscriptResult?(msg.sessionId, msg.text, msg.error)
@@ -856,27 +872,27 @@ final class WebSocketClient {
             }
         case "diagnostics_bundle":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(DiagnosticsBundleMessage.self, from: data) {
+            if let msg = Self.decodeMessage(DiagnosticsBundleMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] diagnostics_bundle: %@ size=%d err=%@",
                       msg.filename, msg.sizeBytes, msg.errorReason ?? "none")
                 onDiagnosticsBundle?(msg)
             }
         case "log_tail":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(LogTailMessage.self, from: data) {
+            if let msg = Self.decodeMessage(LogTailMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] log_tail: %d bytes", msg.totalBytes)
                 onLogTail?(msg)
             }
         case "prompt_library":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(PromptLibraryMessage.self, from: data) {
+            if let msg = Self.decodeMessage(PromptLibraryMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] prompt_library: %d prompts", msg.prompts.count)
                 promptLibrary = msg.prompts
                 onPromptLibrary?(msg.prompts)
             }
         case "whisper_status":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(WhisperStatusMessage.self, from: data) {
+            if let msg = Self.decodeMessage(WhisperStatusMessage.self, from: data, msgType: peek.type) {
                 let tag: Int = {
                     switch msg.state {
                     case .preparing: return 0
