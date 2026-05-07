@@ -51,6 +51,44 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 - `BackendSession.qaPair` UserDefaults entries under the synthetic legacy backend ID get orphaned when `onDeviceIdentity` rekeys to the real UUID. Harmless (key namespaced, never collides), but a future cleanup could add `UserDefaults.standard.removeObject(forKey: "qaPair.\(oldID)")` in the rebuild path.
 - Phone-side `WindowState.isTerminal` matches by exact lowercased app name (`"iterm2"` / `"terminal"`). Adding a new terminal emulator on the Mac requires updating this set or QA-mode pairing will silently exclude it. Documented at `QuipiOS/Models/WindowState+QAMode.swift`.
 
+## Session log — 2026-05-07 cont (QA mode v1 — Task 17 smoke pass partial)
+
+Continuation of QA mode v1 session. 2 fix commits + smoke drive on QA sim's Quip iOS instance.
+
+| Section | Status | Commit | Hardware-tested |
+|---------|--------|--------|-----------------|
+| Discoverability fix — `windowsForBroadcast` includes visible targets in mirror=off path | ✅ | `8e8da66` | n/a (Mac unit tests pass, smoke confirmed) |
+| Wire fix — `Pair for QA` row added to `WindowRectangle.contextMenu` (the actual long-press menu); Task 13 had only added it to `ContextMenuView` (alternate sheet) | ✅ | `2bbec18` | yes (sim smoke) |
+| Mac install (rebuild + stable-sign + ditto) at HEAD `2bbec18`+`8e8da66` | ✅ | n/a | yes |
+| iOS install (physical iPhone 17 Pro Max + QA sim) | ✅ | n/a | yes (sim) / install-only (physical) |
+| Smoke: Sim tile in grid → long-press → "Pair for QA" appears | ✅ | n/a | yes (sim) |
+| Smoke: picker sheet → tap iTerm → side-by-side renders | ✅ | n/a | yes (sim) |
+| Smoke: divider drag with 0.30/0.50/0.70 snaps | ✅ | n/a | yes (sim) |
+| Smoke: tap-pane to select + horizontal swipe-flip selection | ✅ | n/a | yes (sim) |
+| Smoke: Sim selected = Send disabled + read-only hint visible | ✅ | n/a | yes (sim) |
+| Smoke: type+send → text reaches iTerm2 | ⚠️ unverified | n/a | not driven |
+| Smoke: chevron-down keyboard min | ⚠️ unverified | n/a | not driven |
+| Smoke: xmark exit returns to grid | ⚠️ unverified | n/a | not driven |
+| Smoke: `qa_pair_lost` window_closed reason | ⚠️ unverified | n/a | sim-shutdown closed the WS connection itself; pair cleaned by connection-close hook, NOT by validator |
+| Smoke: reconnect-replay (force-quit phone, relaunch → pair restored) | ⚠️ unverified | n/a | not driven |
+| Smoke: Mac restart → phone receives `qa_pair_lost` | ⚠️ unverified | n/a | not driven |
+
+### Bugs found + fixed during smoke
+
+1. **Sim windows never broadcast in default mode.** `windowsForBroadcast(mirrorDesktop: false)` only included `isEnabled` windows. Sim windows are non-terminal, non-enabled by default → never appeared in the grid → user couldn't long-press to enter QA. Fixed in `8e8da66`: targets ride along default broadcast when on-visible-screen, same as terminals in mirror=on path. Added 2 unit tests pinning the new visibility paths.
+2. **"Pair for QA" row missing from long-press menu.** Task 13 added the row to `ContextMenuView` (alternate sheet-style overlay), not to `WindowRectangle.swift` `.contextMenu` modifier — the latter is what fires on long-press. Result: row never visible. Fixed in `2bbec18`: added Button gated on `isTarget || isTerminal` between Restart Claude and the destructive-divider section.
+
+### New v2 asks surfaced this round
+
+- **Live content in QA panes (highest priority).** v1 panes use `WindowRectangle` (colored tile + label). User's first reaction: "am I able to see the contents?" → no. To deliver: refactor `terminalContentView` (currently parameterized by `selectedWindowId` state) into a per-window-id view, render one in each pane, drive content updates for both paired windows even when one is "selected." Rough scope: per-pane `terminalContentText` / `terminalContentScreenshot` state, Mac-side push to send content for both pair halves, then `pane(window:)` swaps from `WindowRectangle` to that view. Side-of-screen-swap (currently swipe-flip is selection-flip only) is a nice-to-have on the same code path.
+- **Long-press menu on grid tiles needs accessibility labels.** While trying to drive smoke via `ios-simulator-skill` scripts (`screen_mapper.py`, `navigator.py`), the grid tiles surfaced as zero accessibility elements — they're SwiftUI tap-gesture views without `accessibilityLabel`. Adding labels (e.g., "Window: nugget-expo iTerm2") would unlock end-to-end UI test automation and improves VoiceOver UX.
+- **`qa_pair_lost` window_closed test path is hard to isolate** when the paired Sim is also hosting the phone-side test client. Future testability: a Mac-side debug command to drop a specific window from the snapshot without touching the connection (so the validator path is exercisable without WS churn).
+
+### Outstanding for next session
+
+- Drive remaining 6 smoke steps on physical iPhone (type/send/chevron/exit + 3 recovery cases).
+- v2 work: live content streaming in panes, accessibility labels on grid tiles.
+
 ## Session log — 2026-05-06 (§B16 + log-spam burn-down)
 
 6 commits, all pushed to `origin/eb-branch`. Started after `c6eb974`.
