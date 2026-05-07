@@ -37,8 +37,31 @@ final class BackendSession {
     var ttsOverlayTexts: [String: String] = [:]
     var reachability: Reachability = .connecting
 
+    /// QA mode pair for this backend. nil = not in QA mode. Persisted to
+    /// `UserDefaults` under "qaPair.\(backendID)" as JSON-encoded `QAPair`.
+    /// Use `updateQAPair(_:)` to mutate so persistence stays in sync.
+    var qaPair: QAPair?
+
     init(backendID: String, client: WebSocketClient) {
         self.backendID = backendID
         self.client = client
+        // Hydrate persisted QA pair if present.
+        if let blob = UserDefaults.standard.data(forKey: "qaPair.\(backendID)"),
+           let pair = try? JSONDecoder().decode(QAPair.self, from: blob) {
+            self.qaPair = pair
+        }
+    }
+
+    /// Mutate `qaPair` and write through to UserDefaults. Use this from the
+    /// host instead of assigning `qaPair` directly so persistence always
+    /// lines up with the in-memory value.
+    func updateQAPair(_ pair: QAPair?) {
+        self.qaPair = pair
+        let key = "qaPair.\(backendID)"
+        if let pair, let blob = try? JSONEncoder().encode(pair) {
+            UserDefaults.standard.set(blob, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 }

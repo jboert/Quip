@@ -82,6 +82,10 @@ final class BackendConnectionManager {
     var onImageUploadAck: ((BackendSession, String) -> Void)?
     var onImageUploadError: ((BackendSession, String) -> Void)?
     var onTranscriptResult: ((BackendSession, UUID, String, String?) -> Void)?
+    /// Fired when the Mac drops a QA pair for a backend (window closed,
+    /// off-screen >5s, or post-reconnect ID mismatch). Hosts use this to
+    /// surface a toast and ensure the layout view falls back to the grid.
+    var onQAPairLost: ((BackendSession, String, String) -> Void)?
 
     init() {
         // Sentinel session so `active` is never nil before pairing.
@@ -943,6 +947,15 @@ final class BackendConnectionManager {
 
         c.onDeviceIdentity = { [weak self, weak session] identity in
             guard let self, let session else { return }
+
+            // Replay persisted QA pair on every identity ack — covers
+            // reconnects (the closure also fires on the equal-IDs path
+            // below). Mac validates the pair; if either id is stale it
+            // responds qa_pair_lost and the bridge clears local state.
+            if let pair = session.qaPair {
+                c.setQAPair(targetId: pair.targetId, terminalId: pair.terminalId)
+            }
+
             // Rekey the synthetic legacy id to the daemon's real UUID.
             let oldID = session.backendID
             if oldID == identity.deviceID { return }
@@ -964,6 +977,7 @@ final class BackendConnectionManager {
             rebuilt.macPermissions = session.macPermissions
             rebuilt.ttsOverlayTexts = session.ttsOverlayTexts
             rebuilt.reachability = session.reachability
+            rebuilt.qaPair = session.qaPair
             self.wire(session: rebuilt)
             self.sessions[identity.deviceID] = rebuilt
             if let i = self.paired.firstIndex(where: { $0.id == oldID }) {
@@ -980,6 +994,13 @@ final class BackendConnectionManager {
         c.onPreferencesRestore = { [weak self, weak session] snap in
             guard let self, let session else { return }
             self.onPreferencesRestore?(session, snap)
+        }
+
+        c.onQAPairLost = { [weak self, weak session] missingId, reason in
+            guard let self, let session else { return }
+            // Drop pair locally + notify host so the toast can fire.
+            session.updateQAPair(nil)
+            self.onQAPairLost?(session, missingId, reason)
         }
 
         c.onTranscriptResult = { [weak self, weak session] sid, text, error in
