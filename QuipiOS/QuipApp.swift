@@ -487,9 +487,17 @@ struct QuipApp: App {
         // MainiOSView's body falls back to the regular grid; this hook
         // just surfaces a user-facing toast so the user knows why the QA
         // layout disappeared.
-        manager.onQAPairLost = { session, missingId, _ in
+        manager.onQAPairLost = { session, lostPair, missingId, _ in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
+                if let lostPair {
+                    ContentMapMutations.purgePairContent(
+                        pair: (lostPair.targetId, lostPair.terminalId),
+                        from: &terminalContentTextById,
+                        &terminalContentScreenshotById,
+                        &terminalContentURLsById
+                    )
+                }
                 let appName = windows.first(where: { $0.id == missingId })?.app ?? "Window"
                 let reason = "\(appName) closed. Exited QA mode."
                 errorToast = reason
@@ -1221,12 +1229,21 @@ struct MainiOSView: View {
                         contentScreenshotById: $terminalContentScreenshotById,
                         contentURLsById: $terminalContentURLsById,
                         backendId: manager.activeBackendID,
+                        onRefresh: { requestActiveContent() },
                         onSendText: { text in
                             client.send(SendTextMessage(windowId: selectedWindowId ?? "",
                                                         text: text,
                                                         pressReturn: true))
                         },
                         onExit: {
+                            if let pair = manager.active.qaPair {
+                                ContentMapMutations.purgePairContent(
+                                    pair: (pair.targetId, pair.terminalId),
+                                    from: &terminalContentTextById,
+                                    &terminalContentScreenshotById,
+                                    &terminalContentURLsById
+                                )
+                            }
                             manager.active.updateQAPair(nil)
                             client.clearQAPair()
                         },

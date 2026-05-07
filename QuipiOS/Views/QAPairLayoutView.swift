@@ -16,6 +16,7 @@ struct QAPairLayoutView: View {
     @Binding var contentScreenshotById: [String: String]
     @Binding var contentURLsById: [String: [String]]
     let backendId: String
+    var onRefresh: () -> Void
     var onSendText: (String) -> Void
     var onExit: () -> Void
     var onRePair: () -> Void
@@ -35,6 +36,7 @@ struct QAPairLayoutView: View {
         contentScreenshotById: Binding<[String: String]>,
         contentURLsById: Binding<[String: [String]]>,
         backendId: String,
+        onRefresh: @escaping () -> Void = {},
         onSendText: @escaping (String) -> Void,
         onExit: @escaping () -> Void,
         onRePair: @escaping () -> Void
@@ -48,6 +50,7 @@ struct QAPairLayoutView: View {
         self.backendId = backendId
         self._dividerRatio = AppStorage(wrappedValue: 0.5,
                                         "qaPair.dividerRatio.\(backendId)")
+        self.onRefresh = onRefresh
         self.onSendText = onSendText
         self.onExit = onExit
         self.onRePair = onRePair
@@ -146,7 +149,7 @@ struct QAPairLayoutView: View {
             windowName: window.folder?.isEmpty == false ? window.folder! : window.name,
             windowColor: Color(hex: window.color),
             isExpanded: .constant(false),
-            onRefresh: { },
+            onRefresh: { onRefresh() },
             onSendAction: { _ in },
             onCycleWindow: nil
         )
