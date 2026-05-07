@@ -85,7 +85,9 @@ final class BackendConnectionManager {
     /// Fired when the Mac drops a QA pair for a backend (window closed,
     /// off-screen >5s, or post-reconnect ID mismatch). Hosts use this to
     /// surface a toast and ensure the layout view falls back to the grid.
-    var onQAPairLost: ((BackendSession, String, String) -> Void)?
+    /// Called after the pair is cleared. `lostPair` is the pair that was active
+    /// before clearing — useful for purging per-windowId content maps.
+    var onQAPairLost: ((BackendSession, QAPair?, String, String) -> Void)?
 
     init() {
         // Sentinel session so `active` is never nil before pairing.
@@ -998,9 +1000,11 @@ final class BackendConnectionManager {
 
         c.onQAPairLost = { [weak self, weak session] missingId, reason in
             guard let self, let session else { return }
+            // Capture pair IDs before clearing so the host can purge content maps.
+            let lostPair = session.qaPair
             // Drop pair locally + notify host so the toast can fire.
             session.updateQAPair(nil)
-            self.onQAPairLost?(session, missingId, reason)
+            self.onQAPairLost?(session, lostPair, missingId, reason)
         }
 
         c.onTranscriptResult = { [weak self, weak session] sid, text, error in
