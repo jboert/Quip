@@ -5173,6 +5173,10 @@ struct SettingsSheet: View {
     // @AppStorage key too and gates its liveActivity.startOrUpdate calls.
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
     @Environment(\.dismiss) private var dismiss
+    /// Briefly flips to true after the user taps the Version row — drives
+    /// the inline "Copied" confirmation; auto-resets after 1.5s so the row
+    /// reverts to the version string.
+    @State private var versionCopied = false
 
     /// "1.5.4 (1)" formatted from CFBundleShortVersionString + CFBundleVersion.
     /// Static so we read Bundle.main once per launch, not on every body redraw.
@@ -5311,15 +5315,35 @@ struct SettingsSheet: View {
                 }
 
                 Section {
-                    HStack {
-                        Text("Version")
-                        Spacer()
-                        Text(Self.appVersionDisplay)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
+                    Button {
+                        UIPasteboard.general.string = "Quip iOS \(Self.appVersionDisplay)"
+                        versionCopied = true
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            await MainActor.run { versionCopied = false }
+                        }
+                    } label: {
+                        HStack {
+                            Text("Version")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if versionCopied {
+                                Text("Copied")
+                                    .foregroundStyle(.secondary)
+                                    .transition(.opacity)
+                            } else {
+                                Text(Self.appVersionDisplay)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Tap to copy version to clipboard")
                 } header: {
                     Text("About")
+                } footer: {
+                    Text("Tap to copy — useful when reporting issues.")
                 }
             }
             .listStyle(.insetGrouped)
