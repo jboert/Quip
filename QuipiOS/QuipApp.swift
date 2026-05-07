@@ -834,6 +834,58 @@ enum TopBarStatus: String, Equatable, CaseIterable {
     }
 }
 
+/// Voice-press readiness shown next to the connection dot. Answers the
+/// question "if I press the volume button right now, will my voice land
+/// in Codex?" — surfacing the three independent prerequisites that have
+/// historically failed silently:
+///   1. WebSocket authenticated (Mac is reachable + paired)
+///   2. iOS mic permission granted (SFSpeech authorized)
+///   3. Selected window's CLI is Codex (recent Mac routing — 0f578a1 —
+///      sends Codex via pasteText; non-Codex falls back to keystroke
+///      typing which doesn't land in Codex's textarea)
+/// Pure classifier so it's unit-testable without a live client.
+enum PTTReadiness: String, Equatable, CaseIterable {
+    case ready          // green:  Codex selected + connected + mic OK
+    case wrongCLI       // yellow: connected + mic OK but selected isn't Codex
+    case offline        // gray:   not connected
+    case micDenied      // red:    SFSpeech permission denied / restricted
+
+    var symbol: String {
+        switch self {
+        case .ready:     return "mic.fill"
+        case .wrongCLI:  return "mic"
+        case .offline:   return "mic"
+        case .micDenied: return "mic.slash.fill"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .ready:     return "Ready for Codex"
+        case .wrongCLI:  return "Selected window isn't Codex"
+        case .offline:   return "Not connected"
+        case .micDenied: return "Microphone permission denied"
+        }
+    }
+
+    func color(colors: QuipColors) -> Color {
+        switch self {
+        case .ready:     return colors.statusConnected
+        case .wrongCLI:  return colors.statusConnecting
+        case .offline:   return .secondary.opacity(0.4)
+        case .micDenied: return .red
+        }
+    }
+
+    static func classify(isAuthenticated: Bool,
+                          isAuthorized: Bool,
+                          selectedCLI: CLIKind?) -> PTTReadiness {
+        if !isAuthorized { return .micDenied }
+        if !isAuthenticated { return .offline }
+        return selectedCLI == .codex ? .ready : .wrongCLI
+    }
+}
+
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
     @Bindable var manager: BackendConnectionManager
@@ -1804,6 +1856,18 @@ struct MainiOSView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Connection: \(topStatus.label)")
             .accessibilityHint(manager.paired.isEmpty ? "No backends paired yet" : "Open backend picker")
+            // PTT readiness — green only when a volume-button press would
+            // actually reach Codex. Yellow when connected but selected
+            // window is Claude / shell. Red when mic permission is denied.
+            let ptt = PTTReadiness.classify(
+                isAuthenticated: client.isAuthenticated,
+                isAuthorized: speech.isAuthorized,
+                selectedCLI: windows.first(where: { $0.id == selectedWindowId })?.cliKind
+            )
+            Image(systemName: ptt.symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(ptt.color(colors: colors))
+                .accessibilityLabel("Push-to-talk: \(ptt.label)")
             if let error = client.lastError {
                 Text(error)
                     .font(.system(size: 9))
