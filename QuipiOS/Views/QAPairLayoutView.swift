@@ -12,12 +12,13 @@ struct QAPairLayoutView: View {
     let target: WindowState
     let terminal: WindowState
     @Binding var selectedWindowId: String?
+    let backendId: String
     var onSendText: (String) -> Void
     var onExit: () -> Void
     var onRePair: () -> Void
 
     @AppStorage private var dividerRatio: Double
-    @State private var positionSwapped: Bool = false
+    @State private var positionSwapped: Bool
     @State private var draftText: String = ""
     @FocusState private var inputFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
@@ -32,11 +33,14 @@ struct QAPairLayoutView: View {
         self.target = target
         self.terminal = terminal
         self._selectedWindowId = selectedWindowId
+        self.backendId = backendId
         self._dividerRatio = AppStorage(wrappedValue: 0.5,
                                         "qaPair.dividerRatio.\(backendId)")
         self.onSendText = onSendText
         self.onExit = onExit
         self.onRePair = onRePair
+        let key = BackendSession.swapKey(forBackendId: backendId)
+        self._positionSwapped = State(initialValue: UserDefaults.standard.bool(forKey: key))
     }
 
     private var selectedIsTarget: Bool { selectedWindowId == target.id }
@@ -51,11 +55,13 @@ struct QAPairLayoutView: View {
                 let leftW = max(geo.size.width * 0.30,
                                 min(geo.size.width * 0.70,
                                     geo.size.width * dividerRatio))
+                let leftWindow: WindowState  = positionSwapped ? target    : terminal
+                let rightWindow: WindowState = positionSwapped ? terminal  : target
                 HStack(spacing: 0) {
-                    pane(window: terminal, width: leftW)
+                    pane(window: leftWindow, width: leftW)
                     divider(totalWidth: geo.size.width, height: geo.size.height)
                         .frame(width: dividerW)
-                    pane(window: target, width: geo.size.width - leftW - dividerW)
+                    pane(window: rightWindow, width: geo.size.width - leftW - dividerW)
                 }
                 .gesture(swipeFlipGesture)
             }
@@ -87,6 +93,8 @@ struct QAPairLayoutView: View {
                 withAnimation(.spring(duration: 0.2, bounce: 0.15)) {
                     positionSwapped.toggle()
                 }
+                let key = BackendSession.swapKey(forBackendId: backendId)
+                UserDefaults.standard.set(positionSwapped, forKey: key)
             } label: {
                 Image(systemName: "arrow.left.arrow.right")
                     .font(.system(size: 14, weight: .medium))

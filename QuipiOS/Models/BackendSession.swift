@@ -26,6 +26,13 @@ final class BackendSession {
     /// Centralized so init + `updateQAPair` can't drift.
     private var qaPairUserDefaultsKey: String { "qaPair.\(backendID)" }
 
+    /// Per-backend UserDefaults key for the QA-mode pane position-swap flag.
+    /// Namespaced like `qaPair.swapped.<backendId>` so two backends paired
+    /// in QA mode keep independent left/right orderings.
+    static func swapKey(forBackendId backendId: String) -> String {
+        "qaPair.swapped.\(backendId)"
+    }
+
     var windows: [WindowState] = []
     var selectedWindowId: String?
     var monitorName: String = "Mac"
