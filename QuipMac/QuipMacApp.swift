@@ -25,6 +25,25 @@ fileprivate func appendPushDiagnostic(_ message: String) {
     }
 }
 
+/// Append one line to ~/Library/Logs/Quip/latency.log. Same shape as
+/// appendPushDiagnostic — kept separate so a slow disk-write on either
+/// path doesn't entangle with the other. Lines are space-separated key=value
+/// so `awk -F= '/processing_ms/ {sum+=$NF; n++} END{print sum/n}'` is enough
+/// to compute a rolling average from the shell.
+fileprivate func appendLatency(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        let path = LogPaths.latencyPath
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -749,6 +768,12 @@ struct QuipMacApp: App {
                     webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                     break
                 }
+                // tRecv = the moment the WS handler decoded the message.
+                // tStart = right before we kick AppleScript / paste; the
+                // async-resolve + focusDelay overhead lives in (tStart - tRecv).
+                // tEnd = right after the inject closure returns. AppleScript
+                // is synchronous, so this is the actual "text landed" instant.
+                let tRecv = Date()
                 ensureITermSessionResolved(for: msg.windowId) { window in
                     if msg.pressReturn { self.thinkingWindows.insert(msg.windowId) }
                     let termApp = self.terminalAppForWindow(window)
@@ -770,9 +795,11 @@ struct QuipMacApp: App {
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
+                    let routingPath: String
                     let inject: () -> Void
                     if cliKind == .codex && termApp == .iterm2 {
                         NSLog("[Quip] send_text routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
+                        routingPath = "pasteText"
                         inject = {
                             self.keystrokeInjector.pasteText(msg.text,
                                                              to: msg.windowId,
@@ -782,6 +809,7 @@ struct QuipMacApp: App {
                         }
                     } else {
                         NSLog("[Quip] send_text routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
+                        routingPath = "sendText"
                         inject = {
                             self.keystrokeInjector.sendText(msg.text,
                                                             to: msg.windowId,
@@ -792,10 +820,19 @@ struct QuipMacApp: App {
                                                             iterm2SessionId: window.iterm2SessionId)
                         }
                     }
-                    if delay == 0 {
+                    let injectAndLog: () -> Void = {
+                        let tStart = Date()
                         inject()
+                        let tEnd = Date()
+                        let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
+                        let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
+                        let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
+                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs)")
+                    }
+                    if delay == 0 {
+                        injectAndLog()
                     } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { inject() }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { injectAndLog() }
                     }
                 }
             }

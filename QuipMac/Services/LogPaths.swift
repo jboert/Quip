@@ -39,6 +39,15 @@ enum LogPaths {
         return directory.appendingPathComponent("kokoro.log").path
     }
 
+    /// Per-message text-land timing — one line per send_text completion with
+    /// the routing path (pasteText / sendText), text length, and Mac-side
+    /// processing time. Drives the latency-regression detector + the
+    /// in-app diagnostics view.
+    static var latencyPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("latency.log").path
+    }
+
     private static func ensureDirectoryExists() {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
