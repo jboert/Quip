@@ -7,6 +7,7 @@ All Mac diagnostic logs live under `~/Library/Logs/Quip/`. They survive reboots 
 - `~/Library/Logs/Quip/websocket.log` — WS handshake / message arrival, oversized-drop notices, auth events
 - `~/Library/Logs/Quip/push.log` — APNs push pipeline (the "I didn't get a notification" debugging path)
 - `~/Library/Logs/Quip/kokoro.log` — Kokoro TTS daemon lifecycle and synth events
+- `~/Library/Logs/Quip/qa-mode.log` — QA-mode pair lifecycle (set/clear/lost) + throttled broadcast_filter window counts
 
 On Linux, the equivalents live under `$XDG_STATE_HOME/quip/` (default `~/.local/state/quip/`).
 
@@ -26,3 +27,25 @@ When the phone's photo-upload thumbnail spinner never clears, the root cause is 
 
 Diagnostic: `PendingImageState.debugStage` captures pipeline breadcrumbs (`encoding-start`, `encoded NB`, `sending b64=NB`, `sent, awaiting ack`). If a 10s watchdog fires, the error message includes the last stage — that tells you whether the problem is on the phone, in transit, or on the Mac.
 
+## QA Mode
+
+QA mode pairs one Mac target window (Simulator now, browser-on-localhost in v2) with one terminal so the phone can render them side-by-side for rapid iteration.
+
+Entry: long-press a Simulator or terminal in the iOS grid → "Pair for QA" → pick the other half → side-by-side layout.
+
+Per-connection state lives in `WebSocketServer.qaPairByConnection` (Mac) and `BackendSession.qaPair` (phone, persisted via `UserDefaults` key `"qaPair.<backendID>"`).
+
+Pair lifecycle log: `~/Library/Logs/Quip/qa-mode.log` — set/clear/lost events + throttled `broadcast_filter` lines.
+
+Failure modes (Mac → `qa_pair_lost`):
+- `window_closed` — id no longer in snapshot
+- `window_offscreen` — `isOnVisibleScreen == false` ≥5s
+- `connection_reset` — phone replayed `set_qa_pair` post-reconnect with stale IDs
+
+Reason strings live as constants on `QAPairLostMessage.Reason`.
+
+Sim is read-only in v1: send button + TextField disabled when Sim is selected; PTT/text input only land in the terminal half.
+
+Mac broadcast paths:
+- Fast path (no QA pair anywhere) — encode `LayoutUpdate` once, broadcast.
+- Per-client path (≥1 phone in QA mode) — encode per client with the right filter (paired phones get 2 windows, others get the unfiltered list). Tunnel broadcasters always get unfiltered (no per-tunnel pair state).
