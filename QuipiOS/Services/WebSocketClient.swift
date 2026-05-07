@@ -268,11 +268,78 @@ final class WebSocketClient {
     private var connectionEvents: [String] = []
     var recentConnectionEvents: [String] { connectionEvents }
 
+    /// Phase 3: which physical hop the WebSocket is using. Inferred at sample
+    /// time from `serverURL`; stable for the lifetime of a single connection.
+    /// `.localWS` = direct LAN ws://; `.cloudflareTunnel` = wss://*.trycloudflare.com;
+    /// `.unknown` for anything else (custom relays, future transports).
+    enum LatencyTransport: String, Equatable, Codable {
+        case localWS
+        case cloudflareTunnel
+        case unknown
+
+        /// Pure classifier so tests can drive it without spinning up a socket.
+        static func classify(_ url: URL?) -> LatencyTransport {
+            guard let url else { return .unknown }
+            switch url.scheme {
+            case "ws":
+                return .localWS
+            case "wss":
+                if url.host?.hasSuffix("trycloudflare.com") == true {
+                    return .cloudflareTunnel
+                }
+                return .unknown
+            default:
+                return .unknown
+            }
+        }
+    }
+
+    /// Phase 3: which radio is the phone actually using right now. Read off
+    /// the existing NWPathMonitor at sample time. iOS hides Wi-Fi/cellular
+    /// RSSI from non-system apps, so this is the best signal-class proxy
+    /// without MetricKit aggregation lag.
+    enum LatencyNetworkClass: String, Equatable, Codable {
+        case wifi
+        case cellular
+        case wired
+        case unknown
+    }
+
+    /// Pure classifier for an NWPath. Wi-Fi wins over cellular if the path
+    /// has both (rare; happens during a hand-off). `.unknown` when the path
+    /// is unsatisfied or carries no recognized interface — keeps samples
+    /// from getting silently bucketed as Wi-Fi when the radio state is
+    /// genuinely unknown.
+    nonisolated static func networkClass(for path: NWPath) -> LatencyNetworkClass {
+        guard path.status == .satisfied else { return .unknown }
+        if path.usesInterfaceType(.wifi) { return .wifi }
+        if path.usesInterfaceType(.cellular) { return .cellular }
+        if path.usesInterfaceType(.wiredEthernet) { return .wired }
+        return .unknown
+    }
+
+    /// Population std-dev (in ms) of `netRtt` across `samples`, computed
+    /// inline so handleSendTextAck stays O(N) per sample without a separate
+    /// per-bucket cache. Returns 0 if fewer than 2 samples — variance of a
+    /// single sample is undefined; treat as "stable until proven otherwise."
+    nonisolated static func netVariance(of samples: [LatencySample]) -> Int {
+        guard samples.count >= 2 else { return 0 }
+        let values = samples.map { Double($0.netRtt) }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let sumSq = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) }
+        return Int((sumSq / Double(values.count)).squareRoot().rounded())
+    }
+
     /// One round-trip text-land sample. `totalRtt` is observed end-to-end on
     /// the phone (send→ack); `injectMs` is what the Mac reports for its own
     /// AppleScript / paste duration; `netRtt = totalRtt - injectMs` isolates
     /// the network from the Mac. Path is "pasteText" or "sendText" so a
     /// Codex-only regression doesn't smear the Claude bucket.
+    ///
+    /// Phase 3 widens with `transport`, `networkClass`, and `netVariance` so
+    /// the future `BackendScorer` can answer "is the slowdown my Mac, the
+    /// link, or the radio?" — and so per-message routing has signal to
+    /// prefer the lowest-score backend without flapping on a single spike.
     struct LatencySample: Equatable {
         let timestamp: Date
         let totalRtt: Int   // ms — phone send to phone ack-receive
@@ -280,6 +347,12 @@ final class WebSocketClient {
         let totalMs: Int    // ms — Mac message-arrival to text-landed
         let netRtt: Int     // ms — totalRtt - totalMs
         let path: String    // "pasteText" | "sendText"
+        let transport: LatencyTransport
+        let networkClass: LatencyNetworkClass
+        /// ms — population std-dev of the last (≤10) `netRtt` samples for
+        /// the same transport bucket on this client at insert time. High
+        /// variance = lossy / weak link → Phase 3 scorer penalizes it.
+        let netVariance: Int
     }
 
     /// Rolling buffer of recent text-land samples (cap 100). Read by
@@ -293,6 +366,12 @@ final class WebSocketClient {
     /// removes the entry. Capped at 32 — anything older than that has
     /// almost certainly been dropped on the floor by the Mac.
     private var pendingSendTexts: [UUID: Date] = [:]
+
+    /// Phase 3: latest classification from NWPathMonitor. Updated on every
+    /// path change so the next `handleSendTextAck` can stamp the sample
+    /// with the current radio without re-walking the path. `.unknown` until
+    /// the first path update lands.
+    private(set) var currentNetworkClass: LatencyNetworkClass = .unknown
 
     init() {
         startPathMonitor()
@@ -319,6 +398,7 @@ final class WebSocketClient {
         monitor.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.currentNetworkClass = Self.networkClass(for: path)
                 if path.status == .satisfied {
                     self.logEvent("network path satisfied")
                     if !self.isConnected,
@@ -557,20 +637,35 @@ final class WebSocketClient {
         // Subtracting from the phone-observed RTT gives a clean network-only
         // figure. Clamp at 0 to defend against clock skew putting it negative.
         let netRtt = max(0, totalRtt - msg.totalMs)
+        // Phase 3: stamp transport from current serverURL, networkClass from
+        // the live path monitor, and netVariance from the most recent
+        // same-transport samples on this client. Variance is computed BEFORE
+        // appending so it reflects the prior 10-sample distribution — the
+        // current sample's deviation gets reflected in the *next* one's
+        // variance, which is the property the scorer actually wants.
+        let transport = LatencyTransport.classify(serverURL)
+        let recentSameTransport = latencySamples
+            .filter { $0.transport == transport }
+            .suffix(10)
+        let variance = Self.netVariance(of: Array(recentSameTransport))
         let sample = LatencySample(
             timestamp: Date(),
             totalRtt: totalRtt,
             injectMs: msg.injectMs,
             totalMs: msg.totalMs,
             netRtt: netRtt,
-            path: msg.path
+            path: msg.path,
+            transport: transport,
+            networkClass: currentNetworkClass,
+            netVariance: variance
         )
         latencySamples.append(sample)
         if latencySamples.count > Self.latencySampleCap {
             latencySamples.removeFirst(latencySamples.count - Self.latencySampleCap)
         }
-        NSLog("[Quip][LATENCY] path=%@ totalRtt=%d netRtt=%d injectMs=%d macTotal=%d",
-              msg.path, totalRtt, netRtt, msg.injectMs, msg.totalMs)
+        NSLog("[Quip][LATENCY] path=%@ totalRtt=%d netRtt=%d injectMs=%d macTotal=%d transport=%@ net=%@ var=%d",
+              msg.path, totalRtt, netRtt, msg.injectMs, msg.totalMs,
+              transport.rawValue, currentNetworkClass.rawValue, variance)
     }
 
     func send<T: Codable>(_ message: T) {
