@@ -903,12 +903,12 @@ final class MessageProtocolTests: XCTestCase {
 
     func testQAPairLostRoundTrip() {
         let msg = QAPairLostMessage(missingId: "com.apple.iphonesimulator.42",
-                                    reason: "window_closed")
+                                    reason: QAPairLostMessage.Reason.windowClosed)
         let data = try! MessageCoder.encoder.encode(msg)
         let decoded = try! MessageCoder.decoder.decode(QAPairLostMessage.self, from: data)
         XCTAssertEqual(decoded.type, "qa_pair_lost")
         XCTAssertEqual(decoded.missingId, "com.apple.iphonesimulator.42")
-        XCTAssertEqual(decoded.reason, "window_closed")
+        XCTAssertEqual(decoded.reason, QAPairLostMessage.Reason.windowClosed)
         let json = String(data: data, encoding: .utf8) ?? ""
         XCTAssertTrue(json.contains("\"missing_id\""), "Wire key must be snake_case: \(json)")
     }

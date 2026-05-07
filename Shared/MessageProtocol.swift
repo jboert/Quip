@@ -970,11 +970,22 @@ struct ClearQAPairMessage: Codable, Sendable {
 /// pair the phone replayed on reconnect doesn't match a current window.
 /// Phone exits QA mode and shows a toast.
 ///
-/// `reason` is a free-form string for forward compat:
-/// - `"window_closed"` — window left the snapshot
-/// - `"window_offscreen"` — `isOnVisibleScreen == false` for >5s
-/// - `"connection_reset"` — Mac doesn't recognize the IDs (post-restart replay)
+/// `reason` is a free-form string for forward compat — see `Reason` for the
+/// canonical producer-side constants:
+/// - `Reason.windowClosed` — window left the snapshot
+/// - `Reason.windowOffscreen` — `isOnVisibleScreen == false` for >5s
+/// - `Reason.connectionReset` — Mac doesn't recognize the IDs (post-restart replay)
 struct QAPairLostMessage: Codable, Sendable {
+    /// Centralized reason codes. Matches the `reason` strings on the wire.
+    /// String-typed (not `enum`) so older clients receiving an unknown
+    /// reason don't fail to decode the surrounding message — the raw
+    /// reason field stays a `String`. Producers should use these constants.
+    enum Reason {
+        static let windowClosed = "window_closed"
+        static let windowOffscreen = "window_offscreen"
+        static let connectionReset = "connection_reset"
+    }
+
     let type: String
     let missingId: String
     let reason: String

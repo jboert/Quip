@@ -696,12 +696,12 @@ struct QuipMacApp: App {
         let knownIds = Set(windowManager.windows.map(\.id))
         if !knownIds.contains(msg.targetId) {
             self.qaModeLog("set_qa_pair rejected: targetId=\(msg.targetId) missing")
-            self.sendQAPairLost(missingId: msg.targetId, reason: "connection_reset", to: connection)
+            self.sendQAPairLost(missingId: msg.targetId, reason: QAPairLostMessage.Reason.connectionReset, to: connection)
             return
         }
         if !knownIds.contains(msg.terminalId) {
             self.qaModeLog("set_qa_pair rejected: terminalId=\(msg.terminalId) missing")
-            self.sendQAPairLost(missingId: msg.terminalId, reason: "connection_reset", to: connection)
+            self.sendQAPairLost(missingId: msg.terminalId, reason: QAPairLostMessage.Reason.connectionReset, to: connection)
             return
         }
         webSocketServer.setQAPair(targetId: msg.targetId, terminalId: msg.terminalId, for: connection)
