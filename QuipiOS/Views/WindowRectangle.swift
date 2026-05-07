@@ -227,6 +227,7 @@ enum WindowAction {
     case toggleEnabled
     case duplicate
     case closeWindow
+    case pairForQA
 }
 
 #Preview {

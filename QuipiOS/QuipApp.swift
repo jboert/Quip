@@ -3586,6 +3586,7 @@ struct MainiOSView: View {
         case .viewOutput: return // handled above
         case .duplicate: return  // handled above
         case .closeWindow: return // handled above
+        case .pairForQA: return // Wired in Task 16 — picker entry point.
         }
         client.send(QuickActionMessage(windowId: windowId, action: str))
     }
