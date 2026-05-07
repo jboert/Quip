@@ -152,6 +152,14 @@ struct WindowRectangle: View {
                 Label("Restart Claude", systemImage: "arrow.clockwise")
             }
 
+            if window.isTarget || window.isTerminal {
+                Button {
+                    triggerAction(.pairForQA)
+                } label: {
+                    Label("Pair for QA", systemImage: "rectangle.split.2x1")
+                }
+            }
+
             Divider()
 
             Button(role: .destructive) {
