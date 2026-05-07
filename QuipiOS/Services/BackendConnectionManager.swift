@@ -39,6 +39,24 @@ final class BackendConnectionManager {
     /// path-change handling does that on its own.
     private var pathMonitor: NWPathMonitor?
 
+    /// Phase 3: latency probe + auto-swap orchestration for the ACTIVE
+    /// session only. Inactive sessions don't need probes — no traffic
+    /// flows through them, so a swap on an inactive session would be
+    /// invisible until the user flipped to it. Cost cap: one probe loop
+    /// at any time across all paired backends.
+    private var probeService: LatencyProbeService?
+    /// Timestamp of the most recent successful URL hot-swap. Stamped into
+    /// `URLSwapPolicy.decide` for hysteresis. Cleared when the active
+    /// backend changes (the new backend's swap history is its own).
+    private var lastSwapAt: Date?
+    /// Polling task for swap evaluations. Distinct from probe cadence
+    /// (probes gather data; this evaluates whether to act on the data).
+    private var swapEvaluatorTask: Task<Void, Never>?
+    /// UserDefaults-backed toggle. Read at task start so a user flip
+    /// takes effect on the next eval tick. Defaults OFF until the
+    /// first hardware-verified release; opt-in keeps the rollout safe.
+    static let autoSwapDefaultsKey = "latencyAutoSwapEnabled"
+
     /// Hooks the host (`QuipApp`) sets so that side-effecty things which the
     /// manager itself shouldn't know about — Live Activity, push registration,
     /// pref sync, error toast routing — can react to events from any session,
@@ -230,6 +248,102 @@ final class BackendConnectionManager {
             activeBackendID = first.id
         }
         startPathMonitor()
+        // Phase 3: bring up the latency probe + swap evaluator targeting
+        // whichever backend is active. Both stay live across foreground/
+        // background; tasks are cheap and self-throttling.
+        rebindProbeService()
+        startSwapEvaluator()
+    }
+
+    // MARK: - Phase 3: latency probe + URL hot-swap orchestration
+
+    /// Spin up (or replace) the probe service against the active session.
+    /// Called from `bootstrap`, `setActive`, and after `add`/`forget` so the
+    /// probe always targets whoever is current. No-op when no session is
+    /// active or the active session lacks alt URLs to probe.
+    private func rebindProbeService() {
+        probeService?.stop()
+        probeService = nil
+        guard !activeBackendID.isEmpty,
+              let session = sessions[activeBackendID] else { return }
+        let activeID = activeBackendID
+        let service = LatencyProbeService(
+            client: session.client,
+            urlsProvider: { [weak self] in
+                guard let self,
+                      let entry = self.paired.first(where: { $0.id == activeID }) else { return [] }
+                return entry.urlsInOrder.compactMap { URL(string: $0) }
+            },
+            currentURLProvider: { [weak session] in
+                session?.client.serverURL
+            }
+        )
+        service.start()
+        probeService = service
+    }
+
+    /// Periodic evaluator. Runs every 30s; reads the toggle, calls
+    /// URLSwapPolicy.decide, and orchestrates a hot-swap if the policy
+    /// returns a non-nil URL. Disabled-by-default until hardware-verified
+    /// (toggle in Settings → Diagnostics → Latency).
+    private func startSwapEvaluator() {
+        swapEvaluatorTask?.cancel()
+        swapEvaluatorTask = Task { [weak self] in
+            // Initial 10s grace so a freshly-bootstrapped manager has a
+            // chance to gather samples before the first eval. Otherwise
+            // the policy returns nil every 30s for the first few minutes
+            // and we waste log lines.
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            while !Task.isCancelled {
+                await self?.evaluateSwap()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
+    }
+
+    /// One eval pass. Returns the URL we swapped to (if any) for testability.
+    @discardableResult
+    func evaluateSwap() async -> URL? {
+        guard UserDefaults.standard.bool(forKey: Self.autoSwapDefaultsKey) else { return nil }
+        guard !activeBackendID.isEmpty,
+              let session = sessions[activeBackendID],
+              let entry = paired.first(where: { $0.id == activeBackendID }),
+              let currentURL = session.client.serverURL else { return nil }
+        let candidates = entry.urlsInOrder.compactMap { URL(string: $0) }
+        guard candidates.count > 1 else { return nil }
+        let samples = session.client.latencySamples
+        guard let target = URLSwapPolicy.decide(
+            currentURL: currentURL,
+            candidates: candidates,
+            samples: samples,
+            lastSwapAt: lastSwapAt
+        ) else { return nil }
+        await performHotSwap(session: session, entry: entry, target: target)
+        return target
+    }
+
+    /// Orchestrate the actual disconnect → reorder → reconnect dance.
+    /// Reorders `urlsInOrder` in-memory only — we don't `savePaired()`
+    /// because the user's preference order should be preserved across
+    /// launches; swaps are tactical, not structural.
+    private func performHotSwap(
+        session: BackendSession,
+        entry: PairedBackend,
+        target: URL
+    ) async {
+        let fromHost = session.client.serverURL?.host ?? "?"
+        let toHost = target.host ?? "?"
+        NSLog("[Quip][LATENCY] hot-swap: from=%@ to=%@ reason=avg-30%%-faster",
+              fromHost, toHost)
+        // Build the reordered URL list with target first.
+        var reordered = entry.urlsInOrder.compactMap { URL(string: $0) }
+        reordered.removeAll { $0 == target }
+        reordered.insert(target, at: 0)
+        session.client.disconnect()
+        session.reachability = .connecting
+        primePINIfPresent(session: session)
+        session.client.connect(toURLs: reordered)
+        lastSwapAt = Date()
     }
 
     /// Watches OS network path transitions and rewinds every live client's
@@ -387,6 +501,12 @@ final class BackendConnectionManager {
         activeBackendID = id
         paired[i].lastUsed = Date()
         savePaired()
+        // Phase 3: re-bind the probe service to the new active session.
+        // Old probe service stops; fresh one starts targeting the new
+        // backend's URL list. Swap history resets — the new backend's
+        // hysteresis is its own.
+        rebindProbeService()
+        lastSwapAt = nil
         return true
     }
 

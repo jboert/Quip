@@ -635,6 +635,32 @@ final class WebSocketClient {
     /// for messageIds we never sent (or whose entry has aged out of the
     /// pending-bookkeeping cap) so a stale ack from a prior session can't
     /// poison the rolling buffer.
+    /// Phase 3 commit 3: probe-sample append used by `LatencyProbeService`.
+    /// Probe samples carry `path = "probe"` and zero on the Mac-side fields
+    /// (probes don't traverse Mac processing); only `netRtt` is meaningful.
+    /// Caller pre-classifies `transport` because the probe service has the
+    /// alt URL in scope while this class only knows its own `serverURL`.
+    func appendProbeSample(host: String, netRtt: Int, transport: LatencyTransport) {
+        let sample = LatencySample(
+            timestamp: Date(),
+            totalRtt: netRtt,
+            injectMs: 0,
+            totalMs: 0,
+            netRtt: netRtt,
+            path: "probe",
+            transport: transport,
+            networkClass: currentNetworkClass,
+            netVariance: 0,
+            serverURLHost: host
+        )
+        latencySamples.append(sample)
+        if latencySamples.count > Self.latencySampleCap {
+            latencySamples.removeFirst(latencySamples.count - Self.latencySampleCap)
+        }
+        NSLog("[Quip][LATENCY] path=probe netRtt=%d host=%@ transport=%@",
+              netRtt, host, transport.rawValue)
+    }
+
     private func handleSendTextAck(_ msg: SendTextAckMessage) {
         guard let sentAt = pendingSendTexts.removeValue(forKey: msg.messageId) else {
             NSLog("[WebSocketClient] send_text_ack with unknown messageId %@", msg.messageId.uuidString)

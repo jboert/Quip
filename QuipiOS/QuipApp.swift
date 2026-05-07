@@ -7076,6 +7076,21 @@ struct LatencyDiagnosticsSheet: View {
                 } header: {
                     Text("Recent (\(client.latencySamples.count) samples)")
                 }
+
+                // Phase 3: opt-in toggle for hot-swap routing. Off by default
+                // until hardware-verified across LAN / Tailscale / Cloudflare;
+                // user enables it from this row to opt into the experimental
+                // "always pick fastest path" behavior.
+                Section {
+                    Toggle("Auto-pick fastest path", isOn: Binding(
+                        get: { UserDefaults.standard.bool(forKey: BackendConnectionManager.autoSwapDefaultsKey) },
+                        set: { UserDefaults.standard.set($0, forKey: BackendConnectionManager.autoSwapDefaultsKey) }
+                    ))
+                } header: {
+                    Text("Routing")
+                } footer: {
+                    Text("When ON, Quip probes alternate paths to your Mac (LAN, Tailscale, tunnel) every minute and switches to the fastest one when a clear winner emerges. Causes a sub-second connection blip during a swap.")
+                }
             }
         }
         .listStyle(.insetGrouped)
