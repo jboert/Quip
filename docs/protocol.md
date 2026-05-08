@@ -327,12 +327,16 @@ Ask for terminal output and screenshot for a window. Server responds with `termi
 
 ### duplicate_window
 
-Spawn a new iTerm2 window in the same working directory as the source window, running the configured command.
+Spawn a new iTerm2 window in the same working directory as the source window.
+`agent` is optional for backward compatibility. When omitted, the Mac uses its
+configured default command. Values: `"claude"`, `"codex"`, or `"terminal"`;
+`"terminal"` opens a bare shell with no agent command.
 
 ```json
 {
   "type": "duplicate_window",
-  "sourceWindowId": "Terminal.12345"
+  "sourceWindowId": "Terminal.12345",
+  "agent": "codex"
 }
 ```
 
@@ -349,12 +353,14 @@ Destructive — close a specific iTerm2 window, killing any running command in t
 
 ### spawn_window
 
-Spawn a new iTerm2 window in the given directory, running the configured spawn command.
+Spawn a new iTerm2 window in the given directory. `agent` has the same optional
+semantics as `duplicate_window`.
 
 ```json
 {
   "type": "spawn_window",
-  "directory": "/Users/jb/Projects/quip"
+  "directory": "/Users/jb/Projects/quip",
+  "agent": "terminal"
 }
 ```
 

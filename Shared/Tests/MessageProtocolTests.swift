@@ -314,20 +314,48 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testDuplicateWindowMessageEncoding() throws {
-        let msg = DuplicateWindowMessage(sourceWindowId: "src-1")
+        let msg = DuplicateWindowMessage(sourceWindowId: "src-1", agent: .codex)
         let data = try XCTUnwrap(MessageCoder.encode(msg))
         let dict = try jsonDict(from: data)
 
         XCTAssertEqual(dict["type"] as? String, "duplicate_window")
         XCTAssertEqual(dict["sourceWindowId"] as? String, "src-1")
+        XCTAssertEqual(dict["agent"] as? String, "codex")
     }
 
     func testDuplicateWindowRoundTrip() throws {
-        let original = DuplicateWindowMessage(sourceWindowId: "src-rt")
+        let original = DuplicateWindowMessage(sourceWindowId: "src-rt", agent: .terminal)
         let data = try XCTUnwrap(MessageCoder.encode(original))
         let restored = try XCTUnwrap(MessageCoder.decode(DuplicateWindowMessage.self, from: data))
         XCTAssertEqual(original.sourceWindowId, restored.sourceWindowId)
+        XCTAssertEqual(original.agent, restored.agent)
         XCTAssertEqual(original.type, restored.type)
+    }
+
+    func testDuplicateWindowAgentDefaultsToNilForOldClients() throws {
+        let json = #"{"type":"duplicate_window","sourceWindowId":"src-old"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let restored = try XCTUnwrap(MessageCoder.decode(DuplicateWindowMessage.self, from: data))
+        XCTAssertNil(restored.agent)
+        XCTAssertEqual(restored.sourceWindowId, "src-old")
+    }
+
+    func testSpawnWindowMessageEncoding() throws {
+        let msg = SpawnWindowMessage(directory: "/Users/dev/project", agent: .terminal)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "spawn_window")
+        XCTAssertEqual(dict["directory"] as? String, "/Users/dev/project")
+        XCTAssertEqual(dict["agent"] as? String, "terminal")
+    }
+
+    func testSpawnWindowAgentDefaultsToNilForOldClients() throws {
+        let json = #"{"type":"spawn_window","directory":"/tmp"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let restored = try XCTUnwrap(MessageCoder.decode(SpawnWindowMessage.self, from: data))
+        XCTAssertNil(restored.agent)
+        XCTAssertEqual(restored.directory, "/tmp")
     }
 
     func testCloseWindowMessageEncoding() throws {

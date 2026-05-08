@@ -808,9 +808,9 @@ private struct ConnectionTab: View {
             }
 
             Section("New Window Spawning") {
-                TextField("Command to run on new window", text: $spawnCommand)
+                TextField("Claude command", text: $spawnCommand)
                     .textFieldStyle(.roundedBorder)
-                Text("Runs after `cd <dir>` when the phone asks for a duplicate window. Leave empty for a bare shell.")
+                Text("Used when the phone selects Claude. Codex runs `codex`; Terminal opens a bare shell.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

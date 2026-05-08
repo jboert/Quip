@@ -1276,8 +1276,8 @@ struct QuipMacApp: App {
                             print("[Quip] duplicate_window: subtitle \"\(rawSubtitle)\" is not a path, falling back to $HOME")
                         }
                     }
-                    let termApp = terminalAppForWindow(source)
-                    let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                    let termApp = spawnTerminalApp(for: msg.agent, source: source)
+                    let cmd = spawnCommand(for: msg.agent)
                     let knownIds = Set(windowManager.windows.map(\.id))
                     keystrokeInjector.spawnWindow(in: dir, command: cmd, terminalApp: termApp)
                     // WindowManager's auto-refresh (~1 second) picks up the new window.
@@ -1315,8 +1315,8 @@ struct QuipMacApp: App {
                     print("[Quip] spawn_window DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
                     break
                 }
-                print("[Quip] spawn_window: directory=\(msg.directory)")
-                let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                print("[Quip] spawn_window: directory=\(msg.directory) agent=\(msg.agent?.rawValue ?? "default")")
+                let cmd = spawnCommand(for: msg.agent)
                 let knownIds = Set(windowManager.windows.map(\.id))
                 keystrokeInjector.spawnWindow(in: msg.directory, command: cmd, terminalApp: .iterm2)
                 selectNewWindowAfterSpawn(knownIds: knownIds, attempt: 0)
@@ -2153,6 +2153,28 @@ struct QuipMacApp: App {
         case TerminalApp.iterm2.bundleIdentifier: return .iterm2
         case TerminalApp.claudeDesktop.bundleIdentifier: return .claudeDesktop
         default: return .terminal
+        }
+    }
+
+    /// New phone-side presets mean "open an iTerm2 session with this command".
+    /// Only legacy duplicate messages preserve the source app's host.
+    private func spawnTerminalApp(for agent: SpawnAgent?, source: ManagedWindow) -> TerminalApp {
+        if agent != nil {
+            return .iterm2
+        }
+        return terminalAppForWindow(source)
+    }
+
+    /// Resolve the phone's spawn preset to the command iTerm should run after
+    /// `cd <dir>`. nil preserves the pre-agent-picker behavior for old clients.
+    private func spawnCommand(for agent: SpawnAgent?) -> String {
+        switch agent {
+        case .codex:
+            return "codex"
+        case .terminal:
+            return ""
+        case .claude, .none:
+            return UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
         }
     }
 

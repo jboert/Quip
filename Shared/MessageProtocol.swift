@@ -36,6 +36,16 @@ enum CLIKind: String, Codable, Sendable, CaseIterable {
     case shell
 }
 
+/// Agent/command preset for newly spawned terminal windows.
+/// `terminal` means "open a shell in the project directory without launching
+/// an AI agent." Optional on spawn messages for wire compatibility: old phone
+/// builds omit it, old Mac builds ignore it.
+enum SpawnAgent: String, Codable, Sendable, CaseIterable {
+    case claude
+    case codex
+    case terminal
+}
+
 struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     let id: String
     let name: String
@@ -299,11 +309,13 @@ struct STTStateMessage: Codable, Sendable {
 struct DuplicateWindowMessage: Codable, Sendable {
     let type: String
     let sourceWindowId: String
+    let agent: SpawnAgent?
     let messageId: UUID?
 
-    init(sourceWindowId: String, messageId: UUID? = UUID()) {
+    init(sourceWindowId: String, agent: SpawnAgent? = nil, messageId: UUID? = UUID()) {
         self.type = "duplicate_window"
         self.sourceWindowId = sourceWindowId
+        self.agent = agent
         self.messageId = messageId
     }
 }
@@ -327,11 +339,13 @@ struct CloseWindowMessage: Codable, Sendable {
 struct SpawnWindowMessage: Codable, Sendable {
     let type: String
     let directory: String
+    let agent: SpawnAgent?
     let messageId: UUID?
 
-    init(directory: String, messageId: UUID? = UUID()) {
+    init(directory: String, agent: SpawnAgent? = nil, messageId: UUID? = UUID()) {
         self.type = "spawn_window"
         self.directory = directory
+        self.agent = agent
         self.messageId = messageId
     }
 }

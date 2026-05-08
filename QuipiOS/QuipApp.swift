@@ -1139,6 +1139,7 @@ struct MainiOSView: View {
     @State private var showBackendPicker = false
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
+    @AppStorage("spawnAgent") private var spawnAgentRaw: String = SpawnAgent.claude.rawValue
     /// Which tab the Spawn sheet is on. "new" shows project directories
     /// (classic path), "attach" shows the list of iTerm windows currently
     /// open on the Mac that Quip isn't already tracking.
@@ -1731,7 +1732,18 @@ struct MainiOSView: View {
 
     @ViewBuilder
     private var spawnSheetNewTab: some View {
-        Group {
+        VStack(spacing: 0) {
+            Picker("Agent", selection: $spawnAgentRaw) {
+                ForEach(SpawnAgent.allCases, id: \.self) { agent in
+                    Text(agent.displayName).tag(agent.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+            .accessibilityLabel("New session agent")
+
             if projectDirectories.isEmpty {
                 ContentUnavailableView(
                     "No Project Directories",
@@ -1741,7 +1753,7 @@ struct MainiOSView: View {
             } else {
                 List(projectDirectories, id: \.self) { dir in
                     Button {
-                        client.send(SpawnWindowMessage(directory: dir))
+                        client.send(SpawnWindowMessage(directory: dir, agent: selectedSpawnAgent))
                         showSpawnPicker = false
                     } label: {
                         Label((dir as NSString).lastPathComponent, systemImage: "folder")
@@ -3771,7 +3783,7 @@ struct MainiOSView: View {
         // Duplicate and closeWindow send different message types than
         // QuickActionMessage, so they're early-return branches.
         if action == .duplicate {
-            client.send(DuplicateWindowMessage(sourceWindowId: windowId))
+            client.send(DuplicateWindowMessage(sourceWindowId: windowId, agent: duplicateSpawnAgent(for: windowId)))
             return
         }
         if action == .closeWindow {
@@ -3794,6 +3806,26 @@ struct MainiOSView: View {
             return
         }
         client.send(QuickActionMessage(windowId: windowId, action: str))
+    }
+
+    private var selectedSpawnAgent: SpawnAgent {
+        SpawnAgent(rawValue: spawnAgentRaw) ?? .claude
+    }
+
+    private func duplicateSpawnAgent(for windowId: String) -> SpawnAgent {
+        guard let window = windows.first(where: { $0.id == windowId }) else {
+            return selectedSpawnAgent
+        }
+        switch window.cliKind {
+        case .claude:
+            return .claude
+        case .codex:
+            return .codex
+        case .shell:
+            return .terminal
+        case nil:
+            return selectedSpawnAgent
+        }
     }
 
     // MARK: - Configurable Quick Buttons
@@ -6899,6 +6931,16 @@ enum SpawnSheetTab: String, CaseIterable, Identifiable {
     case new = "New"
     case attach = "Attach Existing"
     var id: String { rawValue }
+}
+
+extension SpawnAgent {
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .terminal: return "Terminal"
+        }
+    }
 }
 
 /// State for the inline connection-test probe that sits next to the URL field.
