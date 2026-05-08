@@ -5,6 +5,24 @@ import XCTest
 @MainActor
 final class QAModePerWindowContentTests: XCTestCase {
 
+    /// The Mac may publish iTerm's display name as "iTerm" even though the
+    /// terminal enum is named `iterm2`. Pairing must keep accepting that wire
+    /// value or the QA picker shows "No terminals detected."
+    func testItermDisplayNameIsTerminal() {
+        let window = WindowState(
+            id: "term-1",
+            name: "iTerm - Quip",
+            app: "iTerm",
+            folder: "Quip",
+            enabled: true,
+            frame: WindowFrame(x: 0, y: 0, width: 100, height: 100),
+            state: "neutral",
+            color: "#14B8A6"
+        )
+
+        XCTAssertTrue(window.isTerminal)
+    }
+
     /// Updating one windowId's content does not bleed into another.
     func testPerWindowIdSlotsAreIndependent() {
         var text: [String: String] = [:]

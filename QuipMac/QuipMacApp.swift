@@ -931,7 +931,7 @@ struct QuipMacApp: App {
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }),
                    terminalStateDetector.trackedWindows[msg.windowId] == nil {
                     let pid = shellPidForWindow(window)
-                    terminalStateDetector.trackWindow(msg.windowId, shellPid: pid)
+                    terminalStateDetector.trackWindow(msg.windowId, shellPid: pid, tty: window.iterm2Tty)
                 }
             }
 
@@ -971,6 +971,11 @@ struct QuipMacApp: App {
                     // - Default (.shell / unknown / nil) preserves the
                     //   pre-Story-I behavior.
                     let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+                    // Diagnostic: log tracked PID + tty so post-mortem can
+                    // tell stale-PID respawn from genuine "no codex running"
+                    // when cliKind=shell but Codex is visible on screen.
+                    let trackedPid = self.terminalStateDetector.trackedWindows[msg.windowId] ?? 0
+                    let trackedTty = self.terminalStateDetector.trackedTty[msg.windowId] ?? "<none>"
                     let delay = KeystrokeInjector.focusDelay(
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
@@ -1007,7 +1012,7 @@ struct QuipMacApp: App {
                         let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
                         let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
                         let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
-                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs)")
+                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty)")
                         // Round-trip ack — phone subtracts injectMs/totalMs
                         // from its own send→ack delta to derive net_rtt.
                         // Skipped if no messageId (older client) — phone has
@@ -2089,7 +2094,7 @@ struct QuipMacApp: App {
         for window in enabledTerminals {
             if terminalStateDetector.trackedWindows[window.id] == nil {
                 let pid = shellPidForWindow(window)
-                terminalStateDetector.trackWindow(window.id, shellPid: pid)
+                terminalStateDetector.trackWindow(window.id, shellPid: pid, tty: window.iterm2Tty)
             }
         }
         // Also ensure the phone-selected window is tracked, even if not
@@ -2099,7 +2104,7 @@ struct QuipMacApp: App {
            let window = windowManager.windows.first(where: { $0.id == selected }),
            terminalStateDetector.trackedWindows[selected] == nil {
             let pid = shellPidForWindow(window)
-            terminalStateDetector.trackWindow(selected, shellPid: pid)
+            terminalStateDetector.trackWindow(selected, shellPid: pid, tty: window.iterm2Tty)
         }
         // Untrack removed/disabled windows — but preserve the selected one.
         let enabledIds = Set(enabledTerminals.map(\.id))

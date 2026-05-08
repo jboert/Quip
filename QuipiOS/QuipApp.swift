@@ -1712,8 +1712,7 @@ struct MainiOSView: View {
         .alert("Unrecognized Server", isPresented: $showURLWarning) {
             Button("Connect Anyway", role: .destructive) {
                 if let url = pendingUnsafeURL {
-                    manager.ensureImplicitDefault(url: url.absoluteString)
-                    client.connect(to: url)
+                    connectToBackendURL(url)
                     addToRecents(url.absoluteString)
                     pendingUnsafeURL = nil
                 }
@@ -1943,8 +1942,7 @@ struct MainiOSView: View {
                     ForEach(bonjourBrowser.discoveredHosts) { host in
                         Button {
                             if let url = host.wsURL {
-                                manager.ensureImplicitDefault(url: url.absoluteString)
-                                client.connect(to: url)
+                                connectToBackendURL(url)
                                 addToRecents(url.absoluteString)
                             }
                         } label: {
@@ -3642,8 +3640,7 @@ struct MainiOSView: View {
         }
         if let url = URL(string: urlStr) {
             if isURLTrusted(url) {
-                manager.ensureImplicitDefault(url: urlStr)
-                client.connect(to: url)
+                connectToBackendURL(url)
                 addToRecents(urlStr)
             } else {
                 pendingUnsafeURL = url
@@ -3690,6 +3687,14 @@ struct MainiOSView: View {
         let parts = hostPart.split(separator: ".").compactMap { UInt8($0) }
         guard parts.count == 4 else { return false }
         return parts[0] == 100 && (64...127).contains(parts[1])
+    }
+
+    /// Upsert the backend row, then connect through the newly active session.
+    /// `ensureImplicitDefault` may switch `manager.activeBackendID`; using the
+    /// pre-switch `client` binding here dials the wrong WebSocketClient.
+    private func connectToBackendURL(_ url: URL) {
+        manager.ensureImplicitDefault(url: url.absoluteString)
+        manager.active.client.connect(to: url)
     }
 
     // MARK: - Recent Connections

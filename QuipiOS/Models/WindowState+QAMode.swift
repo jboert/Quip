@@ -25,6 +25,6 @@ extension WindowState {
         // no substring matching, since folder names surfaced as `app` could
         // false-positive (e.g. "iterm-tools" project folder).
         let lower = app.lowercased()
-        return lower == "iterm2" || lower == "terminal"
+        return lower == "iterm" || lower == "iterm2" || lower == "terminal"
     }
 }
