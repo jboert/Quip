@@ -4,16 +4,16 @@ import SwiftUI
 /// hint, lets the user tap to switch, swipe-to-forget, or open the existing
 /// add-by-URL/Bonjour flow via "Add backend".
 ///
-/// Cold-switch model for v1: tapping a row calls `manager.setActive(_:)` which
-/// disconnects the placeholder client and reconnects to the new URL.
-/// Reconnect is sub-2s on LAN. The Hot model — all paired backends live, swap
-/// is sub-frame — is a follow-up that requires moving QuipApp's @State into
-/// per-`BackendSession` slices.
+/// Hot model: every paired backend has its own live `BackendSession` with
+/// `client` + `reachability` — switching active is just an `activeBackendID`
+/// pointer flip. The picker reads each session's `reachability` directly so
+/// every row shows its current live status (`.connected` / `.connecting` /
+/// `.unreachable` / `.needsAuth`), not a stale "active vs grey" binary.
 struct BackendPickerSheet: View {
     @Bindable var manager: BackendConnectionManager
-    /// Live connection flag — when the active row is the connected one we
-    /// show a green dot, anything else is a neutral grey since we don't
-    /// (yet) probe inactive backends in v1's cold-switch model.
+    /// Retained for source-compat with the cold-switch v1 caller; ignored
+    /// now that per-session reachability is read directly. Remove once
+    /// every call site stops passing it.
     var isActiveConnected: Bool
     @Binding var isPresented: Bool
     /// Tapped "Add backend". Host pops the existing connect-by-URL UI.
@@ -66,10 +66,17 @@ struct BackendPickerSheet: View {
     @ViewBuilder
     private func row(_ backend: PairedBackend) -> some View {
         let isActive = backend.id == manager.activeBackendID
+        let session = manager.sessions[backend.id]
+        let status = Self.classification(enabled: backend.enabled,
+                                          reachability: session?.reachability)
+        let lastSeen = Self.lastSeenCaption(status: status,
+                                             lastConnectedAt: backend.lastConnectedAt,
+                                             now: Date())
         HStack(spacing: 10) {
             Circle()
-                .fill(dotColor(isActive: isActive, enabled: backend.enabled))
+                .fill(status.dot(colors: colors))
                 .frame(width: 8, height: 8)
+                .accessibilityHidden(true)
             Button {
                 if !isActive {
                     manager.setActive(backend.id)
@@ -81,11 +88,33 @@ struct BackendPickerSheet: View {
                         Text(backend.name.isEmpty ? "Backend" : backend.name)
                             .font(.body.weight(.medium))
                             .foregroundStyle(backend.enabled ? .primary : .secondary)
-                        Text(backend.url)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        // GH H+G: row caption shows live status above the URL,
+                        // not just the URL — answers "is this one connected
+                        // right now?" without flipping to it.
+                        HStack(spacing: 6) {
+                            Text(status.caption)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(status.captionTint(colors: colors))
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text(backend.url)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        // §J — second caption: relative time of last
+                        // successful connection. Hidden when row status
+                        // is .connected (timestamp would be misleading
+                        // — they're connected NOW). Shows "Last seen
+                        // 2m ago / 3d ago" or "Never connected" so the
+                        // user can spot stale entries at a glance.
+                        if let lastSeen {
+                            Text(lastSeen)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Spacer(minLength: 4)
                     if isActive {
@@ -97,6 +126,9 @@ struct BackendPickerSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(backend.name.isEmpty ? "Backend" : backend.name), \(status.caption)")
+            .accessibilityHint(isActive ? "Currently selected" : "Tap to switch to this backend")
 
             // Auto-connect toggle — gated behind a button so a stray tap on
             // the row body doesn't disable the only live backend. Bolt icon
@@ -115,9 +147,95 @@ struct BackendPickerSheet: View {
         }
     }
 
-    private func dotColor(isActive: Bool, enabled: Bool) -> Color {
-        if !enabled { return .secondary.opacity(0.25) }
-        if isActive { return isActiveConnected ? colors.statusConnected : .yellow }
-        return .secondary.opacity(0.4)
+    /// Live row state, derived from the user's `enabled` toggle + the
+    /// session's actual `Reachability`. Pure mapping so it can be tested
+    /// without standing up a full `BackendConnectionManager`. (GH G.)
+    enum RowStatus: String, CaseIterable {
+        case off            // bolt.slash — user disabled auto-connect
+        case unknown        // enabled but no session yet (just paired)
+        case connecting
+        case connected
+        case needsAuth
+        case unreachable
+
+        var caption: String {
+            switch self {
+            case .off:         return "Off"
+            case .unknown:     return "Unknown"
+            case .connecting:  return "Connecting…"
+            case .connected:   return "Connected"
+            case .needsAuth:   return "PIN required"
+            case .unreachable: return "Unreachable"
+            }
+        }
+
+        func dot(colors: QuipColors) -> Color {
+            switch self {
+            case .off:         return .secondary.opacity(0.25)
+            case .unknown:     return .secondary.opacity(0.4)
+            case .connecting:  return .yellow
+            case .connected:   return colors.statusConnected
+            case .needsAuth:   return .orange
+            case .unreachable: return .red.opacity(0.7)
+            }
+        }
+
+        func captionTint(colors: QuipColors) -> Color {
+            switch self {
+            case .off:         return .secondary
+            case .unknown:     return .secondary
+            case .connecting:  return .orange
+            case .connected:   return colors.statusConnected
+            case .needsAuth:   return .orange
+            case .unreachable: return .red.opacity(0.85)
+            }
+        }
+    }
+
+    /// Pure classification helper. Static so the unit tests don't need
+    /// to construct a `BackendPickerSheet` view.
+    static func classification(enabled: Bool, reachability: BackendSession.Reachability?) -> RowStatus {
+        guard enabled else { return .off }
+        guard let r = reachability else { return .unknown }
+        switch r {
+        case .connecting:  return .connecting
+        case .connected:   return .connected
+        case .unreachable: return .unreachable
+        case .needsAuth:   return .needsAuth
+        }
+    }
+
+    /// Build the per-row "last seen" caption. Hidden (returns nil)
+    /// when the row is currently `.connected` — showing a stale
+    /// timestamp next to "Connected" would be confusing. Otherwise
+    /// returns "Last seen Xm ago / Xh ago / Xd ago" or
+    /// "Never connected" when no successful auth has ever been
+    /// recorded for this backend. Pure / time-injectable so unit
+    /// tests can drive every bucket. (§J.)
+    static func lastSeenCaption(status: RowStatus, lastConnectedAt: Date?, now: Date) -> String? {
+        if status == .connected { return nil }
+        guard let when = lastConnectedAt else {
+            return "Never connected"
+        }
+        let delta = now.timeIntervalSince(when)
+        if delta < 0 {
+            // Clock skew — treat as "just now" rather than negative duration.
+            return "Last seen just now"
+        }
+        return "Last seen " + relativeAgo(seconds: delta)
+    }
+
+    /// Compact relative-time formatter — "2m ago" / "5h ago" / "3d ago".
+    /// Bands are coarse on purpose: granularity below a minute is
+    /// noise; above 30 days flattens to "30d+ ago" so very-old entries
+    /// don't show months/years (which would just be a wall clock at
+    /// that point).
+    static func relativeAgo(seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        if s < 60        { return "just now" }
+        if s < 3_600     { return "\(s / 60)m ago" }
+        if s < 86_400    { return "\(s / 3_600)h ago" }
+        if s < 30 * 86_400 { return "\(s / 86_400)d ago" }
+        return "30d+ ago"
     }
 }

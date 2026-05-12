@@ -327,12 +327,16 @@ Ask for terminal output and screenshot for a window. Server responds with `termi
 
 ### duplicate_window
 
-Spawn a new iTerm2 window in the same working directory as the source window, running the configured command.
+Spawn a new iTerm2 window in the same working directory as the source window.
+`agent` is optional for backward compatibility. When omitted, the Mac uses its
+configured default command. Values: `"claude"`, `"codex"`, or `"terminal"`;
+`"terminal"` opens a bare shell with no agent command.
 
 ```json
 {
   "type": "duplicate_window",
-  "sourceWindowId": "Terminal.12345"
+  "sourceWindowId": "Terminal.12345",
+  "agent": "codex"
 }
 ```
 
@@ -349,12 +353,14 @@ Destructive — close a specific iTerm2 window, killing any running command in t
 
 ### spawn_window
 
-Spawn a new iTerm2 window in the given directory, running the configured spawn command.
+Spawn a new iTerm2 window in the given directory. `agent` has the same optional
+semantics as `duplicate_window`.
 
 ```json
 {
   "type": "spawn_window",
-  "directory": "/Users/jb/Projects/quip"
+  "directory": "/Users/jb/Projects/quip",
+  "agent": "terminal"
 }
 ```
 
@@ -562,3 +568,50 @@ iOS users can ship a hot-fix without an app update by dropping a JSON file with 
 | Linux | Rust | `QuipLinux/src/protocol/` |
 
 Shared cross-platform invariants (e.g., the 16 MiB message cap) live in `Shared/Constants.swift` and `QuipLinux/src/protocol/limits.rs` — change in one place, everyone stays consistent.
+
+## Cross-cutting concerns
+
+### Versioning
+
+There is **no explicit `protocolVersion` field** today. Versioning is implicit via field-presence + type-set evolution. Both peers ship independently and stay forward/backward compatible by following these rules:
+
+- **Adding a field:** declare the new field as `Optional` with a default of `nil` in the struct's `init`. Decoders treat absent fields as `nil`. **Both peers can ship the new field independently** — older peers ignore it, newer peers tolerate its absence. This is how `frontmost_changed` (§B16), `claudeMode` on `WindowState`, and `messageId` on every side-effecting message landed without a coordinated release.
+- **Adding a message type:** safe in either direction. The receiving peer that doesn't recognise the new `type` string falls through to the dispatcher's `default` case and silently ignores. Test: the implementation must NOT crash, log-spam, or disconnect on unknown types — it must skip cleanly. (See §B17 for the open trace task on stray unknown frames.)
+- **Changing a field's type or rename:** **breaking.** Add a new field, deprecate the old one, ship for at least one release cycle with both, then delete.
+- **Removing a message type:** breaking when the peer still sends it. Soft-deprecate first by no-oping on receive, then drop.
+
+If we ever need explicit versioning (e.g. for a wire-incompatible change neither peer can polyfill), the negotiation slot is `auth` / `auth_result` — extend with a `protocolVersion` int and bail the connection on mismatch.
+
+### Heartbeat
+
+- **WS-level ping (always on):** iOS sends `URLSessionWebSocketTask.sendPing` every 10s. Mac auto-replies via `wsOptions.autoReplyPing = true` on its `NWProtocolWebSocket.Options`. Both sides accept this is sufficient for keepalive in steady state. The control-frame path is filtered out of Mac's JSON dispatcher by an opcode check (`metadata.opcode != .text`).
+- **iOS stall watchdog (25s):** if no traffic of any kind arrives for 25 seconds, iOS's `WebSocketClient` treats the connection as dead, cancels the task, and reconnects. Catches one-sided disconnects (Mac restart, NAT idle drop) that the WS ping wouldn't notice promptly.
+- **Mac → iOS heartbeat:** **not implemented today** (GH #19 tracks). Mac relies entirely on iOS's keepalive. Adding an app-level heartbeat would let Mac detect a hung phone (rare but possible — e.g. iOS app suspended mid-task) without the 25s stall window.
+- **Reconnect heal:** on every successful auth, iOS re-sends `select_window` with the current `selectedWindowId` so Mac's per-client `clientSelectedWindowId` rebuilds. Without this re-send, push-notification routing (which gates on selection match) silently drops every event after a Mac restart until the user manually retaps a window card. See `feedback_check_socket_first.md`.
+
+### Idempotency
+
+Side-effecting iOS→Mac messages carry an optional `messageId: UUID?` (added in §27). Mac dedupes via `MessageDedupeTable.checkAndRecord(_:)` — first arrival processes, second is silently dropped. Phones that double-tap or retry on reconnect won't double-fire.
+
+Coverage audit at commit `8fdbd66` confirmed every side-effecting Mac handler wraps the dedupe call. New handlers MUST do the same — see the canonical pattern near `case "send_text"` in `QuipMac/QuipMacApp.swift`. The list of side-effecting handlers as of 2026-05-06: `send_text`, `quick_action`, `duplicate_window`, `close_window`, `spawn_window`, `paste_prompt`, `attach_iterm_window`, `image_upload`. (GH #18 closed 2026-05-06 against this audit.)
+
+`messageId` is `Optional` for backward-compat: older iOS builds that omit it still work — they just don't get dedupe protection. Side-effecting messages from those builds are processed every arrival.
+
+Non-side-effecting messages (`request_content`, `select_window`, `preferences_request`, etc.) don't need dedupe — they're naturally idempotent or query-shaped.
+
+### Per-message integrity (HMAC)
+
+Not implemented (GH #17 tracks). Current security model is PIN-only at handshake plus TLS pinning for tunnel paths. Per-message HMAC would protect against MITM on shared LAN segments where an attacker can read+modify post-handshake. Out of scope for v1 — revisit when threat model warrants.
+
+### Frame opcode filtering (Mac side)
+
+Mac's `WebSocketServer.receiveMessage` checks `NWProtocolWebSocket.Metadata.opcode` and skips frames where `opcode != .text && opcode != .binary` BEFORE any JSON parse attempt. Without this filter, `autoReplyPing = true` still delivers the original ping bytes to the message handler, which then fail JSON parse and log `type=unknown (4 bytes)` every 10s per connected client. Filter shipped 2026-05-06 (`3a3a7c7`). A separate residual `type=unknown` source (a text frame, NOT a control frame) is tracked at wishlist §B17.
+
+## See Also
+
+- `Shared/MessageProtocol.swift` — every type's exact shape (source of truth)
+- `CLAUDE.md` — photo-upload debugging notes (only currently-documented protocol failure mode in detail)
+- `QuipMac/Services/WebSocketServer.swift` — Mac dispatch + opcode filter
+- `QuipiOS/Services/WebSocketClient.swift` — iOS send + receive + keepalive + 25s stall watchdog
+- `QuipMac/Services/MessageDedupeTable.swift` — §27 idempotency table
+- `docs/superpowers/wishlist.md` §B17 — open trace task for residual `type=unknown (4 bytes)` text frame

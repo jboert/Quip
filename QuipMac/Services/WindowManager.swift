@@ -46,9 +46,28 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             || bundleId == TerminalApp.iterm2.bundleIdentifier
     }
 
+    /// Whether this window is eligible to be the "target" half of a QA mode pair.
+    /// Derived from `targetKind` so there's one source of truth for the
+    /// classification — `targetKind` defines the value space, `isTarget`
+    /// is just the "any kind" boolean.
+    var isTarget: Bool { targetKind != nil }
+
+    /// Wire-format target classification. Surfaced on `WindowState.targetKind`
+    /// so the phone's QA mode picker can filter without re-deriving from
+    /// bundleId. Values must stay in sync with the phone-side picker's filter
+    /// (see `QAPairPickerSheet`). v1: `"simulator"` or `nil`.
+    /// v2: extend the switch with `"browser_localhost"` for browsers pointed
+    /// at `localhost:<port>` (requires URL extraction beyond bundleId).
+    var targetKind: String? {
+        switch bundleId {
+        case "com.apple.iphonesimulator": return "simulator"
+        default: return nil
+        }
+    }
+
     /// Convert to shared WindowState for protocol messages.
     /// Frame is normalized to 0-1 relative to the given screen bounds.
-    func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false, claudeMode: String? = nil) -> WindowState {
+    func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false, claudeMode: String? = nil, cliKind: CLIKind? = nil) -> WindowState {
         let frame: WindowFrame
         if let screen = screenBounds, screen.width > 0, screen.height > 0 {
             frame = WindowFrame(
@@ -75,7 +94,9 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             state: state,
             color: assignedColor,
             isThinking: isThinking,
-            claudeMode: claudeMode
+            claudeMode: claudeMode,
+            cliKind: cliKind,
+            targetKind: targetKind
         )
     }
 }
@@ -480,23 +501,35 @@ final class WindowManager {
         applyIterm2SessionIds(sessions)
     }
 
-    /// Filter the window list for LayoutUpdate broadcasts.
+    /// Filter the window list for a single client's `LayoutUpdate` broadcast.
     ///
-    /// Mirror OFF (default): only windows the user has explicitly enabled —
-    /// Quip is an allowlist.
+    /// `qaPair` (if set) wins outright: only the two paired windows are
+    /// returned, regardless of `mirrorDesktop` / `isEnabled` / visibility.
+    /// If one half of the pair is missing from `all`, the present half still
+    /// rides out — the snapshot validator emits a separate `qa_pair_lost`
+    /// to drop the pair.
     ///
-    /// Mirror ON: every terminal currently drawn on a connected screen goes
-    /// out, so the phone shows the *visible* desktop at a glance. Off-screen
-    /// terminals (inactive Space, disconnected monitor) are filtered out —
-    /// CG's `.optionOnScreenOnly` isn't reliable here, so we re-check in
-    /// `applyWindowSnapshot`. Enabled windows always ride along regardless
-    /// of visibility, so a browser the user turned on, or a terminal that
-    /// later slipped off-screen, doesn't disappear from the phone.
-    nonisolated static func windowsForBroadcast(_ all: [ManagedWindow], mirrorDesktop: Bool) -> [ManagedWindow] {
-        if mirrorDesktop {
-            return all.filter { ($0.isTerminal && $0.isOnVisibleScreen) || $0.isEnabled }
+    /// `mirrorDesktop=true` (no pair): every visible terminal + every
+    /// visible target (Simulator etc.) + every enabled non-terminal.
+    ///
+    /// `mirrorDesktop=false` (no pair, default): enabled windows + visible
+    /// targets (Simulator etc.). Targets ride along even when disabled so
+    /// QA-mode pairing is discoverable without a manual enable step.
+    nonisolated static func windowsForBroadcast(
+        _ all: [ManagedWindow],
+        mirrorDesktop: Bool,
+        qaPair: (String, String)? = nil
+    ) -> [ManagedWindow] {
+        if let pair = qaPair {
+            let want: Set<String> = [pair.0, pair.1]
+            return all.filter { want.contains($0.id) }
         }
-        return all.filter(\.isEnabled)
+        if mirrorDesktop {
+            return all.filter {
+                (($0.isTerminal || $0.isTarget) && $0.isOnVisibleScreen) || $0.isEnabled
+            }
+        }
+        return all.filter { $0.isEnabled || ($0.isTarget && $0.isOnVisibleScreen) }
     }
 
     /// True when any tracked iTerm2 window is missing its session UUID — the

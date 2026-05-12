@@ -82,6 +82,14 @@ struct ContextMenuView: View {
                     action: .restartClaude
                 )
 
+                if window.isTarget || window.isTerminal {
+                    contextActionRow(
+                        icon: "rectangle.split.2x1",
+                        label: "Pair for QA",
+                        action: .pairForQA
+                    )
+                }
+
                 Divider()
                     .background(colors.divider)
                     .padding(.vertical, 4)

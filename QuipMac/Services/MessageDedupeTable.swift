@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Mac-side dedupe table for idempotent phone-originated messages
 /// (wishlist §27). Phone tags side-effecting messages (`send_text`,
@@ -14,6 +15,8 @@ import Foundation
 /// 100 entries with 30-second TTL covers any plausible network blip
 /// without bloating memory.
 final class MessageDedupeTable: @unchecked Sendable {
+
+    private static let logger = Logger(subsystem: "com.quip.mac", category: "MessageDedupeTable")
 
     private let capacity: Int
     private let ttl: TimeInterval
@@ -61,6 +64,12 @@ final class MessageDedupeTable: @unchecked Sendable {
             if let recorded = index[evicted.id], recorded == evicted.recordedAt {
                 index.removeValue(forKey: evicted.id)
             }
+            // Hitting capacity means the phone is sending >100 messages within
+            // the 30s TTL window — almost always a sign of a runaway loop or
+            // a misbehaving retry. Log it so the operator can spot it instead
+            // of seeing duplicates leak through silently.
+            let age = stamp.timeIntervalSince(evicted.recordedAt)
+            Self.logger.warning("MessageDedupeTable cap=\(self.capacity) reached; evicted oldest entry aged \(String(format: "%.1f", age))s — phone may be flooding")
         }
         return false
     }

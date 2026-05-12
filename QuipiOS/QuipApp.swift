@@ -29,6 +29,42 @@ class AppOrientationDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
+/// Pure helpers for mutating the per-windowId content state maps that
+/// QA mode (and the inline single-window flow) read through. Pulled out
+/// of MainiOSView so unit tests don't have to instantiate the whole view.
+enum ContentMapMutations {
+    /// Sticky writes for screenshot/urls so a refresh whose capture transiently
+    /// fails (Mac sends nil/empty) does not blank the pane. Matches the legacy
+    /// single-state semantics in `onTerminalContent`. Text always overwrites
+    /// (Mac always sends current text).
+    static func applyContent(
+        windowId: String,
+        text: String?,
+        screenshot: String?,
+        urls: [String],
+        into textMap: inout [String: String],
+        _ screenshotMap: inout [String: String],
+        _ urlsMap: inout [String: [String]]
+    ) {
+        if let text { textMap[windowId] = text }
+        if let screenshot, !screenshot.isEmpty { screenshotMap[windowId] = screenshot }
+        if !urls.isEmpty { urlsMap[windowId] = urls }
+    }
+
+    static func purgePairContent(
+        pair: (String, String),
+        from textMap: inout [String: String],
+        _ screenshotMap: inout [String: String],
+        _ urlsMap: inout [String: [String]]
+    ) {
+        for id in [pair.0, pair.1] {
+            textMap.removeValue(forKey: id)
+            screenshotMap.removeValue(forKey: id)
+            urlsMap.removeValue(forKey: id)
+        }
+    }
+}
+
 @main
 struct QuipApp: App {
     @UIApplicationDelegateAdaptor(AppOrientationDelegate.self) var appDelegate
@@ -63,6 +99,11 @@ struct QuipApp: App {
     /// build (pre-tray) reads as "no URLs" and hides the tray.
     @State private var terminalContentURLs: [String]?
     @State private var terminalContentWindowId: String?
+    // Per-windowId content maps — populated alongside the single-state properties
+    // during the dual-state transition period. Task 5 migrates read sites to these.
+    @State private var terminalContentTextById: [String: String] = [:]
+    @State private var terminalContentScreenshotById: [String: String] = [:]
+    @State private var terminalContentURLsById: [String: [String]] = [:]
     @State private var showPINEntry = false
     @State private var pinText = ""
     @State private var projectDirectories: [String] = []
@@ -93,6 +134,27 @@ struct QuipApp: App {
     /// window's `waiting_for_input` events push. True → every enabled
     /// window's transitions push. Synced to Mac via PushPreferencesMessage.
     @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
+    /// Manual override for the system color scheme. "auto" follows
+    /// `UITraitCollection.userInterfaceStyle`; "light" / "dark" pin
+    /// the app regardless of system. Read at root via the
+    /// `appearancePreferred` computed `ColorScheme?` and applied via
+    /// `.preferredColorScheme(...)` on the WindowGroup root view.
+    @AppStorage("appearance.mode") private var appearanceModeRaw: String = "auto"
+    /// (wishlist §B16.) When true, incoming `frontmost_changed` from the
+    /// Mac auto-retargets `selectedWindowId` so image / text sends land in
+    /// whatever window the user is currently looking at on the Mac.
+    /// Manually tapping a window card pins (sets this to false); the user
+    /// re-enables follow-mode via the Auto pill in the picker row.
+    /// Default true — matches the user's expectation that "the phone
+    /// follows the Mac" without an explicit step.
+    @AppStorage("followFrontmost") private var followFrontmost = true
+    private var appearancePreferred: ColorScheme? {
+        switch appearanceModeRaw {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil // auto
+        }
+    }
     /// Output delta text per window — used to display TTS overlay captions
     @State private var ttsOverlayTexts: [String: String] = [:]
     /// Pending image attachment — hoisted to QuipApp (from MainiOSView) so
@@ -116,6 +178,9 @@ struct QuipApp: App {
                 terminalContentScreenshot: $terminalContentScreenshot,
                 terminalContentURLs: $terminalContentURLs,
                 terminalContentWindowId: $terminalContentWindowId,
+                terminalContentTextById: $terminalContentTextById,
+                terminalContentScreenshotById: $terminalContentScreenshotById,
+                terminalContentURLsById: $terminalContentURLsById,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
@@ -136,6 +201,7 @@ struct QuipApp: App {
                 macPermissions: macPermissions
             )
             .environmentObject(pendingImage)
+            .preferredColorScheme(appearancePreferred)
             .onAppear {
                 setup()
                 bonjourBrowser.startBrowsing()
@@ -379,6 +445,26 @@ struct QuipApp: App {
             }
         }
 
+        // (wishlist §B16.) Mac broadcasts its current frontmost ManagedWindow.id
+        // on every cross-app activation + every 400ms within-app poll. When the
+        // user has the Auto pref enabled AND the broadcast id is in our current
+        // window list, retarget. nil broadcasts (frontmost is something Quip
+        // doesn't track — Finder, Mail, etc.) are ignored so the user's last
+        // terminal stays selected until focus returns to a tracked window.
+        manager.onFrontmostChanged = { session, windowId in
+            guard session.backendID == manager.activeBackendID else { return }
+            DispatchQueue.main.async {
+                // QA mode owns selection between the pair halves — frontmost autonomy here would yank selection out of the pane.
+                guard manager.active.qaPair == nil else { return }
+                guard followFrontmost else { return }
+                guard let wid = windowId,
+                      windows.contains(where: { $0.id == wid }) else { return }
+                if selectedWindowId == wid { return }
+                selectedWindowId = wid
+                session.client.send(SelectWindowMessage(windowId: wid))
+            }
+        }
+
         manager.onProjectDirectories = { session, dirs in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async { projectDirectories = dirs }
@@ -392,6 +478,32 @@ struct QuipApp: App {
         manager.onError = { session, reason in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
+                errorToast = reason
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if errorToast == reason { errorToast = nil }
+                }
+            }
+        }
+
+        // Task 16 — QA pair invalidated by Mac (the paired window closed
+        // or otherwise vanished). `BackendConnectionManager.wire()` has
+        // already nilled `session.qaPair`, so the conditional in
+        // MainiOSView's body falls back to the regular grid; this hook
+        // just surfaces a user-facing toast so the user knows why the QA
+        // layout disappeared.
+        manager.onQAPairLost = { session, lostPair, missingId, _ in
+            guard session.backendID == manager.activeBackendID else { return }
+            DispatchQueue.main.async {
+                if let lostPair {
+                    ContentMapMutations.purgePairContent(
+                        pair: (lostPair.targetId, lostPair.terminalId),
+                        from: &terminalContentTextById,
+                        &terminalContentScreenshotById,
+                        &terminalContentURLsById
+                    )
+                }
+                let appName = windows.first(where: { $0.id == missingId })?.app ?? "Window"
+                let reason = "\(appName) closed. Exited QA mode."
                 errorToast = reason
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     if errorToast == reason { errorToast = nil }
@@ -434,6 +546,11 @@ struct QuipApp: App {
 
         volumeHandler.onSelectionChanged = { index in
             DispatchQueue.main.async {
+                // Volume-button cycling is suppressed in QA mode for the same
+                // reason cycleWindow is — pair scope must stay locked. Otherwise
+                // a volume cycle would change selectedWindowId out from under the
+                // pair and the second pane would go stale.
+                if manager.active.qaPair != nil { return }
                 guard index >= 0, index < windows.count else { return }
                 let newId = windows[index].id
                 selectedWindowId = newId
@@ -457,6 +574,17 @@ struct QuipApp: App {
                 if let urls, !urls.isEmpty {
                     terminalContentURLs = urls
                 }
+                // Per-windowId map writes (dual-state: single-state reads still active
+                // in Task 4; Task 5 migrates read sites to use these maps instead).
+                ContentMapMutations.applyContent(
+                    windowId: windowId,
+                    text: content,
+                    screenshot: screenshot.flatMap { $0.isEmpty ? nil : $0 },
+                    urls: urls ?? [],
+                    into: &terminalContentTextById,
+                    &terminalContentScreenshotById,
+                    &terminalContentURLsById
+                )
             }
         }
 
@@ -703,6 +831,224 @@ struct QuipApp: App {
 
 // MARK: - Main iOS View
 
+/// Single-line capsule descriptor for the PTT health banner rendered just
+/// above the main row. Surfaces path-degraded states (Whisper offline,
+/// mid-press disconnect, model warming up) that were previously NSLog-only
+/// or buried in Settings → Diagnostics. Built by
+/// `MainiOSView.classifyPTTBanner(...)`. (GH H.)
+struct PTTBannerInfo: Equatable {
+    let icon: String
+    let message: String
+    let tint: Color
+}
+
+/// Top-bar connection-status pill. Replaces the prior binary
+/// (Connected / Connecting…) with five distinguishable states so the
+/// user can spot stalled / auth-failed / unpaired without digging into
+/// Settings or the picker. Pure classifier on WebSocketClient state +
+/// the paired-backends count. (§K.)
+enum TopBarStatus: String, Equatable, CaseIterable {
+    case unpaired
+    case connected
+    case connecting
+    case authFailed
+    case stalled
+
+    var label: String {
+        switch self {
+        case .unpaired:    return "Not paired"
+        case .connected:   return "Connected"
+        case .connecting:  return "Connecting\u{2026}"
+        case .authFailed:  return "Auth failed"
+        case .stalled:     return "Reconnecting\u{2026}"
+        }
+    }
+
+    func dot(colors: QuipColors) -> Color {
+        switch self {
+        case .unpaired:    return .secondary.opacity(0.4)
+        case .connected:   return colors.statusConnected
+        case .connecting:  return colors.statusConnecting
+        case .authFailed:  return .orange
+        case .stalled:     return .red.opacity(0.7)
+        }
+    }
+
+    /// Pure classifier so unit tests don't need a SwiftUI view + a live
+    /// WebSocketClient. Priority order matters: a connected client
+    /// supersedes everything; a stalled lastError outranks the
+    /// generic "Connecting…" because the user wants to see that
+    /// something's actively wrong.
+    static func classify(isConnected: Bool,
+                          isConnecting: Bool,
+                          isAuthenticated: Bool,
+                          lastError: String?,
+                          hasPaired: Bool) -> TopBarStatus {
+        if isConnected { return .connected }
+        if !hasPaired { return .unpaired }
+        if let err = lastError {
+            let lower = err.lowercased()
+            if lower.contains("auth") || lower.contains("pin") {
+                return .authFailed
+            }
+            if lower.contains("stalled") || lower.contains("no pong") || lower.contains("timed out") {
+                return .stalled
+            }
+        }
+        if isConnecting { return .connecting }
+        // Catch-all for "not connecting, not connected, paired, no
+        // explicit error" — usually transient between a forced
+        // disconnect and the auto-reconnect kicking in.
+        return .stalled
+    }
+
+    /// Structured-reason variant. Same priority order as the lastError
+    /// classifier but reads the typed `DisconnectReason` instead of
+    /// keyword-matching a free-form string. Use this when the call site
+    /// has access to `WebSocketClient.lastDisconnectReason`. Falls back
+    /// to `.connecting` / `.stalled` when the reason is nil. (§30/2)
+    static func classify(isConnected: Bool,
+                          isConnecting: Bool,
+                          isAuthenticated: Bool,
+                          reason: DisconnectReason?,
+                          hasPaired: Bool) -> TopBarStatus {
+        if isConnected { return .connected }
+        if !hasPaired { return .unpaired }
+        if let mapped = reason?.topBarStatus {
+            return mapped
+        }
+        if isConnecting { return .connecting }
+        return .stalled
+    }
+}
+
+/// Voice-press readiness shown next to the connection dot. Answers the
+/// question "if I press the volume button right now, will my voice land
+/// in Codex?" — surfacing the three independent prerequisites that have
+/// historically failed silently:
+///   1. WebSocket authenticated (Mac is reachable + paired)
+///   2. iOS mic permission granted (SFSpeech authorized)
+///   3. Selected window's CLI is Codex (recent Mac routing — 0f578a1 —
+///      sends Codex via pasteText; non-Codex falls back to keystroke
+///      typing which doesn't land in Codex's textarea)
+/// Pure classifier so it's unit-testable without a live client.
+enum PTTReadiness: String, Equatable, CaseIterable {
+    case ready          // green:  Codex selected + connected + mic OK
+    case wrongCLI       // yellow: connected + mic OK but selected isn't Codex
+    case offline        // gray:   not connected
+    case micDenied      // red:    SFSpeech permission denied / restricted
+
+    var symbol: String {
+        switch self {
+        case .ready:     return "mic.fill"
+        case .wrongCLI:  return "mic"
+        case .offline:   return "mic"
+        case .micDenied: return "mic.slash.fill"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .ready:     return "Ready for Codex"
+        case .wrongCLI:  return "Selected window isn't Codex"
+        case .offline:   return "Not connected"
+        case .micDenied: return "Microphone permission denied"
+        }
+    }
+
+    func color(colors: QuipColors) -> Color {
+        switch self {
+        case .ready:     return colors.statusConnected
+        case .wrongCLI:  return colors.statusConnecting
+        case .offline:   return .secondary.opacity(0.4)
+        case .micDenied: return .red
+        }
+    }
+
+    static func classify(isAuthenticated: Bool,
+                          isAuthorized: Bool,
+                          selectedCLI: CLIKind?) -> PTTReadiness {
+        if !isAuthorized { return .micDenied }
+        if !isAuthenticated { return .offline }
+        return selectedCLI == .codex ? .ready : .wrongCLI
+    }
+
+    /// Tiny inline tag shown next to the icon when the state isn't `.ready`.
+    /// Returns nil when the icon alone (or the connection dot for `.offline`)
+    /// already conveys the reason — keeps the row from getting noisy when
+    /// nothing is wrong.
+    func shortHint(selectedCLI: CLIKind?) -> String? {
+        switch self {
+        case .ready:     return nil
+        case .wrongCLI:
+            switch selectedCLI {
+            case .claude:  return "claude"
+            case .shell:   return "shell"
+            case .none:    return "?"
+            case .codex:   return nil  // Defensive: classify() shouldn't put us here
+            }
+        case .offline:   return nil    // Top-bar status pill already covers it
+        case .micDenied: return "no mic"
+        }
+    }
+}
+
+/// Friendly classification of round-trip text-land latency. Three buckets
+/// matched to user perception, not engineering targets — at <250ms voice
+/// transcripts feel instant, at 250–600ms there's a noticeable lag but
+/// the loop still works, past 600ms users start retyping. The badge is
+/// the at-a-glance answer to "is the link snappy right now?" — the
+/// detail sheet is for when the user wants to dig.
+enum LatencySummary: Equatable {
+    case empty                  // No samples yet — first run or post-disconnect
+    case snappy(avgMs: Int)     // < 250ms p50
+    case ok(avgMs: Int)         // 250 – 600ms
+    case slow(avgMs: Int)       // > 600ms
+
+    /// Build from the last N samples (or all if fewer). Computes the median
+    /// total RTT — median over mean so a single 5s outlier doesn't mask an
+    /// otherwise-snappy distribution.
+    static func from(samples: [WebSocketClient.LatencySample], window: Int = 20) -> LatencySummary {
+        let recent = samples.suffix(window)
+        guard !recent.isEmpty else { return .empty }
+        let sorted = recent.map(\.totalRtt).sorted()
+        let median = sorted[sorted.count / 2]
+        if median < 250 { return .snappy(avgMs: median) }
+        if median < 600 { return .ok(avgMs: median) }
+        return .slow(avgMs: median)
+    }
+
+    var color: Color {
+        switch self {
+        case .empty:  return .secondary.opacity(0.5)
+        case .snappy: return .green
+        case .ok:     return .yellow
+        case .slow:   return .red
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .empty:                return "—"
+        case .snappy(let ms):       return "Snappy \(ms)ms"
+        case .ok(let ms):           return "OK \(ms)ms"
+        case .slow(let ms):         return "Slow \(ms)ms"
+        }
+    }
+
+    /// Compact pill suitable for a Settings list row's accessory area.
+    @ViewBuilder
+    func badgeView() -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+}
+
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
     @Bindable var manager: BackendConnectionManager
@@ -715,6 +1061,9 @@ struct MainiOSView: View {
     @Binding var terminalContentScreenshot: String?
     @Binding var terminalContentURLs: [String]?
     @Binding var terminalContentWindowId: String?
+    @Binding var terminalContentTextById: [String: String]
+    @Binding var terminalContentScreenshotById: [String: String]
+    @Binding var terminalContentURLsById: [String: [String]]
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
     var projectDirectories: [String]
@@ -775,11 +1124,22 @@ struct MainiOSView: View {
     @AppStorage("mainRow.prompts.autoEnabledOnce") private var promptsAutoEnabledOnce: Bool = false
     @AppStorage("mainRow.keyboard") private var mainRowKeyboard: Bool = true
     @AppStorage("mainRow.return") private var mainRowReturn: Bool = true
+    /// (wishlist §B16.) Mirrors the QuipApp-level pref so the Auto pill in
+    /// the window picker can read + toggle it. Stays in sync via @AppStorage's
+    /// shared UserDefaults backing — no manual fan-out needed.
+    @AppStorage("followFrontmost") private var followFrontmost: Bool = true
     @State private var showSettings = false
+    /// §26 — shake-to-diagnose sheet trigger. Set to true when the
+    /// device shake gesture fires; the sheet reads from a snapshot
+    /// captured at present time so values don't churn while the user
+    /// is reading.
+    @State private var showDiagnosticsSheet = false
+    @State private var diagnosticsSnapshot: String = ""
     /// Multi-backend picker sheet trigger.
     @State private var showBackendPicker = false
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
+    @AppStorage("spawnAgent") private var spawnAgentRaw: String = SpawnAgent.claude.rawValue
     /// Which tab the Spawn sheet is on. "new" shows project directories
     /// (classic path), "attach" shows the list of iTerm windows currently
     /// open on the Mac that Quip isn't already tracking.
@@ -851,39 +1211,86 @@ struct MainiOSView: View {
     @State private var showingLibraryPicker = false
     @State private var showingCameraPicker = false
 
+    // QA mode picker — set when user long-presses a window and taps
+    // "Pair for QA" in the context menu. `qaPickerSourceWindow` holds the
+    // long-pressed window's id (one half); the sheet picks the OTHER half.
+    @State private var showQAPicker: Bool = false
+    @State private var qaPickerSourceWindow: String? = nil
+
     var body: some View {
         ZStack {
             colors.background
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                if !client.isConnected && !client.isConnecting {
-                    connectBar
-                        .padding(.horizontal, 6)
-                        .padding(.top, 4)
-                } else if client.isConnected && !client.isAuthenticated {
-                    authenticatingBar
-                        .padding(.horizontal, 6)
-                        .padding(.top, 2)
+                // QA mode replaces the status bar + grid + terminal +
+                // controls with a side-by-side pair view. The bottomBar
+                // (settings / connection menu) stays visible so the user
+                // always has an escape hatch even if the header chip's
+                // exit button is somehow obscured. (Task 16.)
+                if let pair = manager.active.qaPair,
+                   let target = windows.first(where: { $0.id == pair.targetId }),
+                   let terminal = windows.first(where: { $0.id == pair.terminalId }) {
+                    QAPairLayoutView(
+                        target: target,
+                        terminal: terminal,
+                        selectedWindowId: $selectedWindowId,
+                        contentTextById: $terminalContentTextById,
+                        contentScreenshotById: $terminalContentScreenshotById,
+                        contentURLsById: $terminalContentURLsById,
+                        backendId: manager.activeBackendID,
+                        onRefresh: { requestActiveContent() },
+                        onSendText: { text in
+                            client.send(SendTextMessage(windowId: selectedWindowId ?? "",
+                                                        text: text,
+                                                        pressReturn: true))
+                        },
+                        onExit: {
+                            if let pair = manager.active.qaPair {
+                                ContentMapMutations.purgePairContent(
+                                    pair: (pair.targetId, pair.terminalId),
+                                    from: &terminalContentTextById,
+                                    &terminalContentScreenshotById,
+                                    &terminalContentURLsById
+                                )
+                            }
+                            manager.active.updateQAPair(nil)
+                            client.clearQAPair()
+                        },
+                        onRePair: {
+                            qaPickerSourceWindow = pair.targetId
+                            showQAPicker = true
+                        }
+                    )
                 } else {
-                    connectedBar
-                        .padding(.horizontal, 6)
-                        .padding(.top, 2)
-                }
-
-                if isPortrait {
-                    portraitContentSection
-                } else {
-                    landscapeContentSection
-                    if showTextInput {
-                        textInputBar
+                    if !client.isConnected && !client.isConnecting {
+                        connectBar
+                            .padding(.horizontal, 6)
+                            .padding(.top, 4)
+                    } else if client.isConnected && !client.isAuthenticated {
+                        authenticatingBar
+                            .padding(.horizontal, 6)
+                            .padding(.top, 2)
+                    } else {
+                        connectedBar
+                            .padding(.horizontal, 6)
+                            .padding(.top, 2)
                     }
-                }
 
-                if client.isAuthenticated && !windows.isEmpty {
-                    portraitControls
-                        .padding(.horizontal, 8)
-                        .padding(.top, 4)
+                    if isPortrait {
+                        portraitContentSection
+                    } else {
+                        landscapeContentSection
+                        if showTextInput {
+                            textInputBar
+                        }
+                    }
+
+                    if client.isAuthenticated && !windows.isEmpty {
+                        portraitControls
+                            .padding(.horizontal, 8)
+                            .padding(.top, 4)
+                    }
                 }
 
                 bottomBar
@@ -982,13 +1389,32 @@ struct MainiOSView: View {
         .environment(\.quipColors, colors)
         .onAppear {
             updateOrientation()
-            // One-shot migration of the legacy CSV `enabledQuickButtons`
-            // representation to the new ordered slot list. Empty JSON =
-            // never migrated; running version puts `quickSlotsJSON` in a
-            // valid state so `effectiveQuickSlots` stays a pure read.
+            // One-shot first-launch seed for the slot row + custom-button
+            // table. Two paths:
+            //   1) Truly-fresh install — both `quickSlotsJSON` empty AND
+            //      `customButtonsJSON` is the empty-array default `"[]"`.
+            //      Seed `defaultSlots(demoCustomID:)` + `defaultDemo()` so
+            //      the row visibly demonstrates both built-ins AND a
+            //      custom button the moment the app connects (no Settings
+            //      drill-down needed, makes simulator QA viable).
+            //   2) Upgrader from pre-§43 CSV — `quickSlotsJSON` empty but
+            //      `customButtonsJSON` already has user data (or the CSV
+            //      itself isn't the default value). Run the existing
+            //      CSV→JSON migration so the user's curated row carries
+            //      forward unchanged.
             if quickSlotsJSON.isEmpty {
-                let migrated = QuickSlotStore.migrate(fromCSV: enabledQuickButtonsRaw)
-                quickSlotsJSON = QuickSlotStore.encode(migrated)
+                let isTrulyFresh =
+                    customButtonsJSON == "[]" &&
+                    enabledQuickButtonsRaw == "plan,yes,no,esc,ctrlC"
+                if isTrulyFresh {
+                    let demo = CustomButtonStore.defaultDemo()
+                    customButtonsJSON = CustomButtonStore.encode([demo])
+                    let seeded = QuickSlotStore.defaultSlots(demoCustomID: demo.id)
+                    quickSlotsJSON = QuickSlotStore.encode(seeded)
+                } else {
+                    let migrated = QuickSlotStore.migrate(fromCSV: enabledQuickButtonsRaw)
+                    quickSlotsJSON = QuickSlotStore.encode(migrated)
+                }
             }
             // Restore persisted phone-side window overrides so a returning
             // user sees their drag layout before the first windows-list
@@ -1092,7 +1518,7 @@ struct MainiOSView: View {
             terminalContentURLs = nil
             terminalContentWindowId = newId
             // Auto-fetch terminal output for the inline view in portrait.
-            if isPortrait, let id = newId { onRequestContent(id) }
+            if isPortrait, newId != nil { requestActiveContent() }
         }
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { code in
@@ -1149,6 +1575,59 @@ struct MainiOSView: View {
                 client.disconnect()
             }
         }
+        .sheet(isPresented: $showDiagnosticsSheet) {
+            DiagnosticsSheet(
+                snapshot: diagnosticsSnapshot,
+                canRequestMacBundle: client.isAuthenticated,
+                onRequestMacBundle: {
+                    client.send(RequestDiagnosticsMessage())
+                }
+            )
+        }
+        // Task 16 — QA-mode pair picker. Triggered by long-press → "Pair
+        // for QA" in WindowRectangle's context menu, OR by the re-pair
+        // button in the QAPairLayoutView header chip. The long-pressed
+        // window IS one half; the sheet picks the OTHER half. Mode is
+        // derived from the source window's classification — long-pressed
+        // a Simulator → pick a terminal; long-pressed a terminal → pick
+        // a Simulator.
+        .sheet(isPresented: $showQAPicker) {
+            if let sourceId = qaPickerSourceWindow,
+               let source = windows.first(where: { $0.id == sourceId }) {
+                let mode: QAPairPickerSheet.Mode = source.isTarget ? .terminal : .target
+                QAPairPickerSheet(
+                    mode: mode,
+                    windows: windows,
+                    onSelect: { other in
+                        let pair: QAPair
+                        if source.isTarget {
+                            pair = QAPair(targetId: source.id, terminalId: other.id)
+                        } else {
+                            pair = QAPair(targetId: other.id, terminalId: source.id)
+                        }
+                        manager.active.updateQAPair(pair)
+                        client.setQAPair(targetId: pair.targetId, terminalId: pair.terminalId)
+                        showQAPicker = false
+                        qaPickerSourceWindow = nil
+                    },
+                    onCancel: {
+                        showQAPicker = false
+                        qaPickerSourceWindow = nil
+                    }
+                )
+            }
+        }
+        .background(
+            // §26 — invisible shake detector mounted as a 0×0 background
+            // view so it sits in the responder chain without taking
+            // layout space. On shake, snapshot iPhone state into a
+            // monospaced text block + present the diagnostics sheet.
+            ShakeDetector {
+                diagnosticsSnapshot = buildDiagnosticsSnapshot()
+                showDiagnosticsSheet = true
+            }
+            .frame(width: 0, height: 0)
+        )
         // Image-attach sheets — hoisted to the body so both portrait and
         // landscape views can trigger them via the shared @State bindings.
         .confirmationDialog("Attach image", isPresented: $showingImageSourceSheet, titleVisibility: .hidden) {
@@ -1234,8 +1713,7 @@ struct MainiOSView: View {
         .alert("Unrecognized Server", isPresented: $showURLWarning) {
             Button("Connect Anyway", role: .destructive) {
                 if let url = pendingUnsafeURL {
-                    manager.ensureImplicitDefault(url: url.absoluteString)
-                    client.connect(to: url)
+                    connectToBackendURL(url)
                     addToRecents(url.absoluteString)
                     pendingUnsafeURL = nil
                 }
@@ -1254,7 +1732,18 @@ struct MainiOSView: View {
 
     @ViewBuilder
     private var spawnSheetNewTab: some View {
-        Group {
+        VStack(spacing: 0) {
+            Picker("Agent", selection: $spawnAgentRaw) {
+                ForEach(SpawnAgent.allCases, id: \.self) { agent in
+                    Text(agent.displayName).tag(agent.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+            .accessibilityLabel("New session agent")
+
             if projectDirectories.isEmpty {
                 ContentUnavailableView(
                     "No Project Directories",
@@ -1264,7 +1753,7 @@ struct MainiOSView: View {
             } else {
                 List(projectDirectories, id: \.self) { dir in
                     Button {
-                        client.send(SpawnWindowMessage(directory: dir))
+                        client.send(SpawnWindowMessage(directory: dir, agent: selectedSpawnAgent))
                         showSpawnPicker = false
                     } label: {
                         Label((dir as NSString).lastPathComponent, systemImage: "folder")
@@ -1465,8 +1954,7 @@ struct MainiOSView: View {
                     ForEach(bonjourBrowser.discoveredHosts) { host in
                         Button {
                             if let url = host.wsURL {
-                                manager.ensureImplicitDefault(url: url.absoluteString)
-                                client.connect(to: url)
+                                connectToBackendURL(url)
                                 addToRecents(url.absoluteString)
                             }
                         } label: {
@@ -1584,7 +2072,18 @@ struct MainiOSView: View {
     // MARK: - Connected Bar
 
     private var connectedBar: some View {
-        HStack(spacing: 4) {
+        // §K — top-bar 4-state pill. Binary green/yellow missed "stalled
+        // mid-handshake / NAT-idle drop / auth-failed / not-paired".
+        // Pure classifier `TopBarStatus.classify(...)` returns the right
+        // color + label; pinned by unit tests.
+        let topStatus = TopBarStatus.classify(
+            isConnected: client.isConnected,
+            isConnecting: client.isConnecting,
+            isAuthenticated: client.isAuthenticated,
+            reason: client.lastDisconnectReason,
+            hasPaired: !manager.paired.isEmpty
+        )
+        return HStack(spacing: 4) {
             // Tap the dot+label to open the multi-backend picker. Hidden when
             // there's no paired entry yet (first launch) so the affordance
             // only shows up once it's actionable.
@@ -1595,9 +2094,9 @@ struct MainiOSView: View {
             } label: {
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(client.isConnected ? colors.statusConnected : colors.statusConnecting)
+                        .fill(topStatus.dot(colors: colors))
                         .frame(width: 6, height: 6)
-                    Text(client.isConnected ? "Connected" : "Connecting\u{2026}")
+                    Text(topStatus.label)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(colors.textSecondary)
                     if manager.paired.count > 1 {
@@ -1611,6 +2110,32 @@ struct MainiOSView: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Connection: \(topStatus.label)")
+            .accessibilityHint(manager.paired.isEmpty ? "No backends paired yet" : "Open backend picker")
+            // PTT readiness — green only when a volume-button press would
+            // actually reach Codex. Yellow when connected but selected
+            // window is Claude / shell. Red when mic permission is denied.
+            // The optional shortHint surfaces *which* CLI is foregrounded
+            // (or "no mic") so the user knows why it's not green without
+            // having to dig into Settings.
+            let pttSelectedCLI = windows.first(where: { $0.id == selectedWindowId })?.cliKind
+            let ptt = PTTReadiness.classify(
+                isAuthenticated: client.isAuthenticated,
+                isAuthorized: speech.isAuthorized,
+                selectedCLI: pttSelectedCLI
+            )
+            HStack(spacing: 2) {
+                Image(systemName: ptt.symbol)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ptt.color(colors: colors))
+                if let hint = ptt.shortHint(selectedCLI: pttSelectedCLI) {
+                    Text(hint)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(ptt.color(colors: colors))
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Push-to-talk: \(ptt.label)")
             if let error = client.lastError {
                 Text(error)
                     .font(.system(size: 9))
@@ -1642,6 +2167,14 @@ struct MainiOSView: View {
                     }
                 }
             }
+            .accessibilityLabel({
+                if let perms = macPermissions,
+                   !(perms.accessibility && perms.appleEvents && perms.screenRecording) {
+                    return "Settings, Mac permission needed"
+                }
+                return "Settings"
+            }())
+            .accessibilityAddTraits(.isButton)
             // One-tap recovery: visible only while disconnected so the user
             // can break the "stuck on Connecting…" state without digging
             // through settings. Disconnects + reconnects to the active URL.
@@ -1656,6 +2189,8 @@ struct MainiOSView: View {
                         .frame(width: 20, height: 20)
                 }
                 .accessibilityLabel("Reset connection")
+                .accessibilityHint("Disconnect and reconnect to the Mac")
+                .accessibilityAddTraits(.isButton)
             }
             Button {
                 client.disconnect()
@@ -1666,6 +2201,9 @@ struct MainiOSView: View {
                     .frame(width: 20, height: 20)
             }
             .padding(.trailing, 4)
+            .accessibilityLabel("Disconnect")
+            .accessibilityHint("Close the connection to the Mac")
+            .accessibilityAddTraits(.isButton)
         }
     }
 
@@ -1690,6 +2228,9 @@ struct MainiOSView: View {
                         .frame(width: 20, height: 20)
                 }
                 .padding(.trailing, 4)
+                .accessibilityLabel("Cancel authentication")
+                .accessibilityHint("Disconnect from the Mac")
+                .accessibilityAddTraits(.isButton)
             }
 
             if showPINEntry {
@@ -1754,32 +2295,84 @@ struct MainiOSView: View {
         let windowColor = selectedWindow.map { Color(hex: $0.color) } ?? colors.textSecondary
         // Landscape is short on vertical space — tighten the button sizes so
         // the full row of controls + quick-button row fits without crowding.
+        // Portrait button widths shrunk so the full mainRow cluster
+        // (cycleLeft+cycleRight + spawn+arrange + mic + photo+prompts+keyboard+return)
+        // fits on a single 430pt-wide iPhone 17 Pro Max line. Old 56pt buttons
+        // summed to ~460pt with all toggles enabled, blowing the parent VStack
+        // wider than the screen and clipping the window-cards row + status header.
+        // 48pt × 6 + nav/ptt/aux + Spacers stays under 430.
         let btnH: CGFloat = isPortrait ? 56 : 40
-        let btnW: CGFloat = isPortrait ? 56 : 44
-        let pttW: CGFloat = isPortrait ? 72 : 56
-        let navW: CGFloat = isPortrait ? 26 : 22
+        let btnW: CGFloat = isPortrait ? 48 : 44
+        let pttW: CGFloat = isPortrait ? 64 : 56
+        let navW: CGFloat = isPortrait ? 24 : 22
         let navH: CGFloat = isPortrait ? 36 : 28
-        let auxW: CGFloat = isPortrait ? 40 : 32
+        let auxW: CGFloat = isPortrait ? 36 : 32
         let auxH: CGFloat = isPortrait ? 56 : 40
 
         return VStack(spacing: isPortrait ? 8 : 4) {
             // Pending image thumbnail — only takes space when an image is attached.
-            PendingImagePreviewStrip(state: pendingImage)
+            // §L — host wires the recovery affordance so the user has an
+            // actionable next step when the watchdog trips. Each
+            // category routes somewhere useful: timeout → reset socket
+            // (forces reconnect via existing client.disconnect/connect
+            // dance); window-closed → re-open the picker; data-invalid →
+            // clear the pending image so the user can try another;
+            // disk-write → just clear so they can retry. The host
+            // controls these so the strip stays a dumb renderer.
+            PendingImagePreviewStrip(state: pendingImage, onRecoveryAction: { category in
+                switch category {
+                case .timeout:
+                    if let url = client.serverURL {
+                        client.disconnect()
+                        client.connect(to: url)
+                    }
+                    pendingImage.clear()
+                case .unknownWindow:
+                    pendingImage.clear()
+                    showBackendPicker = true
+                case .invalidData, .macDiskWrite, .other:
+                    pendingImage.clear()
+                }
+            })
+
+            // GH H: PTT health banner — single-line capsule that surfaces
+            // path-degraded states near the mic button instead of leaving
+            // them buried in Settings. Hidden when nothing notable;
+            // collapses cleanly so the row layout doesn't shift.
+            if let info = pttHealthBanner {
+                HStack(spacing: 6) {
+                    Image(systemName: info.icon)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(info.tint)
+                    Text(info.message)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(info.tint)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(info.tint.opacity(0.12))
+                .clipShape(Capsule())
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Voice input status: \(info.message)")
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
 
             // Cluster gating — small gap (10pt) appears between adjacent
             // clusters when both have visible buttons. PTT mic is always
             // visible and stays geometrically centered via flexible
             // Spacers on each side. Adding/removing buttons recenters
             // automatically because the Spacers absorb the slack.
-            let leftNavOn = mainRowCycleLeft || mainRowCycleRight
-            let leftMgmtOn = mainRowSpawn || mainRowArrange
+            let leftNavOn = !isQAModeActive && (mainRowCycleLeft || mainRowCycleRight)
+            let leftMgmtOn = !isQAModeActive && (mainRowSpawn || mainRowArrange)
             let rightSendOn = mainRowKeyboard || mainRowReturn
 
             // Control buttons
             HStack(spacing: 0) {
                 // LEFT cluster 1: window nav (chevrons)
                 HStack(spacing: 6) {
-                    if mainRowCycleLeft {
+                    if mainRowCycleLeft && !isQAModeActive {
                         Button {
                             cycleWindow(direction: -1)
                         } label: {
@@ -1791,8 +2384,10 @@ struct MainiOSView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .disabled(windows.count <= 1)
+                        .accessibilityLabel("Previous window")
+                        .accessibilityAddTraits(.isButton)
                     }
-                    if mainRowCycleRight {
+                    if mainRowCycleRight && !isQAModeActive {
                         Button {
                             cycleWindow(direction: 1)
                         } label: {
@@ -1804,6 +2399,8 @@ struct MainiOSView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .disabled(windows.count <= 1)
+                        .accessibilityLabel("Next window")
+                        .accessibilityAddTraits(.isButton)
                     }
                 }
 
@@ -1815,7 +2412,7 @@ struct MainiOSView: View {
 
                 // LEFT cluster 2: window mgmt (spawn, arrange)
                 HStack(spacing: 6) {
-                    if mainRowSpawn {
+                    if mainRowSpawn && !isQAModeActive {
                         Button {
                             showSpawnPicker = true
                         } label: {
@@ -1826,6 +2423,8 @@ struct MainiOSView: View {
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
+                        .accessibilityLabel("New window")
+                        .accessibilityAddTraits(.isButton)
                     }
 
                 // Arrange — phone-only display toggle. Cycles through
@@ -1839,11 +2438,15 @@ struct MainiOSView: View {
                 // auto-chooser). Combined into one slot per `feedback_compact_ui`
                 // so the row doesn't overflow. nil isn't a tap-cycle step
                 // anymore; the auto-chooser owns "no override" now.
-                if mainRowArrange {
+                if mainRowArrange && !isQAModeActive {
                     Button {
+                        // Three-mode cycle: horizontal → vertical → grid → horizontal.
+                        // Grid mode (added 2026-05-06) is the natural pick for 4+
+                        // windows where vertical strips get too narrow to read.
                         switch phoneLayoutOverride {
                         case "horizontal": phoneLayoutOverrideRaw = "vertical"
-                        default: phoneLayoutOverrideRaw = "horizontal"
+                        case "vertical":   phoneLayoutOverrideRaw = "grid"
+                        default:           phoneLayoutOverrideRaw = "horizontal"
                         }
                         manualLayoutSticky = true
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1851,8 +2454,9 @@ struct MainiOSView: View {
                         let icon: String = {
                             switch phoneLayoutOverride {
                             case "horizontal": return "rectangle.split.3x1"
-                            case "vertical": return "rectangle.split.1x3"
-                            default: return "rectangle.3.group"
+                            case "vertical":   return "rectangle.split.1x3"
+                            case "grid":       return "rectangle.grid.2x2"
+                            default:           return "rectangle.3.group"
                             }
                         }()
                         // ZStack with a text fallback so the button is never
@@ -1884,6 +2488,9 @@ struct MainiOSView: View {
                             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         }
                     )
+                    .accessibilityLabel("Arrange windows")
+                    .accessibilityHint("Double tap to cycle layout. Long press to realign.")
+                    .accessibilityAddTraits(.isButton)
                 }
                 } // close LEFT cluster 2 HStack
 
@@ -1912,11 +2519,13 @@ struct MainiOSView: View {
                                 .strokeBorder(Color.red.opacity(0.7), lineWidth: isRecording ? 2 : 0)
                         )
                 }
+                .accessibilityLabel(isRecording ? "Stop recording" : "Push to talk")
+                .accessibilityAddTraits(.isButton)
                 Spacer(minLength: 12)
 
                 // RIGHT cluster 1: input attach (photo, prompts)
                 HStack(spacing: 6) {
-                    if mainRowPhoto {
+                    if mainRowPhoto && !isQAModeActive {
                         Button {
                             showingImageSourceSheet = true
                         } label: {
@@ -1927,9 +2536,10 @@ struct MainiOSView: View {
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
-                        .accessibilityLabel("Attach image")
+                        .accessibilityLabel(pendingImage.hasPendingImage ? "Attached image, tap to change" : "Attach image")
+                        .accessibilityAddTraits(.isButton)
                     }
-                    if mainRowPrompts {
+                    if mainRowPrompts && !isQAModeActive {
                         let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
                         Button {
                             showPromptsPickerSheet = true
@@ -1943,11 +2553,12 @@ struct MainiOSView: View {
                         }
                         .disabled(!canFire)
                         .accessibilityLabel("Prompts")
+                        .accessibilityAddTraits(.isButton)
                     }
                 }
 
                 // Visual gap between photo and send-cluster (keyboard/return).
-                if (mainRowPhoto || mainRowPrompts) && rightSendOn {
+                if !isQAModeActive && (mainRowPhoto || mainRowPrompts) && rightSendOn {
                     Spacer().frame(width: 10)
                 }
 
@@ -1967,15 +2578,24 @@ struct MainiOSView: View {
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
+                        .accessibilityLabel(showTextInput ? "Hide keyboard" : "Show keyboard")
+                        .accessibilityHint("Long-press to paste from iPhone clipboard")
+                        .accessibilityAddTraits(.isButton)
+                        .simultaneousGesture(
+                            // §35 Cross-app paste — long-press the keyboard
+                            // button to read iPhone's clipboard and ship it
+                            // straight to the selected window via send_text.
+                            // Single-tap behavior unchanged (toggle text
+                            // input). Skipped silently if no window selected
+                            // OR clipboard is empty — accessibility hint
+                            // documents the gesture so VoiceOver users find
+                            // it.
+                            LongPressGesture(minimumDuration: 0.4)
+                                .onEnded { _ in pasteClipboardToSelectedWindow() }
+                        )
                     }
                     if mainRowReturn {
-                        Button {
-                            if let wid = selectedWindowId {
-                                sendPendingImageIfNeeded(windowId: wid) {
-                                    client.send(QuickActionMessage(windowId: wid, action: "press_return"))
-                                }
-                            }
-                        } label: {
+                        Button { submitOrPressReturn() } label: {
                             Image(systemName: "return")
                                 .font(.system(size: 20, weight: .medium))
                                 .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
@@ -1984,6 +2604,8 @@ struct MainiOSView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .disabled(selectedWindowId == nil)
+                        .accessibilityLabel("Send")
+                        .accessibilityAddTraits(.isButton)
                     }
                 }
 
@@ -2003,20 +2625,116 @@ struct MainiOSView: View {
             // Portrait-only secondary command-shortcut row. Slots render in
             // user-controlled order — they place `.spacer` slots themselves
             // via the editor (Apple-toolbar-style customization).
+            //
+            // Wrapped in a horizontal `ScrollView` so the row stays a single
+            // line no matter how many slots the user has placed — adding
+            // chips beyond what fits on-screen scrolls horizontally instead
+            // of pushing the parent VStack wider and clipping the window
+            // cards / "Connected" header above it. Indicators hidden so the
+            // chrome stays clean; users discover scroll via the natural
+            // truncation cue at the right edge.
             if isPortrait {
                 let slots = effectiveQuickSlots
                 if !slots.isEmpty {
-                    HStack(spacing: 3) {
-                        slotRowView(slots)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 3) {
+                            slotRowView(slots)
+                        }
+                        .padding(.horizontal, 6)
                     }
-                    .padding(.horizontal, 6)
+                    // Pin ScrollView to parent's available width. Without
+                    // this, SwiftUI can propagate the inner HStack's
+                    // intrinsic content size up the layout tree, which on
+                    // a wide-enough chip row pushes the parent VStack out
+                    // beyond the screen and clips the window-cards row +
+                    // status header above. The frame caps width at parent
+                    // so overflow stays inside ScrollView (where it
+                    // scrolls) rather than leaking up.
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
         .padding(.vertical, isPortrait ? 8 : 4)
     }
 
+    /// Compact one-line description of any notable PTT/voice path state
+    /// for the banner just above the main row. nil when nothing notable —
+    /// the banner stays collapsed. (GH H.)
+    var pttHealthBanner: PTTBannerInfo? {
+        Self.classifyPTTBanner(isConnected: client.isConnected,
+                               isRecording: isRecording,
+                               whisperStatus: client.whisperStatus)
+    }
+
+    /// Pure classification — kept static so unit tests can drive every
+    /// combination without standing up the SwiftUI view hierarchy.
+    static func classifyPTTBanner(isConnected: Bool,
+                                  isRecording: Bool,
+                                  whisperStatus: WhisperState) -> PTTBannerInfo? {
+        // Mid-press disconnect is the loudest failure mode — surface first.
+        if isRecording && !isConnected {
+            return PTTBannerInfo(
+                icon: "wifi.exclamationmark",
+                message: "Mac disconnected mid-press — falling back to local",
+                tint: .red
+            )
+        }
+        // Whisper failed on the Mac side — remote path will silently fall
+        // through to local each press unless the user knows.
+        if case .failed(let reason) = whisperStatus {
+            return PTTBannerInfo(
+                icon: "waveform.slash",
+                message: "Whisper offline (\(reason)) — using local",
+                tint: .orange
+            )
+        }
+        // Whisper still warming up — the next press uses local until ready.
+        // Only show this banner while the user is mid-press; otherwise it's
+        // routine startup chatter.
+        if isRecording {
+            switch whisperStatus {
+            case .preparing:
+                return PTTBannerInfo(
+                    icon: "hourglass",
+                    message: "Whisper warming up — using local for this press",
+                    tint: .secondary
+                )
+            case .downloading(let p):
+                return PTTBannerInfo(
+                    icon: "arrow.down.circle",
+                    message: "Whisper downloading \(Int(p * 100))% — using local",
+                    tint: .secondary
+                )
+            default:
+                break
+            }
+        }
+        return nil
+    }
+
+    /// Send `RequestContentMessage` for every windowId we want content for —
+    /// the selected window in normal mode, OR both pair halves in QA mode.
+    /// Mac handles each request independently; payloads land in
+    /// per-windowId state via the receive-side write in TerminalContentMessage.
+    private func requestActiveContent() {
+        if let pair = manager.active.qaPair {
+            client.send(RequestContentMessage(windowId: pair.targetId))
+            client.send(RequestContentMessage(windowId: pair.terminalId))
+            return
+        }
+        if let wid = selectedWindowId {
+            client.send(RequestContentMessage(windowId: wid))
+        }
+    }
+
+    /// True when the active backend has a QA pair set. Used to gate every
+    /// piece of UI that targets a non-pair window so QA is a focus mode.
+    private var isQAModeActive: Bool {
+        manager.active.qaPair != nil
+    }
+
     private func cycleWindow(direction: Int) {
+        guard !isQAModeActive else { return }
         guard windows.count > 1 else { return }
         let currentIndex = windows.firstIndex(where: { $0.id == selectedWindowId }) ?? 0
         let nextIndex = (currentIndex + direction + windows.count) % windows.count
@@ -2071,9 +2789,9 @@ struct MainiOSView: View {
             Button { sendTextInput() } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 22))
-                    .foregroundStyle(textInputValue.isEmpty ? colors.buttonDisabled : colors.buttonPrimary)
+                    .foregroundStyle(canSubmitInput ? colors.buttonPrimary : colors.buttonDisabled)
             }
-            .disabled(textInputValue.isEmpty)
+            .disabled(!canSubmitInput)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
@@ -2093,6 +2811,99 @@ struct MainiOSView: View {
                 client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
             }
         }
+    }
+
+    /// True when there's something for the up-arrow / Return button to
+    /// submit — typed text (after trim) or a queued image. Pure read so
+    /// both the up-arrow's `.disabled` check and `submitOrPressReturn()`'s
+    /// branch read the same condition.
+    private var canSubmitInput: Bool {
+        !textInputValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || pendingImage.hasPendingImage
+    }
+
+    /// Unified action behind the main-row Return ⏎ button. Mirrors the
+    /// up-arrow submit when there's typed text or a queued image so the
+    /// two affordances stop disagreeing on what "send" means. When the
+    /// input is empty, falls through to the bare press_return keystroke
+    /// — that path is what makes Return useful when Claude is sitting
+    /// at a confirmation prompt and the user just wants to advance it
+    /// without typing anything.
+    private func submitOrPressReturn() {
+        if canSubmitInput {
+            sendTextInput()
+            return
+        }
+        guard let wid = selectedWindowId else { return }
+        sendPendingImageIfNeeded(windowId: wid) { [client] in
+            client.send(QuickActionMessage(windowId: wid, action: "press_return"))
+        }
+    }
+
+    /// §26 — build the iPhone-side diagnostics snapshot. Captured at
+    /// shake time + frozen for the duration of the sheet so values
+    /// don't churn while the user is reading. Pulls from
+    /// `WebSocketClient.recentConnectionEvents` ring buffer for the
+    /// last 30 lifecycle events.
+    @MainActor
+    fileprivate func buildDiagnosticsSnapshot() -> String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let appVersion = info["CFBundleShortVersionString"] as? String ?? "?"
+        let buildNumber = info["CFBundleVersion"] as? String ?? "?"
+        let activeName = manager.paired.first(where: { $0.id == manager.activeBackendID })?.name
+        let snapshot = DiagnosticsSnapshotFormatter.Input(
+            appVersion: appVersion,
+            buildNumber: buildNumber,
+            isConnected: client.isConnected,
+            isConnecting: client.isConnecting,
+            isAuthenticated: client.isAuthenticated,
+            lastError: client.lastError,
+            lastDisconnectReason: client.lastDisconnectReason,
+            serverURL: client.serverURL?.absoluteString,
+            pairedCount: manager.paired.count,
+            activeBackendName: activeName,
+            connectionEvents: client.recentConnectionEvents
+        )
+        return DiagnosticsSnapshotFormatter.format(snapshot)
+    }
+
+    /// §35 — long-press on the keyboard main-row button reads the iPhone's
+    /// system clipboard and ships it to the selected window via send_text
+    /// with `pressReturn: false`. Triggers iOS's per-app paste-permission
+    /// prompt the first time the user does it (system standard). Skips
+    /// silently when no window selected or clipboard is empty/non-text;
+    /// the haptic at the end gives feedback even when nothing was pasted.
+    /// Truncated to a 32 KiB ceiling because larger payloads should use
+    /// the dedicated text-input panel + send path with proper batching.
+    @MainActor
+    fileprivate func pasteClipboardToSelectedWindow() {
+        guard let wid = selectedWindowId, !wid.isEmpty else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        guard let raw = UIPasteboard.general.string, !raw.isEmpty else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        let text = Self.clipText(raw, maxBytes: 32 * 1024)
+        client.send(SendTextMessage(windowId: wid, text: text, pressReturn: false))
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    /// Cap clipboard payload at `maxBytes` UTF-8 bytes. Trims by character
+    /// (not byte) so we never split a multi-byte glyph. Pure helper so a
+    /// unit test can drive boundary cases without UIPasteboard.
+    static func clipText(_ s: String, maxBytes: Int) -> String {
+        if s.utf8.count <= maxBytes { return s }
+        var out = ""
+        var bytes = 0
+        for ch in s {
+            let n = String(ch).utf8.count
+            if bytes + n > maxBytes { break }
+            out.append(ch)
+            bytes += n
+        }
+        return out
     }
 
     // MARK: - Image Upload
@@ -2296,10 +3107,14 @@ struct MainiOSView: View {
     }
 
     private var terminalContentView: some View {
-        InlineTerminalContent(
-            content: terminalContentText ?? "",
-            screenshot: terminalContentScreenshot,
-            urls: terminalContentURLs ?? [],
+        let wid = selectedWindowId ?? ""
+        let text = terminalContentTextById[wid] ?? terminalContentText ?? ""
+        let screenshot = terminalContentScreenshotById[wid] ?? terminalContentScreenshot
+        let urls = terminalContentURLsById[wid] ?? terminalContentURLs ?? []
+        return InlineTerminalContent(
+            content: text,
+            screenshot: screenshot,
+            urls: urls,
             windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
             windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
             isExpanded: $isTerminalExpanded,
@@ -2420,6 +3235,13 @@ struct MainiOSView: View {
                                     withAnimation(.spring(duration: 0.2)) {
                                         selectedWindowId = window.id
                                     }
+                                    // (wishlist §B16.) Manual tap pins this window — turns
+                                    // off follow-Mac-frontmost so the next Mac focus change
+                                    // doesn't pull the rug out from under the user. They
+                                    // re-enable follow-mode via the Auto pill.
+                                    if followFrontmost {
+                                        followFrontmost = false
+                                    }
                                     // Tell Mac to focus this window
                                     client.send(SelectWindowMessage(windowId: window.id))
                                 },
@@ -2482,8 +3304,40 @@ struct MainiOSView: View {
                 }
                 .frame(width: mac.width, height: mac.height)
                 .offset(x: mac.minX, y: mac.minY)
+                // (wishlist §B16.) Auto-follow pill, top-right corner of
+                // the mac-screen rect. Tap toggles followFrontmost. Only
+                // shown once windows exist — the empty-state already has
+                // its own focal CTA and the pill would just be noise.
+                .overlay(alignment: .topTrailing) {
+                    if !windows.isEmpty {
+                        autoFollowPill
+                            .padding(6)
+                    }
+                }
             }
         }
+    }
+
+    /// Compact pill that toggles `followFrontmost`. Filled accent when on
+    /// (phone is following Mac focus); outlined when off (phone is pinned
+    /// to whatever the user last tapped). Icon-only per compact-UI rules.
+    private var autoFollowPill: some View {
+        Button {
+            followFrontmost.toggle()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } label: {
+            Image(systemName: followFrontmost ? "cursorarrow.rays" : "hand.point.up.left")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(followFrontmost ? .white : colors.textPrimary)
+                .frame(width: 22, height: 22)
+                .background(followFrontmost ? Color.accentColor : colors.surface.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(colors.surfaceBorder, lineWidth: 0.5)
+                )
+        }
+        .accessibilityLabel(followFrontmost ? "Following Mac frontmost window. Tap to pin." : "Pinned to selected window. Tap to follow Mac.")
     }
 
     /// Largest rect with the given aspect ratio (width/height) that fits inside `size`, centered.
@@ -2525,16 +3379,36 @@ struct MainiOSView: View {
         case "vertical":
             let h = 1.0 / Double(total)
             return WindowFrame(x: 0, y: Double(index) * h, width: 1.0, height: h)
+        case "grid":
+            // Packed grid — `cols = ceil(sqrt(total))` keeps the layout
+            // close to square, then rows = ceil(total/cols) fits the rest.
+            // For total=4 → 2×2, total=5-6 → 3×2, total=7-9 → 3×3, total=10-12 → 4×3.
+            // Last row's leftover cells stay empty (no row-padding hack) so cells
+            // keep a uniform aspect — matches the user's reading model better
+            // than centering a half-row.
+            let cols = max(1, Int(Double(total).squareRoot().rounded(.up)))
+            let rows = max(1, Int((Double(total) / Double(cols)).rounded(.up)))
+            let row = index / cols
+            let col = index % cols
+            let w = 1.0 / Double(cols)
+            let h = 1.0 / Double(rows)
+            return WindowFrame(x: Double(col) * w, y: Double(row) * h, width: w, height: h)
         default:
             return nil
         }
     }
 
-    /// Auto-arrange chooser. Pure fn — picks `"horizontal"` for ≤2 windows,
-    /// `"vertical"` for ≥3. Heuristic is documented in the PRD §9.1 and
-    /// expected to evolve based on device testing.
+    /// Auto-arrange chooser. Pure fn — picks layout based on count:
+    /// 1-2 windows → `"horizontal"` (side-by-side reads naturally on phone);
+    /// 3 windows → `"vertical"` (stacked rows fit before grid is needed);
+    /// 4+ windows → `"grid"` (2-or-3 column packed grid; vertical strips
+    /// at 4+ get too narrow to read).
     static func chooseAutoLayout(count: Int) -> String {
-        count <= 2 ? "horizontal" : "vertical"
+        switch count {
+        case ...2: return "horizontal"
+        case 3:    return "vertical"
+        default:   return "grid"
+        }
     }
 
     /// Re-fire the auto-chooser given the current windows count. Called from
@@ -2778,8 +3652,7 @@ struct MainiOSView: View {
         }
         if let url = URL(string: urlStr) {
             if isURLTrusted(url) {
-                manager.ensureImplicitDefault(url: urlStr)
-                client.connect(to: url)
+                connectToBackendURL(url)
                 addToRecents(urlStr)
             } else {
                 pendingUnsafeURL = url
@@ -2826,6 +3699,14 @@ struct MainiOSView: View {
         let parts = hostPart.split(separator: ".").compactMap { UInt8($0) }
         guard parts.count == 4 else { return false }
         return parts[0] == 100 && (64...127).contains(parts[1])
+    }
+
+    /// Upsert the backend row, then connect through the newly active session.
+    /// `ensureImplicitDefault` may switch `manager.activeBackendID`; using the
+    /// pre-switch `client` binding here dials the wrong WebSocketClient.
+    private func connectToBackendURL(_ url: URL) {
+        manager.ensureImplicitDefault(url: url.absoluteString)
+        manager.active.client.connect(to: url)
     }
 
     // MARK: - Recent Connections
@@ -2902,7 +3783,7 @@ struct MainiOSView: View {
         // Duplicate and closeWindow send different message types than
         // QuickActionMessage, so they're early-return branches.
         if action == .duplicate {
-            client.send(DuplicateWindowMessage(sourceWindowId: windowId))
+            client.send(DuplicateWindowMessage(sourceWindowId: windowId, agent: duplicateSpawnAgent(for: windowId)))
             return
         }
         if action == .closeWindow {
@@ -2919,8 +3800,32 @@ struct MainiOSView: View {
         case .viewOutput: return // handled above
         case .duplicate: return  // handled above
         case .closeWindow: return // handled above
+        case .pairForQA:
+            qaPickerSourceWindow = windowId
+            showQAPicker = true
+            return
         }
         client.send(QuickActionMessage(windowId: windowId, action: str))
+    }
+
+    private var selectedSpawnAgent: SpawnAgent {
+        SpawnAgent(rawValue: spawnAgentRaw) ?? .claude
+    }
+
+    private func duplicateSpawnAgent(for windowId: String) -> SpawnAgent {
+        guard let window = windows.first(where: { $0.id == windowId }) else {
+            return selectedSpawnAgent
+        }
+        switch window.cliKind {
+        case .claude:
+            return .claude
+        case .codex:
+            return .codex
+        case .shell:
+            return .terminal
+        case nil:
+            return selectedSpawnAgent
+        }
     }
 
     // MARK: - Configurable Quick Buttons
@@ -3141,11 +4046,11 @@ struct MainiOSView: View {
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
-                .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+                .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
                 .padding(.horizontal, 4)
                 .padding(.vertical, 5)
                 .frame(minWidth: 20)
-                .background(Color.white.opacity(0.15))
+                .background(colors.chipFill)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
@@ -3203,6 +4108,9 @@ struct MainiOSView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canFire)
+        .accessibilityLabel("Prompt: \(label)")
+        .accessibilityHint(canFire ? "Tap to paste, long-press to paste and submit" : "Prompt unavailable")
+        .accessibilityAddTraits(.isButton)
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.4)
                 .onEnded { _ in firePromptSlot(promptID: promptID, pressReturn: true) }
@@ -3239,6 +4147,9 @@ struct MainiOSView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canFire)
+        .accessibilityLabel("Prompts library")
+        .accessibilityHint(canFire ? "Open prompt picker" : "No prompts available")
+        .accessibilityAddTraits(.isButton)
         // Sheet is hoisted to MainiOSView.body (`promptsPickerSheet` modifier)
         // so the main-row Prompts button can also present it when this slot
         // pill isn't placed in the Quick Buttons row.
@@ -3337,14 +4248,17 @@ struct MainiOSView: View {
                         .minimumScaleFactor(0.55)
                 }
             }
-            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+            .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
             .padding(.horizontal, 4)
             .padding(.vertical, 5)
             .frame(minWidth: 20)
-            .background(Color.white.opacity(0.15))
+            .background(colors.chipFill)
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
+        .accessibilityLabel(btn.label)
+        .accessibilityHint(selectedWindowId == nil ? "No window selected" : "Custom shortcut")
+        .accessibilityAddTraits(.isButton)
     }
 
     @ViewBuilder
@@ -3374,14 +4288,17 @@ struct MainiOSView: View {
                         .minimumScaleFactor(0.55)
                 }
             }
-            .foregroundStyle(.white.opacity(selectedWindowId != nil ? 0.9 : 0.35))
+            .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
             .padding(.horizontal, 4)
             .padding(.vertical, 5)
             .frame(minWidth: 20)
-            .background(Color.white.opacity(0.15))
+            .background(colors.chipFill)
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
+        .accessibilityLabel(button.displayName)
+        .accessibilityHint(selectedWindowId == nil ? "No window selected" : "Quick action")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -3726,6 +4643,12 @@ struct InlineTerminalContent: View {
     /// isn't hit. Zero when idle.
     @State private var swipeOffset: CGFloat = 0
 
+    /// True when the screenshot ScrollView is at-or-near the bottom — gates
+    /// the auto-scroll-to-bottom that fires on every screenshot refresh.
+    /// Default true so the very first screenshot lands at the live tail
+    /// (matches the pre-§36 behavior for users who don't manually scroll).
+    @State private var isPinnedToBottom = true
+
     /// 0…1 normalized swipe magnitude, derived from swipeOffset. Used to
     /// drive the lift-off shadow and the scale-down so the card reads as
     /// "coming off the top of the deck" rather than just a flat slide.
@@ -3874,6 +4797,39 @@ struct InlineTerminalContent: View {
                         .font(.system(size: 13))
                         .foregroundStyle(Color.white.opacity(0.5))
                 }
+                // §38 — iTerm scrollback nav. Two buttons in the header
+                // (page up / page down) with long-press for top / bottom.
+                // Sends quick_action strings; Mac side translates to
+                // Shift+PageUp/Down or Cmd+Home/End via System Events.
+                // Mac throttles per-window so rapid taps still fire.
+                Button {
+                    onSendAction("scroll_page_up")
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
+                .accessibilityLabel("Scroll up one page")
+                .accessibilityHint("Long-press to scroll to top")
+                .accessibilityAddTraits(.isButton)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.4)
+                        .onEnded { _ in onSendAction("scroll_top") }
+                )
+                Button {
+                    onSendAction("scroll_page_down")
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
+                .accessibilityLabel("Scroll down one page")
+                .accessibilityHint("Long-press to scroll to bottom (live)")
+                .accessibilityAddTraits(.isButton)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.4)
+                        .onEnded { _ in onSendAction("scroll_bottom") }
+                )
                 Button { onRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13))
@@ -3883,6 +4839,42 @@ struct InlineTerminalContent: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Color.white.opacity(0.06))
+
+            // §18 — context-aware numbered-prompt chips. When the
+            // detector finds Claude's `❯ 1. Yes / 2. No / 3. Cancel`
+            // pattern in the current content, render a strip of small
+            // chips so the user can tap an answer without typing.
+            // Hidden entirely when no prompt detected — same compact-UI
+            // discipline as the rest of the panel.
+            if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
+                HStack(spacing: 6) {
+                    ForEach(options, id: \.self) { n in
+                        Button {
+                            // sendText "<n>" + press_return — same shape
+                            // as the press_y / press_n quick actions.
+                            // Phone-side helper would be cleaner; for
+                            // v1 reuse the existing action channel by
+                            // emitting a `select_<n>` action that the
+                            // Mac handler maps to sendText.
+                            onSendAction("select_\(n)")
+                        } label: {
+                            Text("\(n)")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.white)
+                                .frame(width: 28, height: 24)
+                                .background(Color.accentColor.opacity(0.85))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .accessibilityLabel("Pick option \(n)")
+                        .accessibilityHint("Submit \(n) to the current Claude prompt")
+                        .accessibilityAddTraits(.isButton)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
+            }
 
             // URL tray above the content area so users can open URLs from
             // the screenshot (which is pixels and can't be tapped in-situ).
@@ -3898,16 +4890,37 @@ struct InlineTerminalContent: View {
             case .image:
                 if let screenshot, let imageData = Data(base64Encoded: screenshot),
                    let uiImage = UIImage(data: imageData) {
+                    // §36 — only auto-scroll to the new bottom when the
+                    // user was already pinned there. If they scrolled up
+                    // to read older content, the 2s screenshot refresh
+                    // used to yank them right back down. Now we track
+                    // distance-from-bottom and only re-pin when within
+                    // ~40pt of the floor (close enough that they were
+                    // clearly following the live tail).
                     ScrollViewReader { proxy in
-                        ScrollView {
+                        let baseScroll = ScrollView {
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFit()
                                 .frame(maxWidth: .infinity)
                                 .id("bottom")
                         }
-                        .onChange(of: screenshot) { _, _ in
-                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+
+                        if #available(iOS 18.0, *) {
+                            baseScroll
+                                .onScrollGeometryChange(for: Bool.self) { geo in
+                                    let distance = geo.contentSize.height
+                                        - (geo.contentOffset.y + geo.containerSize.height)
+                                    return distance < 40
+                                } action: { _, atBottom in
+                                    isPinnedToBottom = atBottom
+                                }
+                                .onChange(of: screenshot) { _, _ in
+                                    guard isPinnedToBottom else { return }
+                                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                                }
+                        } else {
+                            baseScroll
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4373,6 +5386,28 @@ enum QuickSlotStore {
         }
         return slots
     }
+
+    /// Fresh-install starter row. Designed so a new user (or a QA run on a
+    /// freshly-erased simulator) sees both built-ins AND a custom button
+    /// the moment the app connects — proving the feature exists without
+    /// a Settings drill-down. Includes a `.custom(demoCustomID)` slot
+    /// that pairs with `CustomButtonStore.defaultDemo()` to render a
+    /// visible custom-button pill out of the box.
+    static func defaultSlots(demoCustomID: UUID) -> [QuickSlot] {
+        return [
+            .builtin(.btw),
+            .custom(demoCustomID),
+            .spacer(UUID()),
+            .builtin(.yes),
+            .builtin(.no),
+            .spacer(UUID()),
+            .builtin(.one),
+            .builtin(.two),
+            .spacer(UUID()),
+            .builtin(.esc),
+            .builtin(.backspace),
+        ]
+    }
 }
 
 /// Encode/decode the custom-button definitions table.
@@ -4389,6 +5424,29 @@ enum CustomButtonStore {
               let str = String(data: data, encoding: .utf8)
         else { return "[]" }
         return str
+    }
+
+    /// Single starter custom button seeded on truly-fresh installs so the
+    /// quick-button row visibly proves the custom-button feature exists.
+    /// UUID is stable so re-entering the seed path can detect "already
+    /// seeded" without searching by label. Slash payload is a friendly
+    /// no-op (`/help `) — leaves the cursor on the same line so the user
+    /// can either submit or backspace it away.
+    static let demoCustomID: UUID = UUID(uuidString: "DEAD1DEA-0000-0000-0000-000000000001")!
+
+    static func defaultDemo() -> CustomButton {
+        // No systemImage — `customQuickButton` renders icon OR label
+        // (never both), so seeding an icon would hide the "/help"
+        // label and the demo would look like an unmarked sparkle pill.
+        // Letting the label render as text matches the visual style
+        // of the built-in `/btw` slash pill and makes the demo's
+        // purpose obvious without a tap.
+        return CustomButton(
+            id: demoCustomID,
+            label: "/help",
+            systemImage: nil,
+            payload: .slash(text: "/help ", autoSubmit: false)
+        )
     }
 }
 
@@ -4416,6 +5474,10 @@ struct SettingsSheet: View {
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
     @AppStorage("contentRenderMode") private var contentRenderModeRaw: String = ContentRenderMode.auto.rawValue
+    /// Manual override for system color scheme. Bound to the Settings →
+    /// Appearance picker; QuipApp's root view reads the same key and
+    /// applies `.preferredColorScheme(...)` accordingly.
+    @AppStorage("appearance.mode") private var appearanceModeRaw: String = "auto"
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -4432,6 +5494,19 @@ struct SettingsSheet: View {
     // @AppStorage key too and gates its liveActivity.startOrUpdate calls.
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
     @Environment(\.dismiss) private var dismiss
+    /// Briefly flips to true after the user taps the Version row — drives
+    /// the inline "Copied" confirmation; auto-resets after 1.5s so the row
+    /// reverts to the version string.
+    @State private var versionCopied = false
+
+    /// "1.5.4 (1)" formatted from CFBundleShortVersionString + CFBundleVersion.
+    /// Static so we read Bundle.main once per launch, not on every body redraw.
+    static let appVersionDisplay: String = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return short == build ? short : "\(short) (\(build))"
+    }()
 
     var body: some View {
         NavigationStack {
@@ -4447,6 +5522,12 @@ struct SettingsSheet: View {
                 // sits inline behind the toggle so enabling the tray doesn't
                 // spawn a second row.
                 Section {
+                    Picker("Theme", selection: $appearanceModeRaw) {
+                        Text("Auto").tag("auto")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
                     HStack {
                         Toggle("URL tray", isOn: $urlTrayEnabled)
@@ -4466,7 +5547,7 @@ struct SettingsSheet: View {
                 } header: {
                     Text("Appearance")
                 } footer: {
-                    Text("Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
+                    Text("Theme overrides the system Light/Dark setting (Auto follows system). Content mode: Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
                 }
 
                 // Keyboard — both keyboard-row customizers behind one
@@ -4550,8 +5631,50 @@ struct SettingsSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    NavigationLink {
+                        LatencyDiagnosticsSheet(client: client)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("Latency")
+                            Spacer()
+                            LatencySummary.from(samples: client.latencySamples)
+                                .badgeView()
+                        }
+                    }
                 } header: {
                     Text("Diagnostics")
+                }
+
+                Section {
+                    Button {
+                        UIPasteboard.general.string = "Quip iOS \(Self.appVersionDisplay)"
+                        versionCopied = true
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            await MainActor.run { versionCopied = false }
+                        }
+                    } label: {
+                        HStack {
+                            Text("Version")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if versionCopied {
+                                Text("Copied")
+                                    .foregroundStyle(.secondary)
+                                    .transition(.opacity)
+                            } else {
+                                Text(Self.appVersionDisplay)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Tap to copy version to clipboard")
+                } header: {
+                    Text("About")
+                } footer: {
+                    Text("Tap to copy — useful when reporting issues.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -4957,6 +6080,8 @@ struct QuickButtonsSheet: View {
     var client: WebSocketClient?
     @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
+    @Environment(\.colorScheme) private var colorScheme
+    private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
     @State private var editingCustomID: UUID?
     @State private var addingCustom: Bool = false
@@ -5385,11 +6510,11 @@ struct QuickButtonsSheet: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(.white.opacity(0.9))
+        .foregroundStyle(colors.chipText)
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(Color.white.opacity(0.15))
+        .background(colors.chipFill)
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
@@ -5406,11 +6531,11 @@ struct QuickButtonsSheet: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(.white.opacity(0.9))
+        .foregroundStyle(colors.chipText)
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(Color.white.opacity(0.15))
+        .background(colors.chipFill)
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
@@ -5808,6 +6933,16 @@ enum SpawnSheetTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+extension SpawnAgent {
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .terminal: return "Terminal"
+        }
+    }
+}
+
 /// State for the inline connection-test probe that sits next to the URL field.
 /// Kept separate from `client.isConnected` so we can offer a "just reach out
 /// and see" button that doesn't disturb an active session.
@@ -6147,6 +7282,137 @@ struct ConnectionDiagnosticsSheet: View {
         case .ready: return ("ready", .green)
         case .failed(let m): return ("failed: \(m)", .red)
         }
+    }
+}
+
+/// "Why is text taking so long to land?" view. Three friendly numbers up top
+/// (median total / network / Mac-side), then a compact sparkline of recent
+/// samples, then a per-path table so the user can tell at a glance whether
+/// Codex (pasteText) or Claude (sendText) is the slow one. No raw timestamps —
+/// the spec is "approachable", not "engineering dashboard".
+struct LatencyDiagnosticsSheet: View {
+    @Bindable var client: WebSocketClient
+
+    var body: some View {
+        List {
+            Section {
+                let summary = LatencySummary.from(samples: client.latencySamples)
+                HStack(spacing: 10) {
+                    Circle().fill(summary.color).frame(width: 12, height: 12)
+                    Text(summary.label)
+                        .font(.system(size: 17, weight: .semibold))
+                        .monospacedDigit()
+                }
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+                if client.latencySamples.isEmpty {
+                    Text("No samples yet. Send a few messages from a Codex / Claude window — the numbers fill in as round-trips complete.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Round-trip")
+            } footer: {
+                Text("Median of the last 20 text-land round-trips. Snappy = under 250ms; OK up to 600ms; Slow past that.")
+            }
+
+            if !client.latencySamples.isEmpty {
+                Section {
+                    medianRow("Network", samples: client.latencySamples.map(\.netRtt))
+                    medianRow("Mac processing", samples: client.latencySamples.map(\.totalMs))
+                    medianRow("AppleScript / paste", samples: client.latencySamples.map(\.injectMs))
+                } header: {
+                    Text("Where the time goes")
+                } footer: {
+                    Text("Network = phone↔Mac alone. Mac processing = arrival to text landed. AppleScript / paste is the inject step itself.")
+                }
+
+                let codex = client.latencySamples.filter { $0.path == "pasteText" }
+                let other = client.latencySamples.filter { $0.path == "sendText" }
+                Section {
+                    if !codex.isEmpty {
+                        medianRow("Codex (pasteText)", samples: codex.map(\.totalRtt))
+                    }
+                    if !other.isEmpty {
+                        medianRow("Claude / shell (sendText)", samples: other.map(\.totalRtt))
+                    }
+                    if codex.isEmpty && other.isEmpty {
+                        Text("—")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("By routing path")
+                }
+
+                Section {
+                    LatencySparkline(samples: client.latencySamples)
+                        .frame(height: 60)
+                        .padding(.vertical, 4)
+                } header: {
+                    Text("Recent (\(client.latencySamples.count) samples)")
+                }
+
+                // Phase 3: opt-in toggle for hot-swap routing. Off by default
+                // until hardware-verified across LAN / Tailscale / Cloudflare;
+                // user enables it from this row to opt into the experimental
+                // "always pick fastest path" behavior.
+                Section {
+                    Toggle("Auto-pick fastest path", isOn: Binding(
+                        get: { UserDefaults.standard.bool(forKey: BackendConnectionManager.autoSwapDefaultsKey) },
+                        set: { UserDefaults.standard.set($0, forKey: BackendConnectionManager.autoSwapDefaultsKey) }
+                    ))
+                } header: {
+                    Text("Routing")
+                } footer: {
+                    Text("When ON, Quip probes alternate paths to your Mac (LAN, Tailscale, tunnel) every minute and switches to the fastest one when a clear winner emerges. Causes a sub-second connection blip during a swap.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Latency")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private func medianRow(_ title: String, samples: [Int]) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text("\(median(samples))ms")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+
+    private func median(_ values: [Int]) -> Int {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+}
+
+/// Tiny inline sparkline of recent total-RTT samples. Bar heights normalized
+/// to the max in the buffer so the chart auto-scales as conditions change —
+/// the user looks for *shape* (climbing? stable? spiky?) more than absolute
+/// height. Bar color follows the LatencySummary bucket of that single sample.
+private struct LatencySparkline: View {
+    let samples: [WebSocketClient.LatencySample]
+
+    var body: some View {
+        let maxRtt = max(1, samples.map(\.totalRtt).max() ?? 1)
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 1) {
+                ForEach(samples.indices, id: \.self) { i in
+                    let s = samples[i]
+                    let h = max(2, CGFloat(s.totalRtt) / CGFloat(maxRtt) * geo.size.height)
+                    Rectangle()
+                        .fill(LatencySummary.from(samples: [s]).color)
+                        .frame(width: max(1, (geo.size.width - CGFloat(samples.count - 1)) / CGFloat(samples.count)),
+                               height: h)
+                }
+            }
+        }
+        .accessibilityLabel("Latency sparkline of \(samples.count) recent samples")
     }
 }
 

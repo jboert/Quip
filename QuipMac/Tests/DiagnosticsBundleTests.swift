@@ -34,6 +34,29 @@ final class DiagnosticsBundleTests: XCTestCase {
         XCTAssertTrue(text.contains("Architecture:"))
     }
 
+    /// systemInfoText() must NOT ship the raw machine name — that lives
+    /// behind a stable hash so two bundles from the same host can be
+    /// correlated without disclosing the host.
+    func test_systemInfoText_redactsHostName() {
+        let text = DiagnosticsBundle.systemInfoText()
+        let actualHost = Host.current().localizedName ?? ""
+        if actualHost.count >= 3 {
+            XCTAssertFalse(text.contains(actualHost),
+                           "system-info.txt must not contain raw host name '\(actualHost)'")
+        }
+        XCTAssertTrue(text.contains("Host:        <redacted> (id="),
+                      "Host line must use the redacted-with-id format")
+    }
+
+    /// stableHostHash must be deterministic per-input + handle empty input.
+    func test_stableHostHash_deterministic() {
+        XCTAssertEqual(DiagnosticsBundle.stableHostHash("erick-mbp"),
+                       DiagnosticsBundle.stableHostHash("erick-mbp"))
+        XCTAssertNotEqual(DiagnosticsBundle.stableHostHash("erick-mbp"),
+                          DiagnosticsBundle.stableHostHash("other-mac"))
+        XCTAssertEqual(DiagnosticsBundle.stableHostHash(""), "anon")
+    }
+
     /// makeZip respects an absurdly small cap — should throw .overSizeCap
     /// rather than ship a partial zip.
     func test_makeZip_respectsSizeCap() {

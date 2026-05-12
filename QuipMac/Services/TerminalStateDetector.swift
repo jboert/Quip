@@ -20,9 +20,24 @@ final class TerminalStateDetector {
     /// Window IDs currently being tracked, mapped to their shell PIDs
     var trackedWindows: [String: pid_t] = [:]
 
+    /// Per-window TTY (iTerm2 only) — kept alongside `trackedWindows` so the
+    /// detector can re-resolve a stale shell PID after a session respawn.
+    /// iTerm2's TTY (e.g. `/dev/ttys013`) is stable across `exit` + new shell
+    /// in the same session; the shell PID is not. Without this, a respawned
+    /// shell leaves Quip polling descendants of a dead PID, classifier
+    /// returns `.shell`, and codex pastes silently fall back to the legacy
+    /// PTY-write branch (which Codex's composer drops on the floor).
+    var trackedTty: [String: String] = [:]
+
     /// Windows where Claude/node processes are currently running (regardless of CPU).
     /// Updated every poll cycle. Used to drive the "thinking" indicator on iOS.
     var windowsWithClaudeProcess: Set<String> = []
+
+    /// Per-window CLI kind, derived from process-tree sniffing in `detectState`.
+    /// Drives per-CLI input routing on the Mac side (notably image_upload —
+    /// Codex CLI's interactive composer takes pasted image bytes via Cmd+V,
+    /// Claude Code accepts an absolute path typed inline). (GH I.)
+    var windowCLIKind: [String: CLIKind] = [:]
 
     /// CPU threshold below which a process is considered idle
     var cpuIdleThreshold: Double = 5.0
@@ -52,29 +67,44 @@ final class TerminalStateDetector {
             guard let self else { return }
             // Timer fires on the main runloop. Snapshot MainActor state inside
             // assumeIsolated, then do the heavy ps(1) work off main.
-            let (tracked, sttWindows, threshold): ([String: pid_t], Set<String>, Double) =
+            let (tracked, ttys, sttWindows, threshold): ([String: pid_t], [String: String], Set<String>, Double) =
                 MainActor.assumeIsolated {
                     let states = self.windowStates
                     let stt = Set(states.filter { $0.value == .sttActive }.keys)
-                    return (self.trackedWindows, stt, self.cpuIdleThreshold)
+                    return (self.trackedWindows, self.trackedTty, stt, self.cpuIdleThreshold)
                 }
             self.pollQueue.async { [weak self] in
                 guard let self else { return }
                 var results: [(String, TerminalState)] = []
                 var claudePresence: [String: Bool] = [:]
+                var cliByWindow: [String: CLIKind] = [:]
+                // PID re-resolutions when the cached shell PID has died but the
+                // iTerm2 TTY still hosts a live shell. Applied on main below.
+                var pidUpdates: [String: pid_t] = [:]
                 // Collect child PIDs off main (spawns ps processes)
                 var childPidsByWindow: [String: Set<pid_t>] = [:]
                 for (windowId, shellPid) in tracked {
                     if sttWindows.contains(windowId) { continue }
-                    let (detected, hasClaude) = self.detectState(shellPid: shellPid, cpuThreshold: threshold)
+                    let (detected, hasClaude, cli, resolvedPid) = self.detectState(shellPid: shellPid, tty: ttys[windowId], cpuThreshold: threshold)
                     results.append((windowId, detected))
                     claudePresence[windowId] = hasClaude
-                    if let children = self.getChildProcesses(of: shellPid) {
+                    cliByWindow[windowId] = cli
+                    let effectivePid = resolvedPid ?? shellPid
+                    if let resolvedPid { pidUpdates[windowId] = resolvedPid }
+                    if let children = self.getChildProcesses(of: effectivePid) {
                         childPidsByWindow[windowId] = Set(children.map(\.pid))
                     }
                 }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
+                    // Apply re-resolved shell PIDs FIRST so kqueue installs
+                    // below watch the live shell, not the dead one.
+                    for (windowId, newPid) in pidUpdates {
+                        let oldPid = self.trackedWindows[windowId] ?? 0
+                        self.trackedWindows[windowId] = newPid
+                        NSLog("[TerminalStateDetector] Re-resolved shell PID for window %@: %d -> %d (TTY respawn)", windowId, oldPid, newPid)
+                        self.installProcessSource(windowId: windowId, pid: newPid)
+                    }
                     self.applyPollResults(results)
                     // Update Claude process presence for thinking indicator
                     for (windowId, hasClaude) in claudePresence {
@@ -83,6 +113,11 @@ final class TerminalStateDetector {
                         } else {
                             self.windowsWithClaudeProcess.remove(windowId)
                         }
+                    }
+                    // GH I — track per-window CLI kind so image_upload can
+                    // route to the right paste path.
+                    for (windowId, cli) in cliByWindow {
+                        self.windowCLIKind[windowId] = cli
                     }
                     // Install kqueue watches on main where MainActor state lives
                     for (windowId, currentPids) in childPidsByWindow {
@@ -147,18 +182,27 @@ final class TerminalStateDetector {
         return rows.first?.pid
     }
 
-    /// Register a terminal window for state detection
-    func trackWindow(_ windowId: String, shellPid: pid_t) {
+    /// Register a terminal window for state detection.
+    /// `tty` is iTerm2's pseudo-terminal device path; pass it whenever the
+    /// caller has it so the poll loop can re-resolve a stale shell PID after
+    /// a session respawn (see `trackedTty` for the why).
+    func trackWindow(_ windowId: String, shellPid: pid_t, tty: String? = nil) {
         trackedWindows[windowId] = shellPid
+        if let tty, !tty.isEmpty {
+            trackedTty[windowId] = tty
+        } else {
+            trackedTty.removeValue(forKey: windowId)
+        }
         windowStates[windowId] = .neutral
         knownChildren[windowId] = []
         installProcessSource(windowId: windowId, pid: shellPid)
-        print("[TerminalStateDetector] Tracking window \(windowId) with shell PID \(shellPid)")
+        print("[TerminalStateDetector] Tracking window \(windowId) with shell PID \(shellPid) tty=\(tty ?? "<none>")")
     }
 
     /// Remove a window from tracking
     func untrackWindow(_ windowId: String) {
         trackedWindows.removeValue(forKey: windowId)
+        trackedTty.removeValue(forKey: windowId)
         windowStates.removeValue(forKey: windowId)
         knownChildren.removeValue(forKey: windowId)
         cancelProcessSources(for: windowId)
@@ -269,45 +313,77 @@ final class TerminalStateDetector {
     private func pollAllWindows() {
         for (windowId, shellPid) in trackedWindows {
             if windowStates[windowId] == .sttActive { continue }
-            let (detected, hasClaude) = detectState(shellPid: shellPid, cpuThreshold: cpuIdleThreshold)
+            let (detected, hasClaude, cli, resolvedPid) = detectState(shellPid: shellPid, tty: trackedTty[windowId], cpuThreshold: cpuIdleThreshold)
+            if let resolvedPid {
+                trackedWindows[windowId] = resolvedPid
+                installProcessSource(windowId: windowId, pid: resolvedPid)
+            }
             applyPollResults([(windowId, detected)])
             if hasClaude {
                 windowsWithClaudeProcess.insert(windowId)
             } else {
                 windowsWithClaudeProcess.remove(windowId)
             }
+            windowCLIKind[windowId] = cli
         }
     }
 
-    /// Detect whether a shell's child process (claude/node) is busy or idle.
-    /// Returns (state, hasClaudeProcess) — the bool tracks process presence
-    /// regardless of CPU for the "thinking" indicator.
-    private nonisolated func detectState(shellPid: pid_t, cpuThreshold: Double) -> (TerminalState, Bool) {
-        guard let children = getChildProcesses(of: shellPid) else {
-            return (.waitingForInput, false)
+    /// Detect whether a shell's child process (claude/codex/node) is busy or idle.
+    /// Returns (state, hasAIProcess, cliKind, resolvedPid):
+    /// - state, hasAIProcess, cliKind: same as before
+    /// - resolvedPid: non-nil when the cached shell PID had no descendants
+    ///   (likely dead / respawned) AND the supplied iTerm2 TTY now points
+    ///   to a different live shell. Caller writes it back into
+    ///   `trackedWindows` so the next poll watches the live shell.
+    private nonisolated func detectState(shellPid: pid_t, tty: String?, cpuThreshold: Double) -> (TerminalState, Bool, CLIKind, pid_t?) {
+        var resolvedPid: pid_t? = nil
+        var children = getChildProcesses(of: shellPid) ?? []
+
+        // Empty descendants for an iTerm2 window with a known TTY usually
+        // means the original shell has exited and a new shell now owns the
+        // session. Re-resolve via the stable TTY and try once more.
+        if children.isEmpty, let tty, !tty.isEmpty,
+           let liveShell = Self.shellPidForTTY(tty), liveShell != shellPid {
+            resolvedPid = liveShell
+            children = getChildProcesses(of: liveShell) ?? []
         }
 
-        let claudeProcesses = children.filter { info in
-            let comm = info.command.lowercased()
-            return comm.contains("claude") || comm.contains("node")
+        let cliKind = Self.classifyCLI(children: children)
+        let aiProcesses = children.filter { Self.isAIProcess(comm: $0.command.lowercased()) }
+
+        if aiProcesses.isEmpty {
+            return (.waitingForInput, false, cliKind, resolvedPid)
         }
 
-        if claudeProcesses.isEmpty {
-            return (.waitingForInput, false)
-        }
+        let totalCPU = aiProcesses.reduce(0.0) { $0 + $1.cpuPercent }
+        let state: TerminalState = totalCPU < cpuThreshold ? .waitingForInput : .neutral
+        return (state, true, cliKind, resolvedPid)
+    }
 
-        let totalCPU = claudeProcesses.reduce(0.0) { $0 + $1.cpuPercent }
+    /// Classify which AI CLI (if any) is the dominant process running in
+    /// this shell. Order matters: an explicit `codex` match wins over
+    /// `claude`/`node` because Codex CLI also uses Node under the hood.
+    /// Pure function so tests can drive every combination without spawning
+    /// real processes. (GH I.)
+    nonisolated static func classifyCLI(children: [ProcessInfo]) -> CLIKind {
+        let comms = children.map { $0.command.lowercased() }
+        if comms.contains(where: { $0.contains("codex") }) { return .codex }
+        if comms.contains(where: { $0.contains("claude") || $0.contains("node") }) { return .claude }
+        return .shell
+    }
 
-        if totalCPU < cpuThreshold {
-            return (.waitingForInput, true)
-        } else {
-            return (.neutral, true) // busy
-        }
+    /// Is this process name part of the AI-CLI family we treat as
+    /// "thinking-eligible" for the busy/idle indicator? Currently
+    /// matches the same set as before plus codex.
+    nonisolated static func isAIProcess(comm: String) -> Bool {
+        comm.contains("claude") || comm.contains("node") || comm.contains("codex")
     }
 
     // MARK: - Process Info
 
-    private struct ProcessInfo {
+    /// Internal so static helpers like `classifyCLI(children:)` can be
+    /// driven by unit tests without needing to spawn real processes.
+    struct ProcessInfo {
         let pid: pid_t
         let cpuPercent: Double
         let command: String

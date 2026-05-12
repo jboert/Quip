@@ -8,6 +8,12 @@ struct PendingImagePreviewStrip: View {
 
     @ObservedObject var state: PendingImageState
 
+    /// §L — host-provided action handler for the error chip's recovery
+    /// button. Optional; nil disables the action affordance entirely
+    /// (legacy callers that haven't wired the recovery path keep
+    /// rendering the categorized text without a CTA).
+    var onRecoveryAction: ((ImageUploadFailure) -> Void)? = nil
+
     var body: some View {
         if let image = state.image {
             HStack(spacing: 8) {
@@ -58,11 +64,51 @@ struct PendingImagePreviewStrip: View {
                     }
                 }
 
+                // §L — categorized error chip with recovery affordance.
+                // Replaces the freeform red-string render so the user
+                // gets an actionable next step instead of having to
+                // decode "no response (last stage: ...)".
                 if case .error(let reason) = state.uploadState {
-                    Text(reason)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
+                    let category = ImageUploadFailure.classify(reason: reason)
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(category.label)
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(.red)
+                                .lineLimit(1)
+                            // Original raw reason as secondary line so the
+                            // diagnostic stage info isn't lost. Smaller +
+                            // muted so it doesn't fight the primary chip.
+                            Text(reason)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        if !category.actionLabel.isEmpty,
+                           let onRecoveryAction {
+                            Button {
+                                onRecoveryAction(category)
+                            } label: {
+                                Text(category.actionLabel)
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.red.opacity(0.15))
+                                    .foregroundStyle(.red)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(category.actionLabel)
+                            .accessibilityHint("Recover from \(category.label)")
+                            .accessibilityAddTraits(.isButton)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Upload error: \(category.label). \(reason)")
                 }
 
                 Spacer(minLength: 0)

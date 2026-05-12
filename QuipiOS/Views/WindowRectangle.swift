@@ -152,6 +152,14 @@ struct WindowRectangle: View {
                 Label("Restart Claude", systemImage: "arrow.clockwise")
             }
 
+            if window.isTarget || window.isTerminal {
+                Button {
+                    triggerAction(.pairForQA)
+                } label: {
+                    Label("Pair for QA", systemImage: "rectangle.split.2x1")
+                }
+            }
+
             Divider()
 
             Button(role: .destructive) {
@@ -187,6 +195,9 @@ struct WindowRectangle: View {
         } message: {
             Text("Remove from Phone keeps the terminal running on your Mac — you just stop driving it from here. Close Terminal kills any running command and can't be undone.")
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Window: \(window.app) — \(window.folder?.isEmpty == false ? window.folder! : window.name)")
+        .accessibilityHint("Double-tap to select; long-press for actions including QA pairing.")
         .onAppear {
             if window.isThinking {
                 startSpin()
@@ -227,6 +238,7 @@ enum WindowAction {
     case toggleEnabled
     case duplicate
     case closeWindow
+    case pairForQA
 }
 
 #Preview {

@@ -39,6 +39,24 @@ final class BackendConnectionManager {
     /// path-change handling does that on its own.
     private var pathMonitor: NWPathMonitor?
 
+    /// Phase 3: latency probe + auto-swap orchestration for the ACTIVE
+    /// session only. Inactive sessions don't need probes — no traffic
+    /// flows through them, so a swap on an inactive session would be
+    /// invisible until the user flipped to it. Cost cap: one probe loop
+    /// at any time across all paired backends.
+    private var probeService: LatencyProbeService?
+    /// Timestamp of the most recent successful URL hot-swap. Stamped into
+    /// `URLSwapPolicy.decide` for hysteresis. Cleared when the active
+    /// backend changes (the new backend's swap history is its own).
+    private var lastSwapAt: Date?
+    /// Polling task for swap evaluations. Distinct from probe cadence
+    /// (probes gather data; this evaluates whether to act on the data).
+    private var swapEvaluatorTask: Task<Void, Never>?
+    /// UserDefaults-backed toggle. Read at task start so a user flip
+    /// takes effect on the next eval tick. Defaults OFF until the
+    /// first hardware-verified release; opt-in keeps the rollout safe.
+    static let autoSwapDefaultsKey = "latencyAutoSwapEnabled"
+
     /// Hooks the host (`QuipApp`) sets so that side-effecty things which the
     /// manager itself shouldn't know about — Live Activity, push registration,
     /// pref sync, error toast routing — can react to events from any session,
@@ -50,6 +68,10 @@ final class BackendConnectionManager {
     var onOutputDelta: ((BackendSession, String, String, String, Bool) -> Void)?
     var onTTSAudio: ((BackendSession, String, String, String, Int, Bool, Data) -> Void)?
     var onSelectWindow: ((BackendSession, String) -> Void)?
+    /// Mac broadcasts its current frontmost ManagedWindow.id (or nil if
+    /// untracked). Host uses it for the "follow Mac frontmost" feature.
+    /// (wishlist §B16.)
+    var onFrontmostChanged: ((BackendSession, String?) -> Void)?
     var onProjectDirectories: ((BackendSession, [String]) -> Void)?
     var onITermWindowList: ((BackendSession, [ITermWindowInfo]) -> Void)?
     var onError: ((BackendSession, String) -> Void)?
@@ -60,6 +82,12 @@ final class BackendConnectionManager {
     var onImageUploadAck: ((BackendSession, String) -> Void)?
     var onImageUploadError: ((BackendSession, String) -> Void)?
     var onTranscriptResult: ((BackendSession, UUID, String, String?) -> Void)?
+    /// Fired when the Mac drops a QA pair for a backend (window closed,
+    /// off-screen >5s, or post-reconnect ID mismatch). Hosts use this to
+    /// surface a toast and ensure the layout view falls back to the grid.
+    /// Called after the pair is cleared. `lostPair` is the pair that was active
+    /// before clearing — useful for purging per-windowId content maps.
+    var onQAPairLost: ((BackendSession, QAPair?, String, String) -> Void)?
 
     init() {
         // Sentinel session so `active` is never nil before pairing.
@@ -226,6 +254,102 @@ final class BackendConnectionManager {
             activeBackendID = first.id
         }
         startPathMonitor()
+        // Phase 3: bring up the latency probe + swap evaluator targeting
+        // whichever backend is active. Both stay live across foreground/
+        // background; tasks are cheap and self-throttling.
+        rebindProbeService()
+        startSwapEvaluator()
+    }
+
+    // MARK: - Phase 3: latency probe + URL hot-swap orchestration
+
+    /// Spin up (or replace) the probe service against the active session.
+    /// Called from `bootstrap`, `setActive`, and after `add`/`forget` so the
+    /// probe always targets whoever is current. No-op when no session is
+    /// active or the active session lacks alt URLs to probe.
+    private func rebindProbeService() {
+        probeService?.stop()
+        probeService = nil
+        guard !activeBackendID.isEmpty,
+              let session = sessions[activeBackendID] else { return }
+        let activeID = activeBackendID
+        let service = LatencyProbeService(
+            client: session.client,
+            urlsProvider: { [weak self] in
+                guard let self,
+                      let entry = self.paired.first(where: { $0.id == activeID }) else { return [] }
+                return entry.urlsInOrder.compactMap { URL(string: $0) }
+            },
+            currentURLProvider: { [weak session] in
+                session?.client.serverURL
+            }
+        )
+        service.start()
+        probeService = service
+    }
+
+    /// Periodic evaluator. Runs every 30s; reads the toggle, calls
+    /// URLSwapPolicy.decide, and orchestrates a hot-swap if the policy
+    /// returns a non-nil URL. Disabled-by-default until hardware-verified
+    /// (toggle in Settings → Diagnostics → Latency).
+    private func startSwapEvaluator() {
+        swapEvaluatorTask?.cancel()
+        swapEvaluatorTask = Task { [weak self] in
+            // Initial 10s grace so a freshly-bootstrapped manager has a
+            // chance to gather samples before the first eval. Otherwise
+            // the policy returns nil every 30s for the first few minutes
+            // and we waste log lines.
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            while !Task.isCancelled {
+                await self?.evaluateSwap()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
+    }
+
+    /// One eval pass. Returns the URL we swapped to (if any) for testability.
+    @discardableResult
+    func evaluateSwap() async -> URL? {
+        guard UserDefaults.standard.bool(forKey: Self.autoSwapDefaultsKey) else { return nil }
+        guard !activeBackendID.isEmpty,
+              let session = sessions[activeBackendID],
+              let entry = paired.first(where: { $0.id == activeBackendID }),
+              let currentURL = session.client.serverURL else { return nil }
+        let candidates = entry.urlsInOrder.compactMap { URL(string: $0) }
+        guard candidates.count > 1 else { return nil }
+        let samples = session.client.latencySamples
+        guard let target = URLSwapPolicy.decide(
+            currentURL: currentURL,
+            candidates: candidates,
+            samples: samples,
+            lastSwapAt: lastSwapAt
+        ) else { return nil }
+        await performHotSwap(session: session, entry: entry, target: target)
+        return target
+    }
+
+    /// Orchestrate the actual disconnect → reorder → reconnect dance.
+    /// Reorders `urlsInOrder` in-memory only — we don't `savePaired()`
+    /// because the user's preference order should be preserved across
+    /// launches; swaps are tactical, not structural.
+    private func performHotSwap(
+        session: BackendSession,
+        entry: PairedBackend,
+        target: URL
+    ) async {
+        let fromHost = session.client.serverURL?.host ?? "?"
+        let toHost = target.host ?? "?"
+        NSLog("[Quip][LATENCY] hot-swap: from=%@ to=%@ reason=avg-30%%-faster",
+              fromHost, toHost)
+        // Build the reordered URL list with target first.
+        var reordered = entry.urlsInOrder.compactMap { URL(string: $0) }
+        reordered.removeAll { $0 == target }
+        reordered.insert(target, at: 0)
+        session.client.disconnect()
+        session.reachability = .connecting
+        primePINIfPresent(session: session)
+        session.client.connect(toURLs: reordered)
+        lastSwapAt = Date()
     }
 
     /// Watches OS network path transitions and rewinds every live client's
@@ -383,6 +507,12 @@ final class BackendConnectionManager {
         activeBackendID = id
         paired[i].lastUsed = Date()
         savePaired()
+        // Phase 3: re-bind the probe service to the new active session.
+        // Old probe service stops; fresh one starts targeting the new
+        // backend's URL list. Swap history resets — the new backend's
+        // hysteresis is its own.
+        rebindProbeService()
+        lastSwapAt = nil
         return true
     }
 
@@ -678,10 +808,30 @@ final class BackendConnectionManager {
             session.windows = update.windows
             session.monitorName = update.monitor
             if let a = update.screenAspect, a > 0 { session.screenAspect = a }
-            if session.reachability != .connected { session.reachability = .connected }
-            if let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
-                self.paired[i].lastSeenLayoutMonitorName = update.monitor
+            let wasConnected = session.reachability == .connected
+            if !wasConnected { session.reachability = .connected }
+            // §J — stamp the paired-backend's lastConnectedAt on the
+            // first layout_update of a connection (i.e. the moment the
+            // session newly enters .connected). Throttled to once per
+            // connection cycle so the picker sees stable timestamps and
+            // we don't write UserDefaults every layout tick.
+            if !wasConnected, let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
+                self.paired[i].lastConnectedAt = Date()
                 self.savePaired()
+            }
+            if let i = self.paired.firstIndex(where: { $0.id == session.backendID }) {
+                // Diff guard — only persist when the monitor name actually
+                // changed. Without this every layout_update (multiple per
+                // second during normal use) writes UserDefaults, which
+                // triggers `PreferencesSyncService`'s didChange observer,
+                // schedules a 0.5s-debounced snapshot upload, and feeds the
+                // Mac a 1369-byte preferences_snapshot frame at 1-3s
+                // cadence forever. Trigger source for the kokoro.log
+                // "preferences_snapshot" storm (~300:1 vs audio_chunk).
+                if self.paired[i].lastSeenLayoutMonitorName != update.monitor {
+                    self.paired[i].lastSeenLayoutMonitorName = update.monitor
+                    self.savePaired()
+                }
             }
             self.onLayoutUpdate?(session, update)
         }
@@ -731,6 +881,11 @@ final class BackendConnectionManager {
             self.onSelectWindow?(session, windowId)
         }
 
+        c.onFrontmostChanged = { [weak self, weak session] windowId in
+            guard let self, let session else { return }
+            self.onFrontmostChanged?(session, windowId)
+        }
+
         c.onProjectDirectories = { [weak self, weak session] dirs in
             guard let self, let session else { return }
             session.projectDirectories = dirs
@@ -770,6 +925,19 @@ final class BackendConnectionManager {
             guard let self, let session else { return }
             if success {
                 session.reachability = .connected
+                // Re-announce our currently-selected window so the Mac's
+                // `clientSelectedWindowId` lines up with what the phone is
+                // actually showing. After a Mac restart (or any phone
+                // reconnect post-NAT-idle drop) the Mac side resets to
+                // nil; without this re-send, every state-change push
+                // skipped via `selection_mismatch` until the user
+                // manually tapped a different window. push.log shows it
+                // as a long stream of `clientSelectedWindowId=nil,
+                // selection_mismatch` entries.
+                if let wid = session.selectedWindowId,
+                   session.windows.contains(where: { $0.id == wid }) {
+                    session.client.send(SelectWindowMessage(windowId: wid))
+                }
             } else {
                 session.reachability = .needsAuth
                 // Stale PIN — drop it from Keychain; user will be prompted on
@@ -781,6 +949,15 @@ final class BackendConnectionManager {
 
         c.onDeviceIdentity = { [weak self, weak session] identity in
             guard let self, let session else { return }
+
+            // Replay persisted QA pair on every identity ack — covers
+            // reconnects (the closure also fires on the equal-IDs path
+            // below). Mac validates the pair; if either id is stale it
+            // responds qa_pair_lost and the bridge clears local state.
+            if let pair = session.qaPair {
+                c.setQAPair(targetId: pair.targetId, terminalId: pair.terminalId)
+            }
+
             // Rekey the synthetic legacy id to the daemon's real UUID.
             let oldID = session.backendID
             if oldID == identity.deviceID { return }
@@ -802,6 +979,7 @@ final class BackendConnectionManager {
             rebuilt.macPermissions = session.macPermissions
             rebuilt.ttsOverlayTexts = session.ttsOverlayTexts
             rebuilt.reachability = session.reachability
+            rebuilt.updateQAPair(session.qaPair)
             self.wire(session: rebuilt)
             self.sessions[identity.deviceID] = rebuilt
             if let i = self.paired.firstIndex(where: { $0.id == oldID }) {
@@ -818,6 +996,15 @@ final class BackendConnectionManager {
         c.onPreferencesRestore = { [weak self, weak session] snap in
             guard let self, let session else { return }
             self.onPreferencesRestore?(session, snap)
+        }
+
+        c.onQAPairLost = { [weak self, weak session] missingId, reason in
+            guard let self, let session else { return }
+            // Capture pair IDs before clearing so the host can purge content maps.
+            let lostPair = session.qaPair
+            // Drop pair locally + notify host so the toast can fire.
+            session.updateQAPair(nil)
+            self.onQAPairLost?(session, lostPair, missingId, reason)
         }
 
         c.onTranscriptResult = { [weak self, weak session] sid, text, error in

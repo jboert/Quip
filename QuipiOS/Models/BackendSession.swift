@@ -22,6 +22,17 @@ final class BackendSession {
     let backendID: String
     let client: WebSocketClient
 
+    /// UserDefaults key for the persisted QA pair. Computed from `backendID`.
+    /// Centralized so init + `updateQAPair` can't drift.
+    private var qaPairUserDefaultsKey: String { "qaPair.\(backendID)" }
+
+    /// Per-backend UserDefaults key for the QA-mode pane position-swap flag.
+    /// Namespaced like `qaPair.swapped.<backendId>` so two backends paired
+    /// in QA mode keep independent left/right orderings.
+    static func swapKey(forBackendId backendId: String) -> String {
+        "qaPair.swapped.\(backendId)"
+    }
+
     var windows: [WindowState] = []
     var selectedWindowId: String?
     var monitorName: String = "Mac"
@@ -37,8 +48,30 @@ final class BackendSession {
     var ttsOverlayTexts: [String: String] = [:]
     var reachability: Reachability = .connecting
 
+    /// QA mode pair for this backend. nil = not in QA mode. Persisted to
+    /// `UserDefaults` under "qaPair.\(backendID)" as JSON-encoded `QAPair`.
+    /// Use `updateQAPair(_:)` to mutate so persistence stays in sync.
+    private(set) var qaPair: QAPair?
+
     init(backendID: String, client: WebSocketClient) {
         self.backendID = backendID
         self.client = client
+        // Hydrate persisted QA pair if present.
+        if let blob = UserDefaults.standard.data(forKey: qaPairUserDefaultsKey),
+           let pair = try? JSONDecoder().decode(QAPair.self, from: blob) {
+            self.qaPair = pair
+        }
+    }
+
+    /// Mutate `qaPair` and write through to UserDefaults. Use this from the
+    /// host instead of assigning `qaPair` directly so persistence always
+    /// lines up with the in-memory value.
+    func updateQAPair(_ pair: QAPair?) {
+        self.qaPair = pair
+        if let pair, let blob = try? JSONEncoder().encode(pair) {
+            UserDefaults.standard.set(blob, forKey: qaPairUserDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: qaPairUserDefaultsKey)
+        }
     }
 }

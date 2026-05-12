@@ -1747,9 +1747,9 @@ tail -f ~/Library/Logs/Quip/websocket.log | grep -i whisper
 
 ```
 xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
-  -destination 'platform=iOS,name=Tim apple 17' -configuration Debug build
+  -destination 'platform=iOS,name=<your-iphone>' -configuration Debug build
 # devicectl install (name varies; see feedback_default_install_device memory)
-xcrun devicectl device install app --device 'Tim apple 17' \
+xcrun devicectl device install app --device '<your-iphone>' \
   ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Debug-iphoneos/Quip.app
 ```
 

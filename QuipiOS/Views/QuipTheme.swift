@@ -76,6 +76,27 @@ struct QuipColors {
 
     // MARK: - Interactive
 
+    /// Slot-row chip pill fill (built-in / custom button / picker preview).
+    /// Dark mode keeps the existing translucent-white look; light mode
+    /// uses translucent-black so the pill stays visible against a light
+    /// background. Replaces hardcoded `Color.white.opacity(0.15)` calls
+    /// at chip render sites that were invisible in light mode.
+    var chipFill: Color {
+        scheme == .dark
+            ? Color.white.opacity(0.15)
+            : Color.black.opacity(0.10)
+    }
+
+    /// Slot-row chip pill text/icon — pairs with `chipFill`. Slightly
+    /// dimmed when the row is disabled (no selected window) so the
+    /// caller can multiply by an additional opacity for the disabled
+    /// state.
+    var chipText: Color {
+        scheme == .dark
+            ? Color.white.opacity(0.9)
+            : Color.black.opacity(0.85)
+    }
+
     var buttonPrimary: Color { .blue }
 
     var buttonDisabled: Color {

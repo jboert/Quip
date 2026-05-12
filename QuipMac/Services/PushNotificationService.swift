@@ -193,13 +193,21 @@ final class PushNotificationService {
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(devices) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        do {
+            let data = try JSONEncoder().encode(devices)
+            UserDefaults.standard.set(data, forKey: Self.storageKey)
+        } catch {
+            quipPushLog("PERSIST FAILED — devices encode error: \(error.localizedDescription) (\(devices.count) devices not saved; will be lost on relaunch)")
+        }
     }
 
     private func persistPreferences() {
-        guard let data = try? JSONEncoder().encode(preferences) else { return }
-        UserDefaults.standard.set(data, forKey: Self.preferencesKey)
+        do {
+            let data = try JSONEncoder().encode(preferences)
+            UserDefaults.standard.set(data, forKey: Self.preferencesKey)
+        } catch {
+            quipPushLog("PERSIST FAILED — preferences encode error: \(error.localizedDescription) (\(preferences.count) prefs entries not saved; will be lost on relaunch)")
+        }
     }
 
     /// Update (or insert) prefs for a specific device. No-op if the
@@ -300,9 +308,12 @@ final class PushNotificationService {
                                attentionCount: Int, selectedWindowId: String?) {
         guard !devices.isEmpty else { return }
 
-        let keyId = UserDefaults.standard.string(forKey: "apnsKeyId") ?? ""
-        let teamId = UserDefaults.standard.string(forKey: "apnsTeamId") ?? ""
-        let bundleId = UserDefaults.standard.string(forKey: "apnsBundleId") ?? "com.quip.QuipiOS"
+        // GH #22 — APNs metadata moved from UserDefaults to Keychain via
+        // APNsMetadataStore. The accessor handles the one-shot migration on
+        // first read so existing installs don't need to re-enter values.
+        let keyId = APNsMetadataStore.keyId
+        let teamId = APNsMetadataStore.teamId
+        let bundleId = APNsMetadataStore.bundleId
         guard !keyId.isEmpty, !teamId.isEmpty, !bundleId.isEmpty else {
             quipPushLog("waiting_for_input skipped — APNs not configured in Settings → Notifications")
             return

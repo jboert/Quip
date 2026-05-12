@@ -108,5 +108,81 @@ final class MirrorDesktopFilterTests: XCTestCase {
         XCTAssertEqual(Set(ids), Set(["a"]),
                        "Off: only enabled windows are broadcast, regardless of on-screen status. The visibility filter must not leak into the Mirror-OFF path.")
     }
+
+    func testMirrorOffIncludesVisibleTargetsForQADiscoverability() {
+        // Without this, QA mode is unreachable: the user can't long-press a
+        // Simulator tile that the grid never renders. Targets ride along the
+        // default broadcast even when isEnabled=false, as long as they're
+        // on-visible-screen.
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false, onVisibleScreen: true),
+            mw(id: "term", bundleId: iterm2, enabled: false, onVisibleScreen: true),
+        ]
+        let ids = WindowManager.windowsForBroadcast(all, mirrorDesktop: false).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["sim"]),
+                       "Mirror off: visible targets ride along disabled (so QA pair is reachable); disabled terminals stay filtered.")
+    }
+
+    func testMirrorOffOffscreenDisabledTargetStillFiltered() {
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false, onVisibleScreen: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(all, mirrorDesktop: false).map(\.id)
+        XCTAssertTrue(ids.isEmpty,
+                       "Off-screen disabled target stays filtered — only the visibility-on path qualifies.")
+    }
+
+    func testQAPairOverridesEnabledAndMirror() {
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false),
+            mw(id: "term", bundleId: iterm2, enabled: false),
+            mw(id: "other", bundleId: iterm2, enabled: true),
+            mw(id: "browser", bundleId: browser, enabled: true),
+        ]
+        // Even with mirror=false and the pair both isEnabled=false, the pair
+        // wins — and ONLY the pair rides out.
+        let ids = WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: false, qaPair: ("sim", "term")
+        ).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["sim", "term"]))
+    }
+
+    func testQAPairWithMirrorOnStillFiltersToTwo() {
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false),
+            mw(id: "term", bundleId: iterm2, enabled: false),
+            mw(id: "otherTerm", bundleId: iterm2, enabled: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: true, qaPair: ("sim", "term")
+        ).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["sim", "term"]),
+                       "Even with mirror on, qaPair narrows to the two paired ids.")
+    }
+
+    func testQAPairNilFallsBackToCurrentBehavior() {
+        let all = [
+            mw(id: "a", bundleId: iterm2, enabled: true),
+            mw(id: "b", bundleId: iterm2, enabled: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: false, qaPair: nil
+        ).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["a"]),
+                       "qaPair=nil must behave identically to the old single-arg path.")
+    }
+
+    func testQAPairWithMissingIdReturnsOnlyExistingHalf() {
+        // If one id is gone the snapshot validator will emit qa_pair_lost
+        // separately — but until then, broadcast should still try to render
+        // whichever half is present rather than fall back to all-windows.
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: false, qaPair: ("sim", "termGone")
+        ).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["sim"]))
+    }
 }
 #endif

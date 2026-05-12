@@ -1,5 +1,6 @@
 import SwiftUI
 import WhisperKit
+import Network
 
 // WhisperKit (upstream) doesn't declare Sendable conformance. Swift 6 strict
 // concurrency then rejects sending an awaited WhisperKit instance back into
@@ -15,6 +16,25 @@ fileprivate func appendPushDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.pushPath
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
+/// Append one line to ~/Library/Logs/Quip/latency.log. Same shape as
+/// appendPushDiagnostic — kept separate so a slow disk-write on either
+/// path doesn't entangle with the other. Lines are space-separated key=value
+/// so `awk -F= '/processing_ms/ {sum+=$NF; n++} END{print sum/n}'` is enough
+/// to compute a rolling average from the shell.
+fileprivate func appendLatency(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        let path = LogPaths.latencyPath
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)
@@ -53,6 +73,13 @@ struct QuipMacApp: App {
     @State private var ttsGeneration: [String: Int] = [:]
     /// Windows where Claude is actively thinking (detected from terminal content)
     @State private var thinkingWindows: Set<String> = []
+    /// First-seen-offscreen timestamp keyed by "<connId>:<windowId>". Drives
+    /// the 5s grace period before emitting `qa_pair_lost { reason: "window_offscreen" }`.
+    @State private var qaPairOffscreenSince: [String: Date] = [:]
+    /// Per-connection throttle for the broadcast_filter log line. Logs at most
+    /// once per 5s OR when the filtered window count changes — whichever
+    /// comes first — so qa-mode.log doesn't flood with one-line-per-tick.
+    @State private var lastQAFilterLogAt: [ObjectIdentifier: (Date, Int)] = [:]
     /// Last window the phone client selected — only this one gets TTS synthesis
     @State private var clientSelectedWindowId: String? = nil
     /// Windows that must see a "busy" state (Claude processing) before the next
@@ -92,6 +119,13 @@ struct QuipMacApp: App {
     /// retry-on-reconnect sends the same `messageId: UUID`; first
     /// arrival processes, second is silently dropped.
     private let messageDedupe = MessageDedupeTable()
+    /// Last frontmost windowId we broadcast so the 400ms poller can skip
+    /// no-op sends. `nil` is also a valid value (no tracked window
+    /// frontmost), so a separate "have we ever sent" flag is needed —
+    /// otherwise the first broadcast at launch is suppressed when the
+    /// frontmost happens to be untracked. (wishlist §B16.)
+    @State private var lastBroadcastFrontmostWindowId: String? = nil
+    @State private var hasBroadcastFrontmostOnce: Bool = false
 
     var body: some Scene {
         WindowGroup {
@@ -180,6 +214,24 @@ struct QuipMacApp: App {
             }
         }
 
+        webSocketServer.onMessageWithConnection = { [self] data, connection in
+            guard let type = MessageCoder.messageType(from: data) else { return }
+            switch type {
+            case "set_qa_pair":
+                if let msg = MessageCoder.decode(SetQAPairMessage.self, from: data) {
+                    DispatchQueue.main.async {
+                        self.applySetQAPair(msg, connection: connection)
+                    }
+                }
+            case "clear_qa_pair":
+                DispatchQueue.main.async {
+                    self.applyClearQAPair(connection: connection)
+                }
+            default:
+                break
+            }
+        }
+
         webSocketServer.onClientAuthenticated = { [self] in
             DispatchQueue.main.async {
                 self.broadcastLayout()
@@ -193,6 +245,12 @@ struct QuipMacApp: App {
                 self.webSocketServer.broadcast(
                     PromptLibraryMessage(prompts: entries)
                 )
+                // (wishlist §B16.) Send the current frontmost so a
+                // freshly-authenticated phone with "Auto" enabled
+                // doesn't wait up to 400ms for the timer to catch up.
+                // Force re-send by clearing the dedupe sentinel.
+                self.hasBroadcastFrontmostOnce = false
+                self.broadcastFrontmostIfChanged()
             }
         }
 
@@ -231,8 +289,30 @@ struct QuipMacApp: App {
                 if networkMode == .tailscale {
                     tailscale.refresh()
                 }
+                // (wishlist §B16.) Frontmost-app change → broadcast the
+                // matching ManagedWindow.id so phones with the "Auto"
+                // pref enabled retarget without a manual tap. Within-app
+                // window switches (e.g. iTerm A → iTerm B) don't fire
+                // this notification — the 400ms timer below covers those.
+                self.broadcastFrontmostIfChanged()
             }
         }
+
+        // (wishlist §B16.) Within-app window-switch poller. NSWorkspace's
+        // didActivateApplicationNotification only fires on cross-app
+        // changes; cycling between two iTerm windows or two Claude
+        // Desktop windows would otherwise leave the phone targeting the
+        // last-broadcast window. 400ms is fast enough to feel
+        // instantaneous and the diff check inside
+        // `broadcastFrontmostIfChanged` keeps the wire silent during
+        // steady state. .common mode so it keeps firing while a menu /
+        // popover (MenuBarExtra) is being tracked.
+        let frontmostTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+            DispatchQueue.main.async {
+                self.broadcastFrontmostIfChanged()
+            }
+        }
+        RunLoop.main.add(frontmostTimer, forMode: .common)
 
         Task { await setupWhisper() }
 
@@ -333,6 +413,7 @@ struct QuipMacApp: App {
                         // picker again without a round-trip.
                         windowManager.enableAttachedWindows()
                         self.syncTrackedWindows()
+                        validateQAPairs()
                         broadcastLayout()
                     }
                 }
@@ -616,25 +697,179 @@ struct QuipMacApp: App {
     }
 
     @MainActor
+    private func applySetQAPair(_ msg: SetQAPairMessage, connection: NWConnection) {
+        // Validate ids exist in the current snapshot. Reject (and notify)
+        // if either is missing — this is the catches-stale-IDs path on
+        // reconnect-after-Mac-restart.
+        let knownIds = Set(windowManager.windows.map(\.id))
+        if !knownIds.contains(msg.targetId) {
+            self.qaModeLog("set_qa_pair rejected: targetId=\(msg.targetId) missing")
+            self.sendQAPairLost(missingId: msg.targetId, reason: QAPairLostMessage.Reason.connectionReset, to: connection)
+            return
+        }
+        if !knownIds.contains(msg.terminalId) {
+            self.qaModeLog("set_qa_pair rejected: terminalId=\(msg.terminalId) missing")
+            self.sendQAPairLost(missingId: msg.terminalId, reason: QAPairLostMessage.Reason.connectionReset, to: connection)
+            return
+        }
+        webSocketServer.setQAPair(targetId: msg.targetId, terminalId: msg.terminalId, for: connection)
+        self.qaModeLog("set_qa_pair connId=\(ObjectIdentifier(connection)) target=\(msg.targetId) terminal=\(msg.terminalId)")
+        // Push an immediate filtered update so the phone doesn't have to
+        // wait for the next snapshot tick to switch into QA layout.
+        self.broadcastLayout()
+    }
+
+    @MainActor
+    private func applyClearQAPair(connection: NWConnection) {
+        webSocketServer.clearQAPair(for: connection)
+        self.qaModeLog("clear_qa_pair connId=\(ObjectIdentifier(connection))")
+        self.broadcastLayout()
+    }
+
+    /// Send `qa_pair_lost` to a single connection (not a broadcast — only the
+    /// affected client should exit QA mode). Caller logs separately.
+    private func sendQAPairLost(missingId: String, reason: String, to connection: NWConnection) {
+        let msg = QAPairLostMessage(missingId: missingId, reason: reason)
+        webSocketServer.sendToClient(msg, connection: connection)
+    }
+
+    private func qaModeLog(_ msg: String) {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(msg)\n"
+        let path = LogPaths.qaModePath
+        if let fh = FileHandle(forWritingAtPath: path) {
+            fh.seekToEndOfFile()
+            fh.write(Data(line.utf8))
+            fh.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
+        }
+        print("[QAMode] \(msg)")
+    }
+
+    @MainActor
+    private func validateQAPairs() {
+        let knownIds = Set(windowManager.windows.map(\.id))
+        for (connection, pair) in webSocketServer.qaPairSnapshot() {
+            // Closed-window path: id no longer in snapshot.
+            if !knownIds.contains(pair.0) {
+                qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(pair.0) reason=\(QAPairLostMessage.Reason.windowClosed)")
+                sendQAPairLost(missingId: pair.0, reason: QAPairLostMessage.Reason.windowClosed, to: connection)
+                webSocketServer.clearQAPair(for: connection)
+                qaPairOffscreenSince = qaPairOffscreenSince.filter { !$0.key.hasPrefix("\(ObjectIdentifier(connection)):") }
+                continue
+            }
+            if !knownIds.contains(pair.1) {
+                qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(pair.1) reason=\(QAPairLostMessage.Reason.windowClosed)")
+                sendQAPairLost(missingId: pair.1, reason: QAPairLostMessage.Reason.windowClosed, to: connection)
+                webSocketServer.clearQAPair(for: connection)
+                qaPairOffscreenSince = qaPairOffscreenSince.filter { !$0.key.hasPrefix("\(ObjectIdentifier(connection)):") }
+                continue
+            }
+
+            // Off-screen >5s path: bookkeep first-seen, expire after 5s.
+            // Iterate WITHOUT `break` so both ids' timestamps stay maintained
+            // even when the first triggers — the loop fires `qa_pair_lost`
+            // for the first stale id only (one message is enough — phone
+            // exits QA mode either way), then purges all entries for the
+            // affected connection so leftover timestamps don't outlive the pair.
+            let offscreenIds = windowManager.windows
+                .filter { (pair.0 == $0.id || pair.1 == $0.id) && !$0.isOnVisibleScreen }
+                .map(\.id)
+            let now = Date()
+            var pairCleared = false
+            for id in offscreenIds {
+                let key = "\(ObjectIdentifier(connection)):\(id)"
+                let since = qaPairOffscreenSince[key] ?? now
+                qaPairOffscreenSince[key] = since
+                if !pairCleared, now.timeIntervalSince(since) >= 5.0 {
+                    qaModeLog("qa_pair_lost connId=\(ObjectIdentifier(connection)) missing=\(id) reason=\(QAPairLostMessage.Reason.windowOffscreen)")
+                    sendQAPairLost(missingId: id, reason: QAPairLostMessage.Reason.windowOffscreen, to: connection)
+                    webSocketServer.clearQAPair(for: connection)
+                    pairCleared = true
+                }
+            }
+            if pairCleared {
+                // Pair is gone — purge ALL offscreen-since entries for this
+                // connection so the second id's timestamp doesn't leak.
+                let prefix = "\(ObjectIdentifier(connection)):"
+                qaPairOffscreenSince = qaPairOffscreenSince.filter { !$0.key.hasPrefix(prefix) }
+                continue
+            }
+            // Reset clocks for any pair-id that returned on-screen.
+            let onscreen = windowManager.windows.filter {
+                (pair.0 == $0.id || pair.1 == $0.id) && $0.isOnVisibleScreen
+            }.map(\.id)
+            for id in onscreen {
+                qaPairOffscreenSince.removeValue(forKey: "\(ObjectIdentifier(connection)):\(id)")
+            }
+        }
+    }
+
+    @MainActor
     private func broadcastLayout() {
         guard webSocketServer.hasConnectedClients else { return }
         let display = windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first
         let screenBounds = display?.frame ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
 
         let mirrorDesktop = UserDefaults.standard.bool(forKey: "mirrorDesktop")
-        let visible = WindowManager.windowsForBroadcast(windowManager.windows, mirrorDesktop: mirrorDesktop)
-        let states = visible.map { window in
+        let monitor = display?.name ?? "Display 1"
+        let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
+        let allWindows = windowManager.windows
+
+        // Fast path: no client is in QA mode → encode once, broadcast as before.
+        if !webSocketServer.anyQAPairActive {
+            let visible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop)
+            let states = stateize(visible, screenBounds: screenBounds)
+            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
+            webSocketServer.broadcast(update)
+            broadcastProjectDirectories()
+            return
+        }
+
+        // Per-client path: at least one phone is in QA mode. Build each
+        // client's LayoutUpdate with its own filter so QA-paired phones
+        // get exactly two windows and non-QA phones get the unfiltered list.
+        webSocketServer.forEachAuthenticatedClientWithQAPair { connection, pair in
+            let visible = WindowManager.windowsForBroadcast(
+                allWindows, mirrorDesktop: mirrorDesktop, qaPair: pair
+            )
+            let states = self.stateize(visible, screenBounds: screenBounds)
+            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
+            self.webSocketServer.sendToClient(update, connection: connection)
+            if let p = pair {
+                _ = p
+                let key = ObjectIdentifier(connection)
+                let now = Date()
+                let prev = self.lastQAFilterLogAt[key]
+                if prev == nil || prev!.1 != visible.count || now.timeIntervalSince(prev!.0) >= 5.0 {
+                    self.qaModeLog("broadcast_filter connId=\(key) in=\(allWindows.count) out=\(visible.count)")
+                    self.lastQAFilterLogAt[key] = (now, visible.count)
+                }
+            }
+        }
+        // Tunnel broadcasters can't have per-connection QA pair state, so
+        // they always receive the unfiltered LayoutUpdate. Build it once and
+        // push.
+        let unfilteredVisible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop)
+        let unfilteredStates = stateize(unfilteredVisible, screenBounds: screenBounds)
+        let unfilteredUpdate = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: unfilteredStates)
+        webSocketServer.broadcastTunnelsOnly(unfilteredUpdate)
+        broadcastProjectDirectories()
+    }
+
+    /// Build the `WindowState` array from a filtered `ManagedWindow` slice.
+    /// Pulled out so the QA-mode per-client path doesn't duplicate the loop.
+    private func stateize(_ windows: [ManagedWindow], screenBounds: CGRect) -> [WindowState] {
+        windows.map { window in
             window.toWindowState(
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
                 screenBounds: screenBounds,
                 isThinking: thinkingWindows.contains(window.id),
-                claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue
+                claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue,
+                cliKind: terminalStateDetector.windowCLIKind[window.id]
             )
         }
-        let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
-        let update = LayoutUpdate(monitor: display?.name ?? "Display 1", screenAspect: aspect, windows: states)
-        webSocketServer.broadcast(update)
-        broadcastProjectDirectories()
     }
 
     private func broadcastProjectDirectories() {
@@ -696,7 +931,7 @@ struct QuipMacApp: App {
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }),
                    terminalStateDetector.trackedWindows[msg.windowId] == nil {
                     let pid = shellPidForWindow(window)
-                    terminalStateDetector.trackWindow(msg.windowId, shellPid: pid)
+                    terminalStateDetector.trackWindow(msg.windowId, shellPid: pid, tty: window.iterm2Tty)
                 }
             }
 
@@ -713,28 +948,88 @@ struct QuipMacApp: App {
                     webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
                     break
                 }
+                // tRecv = the moment the WS handler decoded the message.
+                // tStart = right before we kick AppleScript / paste; the
+                // async-resolve + focusDelay overhead lives in (tStart - tRecv).
+                // tEnd = right after the inject closure returns. AppleScript
+                // is synchronous, so this is the actual "text landed" instant.
+                let tRecv = Date()
                 ensureITermSessionResolved(for: msg.windowId) { window in
                     if msg.pressReturn { self.thinkingWindows.insert(msg.windowId) }
                     let termApp = self.terminalAppForWindow(window)
                     self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
-                    // When iTerm2 session-write can target the session by UUID,
-                    // the AX raise doesn't need to finish before AppleScript fires
-                    // — `write text` bypasses focus. `focusDelay` returns 0 in
-                    // that case. Otherwise we fall back to the old 80ms delay
-                    // that the System Events/front-window path needs.
+                    // GH I follow-up — branch by detected CLI:
+                    // - Codex CLI's interactive composer ignores PTY-typed
+                    //   bytes from `write text` (sendText's path); it only
+                    //   accepts macOS paste events. PTT transcripts vanished
+                    //   silently before this branch.
+                    // - Claude Code reads stdin in raw mode + echoes typed
+                    //   chars; `write text` works fine (and the
+                    //   character-id 13 CR fires submit reliably).
+                    // - Default (.shell / unknown / nil) preserves the
+                    //   pre-Story-I behavior.
+                    let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+                    // Diagnostic: log tracked PID + tty so post-mortem can
+                    // tell stale-PID respawn from genuine "no codex running"
+                    // when cliKind=shell but Codex is visible on screen.
+                    let trackedPid = self.terminalStateDetector.trackedWindows[msg.windowId] ?? 0
+                    let trackedTty = self.terminalStateDetector.trackedTty[msg.windowId] ?? "<none>"
                     let delay = KeystrokeInjector.focusDelay(
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let inject = {
-                        self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                    let routingPath: String
+                    let inject: () -> Void
+                    if cliKind == .codex && termApp == .iterm2 {
+                        NSLog("[Quip] send_text routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
+                        routingPath = "pasteText"
+                        inject = {
+                            self.keystrokeInjector.pasteText(msg.text,
+                                                             to: msg.windowId,
+                                                             pressReturn: msg.pressReturn,
+                                                             terminalApp: termApp,
+                                                             iterm2SessionId: window.iterm2SessionId)
+                        }
+                    } else {
+                        NSLog("[Quip] send_text routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
+                        routingPath = "sendText"
+                        inject = {
+                            self.keystrokeInjector.sendText(msg.text,
+                                                            to: msg.windowId,
+                                                            pressReturn: msg.pressReturn,
+                                                            terminalApp: termApp,
+                                                            windowName: name,
+                                                            cgWindowNumber: wn,
+                                                            iterm2SessionId: window.iterm2SessionId)
+                        }
+                    }
+                    let injectAndLog: () -> Void = {
+                        let tStart = Date()
+                        inject()
+                        let tEnd = Date()
+                        let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
+                        let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
+                        let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
+                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty)")
+                        // Round-trip ack — phone subtracts injectMs/totalMs
+                        // from its own send→ack delta to derive net_rtt.
+                        // Skipped if no messageId (older client) — phone has
+                        // no way to correlate the ack back to its outbound.
+                        if let mid = msg.messageId {
+                            self.webSocketServer.broadcast(SendTextAckMessage(
+                                messageId: mid,
+                                injectMs: injectMs,
+                                totalMs: totalMs,
+                                path: routingPath
+                            ))
+                        }
                     }
                     if delay == 0 {
-                        inject()
+                        injectAndLog()
                     } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { inject() }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { injectAndLog() }
                     }
                 }
             }
@@ -773,28 +1068,46 @@ struct QuipMacApp: App {
                 }
 
                 ensureITermSessionResolved(for: msg.windowId) { window in
-                    // Paste the absolute path into the terminal input with a trailing space, no Return.
                     let termApp = self.terminalAppForWindow(window)
                     self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
+                    // GH I — branch by detected CLI:
+                    // - Codex CLI's interactive composer accepts pasted IMAGE
+                    //   bytes via Cmd+V; typing the path doesn't attach the
+                    //   image, just leaves a literal string.
+                    // - Claude Code accepts a typed absolute path inline.
+                    // - Default (.shell / unknown / nil) falls through to the
+                    //   path-typing behavior — same as before this branch
+                    //   existed, so a window we can't classify still works as
+                    //   before.
+                    let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
                     let delay = KeystrokeInjector.focusDelay(
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let textToInject = savedURL.path + " "
-                    let finishInjection = {
-                        let result = self.keystrokeInjector.sendText(
-                            textToInject, to: msg.windowId, pressReturn: false,
-                            terminalApp: termApp, windowName: name, cgWindowNumber: wn,
-                            iterm2SessionId: window.iterm2SessionId
-                        )
+                    let finishInjection: () -> Void = {
+                        let result: KeystrokeInjector.InjectionResult
+                        switch cliKind {
+                        case .codex:
+                            result = self.keystrokeInjector.pasteImage(
+                                at: savedURL, to: msg.windowId,
+                                terminalApp: termApp, iterm2SessionId: window.iterm2SessionId
+                            )
+                        case .claude, .shell:
+                            let textToInject = savedURL.path + " "
+                            result = self.keystrokeInjector.sendText(
+                                textToInject, to: msg.windowId, pressReturn: false,
+                                terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                                iterm2SessionId: window.iterm2SessionId
+                            )
+                        }
                         if result.success {
-                            print("[Quip] image_upload: typed path into windowId=\(msg.windowId) (\(textToInject.count) chars)")
+                            print("[Quip] image_upload: delivered to windowId=\(msg.windowId) cli=\(cliKind.rawValue)")
                             self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
                         } else {
-                            let err = result.error ?? "couldn't type path"
-                            print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId): \(err)")
+                            let err = result.error ?? "couldn't deliver image"
+                            print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId) cli=\(cliKind.rawValue): \(err)")
                             self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
                         }
                     }
@@ -963,8 +1276,8 @@ struct QuipMacApp: App {
                             print("[Quip] duplicate_window: subtitle \"\(rawSubtitle)\" is not a path, falling back to $HOME")
                         }
                     }
-                    let termApp = terminalAppForWindow(source)
-                    let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                    let termApp = spawnTerminalApp(for: msg.agent, source: source)
+                    let cmd = spawnCommand(for: msg.agent)
                     let knownIds = Set(windowManager.windows.map(\.id))
                     keystrokeInjector.spawnWindow(in: dir, command: cmd, terminalApp: termApp)
                     // WindowManager's auto-refresh (~1 second) picks up the new window.
@@ -1002,8 +1315,8 @@ struct QuipMacApp: App {
                     print("[Quip] spawn_window DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
                     break
                 }
-                print("[Quip] spawn_window: directory=\(msg.directory)")
-                let cmd = UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+                print("[Quip] spawn_window: directory=\(msg.directory) agent=\(msg.agent?.rawValue ?? "default")")
+                let cmd = spawnCommand(for: msg.agent)
                 let knownIds = Set(windowManager.windows.map(\.id))
                 keystrokeInjector.spawnWindow(in: msg.directory, command: cmd, terminalApp: .iterm2)
                 selectNewWindowAfterSpawn(knownIds: knownIds, attempt: 0)
@@ -1011,8 +1324,14 @@ struct QuipMacApp: App {
 
         case "arrange_windows":
             if let msg = MessageCoder.decode(ArrangeWindowsMessage.self, from: data) {
-                print("[Quip] arrange_windows: layout=\(msg.layout)")
+                print("[Quip] arrange_windows: layout=\(msg.layout.rawValue)")
                 handleArrangeWindows(layout: msg.layout)
+            } else {
+                // GH #20: enum decode failed → log loud + send error back so
+                // a phone-side typo / future unknown layout isn't silent.
+                let raw = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                print("[Quip] arrange_windows: decode failed for payload=\(raw)")
+                webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement layout in arrange_windows payload"))
             }
 
         case "scan_iterm_windows":
@@ -1384,14 +1703,13 @@ struct QuipMacApp: App {
     /// Drives the "arrange horizontally/vertically" command coming from the
     /// phone. Mirrors MenuBarView's local "Arrange Windows" path: filter to
     /// enabled windows, pick the main display, hand over to LayoutCalculator
-    /// + WindowManager.arrangeWindows. Invalid layout strings are rejected
-    /// with an error toast the phone can show.
+    /// + WindowManager.arrangeWindows. Layout enum is total so the
+    /// switch in `LayoutMode.from(arrangeLayout:)` is exhaustive — no
+    /// "unknown" path here. Decode-time rejection of unknown wire
+    /// values lives in MessageCoder.decode (returns nil → caller logs).
     @MainActor
-    private func handleArrangeWindows(layout: String) {
-        guard let mode = LayoutMode.fromArrangeLayout(layout) else {
-            webSocketServer.broadcast(ErrorMessage(reason: "Unknown arrangement: \(layout)"))
-            return
-        }
+    private func handleArrangeWindows(layout: ArrangeLayout) {
+        let mode = LayoutMode.from(arrangeLayout: layout)
         let enabled = windowManager.windows.filter(\.isEnabled)
         guard !enabled.isEmpty else {
             webSocketServer.broadcast(ErrorMessage(reason: "No enabled windows to arrange"))
@@ -1540,6 +1858,39 @@ struct QuipMacApp: App {
         case "press_y":
             runAfterDelay {
                 keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            }
+        // §18 — context-aware numbered-prompt selection. Phone sends
+        // `select_<n>` (1-9) when the user taps a numbered chip in the
+        // terminal panel; Mac types the digit + Return into the target
+        // window the same way press_y/press_n work.
+        case "select_1", "select_2", "select_3", "select_4",
+             "select_5", "select_6", "select_7", "select_8", "select_9":
+            let digit = String(action.suffix(1))
+            runAfterDelay {
+                keystrokeInjector.sendText(digit, to: wid, pressReturn: true,
+                                            terminalApp: termApp, windowName: wname,
+                                            cgWindowNumber: wn,
+                                            iterm2SessionId: window.iterm2SessionId)
+            }
+        // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
+        // sends the iTerm2 menu shortcut for the corresponding action.
+        // Scrollback state lives on the Mac side — the next screenshot
+        // capture will reflect the scrolled viewport, no extra plumbing.
+        case "scroll_page_up", "scroll_page_down", "scroll_top", "scroll_bottom":
+            guard termApp == .iterm2 else {
+                webSocketServer.broadcast(ErrorMessage(reason: "Scrollback only supported in iTerm2 windows"))
+                break
+            }
+            let dir: KeystrokeInjector.ScrollDirection = {
+                switch action {
+                case "scroll_page_up":   return .pageUp
+                case "scroll_page_down": return .pageDown
+                case "scroll_top":       return .top
+                default:                 return .bottom // scroll_bottom
+                }
+            }()
+            runAfterDelay {
+                keystrokeInjector.iterm2Scroll(dir, to: wid, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_n":
             runAfterDelay {
@@ -1743,7 +2094,7 @@ struct QuipMacApp: App {
         for window in enabledTerminals {
             if terminalStateDetector.trackedWindows[window.id] == nil {
                 let pid = shellPidForWindow(window)
-                terminalStateDetector.trackWindow(window.id, shellPid: pid)
+                terminalStateDetector.trackWindow(window.id, shellPid: pid, tty: window.iterm2Tty)
             }
         }
         // Also ensure the phone-selected window is tracked, even if not
@@ -1753,7 +2104,7 @@ struct QuipMacApp: App {
            let window = windowManager.windows.first(where: { $0.id == selected }),
            terminalStateDetector.trackedWindows[selected] == nil {
             let pid = shellPidForWindow(window)
-            terminalStateDetector.trackWindow(selected, shellPid: pid)
+            terminalStateDetector.trackWindow(selected, shellPid: pid, tty: window.iterm2Tty)
         }
         // Untrack removed/disabled windows — but preserve the selected one.
         let enabledIds = Set(enabledTerminals.map(\.id))
@@ -1803,6 +2154,84 @@ struct QuipMacApp: App {
         case TerminalApp.claudeDesktop.bundleIdentifier: return .claudeDesktop
         default: return .terminal
         }
+    }
+
+    /// New phone-side presets mean "open an iTerm2 session with this command".
+    /// Only legacy duplicate messages preserve the source app's host.
+    private func spawnTerminalApp(for agent: SpawnAgent?, source: ManagedWindow) -> TerminalApp {
+        if agent != nil {
+            return .iterm2
+        }
+        return terminalAppForWindow(source)
+    }
+
+    /// Resolve the phone's spawn preset to the command iTerm should run after
+    /// `cd <dir>`. nil preserves the pre-agent-picker behavior for old clients.
+    private func spawnCommand(for agent: SpawnAgent?) -> String {
+        switch agent {
+        case .codex:
+            return "codex"
+        case .terminal:
+            return ""
+        case .claude, .none:
+            return UserDefaults.standard.string(forKey: "spawnCommand") ?? "claude"
+        }
+    }
+
+    /// Resolve the OS's currently-focused window to a ManagedWindow.id, or
+    /// nil when the frontmost app is untracked or the AX query fails.
+    /// Matches by (pid, nearest origin) — same pattern WindowManager uses
+    /// for arrange/focus AX-window lookup.
+    ///
+    /// Returns nil when frontmost is e.g. Finder/Mail/Safari — the phone
+    /// then leaves `selectedWindowId` alone instead of blanking it, so the
+    /// user's last terminal stays the target until focus returns to a
+    /// tracked window. (wishlist §B16.)
+    private func currentFrontmostManagedWindowId() -> String? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = app.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowRef: CFTypeRef?
+        let attrResult = AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedWindowAttribute as CFString, &windowRef
+        )
+        guard attrResult == .success, let raw = windowRef else { return nil }
+        let axWindow = raw as! AXUIElement
+        var posRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
+              let posValue = posRef else { return nil }
+        var axPos = CGPoint.zero
+        AXValueGetValue(posValue as! AXValue, .cgPoint, &axPos)
+        let candidates = windowManager.windows.filter { $0.pid == pid }
+        guard !candidates.isEmpty else { return nil }
+        // 50pt origin tolerance — CG and AX coords are both top-left, so
+        // typical drift is sub-pixel. A larger gap means we matched the
+        // wrong window (e.g. position-tying close on overlapping windows
+        // would still pick *a* candidate, but past 50pt that's a guess and
+        // we'd rather send nil than mis-route).
+        var best: (window: ManagedWindow, distSq: CGFloat)? = nil
+        for w in candidates {
+            let dx = w.bounds.origin.x - axPos.x
+            let dy = w.bounds.origin.y - axPos.y
+            let d = dx * dx + dy * dy
+            if best == nil || d < best!.distSq {
+                best = (w, d)
+            }
+        }
+        guard let pick = best, pick.distSq <= 2500 else { return nil }
+        return pick.window.id
+    }
+
+    /// Compute the current frontmost ManagedWindow.id and broadcast a
+    /// `frontmost_changed` frame iff it differs from the last value we
+    /// sent. Cheap to call on a tight cadence — the AX query is the only
+    /// real cost. (wishlist §B16.)
+    private func broadcastFrontmostIfChanged() {
+        let current = currentFrontmostManagedWindowId()
+        if hasBroadcastFrontmostOnce && current == lastBroadcastFrontmostWindowId { return }
+        lastBroadcastFrontmostWindowId = current
+        hasBroadcastFrontmostOnce = true
+        webSocketServer.broadcast(FrontmostChangedMessage(windowId: current))
     }
 
     /// Find the 1-based window index in the terminal app by matching

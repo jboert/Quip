@@ -11,6 +11,7 @@
 
 import Foundation
 import WatchConnectivity
+import OSLog
 
 /// Wire shape — must match the Watch-side `WatchWindowState` declared in
 /// `QuipiOS/QuipWatch/QuipWatchApp.swift`. Keeping the struct duplicated
@@ -25,6 +26,8 @@ struct WatchWindowSyncEntry: Codable {
 
 @MainActor
 final class WatchSyncService: NSObject, WCSessionDelegate {
+
+    private static let logger = Logger(subsystem: "com.quip.ios", category: "WatchSyncService")
 
     /// Last payload pushed — used to dedupe so we don't fire transferUserInfo
     /// for every layout poll when nothing actually changed.
@@ -47,7 +50,13 @@ final class WatchSyncService: NSObject, WCSessionDelegate {
         guard session.activationState == .activated else { return }
         guard session.isPaired, session.isWatchAppInstalled else { return }
 
-        guard let data = try? JSONEncoder().encode(windows) else { return }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(windows)
+        } catch {
+            Self.logger.error("WatchSync encode failed: \(error.localizedDescription, privacy: .public) — \(windows.count) windows dropped")
+            return
+        }
         if data == lastPayload { return }
         lastPayload = data
 
@@ -58,13 +67,22 @@ final class WatchSyncService: NSObject, WCSessionDelegate {
         // which is exactly what we want for state.
         let payload: [String: Any] = ["windows": data]
         if session.isReachable {
-            session.sendMessage(payload, replyHandler: nil) { _ in
+            session.sendMessage(payload, replyHandler: nil) { sendErr in
                 // Fall through to context update on send failure so the Watch
                 // still has the latest snapshot once it wakes.
-                try? session.updateApplicationContext(payload)
+                Self.logger.warning("WatchSync sendMessage failed (\(sendErr.localizedDescription, privacy: .public)); falling back to applicationContext")
+                do {
+                    try WCSession.default.updateApplicationContext(payload)
+                } catch {
+                    Self.logger.error("WatchSync applicationContext fallback also failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         } else {
-            try? session.updateApplicationContext(payload)
+            do {
+                try session.updateApplicationContext(payload)
+            } catch {
+                Self.logger.error("WatchSync applicationContext failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 

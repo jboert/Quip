@@ -75,7 +75,7 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testArrangeWindowsMessageHorizontalEncoding() throws {
-        let msg = ArrangeWindowsMessage(layout: "horizontal")
+        let msg = ArrangeWindowsMessage(layout: .horizontal)
         let data = try XCTUnwrap(MessageCoder.encode(msg))
         let dict = try jsonDict(from: data)
 
@@ -84,7 +84,7 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testArrangeWindowsMessageVerticalEncoding() throws {
-        let msg = ArrangeWindowsMessage(layout: "vertical")
+        let msg = ArrangeWindowsMessage(layout: .vertical)
         let data = try XCTUnwrap(MessageCoder.encode(msg))
         let dict = try jsonDict(from: data)
 
@@ -92,12 +92,32 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testArrangeWindowsRoundTrip() throws {
-        let original = ArrangeWindowsMessage(layout: "horizontal")
+        let original = ArrangeWindowsMessage(layout: .horizontal)
         let data = try XCTUnwrap(MessageCoder.encode(original))
         let decoded = try XCTUnwrap(MessageCoder.decode(ArrangeWindowsMessage.self, from: data))
 
         XCTAssertEqual(decoded.type, "arrange_windows")
-        XCTAssertEqual(decoded.layout, "horizontal")
+        XCTAssertEqual(decoded.layout, .horizontal)
+    }
+
+    /// GH #20 — unknown wire values must fail Codable decode loudly so
+    /// the Mac handler can log + reject instead of silently dropping.
+    func testArrangeWindowsRejectsUnknownLayout() throws {
+        let json = #"{"type":"arrange_windows","layout":"diagonal"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        XCTAssertNil(MessageCoder.decode(ArrangeWindowsMessage.self, from: data),
+                     "Unknown layout values must fail decode — silent fallthrough was the bug")
+    }
+
+    /// GH #20 — phone's local "grid" mode does NOT travel over the
+    /// wire, so the wire enum stays restricted. If a Mac-side grid
+    /// arranger is ever added, this test gets updated in lockstep with
+    /// the enum extension.
+    func testArrangeWindowsWireEnumStillRejectsGrid() throws {
+        let json = #"{"type":"arrange_windows","layout":"grid"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        XCTAssertNil(MessageCoder.decode(ArrangeWindowsMessage.self, from: data),
+                     "Phone-side grid arrangement is local; the wire enum stays {horizontal, vertical}")
     }
 
     // MARK: - Authentication messages
@@ -294,20 +314,48 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testDuplicateWindowMessageEncoding() throws {
-        let msg = DuplicateWindowMessage(sourceWindowId: "src-1")
+        let msg = DuplicateWindowMessage(sourceWindowId: "src-1", agent: .codex)
         let data = try XCTUnwrap(MessageCoder.encode(msg))
         let dict = try jsonDict(from: data)
 
         XCTAssertEqual(dict["type"] as? String, "duplicate_window")
         XCTAssertEqual(dict["sourceWindowId"] as? String, "src-1")
+        XCTAssertEqual(dict["agent"] as? String, "codex")
     }
 
     func testDuplicateWindowRoundTrip() throws {
-        let original = DuplicateWindowMessage(sourceWindowId: "src-rt")
+        let original = DuplicateWindowMessage(sourceWindowId: "src-rt", agent: .terminal)
         let data = try XCTUnwrap(MessageCoder.encode(original))
         let restored = try XCTUnwrap(MessageCoder.decode(DuplicateWindowMessage.self, from: data))
         XCTAssertEqual(original.sourceWindowId, restored.sourceWindowId)
+        XCTAssertEqual(original.agent, restored.agent)
         XCTAssertEqual(original.type, restored.type)
+    }
+
+    func testDuplicateWindowAgentDefaultsToNilForOldClients() throws {
+        let json = #"{"type":"duplicate_window","sourceWindowId":"src-old"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let restored = try XCTUnwrap(MessageCoder.decode(DuplicateWindowMessage.self, from: data))
+        XCTAssertNil(restored.agent)
+        XCTAssertEqual(restored.sourceWindowId, "src-old")
+    }
+
+    func testSpawnWindowMessageEncoding() throws {
+        let msg = SpawnWindowMessage(directory: "/Users/dev/project", agent: .terminal)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "spawn_window")
+        XCTAssertEqual(dict["directory"] as? String, "/Users/dev/project")
+        XCTAssertEqual(dict["agent"] as? String, "terminal")
+    }
+
+    func testSpawnWindowAgentDefaultsToNilForOldClients() throws {
+        let json = #"{"type":"spawn_window","directory":"/tmp"}"#
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let restored = try XCTUnwrap(MessageCoder.decode(SpawnWindowMessage.self, from: data))
+        XCTAssertNil(restored.agent)
+        XCTAssertEqual(restored.directory, "/tmp")
     }
 
     func testCloseWindowMessageEncoding() throws {
@@ -819,5 +867,113 @@ final class MessageProtocolTests: XCTestCase {
         } else {
             XCTFail("expected .failed")
         }
+    }
+
+    // MARK: - Heartbeat (GH #19)
+
+    func testHeartbeatMessageEncoding() throws {
+        let msg = HeartbeatMessage(seq: 42, ts: 1_700_000_000.5)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "heartbeat")
+        XCTAssertEqual(dict["seq"] as? Int, 42)
+        XCTAssertEqual(dict["ts"] as? Double, 1_700_000_000.5)
+    }
+
+    func testHeartbeatMessageRoundTrip() throws {
+        let msg = HeartbeatMessage(seq: 7, ts: 1_700_123_456.789)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(HeartbeatMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "heartbeat")
+        XCTAssertEqual(decoded.seq, 7)
+        XCTAssertEqual(decoded.ts, 1_700_123_456.789, accuracy: 0.001)
+    }
+
+    func testHeartbeatAckMessageEncoding() throws {
+        let msg = HeartbeatAckMessage(seq: 42)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+
+        XCTAssertEqual(dict["type"] as? String, "heartbeat_ack")
+        XCTAssertEqual(dict["seq"] as? Int, 42)
+    }
+
+    func testHeartbeatAckMessageRoundTrip() throws {
+        let msg = HeartbeatAckMessage(seq: 99)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let decoded = try XCTUnwrap(MessageCoder.decode(HeartbeatAckMessage.self, from: data))
+        XCTAssertEqual(decoded.type, "heartbeat_ack")
+        XCTAssertEqual(decoded.seq, 99)
+    }
+
+    // MARK: - QA Mode
+
+    func testSetQAPairRoundTrip() {
+        let msg = SetQAPairMessage(targetId: "com.apple.iphonesimulator.42",
+                                   terminalId: "com.googlecode.iterm2.117")
+        let data = try! MessageCoder.encoder.encode(msg)
+        let decoded = try! MessageCoder.decoder.decode(SetQAPairMessage.self, from: data)
+        XCTAssertEqual(decoded.type, "set_qa_pair")
+        XCTAssertEqual(decoded.targetId, "com.apple.iphonesimulator.42")
+        XCTAssertEqual(decoded.terminalId, "com.googlecode.iterm2.117")
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"target_id\""), "Wire key must be snake_case: \(json)")
+        XCTAssertTrue(json.contains("\"terminal_id\""), "Wire key must be snake_case: \(json)")
+    }
+
+    func testClearQAPairRoundTrip() {
+        let msg = ClearQAPairMessage()
+        let data = try! MessageCoder.encoder.encode(msg)
+        let decoded = try! MessageCoder.decoder.decode(ClearQAPairMessage.self, from: data)
+        XCTAssertEqual(decoded.type, "clear_qa_pair")
+    }
+
+    func testQAPairLostRoundTrip() {
+        let msg = QAPairLostMessage(missingId: "com.apple.iphonesimulator.42",
+                                    reason: QAPairLostMessage.Reason.windowClosed)
+        let data = try! MessageCoder.encoder.encode(msg)
+        let decoded = try! MessageCoder.decoder.decode(QAPairLostMessage.self, from: data)
+        XCTAssertEqual(decoded.type, "qa_pair_lost")
+        XCTAssertEqual(decoded.missingId, "com.apple.iphonesimulator.42")
+        XCTAssertEqual(decoded.reason, QAPairLostMessage.Reason.windowClosed)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"missing_id\""), "Wire key must be snake_case: \(json)")
+    }
+
+    func testWindowStateTargetKindEncodes() {
+        let w = WindowState(
+            id: "1", name: "iPhone 17 Pro Max", app: "Simulator",
+            enabled: true,
+            frame: WindowFrame(x: 0, y: 0, width: 0.5, height: 0.5),
+            state: "neutral", color: "#3a4a6b", targetKind: "simulator"
+        )
+        let data = try! MessageCoder.encoder.encode(w)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"targetKind\":\"simulator\""), json)
+    }
+
+    func testWindowStateTargetKindDecodesNilWhenMissing() {
+        // Older Mac builds don't include the field. Phone must decode cleanly.
+        let json = """
+        {"id":"1","name":"iTerm","app":"iTerm2","enabled":false,
+         "frame":{"x":0,"y":0,"width":1,"height":1},
+         "state":"neutral","color":"#fff","isThinking":false}
+        """
+        let data = Data(json.utf8)
+        let decoded = try! MessageCoder.decoder.decode(WindowState.self, from: data)
+        XCTAssertNil(decoded.targetKind)
+    }
+
+    func testWindowStateTargetKindDecodesValueWhenPresent() {
+        let json = """
+        {"id":"1","name":"Sim","app":"Simulator","enabled":false,
+         "frame":{"x":0,"y":0,"width":1,"height":1},
+         "state":"neutral","color":"#fff","isThinking":false,
+         "targetKind":"simulator"}
+        """
+        let data = Data(json.utf8)
+        let decoded = try! MessageCoder.decoder.decode(WindowState.self, from: data)
+        XCTAssertEqual(decoded.targetKind, "simulator")
     }
 }

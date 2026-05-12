@@ -164,6 +164,12 @@ final class WebSocketClient {
     var authError: String?
     var serverURL: URL?
     var lastError: String?
+    /// Structured cause of the most recent disconnect. Set BEFORE clearing
+    /// `isConnected` / calling `handleDisconnect` so the §K pill and
+    /// DiagnosticsSheet render the typed reason instead of keyword-matching
+    /// the free-form `lastError` string. Cleared on a fresh connect attempt
+    /// and on `disconnect()` (user-initiated).
+    var lastDisconnectReason: DisconnectReason?
 
     var onLayoutUpdate: ((LayoutUpdate) -> Void)?
     var onStateChange: ((String, String) -> Void)?
@@ -174,6 +180,11 @@ final class WebSocketClient {
     /// Mac asks the phone to switch its selected window — fired when the Mac just
     /// spawned a new window (e.g. duplicate) and wants the phone to follow along.
     var onSelectWindow: ((String) -> Void)?
+    /// Mac broadcasts its current frontmost ManagedWindow.id (or nil if the
+    /// frontmost app is untracked). Phone uses this to auto-retarget
+    /// `selectedWindowId` when the user has the "Auto" pref enabled.
+    /// (wishlist §B16.)
+    var onFrontmostChanged: ((String?) -> Void)?
     var onProjectDirectories: (([String]) -> Void)?
     /// Mac responded to a `scan_iterm_windows` request with the full list of
     /// iTerm2 windows it can see. The iOS scan sheet listens for this.
@@ -187,6 +198,11 @@ final class WebSocketClient {
     /// Mac is sending back a preferences snapshot the phone previously
     /// uploaded — used to repopulate UserDefaults after a reinstall.
     var onPreferencesRestore: ((PreferencesSnapshot) -> Void)?
+    /// Mac dropped the QA pair on this connection — either a paired window
+    /// vanished, went off-screen sustained ≥5s, or the IDs the phone replayed
+    /// post-reconnect don't match. Phone exits QA mode and shows a toast.
+    /// Args: (missingId, reason).
+    var onQAPairLost: ((String, String) -> Void)?
     /// Mac sent its current TCC permission status. Phone surfaces it in the
     /// settings sheet + as a badge on the main screen when anything is denied.
     var onMacPermissions: ((MacPermissionsMessage) -> Void)?
@@ -257,6 +273,119 @@ final class WebSocketClient {
     private var connectionEvents: [String] = []
     var recentConnectionEvents: [String] { connectionEvents }
 
+    /// Phase 3: which physical hop the WebSocket is using. Inferred at sample
+    /// time from `serverURL`; stable for the lifetime of a single connection.
+    /// `.localWS` = direct LAN ws://; `.cloudflareTunnel` = wss://*.trycloudflare.com;
+    /// `.unknown` for anything else (custom relays, future transports).
+    enum LatencyTransport: String, Equatable, Codable {
+        case localWS
+        case cloudflareTunnel
+        case unknown
+
+        /// Pure classifier so tests can drive it without spinning up a socket.
+        static func classify(_ url: URL?) -> LatencyTransport {
+            guard let url else { return .unknown }
+            switch url.scheme {
+            case "ws":
+                return .localWS
+            case "wss":
+                if url.host?.hasSuffix("trycloudflare.com") == true {
+                    return .cloudflareTunnel
+                }
+                return .unknown
+            default:
+                return .unknown
+            }
+        }
+    }
+
+    /// Phase 3: which radio is the phone actually using right now. Read off
+    /// the existing NWPathMonitor at sample time. iOS hides Wi-Fi/cellular
+    /// RSSI from non-system apps, so this is the best signal-class proxy
+    /// without MetricKit aggregation lag.
+    enum LatencyNetworkClass: String, Equatable, Codable {
+        case wifi
+        case cellular
+        case wired
+        case unknown
+    }
+
+    /// Pure classifier for an NWPath. Wi-Fi wins over cellular if the path
+    /// has both (rare; happens during a hand-off). `.unknown` when the path
+    /// is unsatisfied or carries no recognized interface — keeps samples
+    /// from getting silently bucketed as Wi-Fi when the radio state is
+    /// genuinely unknown.
+    nonisolated static func networkClass(for path: NWPath) -> LatencyNetworkClass {
+        guard path.status == .satisfied else { return .unknown }
+        if path.usesInterfaceType(.wifi) { return .wifi }
+        if path.usesInterfaceType(.cellular) { return .cellular }
+        if path.usesInterfaceType(.wiredEthernet) { return .wired }
+        return .unknown
+    }
+
+    /// Population std-dev (in ms) of `netRtt` across `samples`, computed
+    /// inline so handleSendTextAck stays O(N) per sample without a separate
+    /// per-bucket cache. Returns 0 if fewer than 2 samples — variance of a
+    /// single sample is undefined; treat as "stable until proven otherwise."
+    nonisolated static func netVariance(of samples: [LatencySample]) -> Int {
+        guard samples.count >= 2 else { return 0 }
+        let values = samples.map { Double($0.netRtt) }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let sumSq = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) }
+        return Int((sumSq / Double(values.count)).squareRoot().rounded())
+    }
+
+    /// One round-trip text-land sample. `totalRtt` is observed end-to-end on
+    /// the phone (send→ack); `injectMs` is what the Mac reports for its own
+    /// AppleScript / paste duration; `netRtt = totalRtt - injectMs` isolates
+    /// the network from the Mac. Path is "pasteText" or "sendText" so a
+    /// Codex-only regression doesn't smear the Claude bucket.
+    ///
+    /// Phase 3 widens with `transport`, `networkClass`, and `netVariance` so
+    /// the future `BackendScorer` can answer "is the slowdown my Mac, the
+    /// link, or the radio?" — and so per-message routing has signal to
+    /// prefer the lowest-score backend without flapping on a single spike.
+    struct LatencySample: Equatable {
+        let timestamp: Date
+        let totalRtt: Int   // ms — phone send to phone ack-receive
+        let injectMs: Int   // ms — Mac AppleScript / paste alone
+        let totalMs: Int    // ms — Mac message-arrival to text-landed
+        let netRtt: Int     // ms — totalRtt - totalMs
+        let path: String    // "pasteText" | "sendText" | "probe"
+        let transport: LatencyTransport
+        let networkClass: LatencyNetworkClass
+        /// ms — population std-dev of the last (≤10) `netRtt` samples for
+        /// the same transport bucket on this client at insert time. High
+        /// variance = lossy / weak link → Phase 3 scorer penalizes it.
+        let netVariance: Int
+        /// Phase 3 commit 2: URL host portion (no scheme, no port) of the
+        /// connection that produced this sample. `transport` alone lumps
+        /// Bonjour LAN and Tailscale CGNAT together; `serverURLHost` is
+        /// what URLSwapPolicy needs to address per-URL buckets when
+        /// deciding whether an alt path is faster than the current one.
+        /// Empty string when the sample was recorded without a known URL
+        /// (legacy paths; shouldn't happen post-migration).
+        let serverURLHost: String
+    }
+
+    /// Rolling buffer of recent text-land samples (cap 100). Read by
+    /// SettingsSheet → Diagnostics to render the friendly average +
+    /// sparkline. Triggers @Observable redraws on each append.
+    private(set) var latencySamples: [LatencySample] = []
+    private static let latencySampleCap = 100
+
+    /// Outbound send_text bookkeeping: messageId → moment we put it on the
+    /// wire. The ack handler looks up by messageId, computes deltas, and
+    /// removes the entry. Capped at 32 — anything older than that has
+    /// almost certainly been dropped on the floor by the Mac.
+    private var pendingSendTexts: [UUID: Date] = [:]
+
+    /// Phase 3: latest classification from NWPathMonitor. Updated on every
+    /// path change so the next `handleSendTextAck` can stamp the sample
+    /// with the current radio without re-walking the path. `.unknown` until
+    /// the first path update lands.
+    private(set) var currentNetworkClass: LatencyNetworkClass = .unknown
+
     init() {
         startPathMonitor()
         startStuckWatchdog()
@@ -282,6 +411,7 @@ final class WebSocketClient {
         monitor.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.currentNetworkClass = Self.networkClass(for: path)
                 if path.status == .satisfied {
                     self.logEvent("network path satisfied")
                     if !self.isConnected,
@@ -320,7 +450,9 @@ final class WebSocketClient {
                    Date().timeIntervalSince(started) > Self.stuckThresholdSec {
                     let secs = Int(Date().timeIntervalSince(started))
                     self.logEvent("stall watchdog tripped after \(secs)s — forcing reconnect")
-                    self.lastError = "Stalled \(secs)s — resetting"
+                    let reason: DisconnectReason = .stalled(seconds: secs)
+                    self.lastDisconnectReason = reason
+                    self.lastError = reason.label
                     self.connectingStartedAt = Date()  // start clock for next attempt
                     self.handleDisconnect()
                 }
@@ -359,6 +491,7 @@ final class WebSocketClient {
         serverURL = first
         reconnectDelay = 1.0
         lastError = nil
+        lastDisconnectReason = nil
         isConnecting = true
         connectingStartedAt = Date()
         logEvent("connect(toURLs: \(urls.count) total, primary: \(first.absoluteString))")
@@ -409,6 +542,14 @@ final class WebSocketClient {
         isAuthenticated = false
         authError = nil
         sessionPIN = nil
+        // Bug #1 — without these, the previous run's "Stalled 26s — resetting"
+        // watchdog message lingers in the top-bar lastError view even after
+        // disconnect/forget. Picker simultaneously shows "Enter tunnel URL"
+        // because urlText is empty — confusing contradiction at fresh launch
+        // when a previously-paired backend was forgotten.
+        lastError = nil
+        lastDisconnectReason = .userInitiated
+        connectingStartedAt = nil
         NSLog("[WebSocketClient] Disconnected intentionally")
     }
 
@@ -484,6 +625,17 @@ final class WebSocketClient {
         NSLog("[WebSocketClient] Sent auth message")
     }
 
+    /// QA mode — set the pair for THIS connection. Mac will filter its
+    /// LayoutUpdate broadcast to only these two windows for this client.
+    func setQAPair(targetId: String, terminalId: String) {
+        send(SetQAPairMessage(targetId: targetId, terminalId: terminalId))
+    }
+
+    /// QA mode — clear the pair for THIS connection.
+    func clearQAPair() {
+        send(ClearQAPairMessage())
+    }
+
     /// Tell the Mac who this phone is so its connected-clients table can
     /// show a human label instead of an endpoint string. Reuses
     /// `DeviceIdentityMessage` (Mac→phone uses the same shape going the
@@ -495,18 +647,106 @@ final class WebSocketClient {
         send(DeviceIdentityMessage(deviceID: id, deviceKind: "ios", displayName: name))
     }
 
-    func send(_ message: some Codable) {
+    /// Round-trip a SendTextAckMessage into a LatencySample. Drops samples
+    /// for messageIds we never sent (or whose entry has aged out of the
+    /// pending-bookkeeping cap) so a stale ack from a prior session can't
+    /// poison the rolling buffer.
+    /// Phase 3 commit 3: probe-sample append used by `LatencyProbeService`.
+    /// Probe samples carry `path = "probe"` and zero on the Mac-side fields
+    /// (probes don't traverse Mac processing); only `netRtt` is meaningful.
+    /// Caller pre-classifies `transport` because the probe service has the
+    /// alt URL in scope while this class only knows its own `serverURL`.
+    func appendProbeSample(host: String, netRtt: Int, transport: LatencyTransport) {
+        let sample = LatencySample(
+            timestamp: Date(),
+            totalRtt: netRtt,
+            injectMs: 0,
+            totalMs: 0,
+            netRtt: netRtt,
+            path: "probe",
+            transport: transport,
+            networkClass: currentNetworkClass,
+            netVariance: 0,
+            serverURLHost: host
+        )
+        latencySamples.append(sample)
+        if latencySamples.count > Self.latencySampleCap {
+            latencySamples.removeFirst(latencySamples.count - Self.latencySampleCap)
+        }
+        NSLog("[Quip][LATENCY] path=probe netRtt=%d host=%@ transport=%@",
+              netRtt, host, transport.rawValue)
+    }
+
+    private func handleSendTextAck(_ msg: SendTextAckMessage) {
+        guard let sentAt = pendingSendTexts.removeValue(forKey: msg.messageId) else {
+            NSLog("[WebSocketClient] send_text_ack with unknown messageId %@", msg.messageId.uuidString)
+            return
+        }
+        let totalRtt = Int(Date().timeIntervalSince(sentAt) * 1000)
+        // Mac's totalMs covers message-arrival → text-landed (Mac-side end-to-end).
+        // Subtracting from the phone-observed RTT gives a clean network-only
+        // figure. Clamp at 0 to defend against clock skew putting it negative.
+        let netRtt = max(0, totalRtt - msg.totalMs)
+        // Phase 3: stamp transport from current serverURL, networkClass from
+        // the live path monitor, and netVariance from the most recent
+        // same-transport samples on this client. Variance is computed BEFORE
+        // appending so it reflects the prior 10-sample distribution — the
+        // current sample's deviation gets reflected in the *next* one's
+        // variance, which is the property the scorer actually wants.
+        let transport = LatencyTransport.classify(serverURL)
+        let recentSameTransport = latencySamples
+            .filter { $0.transport == transport }
+            .suffix(10)
+        let variance = Self.netVariance(of: Array(recentSameTransport))
+        let host = serverURL?.host ?? ""
+        let sample = LatencySample(
+            timestamp: Date(),
+            totalRtt: totalRtt,
+            injectMs: msg.injectMs,
+            totalMs: msg.totalMs,
+            netRtt: netRtt,
+            path: msg.path,
+            transport: transport,
+            networkClass: currentNetworkClass,
+            netVariance: variance,
+            serverURLHost: host
+        )
+        latencySamples.append(sample)
+        if latencySamples.count > Self.latencySampleCap {
+            latencySamples.removeFirst(latencySamples.count - Self.latencySampleCap)
+        }
+        NSLog("[Quip][LATENCY] path=%@ totalRtt=%d netRtt=%d injectMs=%d macTotal=%d transport=%@ net=%@ var=%d host=%@",
+              msg.path, totalRtt, netRtt, msg.injectMs, msg.totalMs,
+              transport.rawValue, currentNetworkClass.rawValue, variance, host)
+    }
+
+    func send<T: Codable>(_ message: T) {
         guard let task = webSocketTask else { return }
+        // Latency tracking — record the moment we put a SendTextMessage on
+        // the wire so the SendTextAck handler can compute total round-trip.
+        // Messages without a messageId are ignored (older protocol, Mac can't
+        // ack them anyway). Cap the dict so a Mac that never acks doesn't
+        // grow this unbounded.
+        if let stm = message as? SendTextMessage, let mid = stm.messageId {
+            pendingSendTexts[mid] = Date()
+            if pendingSendTexts.count > 32 {
+                if let oldest = pendingSendTexts.min(by: { $0.value < $1.value }) {
+                    pendingSendTexts.removeValue(forKey: oldest.key)
+                }
+            }
+        }
         do {
             let data = try JSONEncoder().encode(message)
             let string = String(data: data, encoding: .utf8) ?? ""
             task.send(.string(string)) { error in
                 if let error = error {
-                    NSLog("[WebSocketClient] Send error: %@", error.localizedDescription)
+                    NSLog("[WebSocketClient] send transport FAILED kind=%@ err=%@",
+                          String(describing: T.self), error.localizedDescription)
                 }
             }
         } catch {
-            NSLog("[WebSocketClient] Encode error: %@", error.localizedDescription)
+            NSLog("[WebSocketClient] send encode FAILED kind=%@ err=%@",
+                  String(describing: T.self), error.localizedDescription)
         }
     }
 
@@ -574,7 +814,8 @@ final class WebSocketClient {
             guard let self, !Task.isCancelled else { return }
             if !self.isConnected && self.isConnecting {
                 NSLog("[WebSocketClient] Connection timeout")
-                self.lastError = "Connection timed out"
+                self.lastDisconnectReason = .timedOut
+                self.lastError = DisconnectReason.timedOut.label
                 self.handleDisconnect()
             }
         }
@@ -591,7 +832,9 @@ final class WebSocketClient {
 
                 if let error = error {
                     self.logEvent("initial ping failed: \(error.localizedDescription)")
-                    self.lastError = error.localizedDescription
+                    let reason: DisconnectReason = .networkError(error.localizedDescription)
+                    self.lastDisconnectReason = reason
+                    self.lastError = reason.label
                     self.handleDisconnect()
                 } else {
                     self.logEvent("connected, awaiting authentication")
@@ -600,6 +843,7 @@ final class WebSocketClient {
                     self.connectingStartedAt = nil
                     self.authError = nil
                     self.lastError = nil
+                    self.lastDisconnectReason = nil
                     self.reconnectDelay = 1.0
                     self.hasEverConnectedOnCurrentURL = true
                     self.startKeepalive()
@@ -661,23 +905,53 @@ final class WebSocketClient {
             case .failure(let error):
                 NSLog("[WebSocketClient] Receive error: %@", error.localizedDescription)
                 DispatchQueue.main.async {
+                    // Receive errors land here on socket close (normal or
+                    // abnormal). URLSession surfaces "Software caused
+                    // connection abort" on a server-side close, "The
+                    // operation couldn't be completed" on path drops, etc.
+                    // Map to networkError unless we already have a reason
+                    // set (e.g. stall watchdog tripped first).
+                    if self.lastDisconnectReason == nil {
+                        let reason: DisconnectReason = .networkError(error.localizedDescription)
+                        self.lastDisconnectReason = reason
+                        self.lastError = reason.label
+                    }
                     self.handleDisconnect()
                 }
             }
         }
     }
 
+    /// §30/4 loud-drop helper. `try? decoder.decode(...)` silently swallows
+    /// schema drift / version skew / corrupt frames — phone shows a "feature
+    /// broken" symptom with zero log evidence. Helper logs the failure with
+    /// enough context (msg type tag + decode target type + payload size +
+    /// underlying error) to triage without re-running. Pure + nonisolated
+    /// + log-injected so tests can assert format without trapping NSLog.
+    nonisolated static func decodeMessage<T: Decodable>(
+        _ type: T.Type,
+        from data: Data,
+        msgType: String,
+        log: (String) -> Void = { NSLog("%@", $0) }
+    ) -> T? {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            log("[WebSocketClient] decode FAILED type=\(msgType) kind=\(String(describing: T.self)) bytes=\(data.count) err=\(error)")
+            return nil
+        }
+    }
+
     private func handleMessage(_ data: Data) {
-        let decoder = JSONDecoder()
         struct TypePeek: Codable { let type: String }
-        guard let peek = try? decoder.decode(TypePeek.self, from: data) else {
+        guard let peek = Self.decodeMessage(TypePeek.self, from: data, msgType: "<peek>") else {
             NSLog("[WebSocketClient] Could not peek type from %d bytes", data.count)
             return
         }
 
         switch peek.type {
         case "auth_result":
-            if let msg = try? decoder.decode(AuthResultMessage.self, from: data) {
+            if let msg = Self.decodeMessage(AuthResultMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] auth_result: success=%d error=%@", msg.success ? 1 : 0, msg.error ?? "none")
                 // "auth_required" is the server's connection-ready signal —
                 // server wants a PIN. Send the cached one if we have it,
@@ -703,90 +977,120 @@ final class WebSocketClient {
                     isAuthenticated = false
                     authError = msg.error ?? "Invalid PIN"
                     sessionPIN = nil  // Clear bad PIN
+                    // Server rejected the PIN. Connection stays alive
+                    // (server keeps the WS open so phone can retry),
+                    // but record the typed reason so the §K pill can
+                    // surface "Auth failed" + the diagnostic sheet
+                    // shows the structured cause.
+                    let reason: DisconnectReason = .authFailed(message: msg.error)
+                    lastDisconnectReason = reason
+                    lastError = reason.label
                 }
                 onAuthResult?(msg.success, msg.error)
             }
         case "device_identity":
-            if let msg = try? decoder.decode(DeviceIdentityMessage.self, from: data) {
+            if let msg = Self.decodeMessage(DeviceIdentityMessage.self, from: data, msgType: peek.type) {
                 onDeviceIdentity?(msg)
+            }
+        case "send_text_ack":
+            if let msg = Self.decodeMessage(SendTextAckMessage.self, from: data, msgType: peek.type) {
+                handleSendTextAck(msg)
             }
         case "layout_update":
             guard isAuthenticated else { return }
-            do {
-                let update = try decoder.decode(LayoutUpdate.self, from: data)
+            if let update = Self.decodeMessage(LayoutUpdate.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] layout_update: %d windows", update.windows.count)
                 onLayoutUpdate?(update)
-            } catch {
-                NSLog("[WebSocketClient] decode error: %@", "\(error)")
             }
         case "state_change":
             guard isAuthenticated else { return }
             struct SC: Codable { let windowId: String; let state: String }
-            if let c = try? decoder.decode(SC.self, from: data) {
+            if let c = Self.decodeMessage(SC.self, from: data, msgType: peek.type) {
                 onStateChange?(c.windowId, c.state)
             }
         case "terminal_content":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(TerminalContentMessage.self, from: data) {
+            if let msg = Self.decodeMessage(TerminalContentMessage.self, from: data, msgType: peek.type) {
                 onTerminalContent?(msg.windowId, msg.content, msg.screenshot, msg.urls)
             }
         case "output_delta":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(OutputDeltaMessage.self, from: data) {
+            if let msg = Self.decodeMessage(OutputDeltaMessage.self, from: data, msgType: peek.type) {
                 onOutputDelta?(msg.windowId, msg.windowName, msg.text, msg.isFinal)
             }
         case "tts_audio":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(TTSAudioMessage.self, from: data) {
+            if let msg = Self.decodeMessage(TTSAudioMessage.self, from: data, msgType: peek.type) {
                 // Empty audioBase64 can happen on the final marker message
                 let wavData = Data(base64Encoded: msg.audioBase64) ?? Data()
                 onTTSAudio?(msg.windowId, msg.windowName, msg.sessionId, msg.sequence, msg.isFinal, wavData)
             }
         case "select_window":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(SelectWindowMessage.self, from: data) {
+            if let msg = Self.decodeMessage(SelectWindowMessage.self, from: data, msgType: peek.type) {
                 onSelectWindow?(msg.windowId)
+            }
+        case "frontmost_changed":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(FrontmostChangedMessage.self, from: data, msgType: peek.type) {
+                onFrontmostChanged?(msg.windowId)
+            }
+        case "qa_pair_lost":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(QAPairLostMessage.self, from: data, msgType: peek.type) {
+                onQAPairLost?(msg.missingId, msg.reason)
+            }
+        case "heartbeat":
+            // GH #19: Mac→iOS app-level heartbeat. Reply with same seq so
+            // Mac knows the iOS app is still processing messages (not just
+            // alive at TCP). Do NOT gate on isAuthenticated — Mac only
+            // dispatches heartbeats to authenticated clients, so by the
+            // time we receive one we're already past auth from Mac's POV.
+            // Fail-soft: if decode fails, drop silently — Mac will log a
+            // stale-heartbeat warning and resync on the next dispatcher tick.
+            if let msg = Self.decodeMessage(HeartbeatMessage.self, from: data, msgType: peek.type) {
+                send(HeartbeatAckMessage(seq: msg.seq))
             }
         case "preferences_restore":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(PreferenceRestoreMessage.self, from: data) {
+            if let msg = Self.decodeMessage(PreferenceRestoreMessage.self, from: data, msgType: peek.type) {
                 onPreferencesRestore?(msg.preferences)
             }
         case "project_directories":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ProjectDirectoriesMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ProjectDirectoriesMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] Received %d project directories", msg.directories.count)
                 onProjectDirectories?(msg.directories)
             }
         case "iterm_window_list":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ITermWindowListMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ITermWindowListMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] iterm_window_list: %d windows", msg.windows.count)
                 onITermWindowList?(msg.windows)
             }
         case "error":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ErrorMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ErrorMessage.self, from: data, msgType: peek.type) {
                 onError?(msg.reason)
             }
         case "image_upload_ack":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ImageUploadAckMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ImageUploadAckMessage.self, from: data, msgType: peek.type) {
                 onImageUploadAck?(msg.savedPath)
             }
         case "image_upload_error":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(ImageUploadErrorMessage.self, from: data) {
+            if let msg = Self.decodeMessage(ImageUploadErrorMessage.self, from: data, msgType: peek.type) {
                 onImageUploadError?(msg.reason)
             }
         case "mac_permissions":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(MacPermissionsMessage.self, from: data) {
+            if let msg = Self.decodeMessage(MacPermissionsMessage.self, from: data, msgType: peek.type) {
                 onMacPermissions?(msg)
             }
         case "transcript_result":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(TranscriptResultMessage.self, from: data) {
+            if let msg = Self.decodeMessage(TranscriptResultMessage.self, from: data, msgType: peek.type) {
                 NSLog("[Quip][PTT] transcript_result arrived textLen=%d errNil=%d",
                       msg.text.count, msg.error == nil ? 1 : 0)
                 onTranscriptResult?(msg.sessionId, msg.text, msg.error)
@@ -795,27 +1099,27 @@ final class WebSocketClient {
             }
         case "diagnostics_bundle":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(DiagnosticsBundleMessage.self, from: data) {
+            if let msg = Self.decodeMessage(DiagnosticsBundleMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] diagnostics_bundle: %@ size=%d err=%@",
                       msg.filename, msg.sizeBytes, msg.errorReason ?? "none")
                 onDiagnosticsBundle?(msg)
             }
         case "log_tail":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(LogTailMessage.self, from: data) {
+            if let msg = Self.decodeMessage(LogTailMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] log_tail: %d bytes", msg.totalBytes)
                 onLogTail?(msg)
             }
         case "prompt_library":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(PromptLibraryMessage.self, from: data) {
+            if let msg = Self.decodeMessage(PromptLibraryMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] prompt_library: %d prompts", msg.prompts.count)
                 promptLibrary = msg.prompts
                 onPromptLibrary?(msg.prompts)
             }
         case "whisper_status":
             guard isAuthenticated else { return }
-            if let msg = try? decoder.decode(WhisperStatusMessage.self, from: data) {
+            if let msg = Self.decodeMessage(WhisperStatusMessage.self, from: data, msgType: peek.type) {
                 let tag: Int = {
                     switch msg.state {
                     case .preparing: return 0
@@ -858,7 +1162,9 @@ final class WebSocketClient {
                 } else {
                     consecutiveMisses += 1
                     self.logEvent("keepalive pong missed (\(consecutiveMisses)/2)")
-                    self.lastError = "No pong (\(consecutiveMisses)/2)"
+                    let reason: DisconnectReason = .networkError("No pong (\(consecutiveMisses)/2)")
+                    self.lastDisconnectReason = reason
+                    self.lastError = reason.label
                     if consecutiveMisses >= 2 {
                         self.logEvent("two consecutive missed pongs — forcing reconnect")
                         self.handleDisconnect()
