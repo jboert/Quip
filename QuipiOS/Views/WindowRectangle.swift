@@ -1,5 +1,40 @@
 import SwiftUI
 
+enum WindowAccessibility {
+    static func tileIdentifier(for window: WindowState) -> String {
+        "window-tile-\(window.id)"
+    }
+
+    static func qaPaneIdentifier(for window: WindowState) -> String {
+        "qa-pane-\(window.id)"
+    }
+
+    static func windowLabel(for window: WindowState) -> String {
+        "Window: \(window.app) - \(displayName(for: window))"
+    }
+
+    static func qaPaneLabel(for window: WindowState) -> String {
+        "QA pane: \(window.app) - \(displayName(for: window))"
+    }
+
+    static func value(isSelected: Bool, isEnabled: Bool) -> String {
+        switch (isSelected, isEnabled) {
+        case (true, true):
+            return "Selected"
+        case (true, false):
+            return "Selected, disabled"
+        case (false, true):
+            return "Available"
+        case (false, false):
+            return "Disabled"
+        }
+    }
+
+    private static func displayName(for window: WindowState) -> String {
+        window.folder?.isEmpty == false ? window.folder! : window.name
+    }
+}
+
 struct WindowRectangle: View {
     let window: WindowState
     let isSelected: Bool
@@ -196,8 +231,11 @@ struct WindowRectangle: View {
             Text("Remove from Phone keeps the terminal running on your Mac — you just stop driving it from here. Close Terminal kills any running command and can't be undone.")
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Window: \(window.app) — \(window.folder?.isEmpty == false ? window.folder! : window.name)")
+        .accessibilityIdentifier(WindowAccessibility.tileIdentifier(for: window))
+        .accessibilityLabel(WindowAccessibility.windowLabel(for: window))
+        .accessibilityValue(WindowAccessibility.value(isSelected: isSelected, isEnabled: window.enabled))
         .accessibilityHint("Double-tap to select; long-press for actions including QA pairing.")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .onAppear {
             if window.isThinking {
                 startSpin()

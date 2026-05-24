@@ -165,6 +165,12 @@ struct QAPairLayoutView: View {
                 selectedWindowId = window.id
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(WindowAccessibility.qaPaneIdentifier(for: window))
+        .accessibilityLabel(WindowAccessibility.qaPaneLabel(for: window))
+        .accessibilityValue(WindowAccessibility.value(isSelected: isSelected, isEnabled: window.enabled))
+        .accessibilityHint("Double-tap to select this QA pane.")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
     // MARK: - Divider
