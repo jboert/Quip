@@ -100,11 +100,13 @@ struct QuipApp: App {
     /// build (pre-tray) reads as "no URLs" and hides the tray.
     @State private var terminalContentURLs: [String]?
     @State private var terminalContentWindowId: String?
+    @State private var terminalContentUpdatedAt: Date?
     // Per-windowId content maps — populated alongside the single-state properties
     // during the dual-state transition period. Task 5 migrates read sites to these.
     @State private var terminalContentTextById: [String: String] = [:]
     @State private var terminalContentScreenshotById: [String: String] = [:]
     @State private var terminalContentURLsById: [String: [String]] = [:]
+    @State private var terminalContentUpdatedAtById: [String: Date] = [:]
     @State private var showPINEntry = false
     @State private var pinText = ""
     @State private var projectDirectories: [String] = []
@@ -179,9 +181,11 @@ struct QuipApp: App {
                 terminalContentScreenshot: $terminalContentScreenshot,
                 terminalContentURLs: $terminalContentURLs,
                 terminalContentWindowId: $terminalContentWindowId,
+                terminalContentUpdatedAt: $terminalContentUpdatedAt,
                 terminalContentTextById: $terminalContentTextById,
                 terminalContentScreenshotById: $terminalContentScreenshotById,
                 terminalContentURLsById: $terminalContentURLsById,
+                terminalContentUpdatedAtById: $terminalContentUpdatedAtById,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
@@ -567,8 +571,11 @@ struct QuipApp: App {
         manager.onTerminalContent = { session, windowId, content, screenshot, urls in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
+                let receivedAt = Date()
                 terminalContentWindowId = windowId
                 terminalContentText = content
+                terminalContentUpdatedAt = receivedAt
+                terminalContentUpdatedAtById[windowId] = receivedAt
                 if let screenshot, !screenshot.isEmpty {
                     terminalContentScreenshot = screenshot
                 }
@@ -1062,9 +1069,11 @@ struct MainiOSView: View {
     @Binding var terminalContentScreenshot: String?
     @Binding var terminalContentURLs: [String]?
     @Binding var terminalContentWindowId: String?
+    @Binding var terminalContentUpdatedAt: Date?
     @Binding var terminalContentTextById: [String: String]
     @Binding var terminalContentScreenshotById: [String: String]
     @Binding var terminalContentURLsById: [String: [String]]
+    @Binding var terminalContentUpdatedAtById: [String: Date]
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
     var projectDirectories: [String]
@@ -2852,6 +2861,26 @@ struct MainiOSView: View {
         let appVersion = info["CFBundleShortVersionString"] as? String ?? "?"
         let buildNumber = info["CFBundleVersion"] as? String ?? "?"
         let activeName = manager.paired.first(where: { $0.id == manager.activeBackendID })?.name
+        let activeBackendID = manager.activeBackendID.isEmpty ? nil : manager.activeBackendID
+        let activeReachability = reachabilityLabel(manager.sessions[manager.activeBackendID]?.reachability)
+        let selectedWindow = selectedWindowId.flatMap { id in windows.first(where: { $0.id == id }) }
+        let contentWindowId = currentDiagnosticsContentWindowId()
+        let contentText = contentWindowId.flatMap { terminalContentTextById[$0] }
+            ?? (contentWindowId == terminalContentWindowId ? terminalContentText : nil)
+        let contentScreenshot = contentWindowId.flatMap { terminalContentScreenshotById[$0] }
+            ?? (contentWindowId == terminalContentWindowId ? terminalContentScreenshot : nil)
+        let contentURLs = contentWindowId.flatMap { terminalContentURLsById[$0] }
+            ?? (contentWindowId == terminalContentWindowId ? terminalContentURLs : nil)
+        let contentUpdatedAt = contentWindowId.flatMap { terminalContentUpdatedAtById[$0] }
+            ?? (contentWindowId == terminalContentWindowId ? terminalContentUpdatedAt : nil)
+        let now = Date()
+        let contentAgeSeconds = contentUpdatedAt.map {
+            max(0, Int(now.timeIntervalSince($0).rounded(.down)))
+        }
+        let contentHasScreenshot = contentWindowId.map { _ in contentScreenshot?.isEmpty == false }
+        let latestSendTextRoutePath = client.latencySamples
+            .last(where: { $0.path == "pasteText" || $0.path == "sendText" })?
+            .path
         let snapshot = DiagnosticsSnapshotFormatter.Input(
             appVersion: appVersion,
             buildNumber: buildNumber,
@@ -2863,9 +2892,45 @@ struct MainiOSView: View {
             serverURL: client.serverURL?.absoluteString,
             pairedCount: manager.paired.count,
             activeBackendName: activeName,
-            connectionEvents: client.recentConnectionEvents
+            connectionEvents: client.recentConnectionEvents,
+            activeBackendID: activeBackendID,
+            activeBackendReachability: activeReachability,
+            selectedWindowID: selectedWindowId,
+            selectedWindowName: selectedWindow?.name,
+            selectedWindowCLI: selectedWindow.map { ($0.cliKind ?? .shell).rawValue },
+            terminalContentWindowID: contentWindowId,
+            terminalContentAgeSeconds: contentAgeSeconds,
+            terminalContentTextLength: contentText?.count,
+            terminalContentHasScreenshot: contentHasScreenshot,
+            terminalContentURLCount: contentURLs?.count,
+            latestSendTextRoutePath: latestSendTextRoutePath
         )
-        return DiagnosticsSnapshotFormatter.format(snapshot)
+        return DiagnosticsSnapshotFormatter.format(snapshot, now: now)
+    }
+
+    private func currentDiagnosticsContentWindowId() -> String? {
+        if let selectedWindowId,
+           terminalContentTextById[selectedWindowId] != nil
+            || terminalContentScreenshotById[selectedWindowId] != nil
+            || terminalContentURLsById[selectedWindowId] != nil {
+            return selectedWindowId
+        }
+        return terminalContentWindowId
+    }
+
+    private func reachabilityLabel(_ reachability: BackendSession.Reachability?) -> String? {
+        switch reachability {
+        case .connecting:
+            return "connecting"
+        case .connected:
+            return "connected"
+        case .unreachable:
+            return "unreachable"
+        case .needsAuth:
+            return "needsAuth"
+        case nil:
+            return nil
+        }
     }
 
     /// §35 — long-press on the keyboard main-row button reads the iPhone's

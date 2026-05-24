@@ -980,11 +980,11 @@ struct QuipMacApp: App {
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let routingPath: String
-                    let inject: () -> Void
-                    if cliKind == .codex && termApp == .iterm2 {
+                    let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
+                    let routingPath = route.rawValue
+                    let inject: () -> KeystrokeInjector.InjectionResult
+                    if route == .pasteText {
                         NSLog("[Quip] send_text routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
-                        routingPath = "pasteText"
                         inject = {
                             self.keystrokeInjector.pasteText(msg.text,
                                                              to: msg.windowId,
@@ -994,7 +994,6 @@ struct QuipMacApp: App {
                         }
                     } else {
                         NSLog("[Quip] send_text routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
-                        routingPath = "sendText"
                         inject = {
                             self.keystrokeInjector.sendText(msg.text,
                                                             to: msg.windowId,
@@ -1007,17 +1006,23 @@ struct QuipMacApp: App {
                     }
                     let injectAndLog: () -> Void = {
                         let tStart = Date()
-                        inject()
+                        let result = inject()
                         let tEnd = Date()
                         let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
                         let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
                         let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
-                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty)")
+                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty)")
+                        if !result.success {
+                            let reason = result.error ?? "unknown injection failure"
+                            self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(reason)"))
+                        }
                         // Round-trip ack — phone subtracts injectMs/totalMs
                         // from its own send→ack delta to derive net_rtt.
                         // Skipped if no messageId (older client) — phone has
                         // no way to correlate the ack back to its outbound.
-                        if let mid = msg.messageId {
+                        // Also skipped on failed injection so latency samples
+                        // do not record failed sends as delivered text.
+                        if result.success, let mid = msg.messageId {
                             self.webSocketServer.broadcast(SendTextAckMessage(
                                 messageId: mid,
                                 injectMs: injectMs,
@@ -1563,8 +1568,9 @@ struct QuipMacApp: App {
             let termApp = self.terminalAppForWindow(window)
             self.windowManager.focusWindow(msg.windowId)
             let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+            let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
             let result: KeystrokeInjector.InjectionResult
-            if cliKind == .codex && termApp == .iterm2 {
+            if route == .pasteText {
                 NSLog("[Quip] paste_prompt routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
                 result = self.keystrokeInjector.pasteText(
                     body, to: msg.windowId, pressReturn: msg.pressReturn,
@@ -1580,8 +1586,11 @@ struct QuipMacApp: App {
                     iterm2SessionId: window.iterm2SessionId
                 )
             }
+            appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id)")
             if !result.success {
-                print("[Quip] paste_prompt FAILED: \(result.error ?? "unknown")")
+                let reason = result.error ?? "unknown"
+                print("[Quip] paste_prompt FAILED: \(reason)")
+                self.webSocketServer.broadcast(ErrorMessage(reason: "Prompt paste failed: \(reason)"))
             }
         }
     }

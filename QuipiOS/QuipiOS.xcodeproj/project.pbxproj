@@ -80,7 +80,6 @@
 		B712CA6389A8643DAA92C4FE /* CertPins.json in Resources */ = {isa = PBXBuildFile; fileRef = 50991F62509F0EBB3C8037B9 /* CertPins.json */; };
 		B74D4BBBD664959095BE58DE /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09BCC5DEEA227B256C96191 /* ConnectionStatusBar.swift */; };
 		B7A0D44EB5C6E674A83BAD07 /* QAPair.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF2970B473254DE9C3144E7D /* QAPair.swift */; };
-		B86CDE99611F63E70CB7C7A3 /* RemoteLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */; };
 		BC0AAA34114426CFF2BEEB74 /* ArrangeLayoutMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEE82AF4A4EEBCF4A0DED50 /* ArrangeLayoutMappingTests.swift */; };
 		C048886FBB8F8115ED5B1964 /* PushNotificationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3153F1300EF9EB3372F1EE7A /* PushNotificationCenter.swift */; };
 		C10D61840E80EDAD704827A9 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 310DDC8B5BA9B05DA4632BF5 /* Color+Hex.swift */; };
@@ -193,7 +192,6 @@
 		8135CA5A6364965D159D7274 /* QuipWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipWatchApp.swift; sourceTree = "<group>"; };
 		838EDA054E1E6EFFD12734ED /* WatchSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSyncService.swift; sourceTree = "<group>"; };
 		89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSNotificationOverlay.swift; sourceTree = "<group>"; };
-		8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLayoutView.swift; sourceTree = "<group>"; };
 		920D8C375CB17F6D732D5F4E /* WebSocketClientDisconnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClientDisconnectTests.swift; sourceTree = "<group>"; };
 		94FA5C2A4E68BD3594AAD1EF /* QAPairPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QAPairPickerSheet.swift; sourceTree = "<group>"; };
 		959643D7FC10BD21E0FDE409 /* QuipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipApp.swift; sourceTree = "<group>"; };
@@ -359,7 +357,6 @@
 				46EF93D7DE43B8C363C6D49D /* QAPairLayoutView.swift */,
 				94FA5C2A4E68BD3594AAD1EF /* QAPairPickerSheet.swift */,
 				BE693F49CD672CFD1507FDC6 /* QuipTheme.swift */,
-				8AA3AAD9A42CCC12C55FB55F /* RemoteLayoutView.swift */,
 				591693AB60296E1978E9F2D1 /* TerminalContentOverlay.swift */,
 				89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */,
 				28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */,
@@ -698,7 +695,6 @@
 				2C52F265432CF7E5BFF28F68 /* QuipLiveActivityAttributes.swift in Sources */,
 				035352DA912748C3F99D4D6C /* QuipMacPermsActivityAttributes.swift in Sources */,
 				48F28455B8142325D6833C25 /* QuipTheme.swift in Sources */,
-				B86CDE99611F63E70CB7C7A3 /* RemoteLayoutView.swift in Sources */,
 				5B36FBA58C811B5085CC8DF6 /* RemoteSpeechSession.swift in Sources */,
 				011C1FA73D1865A5DFBCA40E /* SeamStitcher.swift in Sources */,
 				C9FDDDE951901DE13257C0A6 /* ShakeDetector.swift in Sources */,

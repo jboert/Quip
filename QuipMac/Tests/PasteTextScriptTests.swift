@@ -12,6 +12,35 @@ import XCTest
 /// transcripts to Codex windows. (Story I follow-up.)
 final class PasteTextScriptTests: XCTestCase {
 
+    func test_codexInITermRoutesToPasteText() {
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .codex, terminalApp: .iterm2),
+            .pasteText
+        )
+    }
+
+    func test_codexOutsideITermFallsBackToSendText() {
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .codex, terminalApp: .terminal),
+            .sendText
+        )
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .codex, terminalApp: .claudeDesktop),
+            .sendText
+        )
+    }
+
+    func test_nonCodexInITermUsesSendText() {
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .claude, terminalApp: .iterm2),
+            .sendText
+        )
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .shell, terminalApp: .iterm2),
+            .sendText
+        )
+    }
+
     func test_includesSessionLookupByUniqueId() {
         let script = KeystrokeInjector.pasteTextScript(iterm2SessionId: "ABCD-1234", pressReturn: false)
         XCTAssertTrue(script.contains("if unique id of aSession is \"ABCD-1234\""),

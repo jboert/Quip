@@ -517,7 +517,7 @@ final class BackendConnectionManager {
     }
 
     /// Cycle by `direction` (+1 forward, -1 backward) through the paired list.
-    /// Driven by the horizontal swipe on `RemoteLayoutView`.
+    /// Driven by the horizontal swipe on the main layout surface.
     @discardableResult
     func cycleActive(direction: Int) -> Bool {
         guard paired.count > 1,

@@ -5,6 +5,15 @@
 import AppKit
 import Observation
 
+enum TextInjectionRoute: String, Sendable {
+    case pasteText
+    case sendText
+
+    static func choose(cliKind: CLIKind, terminalApp: TerminalApp) -> TextInjectionRoute {
+        cliKind == .codex && terminalApp == .iterm2 ? .pasteText : .sendText
+    }
+}
+
 @MainActor
 @Observable
 final class KeystrokeInjector {

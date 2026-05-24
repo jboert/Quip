@@ -103,6 +103,17 @@ enum DiagnosticsSnapshotFormatter {
         let pairedCount: Int
         let activeBackendName: String?
         let connectionEvents: [String]
+        var activeBackendID: String? = nil
+        var activeBackendReachability: String? = nil
+        var selectedWindowID: String? = nil
+        var selectedWindowName: String? = nil
+        var selectedWindowCLI: String? = nil
+        var terminalContentWindowID: String? = nil
+        var terminalContentAgeSeconds: Int? = nil
+        var terminalContentTextLength: Int? = nil
+        var terminalContentHasScreenshot: Bool? = nil
+        var terminalContentURLCount: Int? = nil
+        var latestSendTextRoutePath: String? = nil
     }
 
     static func format(_ input: Input, now: Date = Date()) -> String {
@@ -129,6 +140,27 @@ enum DiagnosticsSnapshotFormatter {
         } else {
             lines.append(contentsOf: input.connectionEvents)
         }
+        lines.append("")
+        lines.append("## Active route state")
+        lines.append("activeBackendID: \(input.activeBackendID ?? "<none>")")
+        lines.append("activeBackendReachability: \(input.activeBackendReachability ?? "<none>")")
+        lines.append("selectedWindowID: \(input.selectedWindowID ?? "<none>")")
+        lines.append("selectedWindowName: \(input.selectedWindowName ?? "<none>")")
+        lines.append("selectedWindowCLI: \(input.selectedWindowCLI ?? "<none>")")
+        lines.append("terminalContentWindowID: \(input.terminalContentWindowID ?? "<none>")")
+        lines.append("terminalContentAgeSeconds: \(format(input.terminalContentAgeSeconds))")
+        lines.append("terminalContentTextLength: \(format(input.terminalContentTextLength))")
+        lines.append("terminalContentHasScreenshot: \(format(input.terminalContentHasScreenshot))")
+        lines.append("terminalContentURLCount: \(format(input.terminalContentURLCount))")
+        lines.append("latestSendTextRoutePath: \(input.latestSendTextRoutePath ?? "<none>")")
         return lines.joined(separator: "\n")
+    }
+
+    private static func format(_ value: Int?) -> String {
+        value.map(String.init) ?? "<none>"
+    }
+
+    private static func format(_ value: Bool?) -> String {
+        value.map { String($0) } ?? "<none>"
     }
 }
