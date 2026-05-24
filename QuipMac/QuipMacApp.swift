@@ -1247,7 +1247,7 @@ struct QuipMacApp: App {
                         // from the visible content.
                         let urls = TerminalURLExtractor.extract(from: redacted)
                         DispatchQueue.main.async {
-                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot, urls: urls.isEmpty ? nil : urls))
+                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot, urls: urls))
                         }
                     }
                 }
@@ -1548,11 +1548,11 @@ struct QuipMacApp: App {
     /// Quip-tracked window by enabling the matching ManagedWindow, persist
     /// the sessionId so the attachment survives Quip restarts, and
     /// Phone tapped a prompt — look up the body and inject it into the
-    /// requested window via the existing keystrokeInjector path. Same
-    /// route SendTextMessage uses, so prompt-library payloads honor the
-    /// per-terminal-app shape (iTerm2 AppleScript, Claude Desktop
-    /// clipboard-paste, Terminal.app keystrokes). pressReturn defaults to
-    /// false so the user can review before submitting. (wishlist §57)
+    /// requested window via the existing keystrokeInjector path. Mirrors the
+    /// Codex-aware `send_text` branch: Codex in iTerm2 needs a real paste event
+    /// while Claude/shell sessions still use the direct sendText path.
+    /// pressReturn defaults to false so the user can review before submitting.
+    /// (wishlist §57)
     @MainActor
     private func handlePastePrompt(_ msg: PastePromptMessage) {
         guard let body = promptLibrary.body(for: msg.id), !body.isEmpty else {
@@ -1562,12 +1562,24 @@ struct QuipMacApp: App {
         ensureITermSessionResolved(for: msg.windowId) { window in
             let termApp = self.terminalAppForWindow(window)
             self.windowManager.focusWindow(msg.windowId)
-            let result = self.keystrokeInjector.sendText(
-                body, to: msg.windowId, pressReturn: msg.pressReturn,
-                terminalApp: termApp, windowName: window.name,
-                cgWindowNumber: window.windowNumber,
-                iterm2SessionId: window.iterm2SessionId
-            )
+            let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+            let result: KeystrokeInjector.InjectionResult
+            if cliKind == .codex && termApp == .iterm2 {
+                NSLog("[Quip] paste_prompt routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
+                result = self.keystrokeInjector.pasteText(
+                    body, to: msg.windowId, pressReturn: msg.pressReturn,
+                    terminalApp: termApp,
+                    iterm2SessionId: window.iterm2SessionId
+                )
+            } else {
+                NSLog("[Quip] paste_prompt routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
+                result = self.keystrokeInjector.sendText(
+                    body, to: msg.windowId, pressReturn: msg.pressReturn,
+                    terminalApp: termApp, windowName: window.name,
+                    cgWindowNumber: window.windowNumber,
+                    iterm2SessionId: window.iterm2SessionId
+                )
+            }
             if !result.success {
                 print("[Quip] paste_prompt FAILED: \(result.error ?? "unknown")")
             }

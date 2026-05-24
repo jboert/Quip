@@ -40,7 +40,7 @@ final class QAModePerWindowContentTests: XCTestCase {
             windowId: "win-B",
             text: "beta output",
             screenshot: nil,
-            urls: [],
+            urls: nil,
             into: &text, &screenshot, &urls
         )
 
@@ -49,14 +49,50 @@ final class QAModePerWindowContentTests: XCTestCase {
         XCTAssertEqual(screenshot["win-A"], "data:imageA")
         XCTAssertNil(screenshot["win-B"])
         XCTAssertEqual(urls["win-A"], ["http://localhost:3000"])
-        // Sticky semantics: empty urls leaves slot unwritten (no prior, so nil).
+        // Backward compatibility: nil urls means an older Mac omitted the field.
         XCTAssertNil(urls["win-B"])
     }
 
     /// A refresh whose Mac-side capture transiently fails (nil/empty screenshot
-    /// or empty urls) must not drop the prior content. Otherwise the QA pane
-    /// blanks for one tick every time a screencapture call hiccups.
-    func testApplyContentIsStickyOnNilScreenshotAndEmptyURLs() {
+    /// or omitted urls) must not drop the prior content. Otherwise the QA pane
+    /// blanks for one tick every time a screencapture call hiccups. An explicit
+    /// empty URL list is different: it means the current scrape has no URLs and
+    /// should clear the tray.
+    func testApplyContentIsStickyOnNilScreenshotAndOmittedURLs() {
+        var text: [String: String] = [:]
+        var screenshot: [String: String] = [:]
+        var urls: [String: [String]] = [:]
+
+        ContentMapMutations.applyContent(
+            windowId: "win-A",
+            text: "first",
+            screenshot: "data:imageA",
+            urls: ["http://localhost:3000"],
+            into: &text, &screenshot, &urls
+        )
+        ContentMapMutations.applyContent(
+            windowId: "win-A",
+            text: "second",
+            screenshot: nil,
+            urls: nil,
+            into: &text, &screenshot, &urls
+        )
+
+        XCTAssertEqual(text["win-A"], "second", "text always overwrites")
+        XCTAssertEqual(screenshot["win-A"], "data:imageA", "nil screenshot must not clear prior")
+        XCTAssertEqual(urls["win-A"], ["http://localhost:3000"], "omitted urls must not clear prior")
+
+        ContentMapMutations.applyContent(
+            windowId: "win-A",
+            text: "third",
+            screenshot: "",
+            urls: nil,
+            into: &text, &screenshot, &urls
+        )
+        XCTAssertEqual(screenshot["win-A"], "data:imageA", "empty-string screenshot must not clear prior")
+    }
+
+    func testExplicitEmptyURLsClearPriorTray() {
         var text: [String: String] = [:]
         var screenshot: [String: String] = [:]
         var urls: [String: [String]] = [:]
@@ -76,18 +112,7 @@ final class QAModePerWindowContentTests: XCTestCase {
             into: &text, &screenshot, &urls
         )
 
-        XCTAssertEqual(text["win-A"], "second", "text always overwrites")
-        XCTAssertEqual(screenshot["win-A"], "data:imageA", "nil screenshot must not clear prior")
-        XCTAssertEqual(urls["win-A"], ["http://localhost:3000"], "empty urls must not clear prior")
-
-        ContentMapMutations.applyContent(
-            windowId: "win-A",
-            text: "third",
-            screenshot: "",
-            urls: [],
-            into: &text, &screenshot, &urls
-        )
-        XCTAssertEqual(screenshot["win-A"], "data:imageA", "empty-string screenshot must not clear prior")
+        XCTAssertEqual(urls["win-A"], [], "explicit empty urls must clear stale tray entries")
     }
 
     /// Pair-clear purges both windowIds' slots so v1's "exit QA returns to grid"

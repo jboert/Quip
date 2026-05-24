@@ -856,7 +856,7 @@ final class BackendConnectionManager {
             if let screenshot, !screenshot.isEmpty {
                 session.terminalContentScreenshot = screenshot
             }
-            if let urls, !urls.isEmpty {
+            if let urls {
                 session.terminalContentURLs = urls
             }
             self.onTerminalContent?(session, windowId, content, screenshot, urls)

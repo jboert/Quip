@@ -103,7 +103,7 @@ Response to `request_content`. Contains the last ~200 lines of terminal output, 
 }
 ```
 
-`screenshot` is `null` when capture is unavailable (e.g., Screen Recording permission not granted). `urls` is optional for backward compat with pre-tray Mac builds.
+`screenshot` is `null` when capture is unavailable (e.g., Screen Recording permission not granted). `urls` is optional for backward compat with pre-tray Mac builds; modern Mac builds send an explicit empty list when the current scrape has no URLs so clients can clear stale tray pills.
 
 ### output_delta
 

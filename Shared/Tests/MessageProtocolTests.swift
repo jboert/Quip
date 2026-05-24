@@ -621,6 +621,20 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(restored.screenshot, "iVBORw0KGgoAAAANSUhEUg==")
     }
 
+    func testTerminalContentMessagePreservesExplicitEmptyURLs() throws {
+        let original = TerminalContentMessage(
+            windowId: "w1",
+            content: "$ pwd\n",
+            urls: []
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let dict = try jsonDict(from: data)
+        XCTAssertNotNil(dict["urls"], "modern Mac builds send [] so iOS can clear a stale URL tray")
+
+        let restored = try XCTUnwrap(MessageCoder.decode(TerminalContentMessage.self, from: data))
+        XCTAssertEqual(restored.urls, [])
+    }
+
     // MARK: - Cross-platform JSON key compatibility
 
     func testSortedKeysEncoding() throws {

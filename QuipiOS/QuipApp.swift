@@ -33,22 +33,23 @@ class AppOrientationDelegate: NSObject, UIApplicationDelegate {
 /// QA mode (and the inline single-window flow) read through. Pulled out
 /// of MainiOSView so unit tests don't have to instantiate the whole view.
 enum ContentMapMutations {
-    /// Sticky writes for screenshot/urls so a refresh whose capture transiently
-    /// fails (Mac sends nil/empty) does not blank the pane. Matches the legacy
-    /// single-state semantics in `onTerminalContent`. Text always overwrites
-    /// (Mac always sends current text).
+    /// Sticky writes for screenshots so a refresh whose capture transiently
+    /// fails (Mac sends nil/empty) does not blank the pane. URL lists are
+    /// optional for wire compatibility: nil means "older Mac omitted this
+    /// field", while an explicit empty list means "current scrape has no URLs"
+    /// and must clear the tray.
     static func applyContent(
         windowId: String,
         text: String?,
         screenshot: String?,
-        urls: [String],
+        urls: [String]?,
         into textMap: inout [String: String],
         _ screenshotMap: inout [String: String],
         _ urlsMap: inout [String: [String]]
     ) {
         if let text { textMap[windowId] = text }
         if let screenshot, !screenshot.isEmpty { screenshotMap[windowId] = screenshot }
-        if !urls.isEmpty { urlsMap[windowId] = urls }
+        if let urls { urlsMap[windowId] = urls }
     }
 
     static func purgePairContent(
@@ -571,7 +572,7 @@ struct QuipApp: App {
                 if let screenshot, !screenshot.isEmpty {
                     terminalContentScreenshot = screenshot
                 }
-                if let urls, !urls.isEmpty {
+                if let urls {
                     terminalContentURLs = urls
                 }
                 // Per-windowId map writes (dual-state: single-state reads still active
@@ -580,7 +581,7 @@ struct QuipApp: App {
                     windowId: windowId,
                     text: content,
                     screenshot: screenshot.flatMap { $0.isEmpty ? nil : $0 },
-                    urls: urls ?? [],
+                    urls: urls,
                     into: &terminalContentTextById,
                     &terminalContentScreenshotById,
                     &terminalContentURLsById
