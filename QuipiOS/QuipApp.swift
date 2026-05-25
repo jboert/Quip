@@ -992,6 +992,7 @@ enum PTTReadiness: String, Equatable, CaseIterable {
             switch selectedCLI {
             case .claude:  return "claude"
             case .shell:   return "shell"
+            case .cursor:  return "cursor"
             case .none:    return "?"
             case .codex:   return nil  // Defensive: classify() shouldn't put us here
             }
@@ -1150,6 +1151,7 @@ struct MainiOSView: View {
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
     @AppStorage("spawnAgent") private var spawnAgentRaw: String = SpawnAgent.claude.rawValue
+    @AppStorage(LabsFlags.cursorAgent) private var labsCursorAgent = false
     /// Which tab the Spawn sheet is on. "new" shows project directories
     /// (classic path), "attach" shows the list of iTerm windows currently
     /// open on the Mac that Quip isn't already tracking.
@@ -1744,7 +1746,9 @@ struct MainiOSView: View {
     private var spawnSheetNewTab: some View {
         VStack(spacing: 0) {
             Picker("Agent", selection: $spawnAgentRaw) {
-                ForEach(SpawnAgent.allCases, id: \.self) { agent in
+                // Cursor is gated behind the Labs flag (§7.4); everything else
+                // always shows.
+                ForEach(SpawnAgent.allCases.filter { $0 != .cursor || labsCursorAgent }, id: \.self) { agent in
                     Text(agent.displayName).tag(agent.rawValue)
                 }
             }
@@ -3887,6 +3891,8 @@ struct MainiOSView: View {
             return .claude
         case .codex:
             return .codex
+        case .cursor:
+            return .cursor
         case .shell:
             return .terminal
         case nil:
@@ -5662,6 +5668,9 @@ struct SettingsSheet: View {
                     Text("Notifications")
                 }
 
+                // Quip Labs — opt-in beta features, all off by default. (§0)
+                LabsSection()
+
                 // Prompts — Mac-managed library of paste-and-run prompts
                 // (~/Library/Application Support/Quip/prompts/*.txt).
                 // Tap a row → Mac sendText's the body into the active
@@ -7005,6 +7014,7 @@ extension SpawnAgent {
         case .claude: return "Claude"
         case .codex: return "Codex"
         case .terminal: return "Terminal"
+        case .cursor: return "Cursor"
         }
     }
 }

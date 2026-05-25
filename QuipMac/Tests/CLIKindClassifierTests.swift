@@ -66,4 +66,30 @@ final class CLIKindClassifierTests: XCTestCase {
         XCTAssertFalse(TerminalStateDetector.isAIProcess(comm: "vim"))
         XCTAssertFalse(TerminalStateDetector.isAIProcess(comm: "zsh"))
     }
+
+    // MARK: - Cursor (§7.4)
+
+    func test_cursor_classifiesCursor() {
+        let kids = [proc("zsh"), proc("cursor-agent")]
+        XCTAssertEqual(TerminalStateDetector.classifyCLI(children: kids), .cursor)
+    }
+
+    func test_cursorUnderNode_classifiesCursor_notClaude() {
+        // Cursor's agent CLI can run as a node process — the cursor-agent
+        // match must outrank the node→claude fallback, mirroring codex.
+        let kids = [proc("node /opt/cursor/cursor-agent")]
+        XCTAssertEqual(TerminalStateDetector.classifyCLI(children: kids), .cursor,
+                       "cursor-agent match must outrank node→claude")
+    }
+
+    func test_codexAndCursor_classifiesCodex_byOrder() {
+        // Codex retains top precedence; cursor sits just below it.
+        let kids = [proc("cursor-agent"), proc("codex")]
+        XCTAssertEqual(TerminalStateDetector.classifyCLI(children: kids), .codex)
+    }
+
+    func test_isAIProcess_matchesCursor() {
+        XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "cursor-agent"))
+        XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "node /opt/cursor/cursor-agent"))
+    }
 }

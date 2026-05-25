@@ -1099,7 +1099,11 @@ struct QuipMacApp: App {
                                 at: savedURL, to: msg.windowId,
                                 terminalApp: termApp, iterm2SessionId: window.iterm2SessionId
                             )
-                        case .claude, .shell:
+                        case .claude, .shell, .cursor:
+                            // Cursor's TUI takes a typed absolute path like
+                            // Claude Code (not pasted bytes like Codex).
+                            // Verify on-device; move to the .codex branch if
+                            // Cursor needs clipboard image paste instead.
                             let textToInject = savedURL.path + " "
                             result = self.keystrokeInjector.sendText(
                                 textToInject, to: msg.windowId, pressReturn: false,
@@ -2192,6 +2196,8 @@ struct QuipMacApp: App {
         switch agent {
         case .codex:
             return "codex"
+        case .cursor:
+            return "cursor-agent"
         case .terminal:
             return ""
         case .claude, .none:

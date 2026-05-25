@@ -368,6 +368,9 @@ final class TerminalStateDetector {
     nonisolated static func classifyCLI(children: [ProcessInfo]) -> CLIKind {
         let comms = children.map { $0.command.lowercased() }
         if comms.contains(where: { $0.contains("codex") }) { return .codex }
+        // cursor-agent before the node→claude fallback: Cursor's CLI may run
+        // under node, and the specific match must win (mirrors codex). (§7.4)
+        if comms.contains(where: { $0.contains("cursor-agent") }) { return .cursor }
         if comms.contains(where: { $0.contains("claude") || $0.contains("node") }) { return .claude }
         return .shell
     }
@@ -377,6 +380,7 @@ final class TerminalStateDetector {
     /// matches the same set as before plus codex.
     nonisolated static func isAIProcess(comm: String) -> Bool {
         comm.contains("claude") || comm.contains("node") || comm.contains("codex")
+            || comm.contains("cursor-agent")
     }
 
     // MARK: - Process Info

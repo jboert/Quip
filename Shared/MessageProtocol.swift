@@ -34,6 +34,10 @@ enum CLIKind: String, Codable, Sendable, CaseIterable {
     case claude
     case codex
     case shell
+    /// Cursor's agent CLI (`cursor-agent`). Routed like Claude Code by
+    /// default (typed path, not pasted bytes) — its TUI accepts an inline
+    /// absolute path. Added behind the iOS `labs.cursorAgent` flag. (§7.4)
+    case cursor
 }
 
 /// Agent/command preset for newly spawned terminal windows.
@@ -44,6 +48,9 @@ enum SpawnAgent: String, Codable, Sendable, CaseIterable {
     case claude
     case codex
     case terminal
+    /// Spawn a Cursor agent session (`cursor-agent`). Surfaced in the iOS
+    /// new-session picker only when the `labs.cursorAgent` flag is on. (§7.4)
+    case cursor
 }
 
 struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
