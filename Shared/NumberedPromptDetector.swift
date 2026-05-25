@@ -35,6 +35,16 @@ enum NumberedPromptDetector {
     /// Detect a numbered prompt block. Returns the contiguous option
     /// numbers (1-based, ascending) or nil when no prompt detected.
     static func detect(in content: String) -> [Int]? {
+        bestRun(in: content)?.map(\.number)
+    }
+
+    private struct Match { let number: Int; let hasMarker: Bool; let normalized: String }
+
+    /// Find the longest contiguous run of numbered-option lines that contains
+    /// at least one `❯`/`>` marker (Claude's prompt block). Shared by `detect`
+    /// (→ numbers) and `fingerprint` (→ normalized option text) so the two can
+    /// never disagree about what the current prompt is.
+    private static func bestRun(in content: String) -> [Match]? {
         guard !content.isEmpty else { return nil }
 
         // Take the last `scanLineLimit` lines so we don't false-positive
@@ -47,16 +57,21 @@ enum NumberedPromptDetector {
         // renders the cursor marker on the currently-selected option,
         // so a marker presence inside the block proves it's a real
         // prompt vs prose.
-        struct Match { let number: Int; let hasMarker: Bool }
         var current: [Match] = []
-        var bestRun: [Match] = []
+        var best: [Match] = []
+        func flush() {
+            if current.contains(where: \.hasMarker), current.count > best.count {
+                best = current
+            }
+        }
         for line in tail {
             if let (n, marker) = parseNumberedLine(line) {
+                let m = Match(number: n, hasMarker: marker, normalized: normalizedOptionLine(line))
                 if let last = current.last, n == last.number + 1 {
-                    current.append(Match(number: n, hasMarker: marker))
+                    current.append(m)
                 } else if n == 1 {
                     // Start of a new candidate block.
-                    current = [Match(number: 1, hasMarker: marker)]
+                    current = [m]
                 } else {
                     // Out-of-order numbering — discard.
                     current = []
@@ -64,19 +79,58 @@ enum NumberedPromptDetector {
             } else if !current.isEmpty {
                 // Non-matching line breaks the run; remember it if it
                 // beats the previous best, then reset.
-                if current.contains(where: \.hasMarker), current.count > bestRun.count {
-                    bestRun = current
-                }
+                flush()
                 current = []
             }
         }
-        // Flush trailing run.
-        if current.contains(where: \.hasMarker), current.count > bestRun.count {
-            bestRun = current
-        }
+        flush()  // trailing run
 
-        guard !bestRun.isEmpty else { return nil }
-        return bestRun.map(\.number)
+        return best.isEmpty ? nil : best
+    }
+
+    /// Normalize one option line to its stable identity: ANSI-stripped,
+    /// trimmed, leading `❯`/`>` marker removed, internal whitespace collapsed.
+    /// Dropping the marker is what makes the fingerprint stable as the
+    /// highlight moves between options.
+    private static func normalizedOptionLine(_ line: String) -> String {
+        var s = stripANSI(line).trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("❯ ") { s.removeFirst(2) }
+        else if s.hasPrefix("> ") { s.removeFirst(2) }
+        return s.split(whereSeparator: { $0 == " " || $0 == "\t" }).joined(separator: " ")
+    }
+
+    /// Stable identity of the *set of options* currently on screen, used by
+    /// the Mac to re-validate that a phone's one-tap answer still matches the
+    /// live prompt before injecting (§3.2). Hashes the normalized option lines
+    /// (ANSI-stripped, marker-dropped, whitespace-collapsed) so the value is
+    /// stable as the `❯` highlight moves between options, but changes when the
+    /// option text or count changes. Returns nil when no numbered prompt is
+    /// present. FNV-1a → identical across platforms, no dependencies.
+    static func fingerprint(in content: String) -> String? {
+        guard let run = bestRun(in: content) else { return nil }
+        return fnv1a(run.map(\.normalized).joined(separator: "\n"))
+    }
+
+    /// Detect a free-form yes/no prompt (e.g. "Continue? (y/n)") as opposed to
+    /// a numbered list. Guards `press_y`/`press_n` re-validation. (§3.2)
+    static func detectYesNo(in content: String) -> Bool {
+        guard !content.isEmpty else { return false }
+        for line in content.components(separatedBy: "\n").suffix(scanLineLimit) {
+            let s = stripANSI(line).lowercased()
+            if s.contains("(y/n)") || s.contains("(yes/no)") { return true }
+        }
+        return false
+    }
+
+    /// FNV-1a 64-bit hash → hex. Stable, dependency-free, identical on Mac and
+    /// iOS so a fingerprint computed on the phone matches the Mac's recompute.
+    private static func fnv1a(_ s: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in s.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return String(hash, radix: 16)
     }
 
     /// Parse one line and return (number, hasMarker) if it looks like a
