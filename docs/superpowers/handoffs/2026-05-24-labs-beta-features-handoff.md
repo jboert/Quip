@@ -31,13 +31,15 @@ Tests after `9003bcd`: **QuipMac 346 / QuipiOS 367, all green.** Branch `eb-bran
   **no manual `.pbxproj` surgery**. Commit the regenerated `.pbxproj`.
 - **iOS unit tests need watchOS 26.5 runtime** (the iOS scheme builds the embedded Watch app).
   Installed this session (`xcodebuild -downloadPlatform watchOS`). Already present now.
-- **Dedicated QA sim is gone.** Use `iPhone 17 Pro 26.4.1` UDID `3D46A3C6-01E3-42FB-8E08-DC8B259FCE49`.
-  (Saved-memory default `D853A0…` is stale.)
+- **Dedicated QA sim recreated** 2026-05-24 (the old `D853A0…` clone was gone):
+  `Quip QA — iPhone 17 Pro Max` UDID `3B2ACF04-1B0A-4842-827C-5B1699B8D4F8` (iOS 26.4).
+  (Freshly created — not yet booted/built against; test runs this session used the temporary
+  `iPhone 17 Pro 26.4.1` `3D46A3C6-…`.)
 - **Cursor CLI not installed here** → `cursor-agent` process name + paste-vs-keystroke routing
   are **assumptions**; verify on a device with Cursor. Currently routed like Claude (sendText).
 - Test commands (mirror CI):
   - `xcodebuild test -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO`
-  - `xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,id=3D46A3C6-01E3-42FB-8E08-DC8B259FCE49' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""`
+  - `xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,id=3B2ACF04-1B0A-4842-827C-5B1699B8D4F8' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""`
   - Fast inner loop: add `-only-testing:QuipMacTests/<SuiteName>`.
 
 ## What shipped in `9003bcd`

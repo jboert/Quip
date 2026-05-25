@@ -29,8 +29,9 @@ Full handoff: `handoffs/2026-05-24-labs-beta-features-handoff.md`. Tests: QuipMa
 
 ### Notes for next session
 - Projects are xcodegen-globbed → new/moved files need only `xcodegen generate` (no pbxproj surgery).
-- iOS tests require watchOS 26.5 runtime (installed). Use sim UDID `3D46A3C6-01E3-42FB-8E08-DC8B259FCE49`
-  (dedicated QA sim is gone). Final on-device verify needs one Mac rebuild (re-grant TCC).
+- iOS tests require watchOS 26.5 runtime (installed). Dedicated QA sim recreated 2026-05-24:
+  `Quip QA — iPhone 17 Pro Max` UDID `3B2ACF04-1B0A-4842-827C-5B1699B8D4F8` (iOS 26.4).
+  Final on-device verify needs one Mac rebuild (re-grant TCC).
 
 ---
 
