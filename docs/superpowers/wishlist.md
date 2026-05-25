@@ -6,6 +6,34 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-05-24 (Quip Labs beta features — §0 + §7.4 shipped)
+
+HEAD `9003bcd`. Four-feature Labs effort, built by **extension** (no parallel systems).
+Design: `specs/2026-05-24-quip-labs-beta-features-design.md`. Plan: `~/.claude/plans/polished-wondering-garden.md`.
+Full handoff: `handoffs/2026-05-24-labs-beta-features-handoff.md`. Tests: QuipMac 346 / QuipiOS 367 green.
+
+### Shipped (`9003bcd`)
+- **§0 Quip Labs** — opt-in Settings → Quip Labs section; `LabsFlags` registry; all flags default off
+  (`labs.cursorAgent`, `labs.oneTapAnswer`, `labs.promptPackSharing`).
+- **§7.4 Cursor agent** — `CLIKind.cursor` + `SpawnAgent.cursor`; Mac classifies `cursor-agent`
+  (below codex, above node→claude) + routes/spawns it; Cursor in the iOS agent picker gated by
+  `labs.cursorAgent`. ⚠️ Cursor not installed on dev box — process name + routing are assumptions,
+  verify on a device with Cursor (currently routed like Claude / sendText).
+
+### In progress / next (this effort)
+- **§3.2 One-tap answers** — NOT STARTED. Move `NumberedPromptDetector` → `Shared/`, add
+  `fingerprint`/`detectYesNo`, dynamic push categories, Mac re-validation, in-app buttons. Steps in plan/handoff.
+- **§6.1 Prompt/hot-button packs** — NOT STARTED. `SharedPromptPack` (iOS-only, reuses
+  `PromptEntry`+`CustomButton`), optional prompt metadata via on-disk front-matter, Share Sheet
+  export + `.quippack` import. Steps in plan/handoff.
+
+### Notes for next session
+- Projects are xcodegen-globbed → new/moved files need only `xcodegen generate` (no pbxproj surgery).
+- iOS tests require watchOS 26.5 runtime (installed). Use sim UDID `3D46A3C6-01E3-42FB-8E08-DC8B259FCE49`
+  (dedicated QA sim is gone). Final on-device verify needs one Mac rebuild (re-grant TCC).
+
+---
+
 ## Session log — 2026-05-07 cont-3 (QA mode v1.5 — live content + focus mode + a11y)
 
 HEAD `4f2c8c8` (pushed pending). Eleven-task plan from `docs/superpowers/plans/2026-05-07-qa-mode-v1.5.md` driven via subagent-driven-development. 354/354 iOS tests passing, 335/335 Mac tests passing.
