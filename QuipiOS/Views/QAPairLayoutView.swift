@@ -150,7 +150,7 @@ struct QAPairLayoutView: View {
             windowColor: Color(hex: window.color),
             isExpanded: .constant(false),
             onRefresh: { onRefresh() },
-            onSendAction: { _ in },
+            onSendAction: { _, _ in },
             onCycleWindow: nil
         )
         .frame(width: max(0, width))

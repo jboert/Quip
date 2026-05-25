@@ -3188,9 +3188,9 @@ struct MainiOSView: View {
             onRefresh: {
                 if let wid = selectedWindowId { onRequestContent(wid) }
             },
-            onSendAction: { action in
+            onSendAction: { action, fingerprint in
                 if let wid = selectedWindowId {
-                    client.send(QuickActionMessage(windowId: wid, action: action))
+                    client.send(QuickActionMessage(windowId: wid, action: action, promptFingerprint: fingerprint))
                     // 300ms is enough for the keystroke to reach iTerm and
                     // for Claude to render its first byte; asking sooner
                     // mostly captures the pre-action state. The Mac throttle
@@ -4676,7 +4676,10 @@ struct InlineTerminalContent: View {
     let windowColor: Color
     @Binding var isExpanded: Bool
     var onRefresh: () -> Void
-    var onSendAction: (String) -> Void
+    /// (action, promptFingerprint?) — fingerprint is non-nil only for one-tap
+    /// answers when the Labs flag is on, so the Mac re-validates. (§3.2)
+    var onSendAction: (String, String?) -> Void
+    @AppStorage(LabsFlags.oneTapAnswer) private var labsOneTapAnswer = false
     /// Swipe handler — `direction` is +1 (swipe left = next window) or -1
     /// (swipe right = previous window), matching `MainiOSView.cycleWindow`.
     /// Optional for previews / non-swiping callers.
@@ -4872,7 +4875,7 @@ struct InlineTerminalContent: View {
                 // Shift+PageUp/Down or Cmd+Home/End via System Events.
                 // Mac throttles per-window so rapid taps still fire.
                 Button {
-                    onSendAction("scroll_page_up")
+                    onSendAction("scroll_page_up", nil)
                 } label: {
                     Image(systemName: "chevron.up")
                         .font(.system(size: 13))
@@ -4883,10 +4886,10 @@ struct InlineTerminalContent: View {
                 .accessibilityAddTraits(.isButton)
                 .simultaneousGesture(
                     LongPressGesture(minimumDuration: 0.4)
-                        .onEnded { _ in onSendAction("scroll_top") }
+                        .onEnded { _ in onSendAction("scroll_top", nil) }
                 )
                 Button {
-                    onSendAction("scroll_page_down")
+                    onSendAction("scroll_page_down", nil)
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 13))
@@ -4897,7 +4900,7 @@ struct InlineTerminalContent: View {
                 .accessibilityAddTraits(.isButton)
                 .simultaneousGesture(
                     LongPressGesture(minimumDuration: 0.4)
-                        .onEnded { _ in onSendAction("scroll_bottom") }
+                        .onEnded { _ in onSendAction("scroll_bottom", nil) }
                 )
                 Button { onRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
@@ -4916,33 +4919,56 @@ struct InlineTerminalContent: View {
             // Hidden entirely when no prompt detected — same compact-UI
             // discipline as the rest of the panel.
             if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
-                HStack(spacing: 6) {
-                    ForEach(options, id: \.self) { n in
-                        Button {
-                            // sendText "<n>" + press_return — same shape
-                            // as the press_y / press_n quick actions.
-                            // Phone-side helper would be cleaner; for
-                            // v1 reuse the existing action channel by
-                            // emitting a `select_<n>` action that the
-                            // Mac handler maps to sendText.
-                            onSendAction("select_\(n)")
-                        } label: {
-                            Text("\(n)")
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(Color.white)
-                                .frame(width: 28, height: 24)
-                                .background(Color.accentColor.opacity(0.85))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                if labsOneTapAnswer {
+                    // §3.2 Labs — prominent, equal-width answer buttons with the
+                    // prompt fingerprint so the Mac re-validates before injecting.
+                    let fingerprint = NumberedPromptDetector.fingerprint(in: content)
+                    HStack(spacing: 8) {
+                        ForEach(options, id: \.self) { n in
+                            Button {
+                                onSendAction("select_\(n)", fingerprint)
+                            } label: {
+                                Text("\(n)")
+                                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.white)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 40)
+                                    .background(Color.accentColor)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            .accessibilityLabel("Pick option \(n)")
+                            .accessibilityHint("Submit \(n) to the current prompt")
+                            .accessibilityAddTraits(.isButton)
                         }
-                        .accessibilityLabel("Pick option \(n)")
-                        .accessibilityHint("Submit \(n) to the current Claude prompt")
-                        .accessibilityAddTraits(.isButton)
                     }
-                    Spacer()
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
+                    .padding(.bottom, 4)
+                } else {
+                    // §18 — compact chips (default). Tap emits `select_<n>`;
+                    // no fingerprint → Mac injects without re-validation.
+                    HStack(spacing: 6) {
+                        ForEach(options, id: \.self) { n in
+                            Button {
+                                onSendAction("select_\(n)", nil)
+                            } label: {
+                                Text("\(n)")
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(Color.white)
+                                    .frame(width: 28, height: 24)
+                                    .background(Color.accentColor.opacity(0.85))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            .accessibilityLabel("Pick option \(n)")
+                            .accessibilityHint("Submit \(n) to the current Claude prompt")
+                            .accessibilityAddTraits(.isButton)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+                    .padding(.bottom, 2)
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 4)
-                .padding(.bottom, 2)
             }
 
             // URL tray above the content area so users can open URLs from
