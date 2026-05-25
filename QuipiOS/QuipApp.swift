@@ -83,6 +83,15 @@ struct QuipApp: App {
     @State private var liveActivity = LiveActivityService()
     @State private var prefsSync = PreferencesSyncService()
 
+    // §6.1 prompt/button pack import. Same @AppStorage keys MainiOSView uses,
+    // so a mutation here syncs to both views (and to the Mac via the snapshot).
+    @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
+    @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
+    @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
+    @State private var importablePack: ImportablePack?
+    @State private var importPackErrorMsg: String?
+    @State private var showImportPackError = false
+
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
     @State private var monitorName: String = "Mac"
@@ -299,6 +308,12 @@ struct QuipApp: App {
                 if !enabled { liveActivity.endAll() }
             }
             .onOpenURL { url in
+                // §6.1 — "Open in Quip" for a shared .quippack file. Handle
+                // before the quip:// scheme guard (file URLs have no scheme).
+                if url.isFileURL && url.pathExtension == SharedPromptPack.fileExtension {
+                    handleIncomingPack(url)
+                    return
+                }
                 // Deep link from the Live Activity island / lock screen:
                 //   quip://window/<windowId> — select that window + open input
                 //   quip://perms            — pop the SettingsSheet open (Mac
@@ -322,6 +337,14 @@ struct QuipApp: App {
                 attentionCenter.clearAttention(for: windowId)
                 showTextInput = true
                 client.send(SelectWindowMessage(windowId: windowId))
+            }
+            .sheet(item: $importablePack) { item in
+                ImportPackSheet(pack: item.pack) { applyImportedPack(item.pack) }
+            }
+            .alert("Couldn't import pack", isPresented: $showImportPackError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(importPackErrorMsg ?? "")
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
                 // Always call resumeAfterBackground so the volume KVO observer
@@ -357,6 +380,60 @@ struct QuipApp: App {
     }
 
     /// True when the current wall-clock hour falls inside the user's
+    // MARK: - §6.1 Prompt/button pack import
+
+    /// Decode an incoming `.quippack` file and present the import preview.
+    /// Never applies silently; bad / newer / empty files surface an alert.
+    private func handleIncomingPack(_ url: URL) {
+        guard labsPromptPacks else {
+            importPackErrorMsg = "Enable Settings → Quip Labs → Prompt & button packs to import."
+            showImportPackError = true
+            return
+        }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            let pack = try SharedPromptPack.decode(data)
+            guard !pack.isEmpty else {
+                importPackErrorMsg = "That pack has no prompts or buttons."
+                showImportPackError = true
+                return
+            }
+            importablePack = ImportablePack(pack: pack)
+        } catch SharedPromptPack.PackError.unsupportedSchema {
+            importPackErrorMsg = "This pack was made by a newer version of Quip."
+            showImportPackError = true
+        } catch {
+            importPackErrorMsg = "That file isn't a valid Quip pack."
+            showImportPackError = true
+        }
+    }
+
+    /// Apply a confirmed pack: prompts → Mac via PutPromptMessage (non-colliding
+    /// ids), buttons → appended locally with fresh UUIDs (auto-syncs to Mac via
+    /// the preferences snapshot).
+    private func applyImportedPack(_ pack: SharedPromptPack) {
+        var existing = Set(client.promptLibrary.map(\.id))
+        for p in pack.prompts {
+            let id = SharedPromptPack.uniquePromptID(desired: p.id, existing: existing)
+            existing.insert(id)
+            client.send(PutPromptMessage(id: id, label: p.label, body: p.body,
+                                         tags: p.tags, targetAgent: p.targetAgent, description: p.description))
+        }
+        if !pack.buttons.isEmpty {
+            var defs = CustomButtonStore.decode(customButtonsJSON)
+            var slotList = QuickSlotStore.decode(quickSlotsJSON)
+            for b in pack.buttons {
+                let r = SharedPromptPack.reminted(b)
+                defs.append(r)
+                slotList.append(.custom(r.id))
+            }
+            customButtonsJSON = CustomButtonStore.encode(defs)
+            quickSlotsJSON = QuickSlotStore.encode(slotList)
+        }
+    }
+
     /// quiet-hours window. Handles both same-day (9-17) and overnight
     /// (22-7) ranges. Mirrors the Mac-side `DevicePushPreferences.isQuietNow`
     /// so both the APNs path and the Live Activity path agree.
@@ -6189,6 +6266,8 @@ struct QuickButtonsSheet: View {
     /// (iOS Menu has a fixed render window and clips long labels mid-word).
     @State private var showAddSheet: Bool = false
     @State private var addSheetQuery: String = ""
+    @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
+    @State private var shareItem: PackShareItem?
 
     // Cached snapshots of the @AppStorage-backed JSON. Computed-property
     // versions re-decoded on EVERY body evaluation, and any observable
@@ -6311,6 +6390,23 @@ struct QuickButtonsSheet: View {
             ToolbarItem(placement: .topBarTrailing) {
                 addMenu
             }
+            // §6.1 — export custom buttons as a shareable .quippack (Labs).
+            if labsPromptPacks && !customs.isEmpty {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        let pack = SharedPromptPack(name: "Quip Buttons", prompts: [], buttons: customs)
+                        if let url = try? pack.writeToTemp(filename: "quip-buttons") {
+                            shareItem = PackShareItem(url: url)
+                        }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share buttons")
+                }
+            }
+        }
+        .sheet(item: $shareItem) { item in
+            DiagnosticsShareSheet(items: [item.url])
         }
         .onAppear { refreshSnapshots() }
         .onChange(of: quickSlotsJSON) { _, _ in refreshSlotsSnapshot() }
@@ -7615,6 +7711,8 @@ struct PromptLibrarySheet: View {
     @State private var lastFiredId: String?
     @State private var editing: PromptEntry?
     @State private var creatingNew: Bool = false
+    @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
+    @State private var shareItem: PackShareItem?
 
     var body: some View {
         List {
@@ -7668,6 +7766,21 @@ struct PromptLibrarySheet: View {
                     Image(systemName: "plus")
                 }
             }
+            // §6.1 — export the whole library as a shareable .quippack (Labs).
+            if labsPromptPacks && !client.promptLibrary.isEmpty {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        let pack = SharedPromptPack(name: "Quip Prompts",
+                                                    prompts: client.promptLibrary, buttons: [])
+                        if let url = try? pack.writeToTemp(filename: "quip-prompts") {
+                            shareItem = PackShareItem(url: url)
+                        }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share prompts")
+                }
+            }
         }
         .sheet(isPresented: $creatingNew) {
             PromptEditorSheet(initial: nil) { id, label, body in
@@ -7678,6 +7791,9 @@ struct PromptLibrarySheet: View {
             PromptEditorSheet(initial: entry) { id, label, body in
                 client.send(PutPromptMessage(id: id, label: label, body: body))
             }
+        }
+        .sheet(item: $shareItem) { item in
+            DiagnosticsShareSheet(items: [item.url])
         }
     }
 
@@ -7806,4 +7922,61 @@ struct DiagnosticsShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+/// Identifiable wrapper so a staged `.quippack` URL can drive `.sheet(item:)`. (§6.1)
+struct PackShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Identifiable wrapper for a decoded incoming pack awaiting import confirmation. (§6.1)
+struct ImportablePack: Identifiable {
+    let id = UUID()
+    let pack: SharedPromptPack
+}
+
+/// Import preview — lists what a `.quippack` contains and requires explicit
+/// confirmation (never silent). (§6.1)
+struct ImportPackSheet: View {
+    let pack: SharedPromptPack
+    var onConfirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if !pack.prompts.isEmpty {
+                    Section("Prompts (\(pack.prompts.count))") {
+                        ForEach(pack.prompts) { p in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.label).font(.system(size: 14, weight: .medium))
+                                Text(p.bodyPreview)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+                if !pack.buttons.isEmpty {
+                    Section("Buttons (\(pack.buttons.count))") {
+                        ForEach(pack.buttons) { b in
+                            Text(b.label).font(.system(size: 14))
+                        }
+                    }
+                }
+            }
+            .navigationTitle(pack.name ?? "Import Pack")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Import") { onConfirm(); dismiss() }.bold()
+                }
+            }
+        }
+    }
 }

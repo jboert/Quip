@@ -67,6 +67,23 @@ targets:
           - CFBundleURLName: com.fintechadventures.quip
             CFBundleURLSchemes:
               - quip
+        # §6.1 — register the .quippack prompt/button pack type so "Open in
+        # Quip" appears in the Share Sheet / Files for shared packs.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.fintechadventures.quip.pack
+            UTTypeDescription: Quip Pack
+            UTTypeConformsTo:
+              - public.json
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - quippack
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Quip Pack
+            LSItemContentTypes:
+              - com.fintechadventures.quip.pack
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
         NSBluetoothAlwaysUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSBluetoothPeripheralUsageDescription: Quip uses Bluetooth to discover and connect to your Mac.
         NSLocalNetworkUsageDescription: Quip connects to your Mac over the local network to control Claude Code sessions.
