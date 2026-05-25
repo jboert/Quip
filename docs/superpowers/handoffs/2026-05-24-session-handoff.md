@@ -11,13 +11,12 @@ Recap for `/clear`. Branch `eb-branch` (local, **not pushed** — eb-branch push
 > - `e36dab1` iOS: Labs-gated prominent in-app answer buttons + fingerprint
 >
 > Tests now: **QuipMac 371, QuipiOS 383, all green** (sim/unit only — still no device install; Mac app still v1.5.2).
-> **Status: §0 ✅  §7.4 ✅  §3.2 ✅  §6.1 🟡 partial.**
-> §6.1 data+model+apply-helpers shipped (`997ded0`,`436c9cb`,`da89497`); **remaining = export/import UI glue**
-> (export Share Sheet, `.quippack` UTI in Info.plist, `.onOpenURL` import branch + `ImportPackSheet`, apply wiring) —
-> precise anchors in `2026-05-24-labs-beta-features-handoff.md` §"§6.1 … UI GLUE REMAINS".
-> Tests as of `da89497`: **QuipMac 380, QuipiOS 388** green (sim/unit; still no device install; Mac app still v1.5.2).
-> Then one Mac rebuild + on-device verify (Cursor, one-tap incl. stale→"Prompt changed", pack export→import).
-> Still open: Cursor on-device verify (not installed); Mac version bump 1.5.2→1.5.4.
+> **Status: §0 ✅  §7.4 ✅  §3.2 ✅  §6.1 ✅ — ALL FOUR FEATURES DONE.**
+> §6.1 export/import UI shipped (`33694f8`): Share from prompt/button sheets → `.quippack`; import via
+> `.onOpenURL` + `ImportPackSheet`. Tests: **QuipMac 380, QuipiOS 394** green (sim/unit only).
+> **Remaining = NO code — only on-device validation:** one Mac rebuild + reinstall (re-grant TCC) then verify
+> on a device: Cursor spawn/classify, one-tap answers incl. stale→"Prompt changed", pack export→import.
+> Still open: Cursor on-device verify (not installed); Mac version bump 1.5.2→1.5.4 (Mac app still v1.5.2 — not rebuilt).
 
 ## What this session did
 Verified the app (709 tests green), then designed + began the four-feature **Quip Labs**

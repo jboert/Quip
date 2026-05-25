@@ -28,11 +28,15 @@ Full handoff: `handoffs/2026-05-24-labs-beta-features-handoff.md`. Tests: QuipMa
   Mac re-validates (`answerStillValid`) and drops stale answers with "Prompt changed — not sent";
   Labs-gated prominent in-app buttons (`labs.oneTapAnswer`). Tests: Mac 371 / iOS 383.
 
-### In progress / next (this effort)
-- **§6.1 Prompt/hot-button packs** — 🟡 PARTIAL. Data + model + apply-helpers DONE
-  (`997ded0` metadata+front-matter, `436c9cb` SharedPromptPack model, `da89497` uniquePromptID/remint).
-  REMAINING: export Share Sheet, `.quippack` UTI in Info.plist, `.onOpenURL` import branch +
-  `ImportPackSheet`, apply wiring. Full step list in `handoffs/2026-05-24-labs-beta-features-handoff.md`.
+- **§6.1 Prompt/hot-button packs** — DONE (`997ded0` metadata+front-matter, `436c9cb` SharedPromptPack
+  model, `da89497` uniquePromptID/remint, `33694f8` export/import UI). Share prompts/buttons as `.quippack`;
+  import via "Open in Quip" → preview → apply (non-colliding prompt ids, reminted button UUIDs). All
+  Labs-gated (`labs.promptPackSharing`).
+
+### All four Labs features SHIPPED — remaining is on-device validation only
+- One Mac rebuild + reinstall (re-grant Accessibility + Screen Recording), then verify on a device:
+  Cursor spawn/classify (Cursor not yet installed), one-tap answers incl. stale→"Prompt changed",
+  pack export→import. Optional: Mac version bump 1.5.2→1.5.4.
 
 ### Notes for next session
 - Projects are xcodegen-globbed → new/moved files need only `xcodegen generate` (no pbxproj surgery).

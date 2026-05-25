@@ -21,7 +21,7 @@ Implementation plan (full step list): `~/.claude/plans/polished-wondering-garden
 | §0 Quip Labs | ✅ DONE, committed `9003bcd` |
 | §7.4 Cursor | ✅ DONE, committed `9003bcd` |
 | §3.2 One-tap answers | ✅ DONE — `acf1b60`,`84c9d85`,`ab200ca`,`d113537`,`e36dab1` (Mac 371 / iOS 383) |
-| §6.1 Prompt/button packs | 🟡 PARTIAL — data+model+apply-helpers done (`997ded0`,`436c9cb`,`da89497`); export/import UI remains |
+| §6.1 Prompt/button packs | ✅ DONE — `997ded0`,`436c9cb`,`da89497`,`33694f8` (export/import UI shipped; iOS 394) |
 
 Tests after `9003bcd`: **QuipMac 346 / QuipiOS 367, all green.** Branch `eb-branch` (local, never push).
 
@@ -80,9 +80,14 @@ Detailed steps in the plan file. Summary:
 8. Tests: fingerprint stability/sensitivity/nil; `category(forOptions:)`; QuickActionMessage round-trip
    ±fingerprint; re-validation decision fn (match/mismatch/nil/N-absent); WaitingActionResponse ids.
 
-## §6.1 Prompt/hot-button packs — DATA + MODEL DONE, UI GLUE REMAINS
+## §6.1 Prompt/hot-button packs — ✅ COMPLETE
 
 **Done (committed):**
+- `33694f8` part 4 — export ("Share" in `PromptLibrarySheet` + `QuickButtonsSheet`) + import
+  (`.quippack` UTI in `project.yml`; `QuipApp.onOpenURL` file branch → `handleIncomingPack` →
+  `ImportPackSheet` preview → `applyImportedPack`). Import state/methods live on **`QuipApp`** (the
+  App struct that owns `.onOpenURL` + `client`), not `MainiOSView`.
+
 - `997ded0` part 1 — optional `tags`/`targetAgent`/`description` on `PromptEntry`+`PutPromptMessage`;
   Mac `PromptLibrary` `<!-- quip:meta -->` front-matter (`parsePrompt`/`renderFile`/`metaBlock`,
   byte-identical legacy output when no metadata); `put_prompt` dispatch forwards metadata.
