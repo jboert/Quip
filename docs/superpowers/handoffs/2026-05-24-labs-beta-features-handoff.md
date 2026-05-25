@@ -21,7 +21,7 @@ Implementation plan (full step list): `~/.claude/plans/polished-wondering-garden
 | §0 Quip Labs | ✅ DONE, committed `9003bcd` |
 | §7.4 Cursor | ✅ DONE, committed `9003bcd` |
 | §3.2 One-tap answers | ✅ DONE — `acf1b60`,`84c9d85`,`ab200ca`,`d113537`,`e36dab1` (Mac 371 / iOS 383) |
-| §6.1 Prompt/button packs | ⏳ NOT STARTED |
+| §6.1 Prompt/button packs | 🟡 PARTIAL — data+model+apply-helpers done (`997ded0`,`436c9cb`,`da89497`); export/import UI remains |
 
 Tests after `9003bcd`: **QuipMac 346 / QuipiOS 367, all green.** Branch `eb-branch` (local, never push).
 
@@ -80,15 +80,39 @@ Detailed steps in the plan file. Summary:
 8. Tests: fingerprint stability/sensitivity/nil; `category(forOptions:)`; QuickActionMessage round-trip
    ±fingerprint; re-validation decision fn (match/mismatch/nil/N-absent); WaitingActionResponse ids.
 
-## Remaining: §6.1 Prompt/hot-button packs
-Detailed steps in the plan file. Summary: `SharedPromptPack` (iOS-only file
-`QuipiOS/Services/SharedPromptPack.swift`, reuses `PromptEntry`+`CustomButton` verbatim, never on the
-wire); optional metadata (`tags`/`targetAgent`/`description`) on `PromptEntry`+`PutPromptMessage` +
-on-disk `<!-- quip:meta -->` front-matter in `PromptLibrary` (byte-identical legacy output when absent);
-export via `DiagnosticsShareSheet`; import via `.quippack` UTI in `QuipiOS/Info.plist` + file branch in
-`.onOpenURL` (`QuipApp.swift:304`) + `ImportPackSheet` preview; prompts → extended `PutPromptMessage`,
-buttons → append with reminted UUIDs to `customButtonsJSON`/`quickSlotsJSON`. Gate on
-`labs.promptPackSharing`.
+## §6.1 Prompt/hot-button packs — DATA + MODEL DONE, UI GLUE REMAINS
+
+**Done (committed):**
+- `997ded0` part 1 — optional `tags`/`targetAgent`/`description` on `PromptEntry`+`PutPromptMessage`;
+  Mac `PromptLibrary` `<!-- quip:meta -->` front-matter (`parsePrompt`/`renderFile`/`metaBlock`,
+  byte-identical legacy output when no metadata); `put_prompt` dispatch forwards metadata.
+- `436c9cb` part 2 — `QuipiOS/Services/SharedPromptPack.swift`: iOS-only Codable bundle reusing
+  `PromptEntry`+`CustomButton`, `encoded()`/`decode()` (schema guard), `writeToTemp`. Never on the wire.
+- `da89497` part 3 — `SharedPromptPack.uniquePromptID(desired:existing:)` + `reminted(_:)` (pure, tested).
+
+**Remaining (UI glue — mechanical SwiftUI, do fresh):**
+1. **Export** — add a "Share" toolbar action to `PromptLibrarySheet` (`QuipApp.swift`, search
+   `struct PromptLibrarySheet`) and `QuickButtonsSheet` (`struct QuickButtonsSheet`): build a
+   `SharedPromptPack` from selected `client.promptLibrary` entries / `CustomButton`s →
+   `pack.writeToTemp(...)` → present `DiagnosticsShareSheet` (already in `QuipApp.swift`, generic over
+   `items:[Any]`). Gate on `@AppStorage(LabsFlags.promptPackSharing)`.
+2. **Info.plist** (`QuipiOS/Info.plist`) — add `UTExportedTypeDeclarations` (`com.fintechadventures.quip.pack`,
+   conforms `public.json`/`public.data`, extension `quippack`) + `CFBundleDocumentTypes` (Editor/Owner).
+3. **Import** — extend the existing `.onOpenURL` (`QuipApp.swift:304`, currently `quip://`-only): add a
+   `url.isFileURL && url.pathExtension == "quippack"` branch FIRST → `handleIncomingPack(url)`:
+   security-scoped read → `SharedPromptPack.decode` (catch `.unsupportedSchema` → alert) → present a new
+   `ImportPackSheet` (checkbox preview, never silent). On confirm:
+   - prompts → `PutPromptMessage(id: uniquePromptID(desired:existing: Set(client.promptLibrary.map(\.id))), ...metadata)`;
+   - buttons → decode `customButtonsJSON` via `CustomButtonStore`, append `reminted(...)`, append matching
+     `.custom(uuid)` slots to `quickSlotsJSON` via `QuickSlotStore` (mirror add-custom flow), re-encode →
+     auto-syncs to Mac via `PreferencesSnapshot`.
+   - Mac offline → apply buttons (local), warn prompts need a connection.
+   Gate on `LabsFlags.promptPackSharing`.
+4. Flag already exists: `LabsFlags.promptPackSharing` (toggle live in Settings → Quip Labs).
+5. Tests to add: `ImportPackSheet` apply path is UI; keep logic in already-tested helpers. Add an
+   apply-integration test only if the apply logic gets non-trivial.
+
+After §6.1: one Mac rebuild + on-device verify (Cursor, one-tap incl. stale→"Prompt changed", pack export→import).
 
 ## Final step (after §3.2 + §6.1)
 One Mac rebuild + reinstall (re-grant Accessibility + Screen Recording per project rule), and on-device

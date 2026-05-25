@@ -11,9 +11,12 @@ Recap for `/clear`. Branch `eb-branch` (local, **not pushed** — eb-branch push
 > - `e36dab1` iOS: Labs-gated prominent in-app answer buttons + fingerprint
 >
 > Tests now: **QuipMac 371, QuipiOS 383, all green** (sim/unit only — still no device install; Mac app still v1.5.2).
-> **Status: §0 ✅  §7.4 ✅  §3.2 ✅  §6.1 ⏳ not started.**
-> **Resume next:** §6.1 prompt/hot-button packs — see `2026-05-24-labs-beta-features-handoff.md` §"Remaining: §6.1"
-> and the plan file. Then one Mac rebuild + on-device verify of everything (Cursor, one-tap incl. stale→"Prompt changed", packs).
+> **Status: §0 ✅  §7.4 ✅  §3.2 ✅  §6.1 🟡 partial.**
+> §6.1 data+model+apply-helpers shipped (`997ded0`,`436c9cb`,`da89497`); **remaining = export/import UI glue**
+> (export Share Sheet, `.quippack` UTI in Info.plist, `.onOpenURL` import branch + `ImportPackSheet`, apply wiring) —
+> precise anchors in `2026-05-24-labs-beta-features-handoff.md` §"§6.1 … UI GLUE REMAINS".
+> Tests as of `da89497`: **QuipMac 380, QuipiOS 388** green (sim/unit; still no device install; Mac app still v1.5.2).
+> Then one Mac rebuild + on-device verify (Cursor, one-tap incl. stale→"Prompt changed", pack export→import).
 > Still open: Cursor on-device verify (not installed); Mac version bump 1.5.2→1.5.4.
 
 ## What this session did

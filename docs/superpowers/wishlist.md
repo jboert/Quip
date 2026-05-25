@@ -29,9 +29,10 @@ Full handoff: `handoffs/2026-05-24-labs-beta-features-handoff.md`. Tests: QuipMa
   Labs-gated prominent in-app buttons (`labs.oneTapAnswer`). Tests: Mac 371 / iOS 383.
 
 ### In progress / next (this effort)
-- **§6.1 Prompt/hot-button packs** — NOT STARTED. `SharedPromptPack` (iOS-only, reuses
-  `PromptEntry`+`CustomButton`), optional prompt metadata via on-disk front-matter, Share Sheet
-  export + `.quippack` import. Steps in plan/handoff.
+- **§6.1 Prompt/hot-button packs** — 🟡 PARTIAL. Data + model + apply-helpers DONE
+  (`997ded0` metadata+front-matter, `436c9cb` SharedPromptPack model, `da89497` uniquePromptID/remint).
+  REMAINING: export Share Sheet, `.quippack` UTI in Info.plist, `.onOpenURL` import branch +
+  `ImportPackSheet`, apply wiring. Full step list in `handoffs/2026-05-24-labs-beta-features-handoff.md`.
 
 ### Notes for next session
 - Projects are xcodegen-globbed → new/moved files need only `xcodegen generate` (no pbxproj surgery).
