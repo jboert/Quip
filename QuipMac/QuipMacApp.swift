@@ -1199,7 +1199,7 @@ struct QuipMacApp: App {
                 }
                 thinkingWindows.insert(msg.windowId)
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
-                    handleQuickAction(msg.action, for: window)
+                    handleQuickAction(msg.action, for: window, promptFingerprint: msg.promptFingerprint)
                 } else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] quick_action DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
@@ -1836,8 +1836,83 @@ struct QuipMacApp: App {
         }
     }
 
+    /// One-tap answer actions eligible for §3.2 prompt re-validation.
+    static let answerActions: Set<String> = [
+        "press_y", "press_n",
+        "select_1", "select_2", "select_3", "select_4",
+        "select_5", "select_6", "select_7", "select_8", "select_9",
+    ]
+
+    /// Pure decision: may we inject `action` given the prompt the phone saw
+    /// (`expectedFingerprint`) versus what's on screen now (`liveContent`)?
+    /// True only if the live prompt still hashes to the same value (and, for
+    /// `select_N`, that N is still an offered option). Guards against
+    /// answering a prompt the agent already moved past. (§3.2)
+    nonisolated static func answerStillValid(action: String, expectedFingerprint: String,
+                                             liveContent: String) -> Bool {
+        guard let live = NumberedPromptDetector.fingerprint(in: liveContent),
+              live == expectedFingerprint else {
+            return false
+        }
+        // For a numbered answer, also confirm N is still an offered option.
+        if action.hasPrefix("select_"), let n = Int(action.suffix(1)) {
+            return NumberedPromptDetector.detect(in: liveContent)?.contains(n) ?? false
+        }
+        return true  // press_y / press_n — fingerprint match is sufficient
+    }
+
+    /// Re-scrape the window (background, AppleScript), and inject the answer
+    /// only if `answerStillValid`; otherwise tell the phone the prompt
+    /// changed. (§3.2)
     @MainActor
-    private func handleQuickAction(_ action: String, for window: ManagedWindow) {
+    private func revalidateAnswer(_ action: String, for window: ManagedWindow,
+                                  expectedFingerprint: String) {
+        let termApp = terminalAppForWindow(window)
+        let wn = window.windowNumber
+        let wname = window.name
+        let wid = window.id
+        let sessionId = window.iterm2SessionId
+        let isTerminal = window.isTerminal
+        let text: String = {
+            switch action {
+            case "press_y": return "y"
+            case "press_n": return "n"
+            default: return String(action.suffix(1)) // select_N
+            }
+        }()
+        DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer, windowManager] in
+            let content = isTerminal
+                ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
+                : ""
+            let ok = Self.answerStillValid(action: action, expectedFingerprint: expectedFingerprint, liveContent: content)
+            DispatchQueue.main.async {
+                guard ok else {
+                    print("[Quip] one-tap answer DROPPED (prompt changed): action=\(action) window=\(wid)")
+                    webSocketServer.broadcast(ErrorMessage(reason: "Prompt changed — not sent"))
+                    return
+                }
+                windowManager.focusWindow(wid)
+                let delay = KeystrokeInjector.focusDelay(path: .quickAction, terminalApp: termApp,
+                                                         iterm2SessionId: sessionId)
+                let inject: () -> Void = {
+                    _ = keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
+                                                   windowName: wname, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                }
+                if delay == 0 { inject() } else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: inject) }
+            }
+        }
+    }
+
+    @MainActor
+    private func handleQuickAction(_ action: String, for window: ManagedWindow,
+                                   promptFingerprint: String? = nil) {
+        // §3.2 — re-validate one-tap answers carrying a fingerprint before
+        // injecting. nil fingerprint (older phones / in-app non-Labs taps /
+        // non-answer actions) falls straight through to the legacy path.
+        if let fp = promptFingerprint, Self.answerActions.contains(action) {
+            revalidateAnswer(action, for: window, expectedFingerprint: fp)
+            return
+        }
         let termApp = terminalAppForWindow(window)
         let wid = window.id
         let wn = window.windowNumber
