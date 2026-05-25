@@ -1393,7 +1393,8 @@ struct QuipMacApp: App {
 
         case "put_prompt":
             if let msg = MessageCoder.decode(PutPromptMessage.self, from: data) {
-                _ = promptLibrary.put(id: msg.id, label: msg.label, body: msg.body)
+                _ = promptLibrary.put(id: msg.id, label: msg.label, body: msg.body,
+                                      tags: msg.tags, targetAgent: msg.targetAgent, description: msg.description)
                 // FS watcher will rescan + re-broadcast; nothing to ack.
             }
 

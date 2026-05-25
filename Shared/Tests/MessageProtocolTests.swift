@@ -330,6 +330,39 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(restored.action, "press_y")
     }
 
+    // §6.1 — prompt metadata (optional, back-compat)
+
+    func testPromptEntryMetadataRoundTrip() throws {
+        let e = PromptEntry(id: "p1", label: "Ship", body: "ship it",
+                            tags: ["release", "swift"], targetAgent: "claude", description: "one-liner")
+        let data = try XCTUnwrap(MessageCoder.encode(e))
+        let r = try XCTUnwrap(MessageCoder.decode(PromptEntry.self, from: data))
+        XCTAssertEqual(r.tags, ["release", "swift"])
+        XCTAssertEqual(r.targetAgent, "claude")
+        XCTAssertEqual(r.description, "one-liner")
+    }
+
+    func testPromptEntryLegacyDecodesNilMetadata() throws {
+        // Old Mac broadcasts only id/label/body — must decode with nil metadata.
+        let legacy = #"{"id":"p","label":"L","body":"B"}"#
+        let data = try XCTUnwrap(legacy.data(using: .utf8))
+        let r = try XCTUnwrap(MessageCoder.decode(PromptEntry.self, from: data))
+        XCTAssertNil(r.tags)
+        XCTAssertNil(r.targetAgent)
+        XCTAssertNil(r.description)
+        XCTAssertEqual(r.body, "B")
+    }
+
+    func testPutPromptMetadataRoundTrip() throws {
+        let m = PutPromptMessage(id: "p", label: "L", body: "B",
+                                 tags: ["x"], targetAgent: "cursor", description: "d")
+        let data = try XCTUnwrap(MessageCoder.encode(m))
+        let r = try XCTUnwrap(MessageCoder.decode(PutPromptMessage.self, from: data))
+        XCTAssertEqual(r.tags, ["x"])
+        XCTAssertEqual(r.targetAgent, "cursor")
+        XCTAssertEqual(r.description, "d")
+    }
+
     func testDuplicateWindowMessageEncoding() throws {
         let msg = DuplicateWindowMessage(sourceWindowId: "src-1", agent: .codex)
         let data = try XCTUnwrap(MessageCoder.encode(msg))

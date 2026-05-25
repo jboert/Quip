@@ -68,14 +68,13 @@ final class PromptLibrary {
     /// preserves the friendly title. Returns the URL on success, nil on
     /// failure (filesystem error or sanitization rejection).
     @discardableResult
-    func put(id: String, label: String, body: String) -> URL? {
+    func put(id: String, label: String, body: String,
+             tags: [String]? = nil, targetAgent: String? = nil, description: String? = nil) -> URL? {
         let safeID = Self.sanitizeID(id)
         guard !safeID.isEmpty else { return nil }
         let url = Self.directory.appendingPathComponent("\(safeID).txt")
-        let labelDiffersFromID = !label.isEmpty && label != safeID
-        let fileBody = labelDiffersFromID
-            ? "# \(label)\n\n\(body)\n"
-            : "\(body)\n"
+        let fileBody = Self.renderFile(id: safeID, label: label, body: body,
+                                       tags: tags, targetAgent: targetAgent, description: description)
         do {
             try fileBody.write(to: url, atomically: true, encoding: .utf8)
             // FS watcher will fire and rescan; return immediately so the
@@ -178,8 +177,9 @@ final class PromptLibrary {
                 continue
             }
             let id = url.deletingPathExtension().lastPathComponent
-            let (label, body) = Self.extractLabelAndBody(filename: id, raw: raw)
-            newEntries.append(PromptEntry(id: id, label: label, body: body))
+            let p = Self.parsePrompt(filename: id, raw: raw)
+            newEntries.append(PromptEntry(id: id, label: p.label, body: p.body,
+                                          tags: p.tags, targetAgent: p.targetAgent, description: p.description))
         }
 
         if newEntries == entries { return }
@@ -187,20 +187,87 @@ final class PromptLibrary {
         onChange?(newEntries)
     }
 
-    /// Pure helper — pulled out for tests. If the file's first non-empty
-    /// line starts with `# `, treat that as the label and strip it from
-    /// the body. Otherwise label = filename.
-    static func extractLabelAndBody(filename: String, raw: String) -> (label: String, body: String) {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let firstNewline = trimmed.firstIndex(of: "\n"),
-              trimmed.hasPrefix("# ") else {
-            return (filename, trimmed)
+    /// Parsed shape of a prompt file: optional `# label`, optional
+    /// `<!-- quip:meta ... -->` front-matter (§6.1), then the body.
+    struct ParsedPrompt: Equatable {
+        let label: String
+        let body: String
+        let tags: [String]?
+        let targetAgent: String?
+        let description: String?
+    }
+
+    /// Pure parser — pulled out for tests. Handles legacy headerless files
+    /// and `# label` files unchanged, plus an optional `<!-- quip:meta -->`
+    /// block carrying tags/agent/desc.
+    nonisolated static func parsePrompt(filename: String, raw: String) -> ParsedPrompt {
+        var lines = raw.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+
+        var label = filename
+        // Only treat `# ...` as a label when there's a body after it, matching
+        // the legacy behavior (a lone "# x" line stays body).
+        if lines.count > 1, let first = lines.first, first.hasPrefix("# ") {
+            let l = String(first.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            if !l.isEmpty { label = l }
+            lines.removeFirst()
         }
-        let titleLine = String(trimmed[..<firstNewline])
-        let label = String(titleLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-        let bodyStart = trimmed.index(after: firstNewline)
-        let body = String(trimmed[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return (label.isEmpty ? filename : label, body)
+        while let f = lines.first, f.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
+
+        var tags: [String]?
+        var agent: String?
+        var desc: String?
+        if lines.first?.trimmingCharacters(in: .whitespaces) == "<!-- quip:meta" {
+            lines.removeFirst()
+            while let m = lines.first, m.trimmingCharacters(in: .whitespaces) != "-->" {
+                let t = m.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("tags:") {
+                    let arr = String(t.dropFirst(5)).split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    tags = arr.isEmpty ? nil : arr
+                } else if t.hasPrefix("agent:") {
+                    let v = String(t.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                    agent = v.isEmpty ? nil : v
+                } else if t.hasPrefix("desc:") {
+                    let v = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                    desc = v.isEmpty ? nil : v
+                }
+                lines.removeFirst()
+            }
+            if !lines.isEmpty { lines.removeFirst() }  // drop "-->"
+        }
+
+        let body = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return ParsedPrompt(label: label, body: body, tags: tags, targetAgent: agent, description: desc)
+    }
+
+    /// Back-compat shim for callers that only want (label, body).
+    nonisolated static func extractLabelAndBody(filename: String, raw: String) -> (label: String, body: String) {
+        let p = parsePrompt(filename: filename, raw: raw)
+        return (p.label, p.body)
+    }
+
+    /// The `<!-- quip:meta -->` block, or nil when no metadata is set.
+    nonisolated static func metaBlock(tags: [String]?, targetAgent: String?, description: String?) -> String? {
+        var ls: [String] = []
+        if let tags, !tags.isEmpty { ls.append("tags: " + tags.joined(separator: ", ")) }
+        if let a = targetAgent, !a.isEmpty { ls.append("agent: \(a)") }
+        if let d = description, !d.isEmpty { ls.append("desc: \(d)") }
+        guard !ls.isEmpty else { return nil }
+        return "<!-- quip:meta\n" + ls.joined(separator: "\n") + "\n-->\n"
+    }
+
+    /// Render the on-disk file contents. **Byte-identical to the legacy
+    /// format when no metadata is set** (guards existing files from churn).
+    nonisolated static func renderFile(id: String, label: String, body: String,
+                                       tags: [String]?, targetAgent: String?, description: String?) -> String {
+        let labelDiffers = !label.isEmpty && label != id
+        let meta = metaBlock(tags: tags, targetAgent: targetAgent, description: description)
+        var out = ""
+        if labelDiffers { out += "# \(label)\n" }
+        if let meta { out += meta }
+        if labelDiffers || meta != nil { out += "\n" }
+        out += "\(body)\n"
+        return out
     }
 
     private func startWatching() {

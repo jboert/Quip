@@ -635,11 +635,27 @@ struct PromptEntry: Codable, Sendable, Hashable, Identifiable {
     let id: String
     let label: String
     let body: String
+    /// Optional pack metadata (§6.1). All nil for plain `.txt` prompts and
+    /// older peers — additive, so existing prompts and old Mac/phone builds
+    /// keep working unchanged.
+    let tags: [String]?
+    let targetAgent: String?  // "claude" | "codex" | "cursor" | "any"
+    let description: String?
 
     /// Convenience for the iOS list row — first 120 chars of the
     /// body, used as a single-line preview.
     var bodyPreview: String { String(body.prefix(120)) }
     var bodyBytes: Int { body.utf8.count }
+
+    init(id: String, label: String, body: String,
+         tags: [String]? = nil, targetAgent: String? = nil, description: String? = nil) {
+        self.id = id
+        self.label = label
+        self.body = body
+        self.tags = tags
+        self.targetAgent = targetAgent
+        self.description = description
+    }
 }
 
 /// iPhone → Mac. User tapped a prompt — paste its body into the
@@ -671,12 +687,21 @@ struct PutPromptMessage: Codable, Sendable {
     let id: String
     let label: String
     let body: String
+    /// Optional pack metadata (§6.1) — persisted by the Mac as on-disk
+    /// front-matter. All optional → old peers ignore / send nil.
+    let tags: [String]?
+    let targetAgent: String?
+    let description: String?
 
-    init(id: String, label: String, body: String) {
+    init(id: String, label: String, body: String,
+         tags: [String]? = nil, targetAgent: String? = nil, description: String? = nil) {
         self.type = "put_prompt"
         self.id = id
         self.label = label
         self.body = body
+        self.tags = tags
+        self.targetAgent = targetAgent
+        self.description = description
     }
 }
 
