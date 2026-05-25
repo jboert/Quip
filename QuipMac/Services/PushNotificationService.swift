@@ -304,8 +304,22 @@ final class PushNotificationService {
     ///
     /// Debounce: 30s per (windowId, device) pair. Global pause +
     /// quiet-hours + sound toggle honored per device.
+    /// Map detected prompt options to the APNs notification category whose
+    /// registered action set matches (iOS caps inline lock-screen actions at
+    /// 4). Falls back to the legacy `waiting_for_input` (plain banner → open
+    /// app) for >4 options or unrecognized shapes. (§3.2)
+    nonisolated static func waitingCategory(options: [Int]?, isYesNo: Bool) -> String {
+        if let opts = options, (2...4).contains(opts.count) {
+            return "waiting." + opts.map(String.init).joined()
+        }
+        if isYesNo { return "waiting.yn" }
+        return "waiting_for_input"
+    }
+
     func notifyWaitingForInput(windowId: String, windowName: String, projectName: String?,
-                               attentionCount: Int, selectedWindowId: String?) {
+                               attentionCount: Int, selectedWindowId: String?,
+                               options: [Int]? = nil, isYesNo: Bool = false,
+                               promptFingerprint: String? = nil) {
         guard !devices.isEmpty else { return }
 
         // GH #22 — APNs metadata moved from UserDefaults to Keychain via
@@ -412,15 +426,20 @@ final class PushNotificationService {
                 // from its registered UNNotificationCategory of the
                 // matching identifier. Older iOS clients that don't
                 // register the category fall back to the plain banner.
-                "category": "waiting_for_input"
+                "category": Self.waitingCategory(options: options, isYesNo: isYesNo)
             ]
             if prefs.sound { aps["sound"] = "default" }
 
-            let payload: [String: Any] = [
+            var payload: [String: Any] = [
                 "aps": aps,
                 "quip_window_id": windowId,
                 "quip_event": "waiting_for_input"
             ]
+            // Dynamic one-tap answer metadata (§3.2): the option numbers the
+            // phone should render as actions, and the fingerprint it must echo
+            // back so the Mac can re-validate before injecting.
+            if let options { payload["quip_options"] = options }
+            if let promptFingerprint { payload["quip_prompt_fingerprint"] = promptFingerprint }
 
             // Encode now (on main) so the Task below captures Sendable Data
             // instead of an [String: Any] which is not Sendable.

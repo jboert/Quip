@@ -347,13 +347,41 @@ struct QuipMacApp: App {
                 // subtitle = directory basename (e.g. "Quip", "credit-unions")
                 // via fetchSubtitles/applySubtitles. That's the project.
                 let project = window?.subtitle
-                pushNotificationService.notifyWaitingForInput(
-                    windowId: windowId,
-                    windowName: windowName,
-                    projectName: project,
-                    attentionCount: 1,
-                    selectedWindowId: clientSelectedWindowId
-                )
+
+                // (§3.2) When a push could actually fire, scrape the prompt so
+                // the notification can show the right one-tap answer actions
+                // and carry a fingerprint for Mac re-validation. AppleScript
+                // read is backgrounded so we don't jank the main thread on a
+                // state transition; we hop back to main to fire the push.
+                if !pushNotificationService.devices.isEmpty,
+                   let window, window.isTerminal {
+                    let wn = window.windowNumber
+                    let termApp = terminalAppForWindow(window)
+                    let sessionId = window.iterm2SessionId
+                    DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, pushNotificationService] in
+                        let content = keystrokeInjector.readContent(
+                            terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId
+                        ) ?? ""
+                        let options = NumberedPromptDetector.detect(in: content)
+                        let isYesNo = NumberedPromptDetector.detectYesNo(in: content)
+                        let fingerprint = NumberedPromptDetector.fingerprint(in: content)
+                        DispatchQueue.main.async {
+                            pushNotificationService.notifyWaitingForInput(
+                                windowId: windowId, windowName: windowName, projectName: project,
+                                attentionCount: 1, selectedWindowId: clientSelectedWindowId,
+                                options: options, isYesNo: isYesNo, promptFingerprint: fingerprint
+                            )
+                        }
+                    }
+                } else {
+                    pushNotificationService.notifyWaitingForInput(
+                        windowId: windowId,
+                        windowName: windowName,
+                        projectName: project,
+                        attentionCount: 1,
+                        selectedWindowId: clientSelectedWindowId
+                    )
+                }
 
                 if pendingInputForWindow.contains(windowId) {
                     KokoroTTSDebug.log("TTS suppressed: \(windowId) still pending input response")

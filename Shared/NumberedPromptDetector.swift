@@ -107,19 +107,33 @@ enum NumberedPromptDetector {
     /// option text or count changes. Returns nil when no numbered prompt is
     /// present. FNV-1a → identical across platforms, no dependencies.
     static func fingerprint(in content: String) -> String? {
-        guard let run = bestRun(in: content) else { return nil }
-        return fnv1a(run.map(\.normalized).joined(separator: "\n"))
+        if let run = bestRun(in: content) {
+            return fnv1a(run.map(\.normalized).joined(separator: "\n"))
+        }
+        // y/n prompts have no numbered run; hash the y/n line so press_y /
+        // press_n answers can be re-validated uniformly. (§3.2)
+        if let yn = yesNoLine(in: content) {
+            return fnv1a("yn:" + yn)
+        }
+        return nil
     }
 
     /// Detect a free-form yes/no prompt (e.g. "Continue? (y/n)") as opposed to
     /// a numbered list. Guards `press_y`/`press_n` re-validation. (§3.2)
     static func detectYesNo(in content: String) -> Bool {
-        guard !content.isEmpty else { return false }
+        yesNoLine(in: content) != nil
+    }
+
+    /// The normalized line carrying a `(y/n)` / `(yes/no)` affordance, or nil.
+    private static func yesNoLine(in content: String) -> String? {
+        guard !content.isEmpty else { return nil }
         for line in content.components(separatedBy: "\n").suffix(scanLineLimit) {
             let s = stripANSI(line).lowercased()
-            if s.contains("(y/n)") || s.contains("(yes/no)") { return true }
+            if s.contains("(y/n)") || s.contains("(yes/no)") {
+                return s.split(whereSeparator: { $0 == " " || $0 == "\t" }).joined(separator: " ")
+            }
         }
-        return false
+        return nil
     }
 
     /// FNV-1a 64-bit hash → hex. Stable, dependency-free, identical on Mac and

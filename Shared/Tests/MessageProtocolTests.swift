@@ -313,6 +313,23 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(original.action, restored.action)
     }
 
+    func testQuickActionFingerprintRoundTrip() throws {
+        let original = QuickActionMessage(windowId: "rt-4", action: "select_2",
+                                          promptFingerprint: "abc123")
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(QuickActionMessage.self, from: data))
+        XCTAssertEqual(restored.promptFingerprint, "abc123")
+    }
+
+    func testQuickActionFingerprintAbsentDecodesNil() throws {
+        // Old phones omit the field entirely — must decode to nil, not throw.
+        let legacyJSON = #"{"type":"quick_action","windowId":"w","action":"press_y"}"#
+        let data = try XCTUnwrap(legacyJSON.data(using: .utf8))
+        let restored = try XCTUnwrap(MessageCoder.decode(QuickActionMessage.self, from: data))
+        XCTAssertNil(restored.promptFingerprint)
+        XCTAssertEqual(restored.action, "press_y")
+    }
+
     func testDuplicateWindowMessageEncoding() throws {
         let msg = DuplicateWindowMessage(sourceWindowId: "src-1", agent: .codex)
         let data = try XCTUnwrap(MessageCoder.encode(msg))

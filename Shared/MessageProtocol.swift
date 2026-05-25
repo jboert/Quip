@@ -284,12 +284,21 @@ struct QuickActionMessage: Codable, Sendable {
     let windowId: String
     let action: String
     let messageId: UUID?
+    /// Fingerprint of the prompt the phone saw when it sent an answer
+    /// (`select_N`/`press_y`/`press_n`). The Mac re-scrapes the window and
+    /// injects only if the live prompt still hashes to this value — guards
+    /// against answering a prompt the agent already moved past. Optional:
+    /// nil (older phones / non-answer actions) → inject without re-validation
+    /// (legacy behavior). (§3.2)
+    let promptFingerprint: String?
 
-    init(windowId: String, action: String, messageId: UUID? = UUID()) {
+    init(windowId: String, action: String, messageId: UUID? = UUID(),
+         promptFingerprint: String? = nil) {
         self.type = "quick_action"
         self.windowId = windowId
         self.action = action
         self.messageId = messageId
+        self.promptFingerprint = promptFingerprint
     }
 }
 

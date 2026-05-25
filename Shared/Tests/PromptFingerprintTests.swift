@@ -80,4 +80,15 @@ final class PromptFingerprintTests: XCTestCase {
         XCTAssertFalse(NumberedPromptDetector.detectYesNo(in: "the function returns y/n internally"))
         XCTAssertFalse(NumberedPromptDetector.detectYesNo(in: ""))
     }
+
+    func test_fingerprint_yesNo_nonNilAndStableAcrossANSI() {
+        let fp = NumberedPromptDetector.fingerprint(in: "Proceed? (y/n)")
+        XCTAssertNotNil(fp)
+        XCTAssertEqual(fp, NumberedPromptDetector.fingerprint(in: "\u{1B}[0mProceed? (y/n)\u{1B}[0m"))
+    }
+
+    func test_fingerprint_yesNo_differsByPromptText() {
+        XCTAssertNotEqual(NumberedPromptDetector.fingerprint(in: "Proceed? (y/n)"),
+                          NumberedPromptDetector.fingerprint(in: "Overwrite file? (y/n)"))
+    }
 }
