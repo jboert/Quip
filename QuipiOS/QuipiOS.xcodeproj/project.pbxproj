@@ -57,6 +57,7 @@
 		6E425B84F2A52841E8485386 /* BackendConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A26AAB8221B8827AD9A61B0 /* BackendConnectionManager.swift */; };
 		6EB4C507372507C62A6F49ED /* PTTWindowTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE3FC3415A512C214E8D8D9 /* PTTWindowTracker.swift */; };
 		6F89F8CCE385F0E125415C6B /* WhisperAudioSenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A833238659B2E7E8D205F45 /* WhisperAudioSenderTests.swift */; };
+		72A1EC704157D1A0BB7000FB /* SharedPromptPackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83612E4AAD60976DE26A48C6 /* SharedPromptPackTests.swift */; };
 		7855744B8C4218CBACE69836 /* WindowInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414AD810B644C175CFB73EE5 /* WindowInfo.swift */; };
 		7880A1510DE089958DF89CAA /* WindowRectangle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */; };
 		7F833C0FCAC5D184B4D67088 /* SpeechServiceWebSocketResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C735A6BD67B801811B0BC187 /* SpeechServiceWebSocketResolverTests.swift */; };
@@ -101,6 +102,7 @@
 		E634311FF9DEAEA0E074302E /* ImagePickerPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3150B50687617E509C16EC1D /* ImagePickerPresenter.swift */; };
 		EC127D40795A4EE84F29011C /* DiagnosticsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 466A4F2906BA7B078608620E /* DiagnosticsSheet.swift */; };
 		F0364CB28BFA07CC324DF280 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F583D197E23AF06962CE81A /* Constants.swift */; };
+		F2D52DABE02A6905555B34C1 /* SharedPromptPack.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB452BF9305E84A3A7257ED3 /* SharedPromptPack.swift */; };
 		F3517C7EF645E2CA6F048E18 /* ClipTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8444F84725ACF68F985C743 /* ClipTextTests.swift */; };
 		F7B32FEF1E1A176C2710D831 /* PendingImageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 773DBA5F5449A8B4C8E7D1AE /* PendingImageState.swift */; };
 		F94D7DE90D3DB54EE024E0D4 /* QAPairSwapPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D31E23CAD62DA5238EF9F0CF /* QAPairSwapPersistenceTests.swift */; };
@@ -196,6 +198,7 @@
 		773DBA5F5449A8B4C8E7D1AE /* PendingImageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingImageState.swift; sourceTree = "<group>"; };
 		7A26AAB8221B8827AD9A61B0 /* BackendConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendConnectionManager.swift; sourceTree = "<group>"; };
 		8135CA5A6364965D159D7274 /* QuipWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipWatchApp.swift; sourceTree = "<group>"; };
+		83612E4AAD60976DE26A48C6 /* SharedPromptPackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedPromptPackTests.swift; sourceTree = "<group>"; };
 		838EDA054E1E6EFFD12734ED /* WatchSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSyncService.swift; sourceTree = "<group>"; };
 		89064CA2FFA4B5A35BC437E8 /* TTSNotificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSNotificationOverlay.swift; sourceTree = "<group>"; };
 		920D8C375CB17F6D732D5F4E /* WebSocketClientDisconnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClientDisconnectTests.swift; sourceTree = "<group>"; };
@@ -208,6 +211,7 @@
 		A7D5109AD873D10B318811CA /* PromptFingerprintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptFingerprintTests.swift; sourceTree = "<group>"; };
 		A8B6A494C62E7118541A81C1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AB1FAB05086E60FFC302C3E6 /* ContextMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuView.swift; sourceTree = "<group>"; };
+		AB452BF9305E84A3A7257ED3 /* SharedPromptPack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedPromptPack.swift; sourceTree = "<group>"; };
 		AD67F0481CA1F97EEB2F5D7C /* InlineTerminalContentBranchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineTerminalContentBranchTests.swift; sourceTree = "<group>"; };
 		ADA867C4EE46E8D6EEA5EC8D /* PushRegistrationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrationService.swift; sourceTree = "<group>"; };
 		B2248221E38F20DE3A6CDDAE /* DisconnectReason.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisconnectReason.swift; sourceTree = "<group>"; };
@@ -343,6 +347,7 @@
 				539551F0E0C717066B804151 /* QuickSlotStoreSeedTests.swift */,
 				1B0C4B6E9EA1F79748808978 /* RecognizerRolloverTests.swift */,
 				BB799E5EBA5A72A97A8EDD06 /* RemoteSpeechSessionTests.swift */,
+				83612E4AAD60976DE26A48C6 /* SharedPromptPackTests.swift */,
 				47C70308C62E57B9CBBEFF9E /* SpeechServicePathSelectionTests.swift */,
 				C735A6BD67B801811B0BC187 /* SpeechServiceWebSocketResolverTests.swift */,
 				20E7E5CA016997F75176F2A5 /* TopBarStatusTests.swift */,
@@ -431,6 +436,7 @@
 				ADA867C4EE46E8D6EEA5EC8D /* PushRegistrationService.swift */,
 				E10C0B106747159F0E24ED6C /* RemoteSpeechSession.swift */,
 				451D008AD329E15F102F2D8D /* ShakeDetector.swift */,
+				AB452BF9305E84A3A7257ED3 /* SharedPromptPack.swift */,
 				DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */,
 				F7EED90216075AC25A1EDB70 /* SpeechService.swift */,
 				E83FAF15045507E468580CDB /* URLSwapPolicy.swift */,
@@ -650,6 +656,7 @@
 				192A0DA56B5881A451A18799 /* RecognizerRolloverTests.swift in Sources */,
 				034FCCCD9B6278E606AB7BBE /* RemoteSpeechSessionTests.swift in Sources */,
 				A795C27D5F398A26647E2B49 /* SeamStitcherTests.swift in Sources */,
+				72A1EC704157D1A0BB7000FB /* SharedPromptPackTests.swift in Sources */,
 				1FED4AB0761613E80C3FAC9D /* SpeechServicePathSelectionTests.swift in Sources */,
 				7F833C0FCAC5D184B4D67088 /* SpeechServiceWebSocketResolverTests.swift in Sources */,
 				0123EF17E5CB3A1E14A0E416 /* TopBarStatusTests.swift in Sources */,
@@ -714,6 +721,7 @@
 				5B36FBA58C811B5085CC8DF6 /* RemoteSpeechSession.swift in Sources */,
 				011C1FA73D1865A5DFBCA40E /* SeamStitcher.swift in Sources */,
 				C9FDDDE951901DE13257C0A6 /* ShakeDetector.swift in Sources */,
+				F2D52DABE02A6905555B34C1 /* SharedPromptPack.swift in Sources */,
 				2FE851D3B7E5A263C2E1A06F /* SilentModeDetector.swift in Sources */,
 				996767763A69068B0D1D8687 /* SpeechService.swift in Sources */,
 				61BEA675BFFB5F8019D960F0 /* TTSNotificationOverlay.swift in Sources */,
