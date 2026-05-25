@@ -20,7 +20,7 @@ Implementation plan (full step list): `~/.claude/plans/polished-wondering-garden
 |---|---|
 | §0 Quip Labs | ✅ DONE, committed `9003bcd` |
 | §7.4 Cursor | ✅ DONE, committed `9003bcd` |
-| §3.2 One-tap answers | ⏳ NOT STARTED |
+| §3.2 One-tap answers | ✅ DONE — `acf1b60`,`84c9d85`,`ab200ca`,`d113537`,`e36dab1` (Mac 371 / iOS 383) |
 | §6.1 Prompt/button packs | ⏳ NOT STARTED |
 
 Tests after `9003bcd`: **QuipMac 346 / QuipiOS 367, all green.** Branch `eb-branch` (local, never push).

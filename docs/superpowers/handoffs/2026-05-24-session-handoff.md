@@ -2,6 +2,20 @@
 
 Recap for `/clear`. Branch `eb-branch` (local, **not pushed** — eb-branch push policy).
 
+> ## UPDATE (continued same session, 2026-05-25) — §3.2 COMPLETE
+> §3.2 one-tap answers fully shipped across 5 more commits:
+> - `acf1b60` detector → Shared + fingerprint/yes-no helpers
+> - `84c9d85` Mac: dynamic push categories + options/fingerprint in payload
+> - `ab200ca` iOS: dynamic notification action set + echo fingerprint, unify on select_N
+> - `d113537` Mac: re-validate answers before injecting (`answerStillValid` + `revalidateAnswer`)
+> - `e36dab1` iOS: Labs-gated prominent in-app answer buttons + fingerprint
+>
+> Tests now: **QuipMac 371, QuipiOS 383, all green** (sim/unit only — still no device install; Mac app still v1.5.2).
+> **Status: §0 ✅  §7.4 ✅  §3.2 ✅  §6.1 ⏳ not started.**
+> **Resume next:** §6.1 prompt/hot-button packs — see `2026-05-24-labs-beta-features-handoff.md` §"Remaining: §6.1"
+> and the plan file. Then one Mac rebuild + on-device verify of everything (Cursor, one-tap incl. stale→"Prompt changed", packs).
+> Still open: Cursor on-device verify (not installed); Mac version bump 1.5.2→1.5.4.
+
 ## What this session did
 Verified the app (709 tests green), then designed + began the four-feature **Quip Labs**
 effort (brainstorm → spec → plan → execution). Shipped §0 + §7.4 + §3.2 part 1.

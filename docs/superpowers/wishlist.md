@@ -20,9 +20,15 @@ Full handoff: `handoffs/2026-05-24-labs-beta-features-handoff.md`. Tests: QuipMa
   `labs.cursorAgent`. ⚠️ Cursor not installed on dev box — process name + routing are assumptions,
   verify on a device with Cursor (currently routed like Claude / sendText).
 
+### Shipped (cont. 2026-05-25)
+- **§3.2 One-tap answers** — DONE (`acf1b60`, `84c9d85`, `ab200ca`, `d113537`, `e36dab1`).
+  Detector moved to Shared + fingerprint/yes-no; Mac sends dynamic push categories
+  (`waiting.yn/.12/.123/.1234`) with `quip_options`+`quip_prompt_fingerprint`; iOS registers the
+  category set, unifies answers onto `select_N`/`press_y`/`press_n` and echoes the fingerprint;
+  Mac re-validates (`answerStillValid`) and drops stale answers with "Prompt changed — not sent";
+  Labs-gated prominent in-app buttons (`labs.oneTapAnswer`). Tests: Mac 371 / iOS 383.
+
 ### In progress / next (this effort)
-- **§3.2 One-tap answers** — NOT STARTED. Move `NumberedPromptDetector` → `Shared/`, add
-  `fingerprint`/`detectYesNo`, dynamic push categories, Mac re-validation, in-app buttons. Steps in plan/handoff.
 - **§6.1 Prompt/hot-button packs** — NOT STARTED. `SharedPromptPack` (iOS-only, reuses
   `PromptEntry`+`CustomButton`), optional prompt metadata via on-disk front-matter, Share Sheet
   export + `.quippack` import. Steps in plan/handoff.
