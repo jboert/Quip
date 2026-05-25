@@ -65,6 +65,7 @@
 		855A8E9290C29653C7B9984A /* QuipWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8135CA5A6364965D159D7274 /* QuipWatchApp.swift */; };
 		90AC9E73F35BAD1CC1917C75 /* QuipLiveActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04067ECD7983ACC50844C82D /* QuipLiveActivityBundle.swift */; };
 		911B08CC263A882D5F10E54B /* QuipLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE5492ADBC22C9381D58D40 /* QuipLiveActivityAttributes.swift */; };
+		97BC551925409FA9B99AABC9 /* WaitingActionResponseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EC7A4E7900EB047632020D9 /* WaitingActionResponseTests.swift */; };
 		996767763A69068B0D1D8687 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EED90216075AC25A1EDB70 /* SpeechService.swift */; };
 		9D4B25026FF4024C527D78B5 /* WindowAccessibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A14D4670532505FC15D68D /* WindowAccessibilityTests.swift */; };
 		A2C9D767FE520F91C67D1C57 /* PromptFingerprintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D5109AD873D10B318811CA /* PromptFingerprintTests.swift */; };
@@ -160,6 +161,7 @@
 		2557AE8AAEAD4735BAEF2EAF /* QuipWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuipWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		28C25E9D2C8F4C324CDAF8B9 /* WindowRectangle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRectangle.swift; sourceTree = "<group>"; };
 		2931F612B095AEDB42A97FE4 /* QuipiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = QuipiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2EC7A4E7900EB047632020D9 /* WaitingActionResponseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitingActionResponseTests.swift; sourceTree = "<group>"; };
 		30CED6C2881B9B0070767205 /* AudioRingBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBuffer.swift; sourceTree = "<group>"; };
 		310DDC8B5BA9B05DA4632BF5 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
 		3150B50687617E509C16EC1D /* ImagePickerPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePickerPresenter.swift; sourceTree = "<group>"; };
@@ -345,6 +347,7 @@
 				C735A6BD67B801811B0BC187 /* SpeechServiceWebSocketResolverTests.swift */,
 				20E7E5CA016997F75176F2A5 /* TopBarStatusTests.swift */,
 				9883079F39A65B1627B0A274 /* URLSwapPolicyTests.swift */,
+				2EC7A4E7900EB047632020D9 /* WaitingActionResponseTests.swift */,
 				920D8C375CB17F6D732D5F4E /* WebSocketClientDisconnectTests.swift */,
 				4A833238659B2E7E8D205F45 /* WhisperAudioSenderTests.swift */,
 				D5A14D4670532505FC15D68D /* WindowAccessibilityTests.swift */,
@@ -651,6 +654,7 @@
 				7F833C0FCAC5D184B4D67088 /* SpeechServiceWebSocketResolverTests.swift in Sources */,
 				0123EF17E5CB3A1E14A0E416 /* TopBarStatusTests.swift in Sources */,
 				4664DF49224C6553CC59D600 /* URLSwapPolicyTests.swift in Sources */,
+				97BC551925409FA9B99AABC9 /* WaitingActionResponseTests.swift in Sources */,
 				289E8EEFA09B796BF3BE0844 /* WebSocketClientDisconnectTests.swift in Sources */,
 				6F89F8CCE385F0E125415C6B /* WhisperAudioSenderTests.swift in Sources */,
 				9D4B25026FF4024C527D78B5 /* WindowAccessibilityTests.swift in Sources */,

@@ -73,7 +73,7 @@ final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDe
     /// QuipApp wires this to dispatch a quick_action / send_text over
     /// the active WebSocket so the Mac responds even when the iPhone
     /// (or paired Watch) is locked. Always invoked on main.
-    var onActionResponse: ((_ windowId: String, _ action: WaitingActionResponse) -> Void)?
+    var onActionResponse: ((_ windowId: String, _ action: WaitingActionResponse, _ promptFingerprint: String?) -> Void)?
 
     /// Returns whatever the user currently has selected on the phone so
     /// we can decide whether to suppress the banner. Called on main.
@@ -114,12 +114,13 @@ final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDe
     ) {
         let userInfo = response.notification.request.content.userInfo
         let windowId = userInfo["quip_window_id"] as? String
+        let fingerprint = userInfo["quip_prompt_fingerprint"] as? String
         let actionId = response.actionIdentifier
         let completion = UncheckedSendable(completionHandler)
         DispatchQueue.main.async { [weak self] in
             guard let self else { completion.value(); return }
             if let action = WaitingActionResponse(actionId: actionId), let windowId {
-                self.onActionResponse?(windowId, action)
+                self.onActionResponse?(windowId, action, fingerprint)
             } else if let windowId {
                 // UNNotificationDefaultActionIdentifier (tap body) or
                 // UNNotificationDismissActionIdentifier (swipe away) —
@@ -143,10 +144,13 @@ enum WaitingActionResponse: String, Sendable {
     case yes
     /// Claude's typical y/n negative — fires `quick_action press_n`.
     case no
-    /// Numbered-prompt answer "1" — fires `send_text "1"` w/ Return.
+    /// Numbered-prompt answers — each fires `quick_action select_N` (the Mac
+    /// types the digit + Return, with re-validation when a fingerprint is
+    /// attached). (§3.2)
     case choiceOne
-    /// Numbered-prompt answer "2" — fires `send_text "2"` w/ Return.
     case choiceTwo
+    case choiceThree
+    case choiceFour
 
     /// Identifier strings used in the `UNNotificationAction` registration
     /// + the `actionIdentifier` we get back on tap.
@@ -156,6 +160,22 @@ enum WaitingActionResponse: String, Sendable {
         case .no: return "QUIP_ACTION_NO"
         case .choiceOne: return "QUIP_ACTION_CHOICE_1"
         case .choiceTwo: return "QUIP_ACTION_CHOICE_2"
+        case .choiceThree: return "QUIP_ACTION_CHOICE_3"
+        case .choiceFour: return "QUIP_ACTION_CHOICE_4"
+        }
+    }
+
+    /// The `quick_action` wire string this answer dispatches. All numbered
+    /// choices unify onto `select_N` so the Mac has a single re-validation
+    /// chokepoint. (§3.2)
+    var quickAction: String {
+        switch self {
+        case .yes: return "press_y"
+        case .no: return "press_n"
+        case .choiceOne: return "select_1"
+        case .choiceTwo: return "select_2"
+        case .choiceThree: return "select_3"
+        case .choiceFour: return "select_4"
         }
     }
 
@@ -165,6 +185,8 @@ enum WaitingActionResponse: String, Sendable {
         case "QUIP_ACTION_NO": self = .no
         case "QUIP_ACTION_CHOICE_1": self = .choiceOne
         case "QUIP_ACTION_CHOICE_2": self = .choiceTwo
+        case "QUIP_ACTION_CHOICE_3": self = .choiceThree
+        case "QUIP_ACTION_CHOICE_4": self = .choiceFour
         default: return nil
         }
     }
@@ -176,36 +198,32 @@ enum WaitingActionResponse: String, Sendable {
 enum WaitingNotificationCategory {
     static let identifier = "waiting_for_input"
 
-    static func makeCategory() -> UNNotificationCategory {
-        let yes = UNNotificationAction(
-            identifier: WaitingActionResponse.yes.rawIdentifier,
-            title: "Yes",
-            options: []
-        )
-        let no = UNNotificationAction(
-            identifier: WaitingActionResponse.no.rawIdentifier,
-            title: "No",
-            options: []
-        )
-        let one = UNNotificationAction(
-            identifier: WaitingActionResponse.choiceOne.rawIdentifier,
-            title: "1",
-            options: []
-        )
-        let two = UNNotificationAction(
-            identifier: WaitingActionResponse.choiceTwo.rawIdentifier,
-            title: "2",
-            options: []
-        )
-        // Order matters — iOS surfaces the first 4 inline on the lock
-        // screen + Watch. Yes/No come first because they're the most
-        // common Claude prompts; numbered choices follow.
-        return UNNotificationCategory(
-            identifier: identifier,
-            actions: [yes, no, one, two],
-            intentIdentifiers: [],
-            options: []
-        )
+    private static func action(_ r: WaitingActionResponse, _ title: String) -> UNNotificationAction {
+        UNNotificationAction(identifier: r.rawIdentifier, title: title, options: [])
+    }
+
+    /// Numbered-answer actions 1...n (n ≤ 4, the lock-screen cap).
+    private static func numberedActions(_ n: Int) -> [UNNotificationAction] {
+        let cases: [WaitingActionResponse] = [.choiceOne, .choiceTwo, .choiceThree, .choiceFour]
+        return (0..<min(n, 4)).map { action(cases[$0], "\($0 + 1)") }
+    }
+
+    /// The full category set Quip registers at launch. The Mac picks the
+    /// matching identifier per push (`PushNotificationService.waitingCategory`):
+    /// `waiting.yn` / `waiting.12` / `waiting.123` / `waiting.1234`, plus the
+    /// legacy `waiting_for_input` (Yes/No/1/2) for old payloads. (§3.2)
+    static func makeCategories() -> [UNNotificationCategory] {
+        func cat(_ id: String, _ actions: [UNNotificationAction]) -> UNNotificationCategory {
+            UNNotificationCategory(identifier: id, actions: actions, intentIdentifiers: [], options: [])
+        }
+        return [
+            cat(identifier, [action(.yes, "Yes"), action(.no, "No"),
+                             action(.choiceOne, "1"), action(.choiceTwo, "2")]),
+            cat("waiting.yn", [action(.yes, "Yes"), action(.no, "No")]),
+            cat("waiting.12", numberedActions(2)),
+            cat("waiting.123", numberedActions(3)),
+            cat("waiting.1234", numberedActions(4)),
+        ]
     }
 }
 

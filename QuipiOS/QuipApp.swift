@@ -242,24 +242,21 @@ struct QuipApp: App {
                 // the `waiting_for_input` category. Tap fires here; we
                 // dispatch over the active WebSocket so the Mac responds
                 // even when the iPhone app is locked.
-                pushDelegate.onActionResponse = { windowId, action in
+                pushDelegate.onActionResponse = { windowId, action, fingerprint in
                     attentionCenter.clearAttention(for: windowId)
-                    switch action {
-                    case .yes:
-                        client.send(QuickActionMessage(windowId: windowId, action: "press_y"))
-                    case .no:
-                        client.send(QuickActionMessage(windowId: windowId, action: "press_n"))
-                    case .choiceOne:
-                        client.send(SendTextMessage(windowId: windowId, text: "1", pressReturn: true))
-                    case .choiceTwo:
-                        client.send(SendTextMessage(windowId: windowId, text: "2", pressReturn: true))
-                    }
+                    // All answers go over the unified quick_action path with the
+                    // prompt fingerprint, so the Mac re-validates before
+                    // injecting (§3.2). nil fingerprint (older payloads) → Mac
+                    // injects without re-validation, matching prior behavior.
+                    client.send(QuickActionMessage(windowId: windowId,
+                                                   action: action.quickAction,
+                                                   promptFingerprint: fingerprint))
                 }
-                // Register the category so iOS knows which actions to
+                // Register the category set so iOS knows which actions to
                 // surface for any push whose `aps.category` matches.
                 // Idempotent; safe to call on every cold start.
                 UNUserNotificationCenter.current().setNotificationCategories(
-                    [WaitingNotificationCategory.makeCategory()]
+                    Set(WaitingNotificationCategory.makeCategories())
                 )
             }
             .onChange(of: selectedWindowId) { _, newId in
