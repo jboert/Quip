@@ -55,6 +55,21 @@ final class SharedPromptPackTests: XCTestCase {
         XCTAssertThrowsError(try SharedPromptPack.decode(data))
     }
 
+    func test_uniquePromptID() {
+        XCTAssertEqual(SharedPromptPack.uniquePromptID(desired: "ship", existing: []), "ship")
+        XCTAssertEqual(SharedPromptPack.uniquePromptID(desired: "ship", existing: ["ship"]), "ship-2")
+        XCTAssertEqual(SharedPromptPack.uniquePromptID(desired: "ship", existing: ["ship", "ship-2"]), "ship-3")
+        XCTAssertEqual(SharedPromptPack.uniquePromptID(desired: "new", existing: ["ship"]), "new")
+    }
+
+    func test_reminted_changesIdKeepsContent() {
+        let b = sampleButton()
+        let r = SharedPromptPack.reminted(b)
+        XCTAssertNotEqual(r.id, b.id)
+        XCTAssertEqual(r.label, b.label)
+        XCTAssertEqual(r.payload, b.payload)
+    }
+
     func test_decode_legacySchema1_succeeds() throws {
         // Minimal schema-1 pack written without optional name/createdAt.
         let json = #"{"schema":1,"prompts":[],"buttons":[]}"#

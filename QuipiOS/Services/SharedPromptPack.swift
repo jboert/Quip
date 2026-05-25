@@ -56,6 +56,23 @@ struct SharedPromptPack: Codable {
         return pack
     }
 
+    /// Pick a non-colliding prompt id for import: returns `desired` if free,
+    /// else suffixes `-2`, `-3`, … (non-destructive default; the import UI can
+    /// still offer explicit overwrite). (§6.1)
+    static func uniquePromptID(desired: String, existing: Set<String>) -> String {
+        guard existing.contains(desired) else { return desired }
+        var n = 2
+        while existing.contains("\(desired)-\(n)") { n += 1 }
+        return "\(desired)-\(n)"
+    }
+
+    /// Re-mint a button's id so an imported button never collides with an
+    /// existing local one. (§6.1)
+    static func reminted(_ button: CustomButton) -> CustomButton {
+        CustomButton(id: UUID(), label: button.label,
+                     systemImage: button.systemImage, payload: button.payload)
+    }
+
     /// Stage the pack as a temp `.quippack` file for `UIActivityViewController`.
     func writeToTemp(filename: String) throws -> URL {
         let base = filename.trimmingCharacters(in: .whitespacesAndNewlines)
