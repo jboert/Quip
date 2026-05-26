@@ -13,6 +13,7 @@
 		035352DA912748C3F99D4D6C /* QuipMacPermsActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9CD5E023A432434C3093C06 /* QuipMacPermsActivityAttributes.swift */; };
 		046BFBEA924261A691A9EA3B /* PendingImagePreviewStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0BC3568ECDD8FC3E78B940 /* PendingImagePreviewStrip.swift */; };
 		0586F04BFC108610CED09909 /* PTTBannerClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD332B740FB015E64C5007C5 /* PTTBannerClassifierTests.swift */; };
+		059995681C7E3EB56DFE0008 /* PathDrivenReconnectGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3E12CF085A47DE5A916E944 /* PathDrivenReconnectGuardTests.swift */; };
 		0AA0F2FFEDD25846D8E8E6A0 /* AudioRingBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30CED6C2881B9B0070767205 /* AudioRingBuffer.swift */; };
 		0DB71EDB9501F21F1248DF62 /* QuipMacPermsActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46181BEC707D4C04671D336E /* QuipMacPermsActivityWidget.swift */; };
 		18A4E909F7DB2D6235FB747A /* ImageUploadFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0C4B009323C19ADC62F972 /* ImageUploadFailureTests.swift */; };
@@ -224,6 +225,7 @@
 		BD332B740FB015E64C5007C5 /* PTTBannerClassifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTBannerClassifierTests.swift; sourceTree = "<group>"; };
 		BE0BC3568ECDD8FC3E78B940 /* PendingImagePreviewStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingImagePreviewStrip.swift; sourceTree = "<group>"; };
 		BE693F49CD672CFD1507FDC6 /* QuipTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipTheme.swift; sourceTree = "<group>"; };
+		C3E12CF085A47DE5A916E944 /* PathDrivenReconnectGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathDrivenReconnectGuardTests.swift; sourceTree = "<group>"; };
 		C735A6BD67B801811B0BC187 /* SpeechServiceWebSocketResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServiceWebSocketResolverTests.swift; sourceTree = "<group>"; };
 		C7893E31FF604E6F884281A4 /* DisconnectReasonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisconnectReasonTests.swift; sourceTree = "<group>"; };
 		CD5EF7F0DB800A4E6B60F96F /* DiagnosticsSnapshotFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsSnapshotFormatterTests.swift; sourceTree = "<group>"; };
@@ -340,6 +342,7 @@
 				D9FD1759EACD71B9E57C25E1 /* LatencyTaggingTests.swift */,
 				D6D5159A24459D33F4AE547B /* LinkifiedTerminalContentTests.swift */,
 				E4292A437D9ACE85DBAE881F /* NumberedPromptDetectorTests.swift */,
+				C3E12CF085A47DE5A916E944 /* PathDrivenReconnectGuardTests.swift */,
 				0BD4C0C02F1EAFBEEDC5EA1D /* PhoneLayoutChooserTests.swift */,
 				BD332B740FB015E64C5007C5 /* PTTBannerClassifierTests.swift */,
 				FFE14A146132EC2FDBF484D2 /* PTTStressTests.swift */,
@@ -650,6 +653,7 @@
 				0586F04BFC108610CED09909 /* PTTBannerClassifierTests.swift in Sources */,
 				D574C92B13CDC64E5C200CAB /* PTTStressTests.swift in Sources */,
 				689A5ACEE675BEBE7608C903 /* PTTWindowTrackerTests.swift in Sources */,
+				059995681C7E3EB56DFE0008 /* PathDrivenReconnectGuardTests.swift in Sources */,
 				35848956152082FFE9094000 /* PhoneLayoutChooserTests.swift in Sources */,
 				A2C9D767FE520F91C67D1C57 /* PromptFingerprintTests.swift in Sources */,
 				ACDD54B51C3FD5979135AA99 /* QAModePerWindowContentTests.swift in Sources */,

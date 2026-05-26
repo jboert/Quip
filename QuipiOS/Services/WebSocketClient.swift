@@ -409,10 +409,30 @@ final class WebSocketClient {
         stuckWatchdogTask = nil
     }
 
+    /// Predicate: should a `.satisfied` NWPath event tear down whatever the
+    /// client is doing and kick a fresh connection attempt? Factored out as
+    /// a pure function for test coverage — see `PathDrivenReconnectGuardTests`.
+    ///
+    /// The `!isConnecting` guard is load-bearing: without it, a Wi-Fi path
+    /// flap (router DHCP renewal, BSSID roam, screen-on radio wakeup — all
+    /// fire 2-3 `.satisfied` events within a few seconds) preempts the
+    /// in-flight handshake mid-ping, spawns a fresh socket, and the previous
+    /// socket dies Mac-side as `POSIX 57 ENOTCONN`. The `startStuckWatchdog`
+    /// (5s tick, `stuckThresholdSec` deadline) already covers the genuine
+    /// "in-flight handshake actually wedged" case, so refusing to preempt
+    /// an in-flight attempt loses nothing — worst case is one extra
+    /// connection-timeout cycle on a true Wi-Fi → cellular handoff.
+    nonisolated static func shouldKickReconnect(isConnected: Bool,
+                                                isConnecting: Bool,
+                                                intentional: Bool,
+                                                hasServerURL: Bool) -> Bool {
+        return !isConnected && !isConnecting && !intentional && hasServerURL
+    }
+
     /// Subscribes to network path changes. When the path becomes satisfied and
-    /// we're not already connected, reset the backoff and kick a connection
-    /// attempt right away. Catches the "phone gave up retrying after a network
-    /// blip" failure mode that leaves the UI stuck on "Connecting…".
+    /// we're not already connected (or mid-connect), reset the backoff and
+    /// kick a connection attempt. Catches the "phone gave up retrying after a
+    /// network blip" failure mode that leaves the UI stuck on "Connecting…".
     private func startPathMonitor() {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
@@ -421,9 +441,10 @@ final class WebSocketClient {
                 self.currentNetworkClass = Self.networkClass(for: path)
                 if path.status == .satisfied {
                     self.logEvent("network path satisfied")
-                    if !self.isConnected,
-                       !self.intentionalDisconnect,
-                       self.serverURL != nil {
+                    if Self.shouldKickReconnect(isConnected: self.isConnected,
+                                                isConnecting: self.isConnecting,
+                                                intentional: self.intentionalDisconnect,
+                                                hasServerURL: self.serverURL != nil) {
                         self.logEvent("path-driven reconnect kick")
                         self.reconnectDelay = 1.0
                         self.reconnectTask?.cancel()
