@@ -450,6 +450,17 @@ final class WebSocketClient {
                         self.reconnectTask?.cancel()
                         self.reconnectTask = nil
                         self.establishConnection()
+                    } else {
+                        // Diagnostic: spell out which guard tripped so future
+                        // POSIX-57 sleuthing can tell "guard fired correctly"
+                        // from "monitor dead". Most common case during a
+                        // Wi-Fi flap burst is isConnecting=true.
+                        let why: String
+                        if self.isConnected { why = "already connected" }
+                        else if self.isConnecting { why = "handshake in-flight" }
+                        else if self.intentionalDisconnect { why = "intentional disconnect" }
+                        else { why = "no server URL" }
+                        self.logEvent("path-driven reconnect suppressed (\(why))")
                     }
                 } else {
                     self.logEvent("network path unsatisfied (\(path.status))")
@@ -1028,6 +1039,7 @@ final class WebSocketClient {
                 // (iTerm respawn, layout change) and never gets it back
                 // until the user re-taps. Replaying here closes the gap.
                 if msg.success, let wid = lastSelectedWindowId {
+                    logEvent("auth_result replay: re-selecting window \(wid)")
                     send(SelectWindowMessage(windowId: wid))
                 }
                 onAuthResult?(msg.success, msg.error)
