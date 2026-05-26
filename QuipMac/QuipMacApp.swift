@@ -1653,24 +1653,34 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             self.windowManager.focusWindow(msg.windowId)
             let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
             let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
-            let result: KeystrokeInjector.InjectionResult
-            if route == .pasteText {
-                NSLog("[Quip] paste_prompt routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
-                result = self.keystrokeInjector.pasteText(
-                    body, to: msg.windowId, pressReturn: msg.pressReturn,
-                    terminalApp: termApp,
-                    iterm2SessionId: window.iterm2SessionId
-                )
-            } else {
-                NSLog("[Quip] paste_prompt routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
-                result = self.keystrokeInjector.sendText(
-                    body, to: msg.windowId, pressReturn: msg.pressReturn,
-                    terminalApp: termApp, windowName: window.name,
-                    cgWindowNumber: window.windowNumber,
-                    iterm2SessionId: window.iterm2SessionId
-                )
+            let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sessionId in
+                if route == .pasteText {
+                    return self.keystrokeInjector.pasteText(
+                        body, to: msg.windowId, pressReturn: msg.pressReturn,
+                        terminalApp: termApp, iterm2SessionId: sessionId)
+                } else {
+                    return self.keystrokeInjector.sendText(
+                        body, to: msg.windowId, pressReturn: msg.pressReturn,
+                        terminalApp: termApp, windowName: window.name,
+                        cgWindowNumber: window.windowNumber, iterm2SessionId: sessionId)
+                }
             }
-            appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id)")
+            NSLog("[Quip] paste_prompt routing: %@ (cliKind=%@, term=%@, window=%@)",
+                  route.rawValue, cliKind.rawValue, termApp.rawValue, msg.windowId)
+            var result = doInject(window.iterm2SessionId)
+            // (#1) Same self-heal as send_text: stale iTerm2 session id → refresh + retry once.
+            var selfHealed = false
+            if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
+                let sessions = WindowManager.fetchIterm2SessionIds()
+                self.windowManager.applyIterm2SessionIds(sessions)
+                if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
+                   let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
+                    NSLog("[Quip] paste_prompt self-heal: refreshed iTerm2 session id for %@", msg.windowId)
+                    selfHealed = true
+                    result = doInject(newId)
+                }
+            }
+            appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)")
             if !result.success {
                 let reason = result.error ?? "unknown"
                 print("[Quip] paste_prompt FAILED: \(reason)")
@@ -1975,11 +1985,29 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 windowManager.focusWindow(wid)
                 let delay = KeystrokeInjector.focusDelay(path: .quickAction, terminalApp: termApp,
                                                          iterm2SessionId: sessionId)
-                let inject: () -> Void = {
-                    _ = keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
-                                                   windowName: wname, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sid in
+                    keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
+                                               windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
                 }
-                if delay == 0 { inject() } else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: inject) }
+                let injectWithSelfHeal: () -> Void = {
+                    var r = doInject(sessionId)
+                    // (#1) Self-heal: stale iTerm2 session id → refresh + retry once.
+                    if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: termApp) {
+                        let sessions = WindowManager.fetchIterm2SessionIds()
+                        windowManager.applyIterm2SessionIds(sessions)
+                        if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
+                           let newId = refreshed.iterm2SessionId, newId != sessionId {
+                            NSLog("[Quip] revalidateAnswer self-heal: refreshed iTerm2 session id for %@", wid)
+                            r = doInject(newId)
+                        }
+                    }
+                    if !r.success {
+                        let reason = r.error ?? "unknown injection failure"
+                        webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
+                    }
+                }
+                if delay == 0 { injectWithSelfHeal() }
+                else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: injectWithSelfHeal) }
             }
         }
     }
