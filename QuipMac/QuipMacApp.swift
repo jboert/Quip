@@ -1025,7 +1025,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
                     // Diagnostic: log tracked PID + tty so post-mortem can
                     // tell stale-PID respawn from genuine "no codex running"
-                    // when cliKind=shell but Codex is visible on screen.
+                    // when cliKind=shell but an agent CLI is visible on screen.
                     let trackedPid = self.terminalStateDetector.trackedWindows[msg.windowId] ?? 0
                     let trackedTty = self.terminalStateDetector.trackedTty[msg.windowId] ?? "<none>"
                     let delay = KeystrokeInjector.focusDelay(
@@ -1036,7 +1036,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     let routingPath = route.rawValue
                     let inject: () -> KeystrokeInjector.InjectionResult
                     if route == .pasteText {
-                        NSLog("[Quip] send_text routing: pasteText (cliKind=codex, term=iterm2, window=%@)", msg.windowId)
+                        NSLog("[Quip] send_text routing: pasteText (cliKind=%@, term=iterm2, window=%@)", cliKind.rawValue, msg.windowId)
                         inject = {
                             self.keystrokeInjector.pasteText(msg.text,
                                                              to: msg.windowId,
@@ -1160,6 +1160,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     // - Codex CLI's interactive composer accepts pasted IMAGE
                     //   bytes via Cmd+V; typing the path doesn't attach the
                     //   image, just leaves a literal string.
+                    // - Grok's text composer uses the paste path for prompts,
+                    //   but image attachment support is not verified yet.
                     // - Claude Code accepts a typed absolute path inline.
                     // - Default (.shell / unknown / nil) falls through to the
                     //   path-typing behavior — same as before this branch
@@ -1178,11 +1180,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                 at: savedURL, to: msg.windowId,
                                 terminalApp: termApp, iterm2SessionId: window.iterm2SessionId
                             )
-                        case .claude, .shell, .cursor:
+                        case .claude, .shell, .cursor, .grok:
                             // Cursor's TUI takes a typed absolute path like
                             // Claude Code (not pasted bytes like Codex).
+                            // Grok prompt text uses clipboard paste, but image
+                            // attachment is not yet known to support pasted bytes.
                             // Verify on-device; move to the .codex branch if
-                            // Cursor needs clipboard image paste instead.
+                            // Cursor/Grok needs clipboard image paste instead.
                             let textToInject = savedURL.path + " "
                             result = self.keystrokeInjector.sendText(
                                 textToInject, to: msg.windowId, pressReturn: false,
@@ -1638,8 +1642,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// the sessionId so the attachment survives Quip restarts, and
     /// Phone tapped a prompt — look up the body and inject it into the
     /// requested window via the existing keystrokeInjector path. Mirrors the
-    /// Codex-aware `send_text` branch: Codex in iTerm2 needs a real paste event
-    /// while Claude/shell sessions still use the direct sendText path.
+    /// Agent-aware `send_text` branch: Codex/Grok in iTerm2 need a real paste
+    /// event while Claude/shell sessions still use the direct sendText path.
     /// pressReturn defaults to false so the user can review before submitting.
     /// (wishlist §57)
     @MainActor
@@ -2458,6 +2462,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         switch agent {
         case .codex:
             return "codex"
+        case .grok:
+            return "grok"
         case .cursor:
             return "cursor-agent"
         case .terminal:

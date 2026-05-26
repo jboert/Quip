@@ -1067,6 +1067,7 @@ enum PTTReadiness: String, Equatable, CaseIterable {
             case .claude:  return "claude"
             case .shell:   return "shell"
             case .cursor:  return "cursor"
+            case .grok:    return "grok"
             case .none:    return "?"
             case .codex:   return nil  // Defensive: classify() shouldn't put us here
             }
@@ -3965,6 +3966,8 @@ struct MainiOSView: View {
             return .claude
         case .codex:
             return .codex
+        case .grok:
+            return .grok
         case .cursor:
             return .cursor
         case .shell:
@@ -7134,6 +7137,7 @@ extension SpawnAgent {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
+        case .grok: return "Grok"
         case .terminal: return "Terminal"
         case .cursor: return "Cursor"
         }

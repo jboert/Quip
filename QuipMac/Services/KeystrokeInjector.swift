@@ -10,7 +10,12 @@ enum TextInjectionRoute: String, Sendable {
     case sendText
 
     static func choose(cliKind: CLIKind, terminalApp: TerminalApp) -> TextInjectionRoute {
-        cliKind == .codex && terminalApp == .iterm2 ? .pasteText : .sendText
+        switch (cliKind, terminalApp) {
+        case (.codex, .iterm2), (.grok, .iterm2):
+            return .pasteText
+        default:
+            return .sendText
+        }
     }
 }
 

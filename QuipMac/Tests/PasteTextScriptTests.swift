@@ -2,7 +2,7 @@ import XCTest
 @testable import Quip
 
 /// Locks the AppleScript shape that `KeystrokeInjector.pasteText` ships
-/// for Codex CLI windows. The script walks window→tab→session, selects
+/// for composer-backed CLI windows. The script walks window→tab→session, selects
 /// the target session by unique id, activates iTerm2, and Cmd+V's the
 /// clipboard. With pressReturn=true an extra Enter (key code 36) follows.
 ///
@@ -19,6 +19,13 @@ final class PasteTextScriptTests: XCTestCase {
         )
     }
 
+    func test_grokInITermRoutesToPasteText() {
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .grok, terminalApp: .iterm2),
+            .pasteText
+        )
+    }
+
     func test_codexOutsideITermFallsBackToSendText() {
         XCTAssertEqual(
             TextInjectionRoute.choose(cliKind: .codex, terminalApp: .terminal),
@@ -26,6 +33,17 @@ final class PasteTextScriptTests: XCTestCase {
         )
         XCTAssertEqual(
             TextInjectionRoute.choose(cliKind: .codex, terminalApp: .claudeDesktop),
+            .sendText
+        )
+    }
+
+    func test_grokOutsideITermFallsBackToSendText() {
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .grok, terminalApp: .terminal),
+            .sendText
+        )
+        XCTAssertEqual(
+            TextInjectionRoute.choose(cliKind: .grok, terminalApp: .claudeDesktop),
             .sendText
         )
     }

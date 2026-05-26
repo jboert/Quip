@@ -27,12 +27,14 @@ struct LayoutUpdate: Codable, Sendable {
 /// `TerminalApp` (the host app — iTerm2 / Terminal / Claude Desktop): a
 /// Codex CLI session lives inside an iTerm2 host. Drives per-CLI input
 /// routing: Codex's interactive composer takes pasted *image bytes* via
-/// Cmd+V, while Claude Code accepts an *absolute path* typed inline.
+/// Cmd+V, Grok's composer also needs the paste path for text prompts, while
+/// Claude Code accepts an *absolute path* typed inline.
 /// Default `.shell` covers raw shells / unknown TUIs — same path-typing
 /// fallback as before this enum existed. (GH I.)
 enum CLIKind: String, Codable, Sendable, CaseIterable {
     case claude
     case codex
+    case grok
     case shell
     /// Cursor's agent CLI (`cursor-agent`). Routed like Claude Code by
     /// default (typed path, not pasted bytes) — its TUI accepts an inline
@@ -47,6 +49,7 @@ enum CLIKind: String, Codable, Sendable, CaseIterable {
 enum SpawnAgent: String, Codable, Sendable, CaseIterable {
     case claude
     case codex
+    case grok
     case terminal
     /// Spawn a Cursor agent session (`cursor-agent`). Surfaced in the iOS
     /// new-session picker only when the `labs.cursorAgent` flag is on. (§7.4)

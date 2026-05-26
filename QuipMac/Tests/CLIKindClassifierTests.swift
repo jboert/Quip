@@ -38,6 +38,17 @@ final class CLIKindClassifierTests: XCTestCase {
         XCTAssertEqual(TerminalStateDetector.classifyCLI(children: kids), .codex)
     }
 
+    func test_grok_classifiesGrok() {
+        let kids = [proc("zsh"), proc("grok")]
+        XCTAssertEqual(TerminalStateDetector.classifyCLI(children: kids), .grok)
+    }
+
+    func test_grokUnderNode_classifiesGrok_notClaude() {
+        let kids = [proc("node /usr/local/bin/grok")]
+        XCTAssertEqual(TerminalStateDetector.classifyCLI(children: kids), .grok,
+                       "grok match must outrank node→claude")
+    }
+
     func test_codexUnderNode_classifiesCodex_notClaude() {
         // Codex CLI is itself a Node app — the comm string typically
         // includes both "node" and "codex". Codex match must win because
@@ -62,7 +73,9 @@ final class CLIKindClassifierTests: XCTestCase {
         XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "claude"))
         XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "node"))
         XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "codex"))
+        XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "grok"))
         XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "node /path/to/codex"))
+        XCTAssertTrue(TerminalStateDetector.isAIProcess(comm: "node /path/to/grok"))
         XCTAssertFalse(TerminalStateDetector.isAIProcess(comm: "vim"))
         XCTAssertFalse(TerminalStateDetector.isAIProcess(comm: "zsh"))
     }

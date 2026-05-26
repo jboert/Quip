@@ -361,13 +361,14 @@ final class TerminalStateDetector {
     }
 
     /// Classify which AI CLI (if any) is the dominant process running in
-    /// this shell. Order matters: an explicit `codex` match wins over
-    /// `claude`/`node` because Codex CLI also uses Node under the hood.
+    /// this shell. Order matters: explicit agent matches win over
+    /// `claude`/`node` because several agent CLIs may run under Node.
     /// Pure function so tests can drive every combination without spawning
     /// real processes. (GH I.)
     nonisolated static func classifyCLI(children: [ProcessInfo]) -> CLIKind {
         let comms = children.map { $0.command.lowercased() }
         if comms.contains(where: { $0.contains("codex") }) { return .codex }
+        if comms.contains(where: { $0.contains("grok") }) { return .grok }
         // cursor-agent before the node→claude fallback: Cursor's CLI may run
         // under node, and the specific match must win (mirrors codex). (§7.4)
         if comms.contains(where: { $0.contains("cursor-agent") }) { return .cursor }
@@ -380,7 +381,7 @@ final class TerminalStateDetector {
     /// matches the same set as before plus codex.
     nonisolated static func isAIProcess(comm: String) -> Bool {
         comm.contains("claude") || comm.contains("node") || comm.contains("codex")
-            || comm.contains("cursor-agent")
+            || comm.contains("grok") || comm.contains("cursor-agent")
     }
 
     // MARK: - Process Info
