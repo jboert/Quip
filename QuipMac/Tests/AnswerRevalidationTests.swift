@@ -6,6 +6,19 @@ import XCTest
 final class AnswerRevalidationTests: XCTestCase {
 
     private let numbered = "Pick one:\n❯ 1. Yes\n  2. No\n  3. Cancel"
+    private let codexNumbered = """
+    Pick one:
+    › 1. One
+      2. Two
+      3. Three
+      4. Four
+      5. Five
+      6. Six
+      7. Seven
+      8. Eight
+      9. Nine
+      10. Ten
+    """
     private let yesNo = "Overwrite file? (y/n)"
 
     func test_numbered_matchingFingerprint_andOptionPresent_injects() {
@@ -27,6 +40,21 @@ final class AnswerRevalidationTests: XCTestCase {
         // Live prompt has 1-3; select_5 is not an offered option.
         XCTAssertFalse(QuipMacApp.answerStillValid(action: "select_5",
                                                    expectedFingerprint: fp, liveContent: numbered))
+    }
+
+    func test_numbered_multiDigitOption_matchingFingerprint_injects() {
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: codexNumbered))
+        XCTAssertTrue(QuipMacApp.answerStillValid(action: "select_10",
+                                                  expectedFingerprint: fp,
+                                                  liveContent: codexNumbered))
+    }
+
+    func test_selectedOptionNumber_parsesDynamicActions() {
+        XCTAssertEqual(QuipMacApp.selectedOptionNumber(from: "select_5"), 5)
+        XCTAssertEqual(QuipMacApp.selectedOptionNumber(from: "select_10"), 10)
+        XCTAssertNil(QuipMacApp.selectedOptionNumber(from: "select_0"))
+        XCTAssertNil(QuipMacApp.selectedOptionNumber(from: "select_x"))
+        XCTAssertNil(QuipMacApp.selectedOptionNumber(from: "select_"))
     }
 
     func test_yesNo_matchingFingerprint_injects() {

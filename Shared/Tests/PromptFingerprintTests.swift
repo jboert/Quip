@@ -38,6 +38,39 @@ final class PromptFingerprintTests: XCTestCase {
                        "ANSI codes must not change the fingerprint")
     }
 
+    func test_fingerprint_stableAcrossCodexMarkerMoveWithMultiDigitOptions() {
+        let a = """
+        Pick one:
+        › 1. One
+          2. Two
+          3. Three
+          4. Four
+          5. Five
+          6. Six
+          7. Seven
+          8. Eight
+          9. Nine
+          10. Ten
+        """
+        let b = """
+        Pick one:
+          1. One
+          2. Two
+          3. Three
+          4. Four
+          5. Five
+          6. Six
+          7. Seven
+          8. Eight
+          9. Nine
+        › 10. Ten
+        """
+        let fa = NumberedPromptDetector.fingerprint(in: a)
+        XCTAssertNotNil(fa)
+        XCTAssertEqual(fa, NumberedPromptDetector.fingerprint(in: b),
+                       "marker position must not change the fingerprint for Codex-style menus")
+    }
+
     func test_fingerprint_changesWhenOptionTextChanges() {
         let yes = "❯ 1. Yes\n  2. No"
         let proceed = "❯ 1. Proceed\n  2. No"

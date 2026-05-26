@@ -2,7 +2,7 @@ import XCTest
 @testable import Quip
 
 /// Locks the §18 numbered-prompt detector. Disambiguation between a
-/// real Claude prompt (with `❯` cursor marker) and prose that happens to
+/// real agent prompt (with a cursor marker) and prose that happens to
 /// contain numbered text is the entire reason this thing exists, so the
 /// tests cover both positive and negative cases.
 final class NumberedPromptDetectorTests: XCTestCase {
@@ -48,11 +48,48 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
     }
 
+    func test_codexMarkerWithFiveOptions_detected() {
+        let content = """
+        Choose an action:
+        › 1. Fix URL tray
+          2. Fix prompt routing
+          3. Run tests
+          4. Install on phone
+          5. Push branch
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2, 3, 4, 5])
+    }
+
+    func test_multiDigitOptions_detected() {
+        let content = """
+        Choose one:
+        › 1. One
+          2. Two
+          3. Three
+          4. Four
+          5. Five
+          6. Six
+          7. Seven
+          8. Eight
+          9. Nine
+          10. Ten
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), Array(1...10))
+    }
+
     func test_parenSeparator_detected() {
         // Claude has variants with `1)` instead of `1.`.
         let content = """
         ❯ 1) Yes
           2) No
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
+    }
+
+    func test_colonSeparator_detected() {
+        let content = """
+        › 1: Yes
+          2: No
         """
         XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
     }
@@ -123,9 +160,12 @@ final class NumberedPromptDetectorTests: XCTestCase {
     func test_parseNumberedLine_pickup() {
         XCTAssertEqual(NumberedPromptDetector.parseNumberedLine("❯ 1. Yes")?.0, 1)
         XCTAssertTrue(NumberedPromptDetector.parseNumberedLine("❯ 1. Yes")?.1 == true)
+        XCTAssertEqual(NumberedPromptDetector.parseNumberedLine("› 1. Yes")?.0, 1)
+        XCTAssertTrue(NumberedPromptDetector.parseNumberedLine("› 1. Yes")?.1 == true)
         XCTAssertEqual(NumberedPromptDetector.parseNumberedLine("  2. No")?.0, 2)
         XCTAssertFalse(NumberedPromptDetector.parseNumberedLine("  2. No")?.1 ?? true)
+        XCTAssertEqual(NumberedPromptDetector.parseNumberedLine("  10. Later")?.0, 10)
         XCTAssertNil(NumberedPromptDetector.parseNumberedLine("plain prose"))
-        XCTAssertNil(NumberedPromptDetector.parseNumberedLine("1: bad separator"))
+        XCTAssertNil(NumberedPromptDetector.parseNumberedLine("1- bad separator"))
     }
 }

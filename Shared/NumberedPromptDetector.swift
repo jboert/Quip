@@ -1,8 +1,9 @@
 import Foundation
 
-/// Detects Claude Code's numbered-prompt block in a terminal content
+/// Detects an agent CLI's numbered-prompt block in a terminal content
 /// snapshot — the `❯ 1. Yes / 2. No / 3. Cancel` style affordance Claude
-/// renders when asking the user to pick from a list. (§18.)
+/// renders, or the `› 1. Yes` marker Codex can render, when asking the
+/// user to pick from a list. (§18.)
 ///
 /// Disambiguation matters: a regular paragraph that happens to contain
 /// "1." and "2." (e.g. a markdown ordered list in chat output) must NOT
@@ -13,11 +14,11 @@ import Foundation
 ///      output) backward up to a small window — Claude's prompt sits at
 ///      the bottom of the visible viewport.
 ///   2. Find lines matching the prompt pattern: optional leading
-///      whitespace + `❯ ` cursor marker OR start-of-line, then a digit,
+///      whitespace + known cursor marker OR start-of-line, then a digit,
 ///      a `.` or `)` separator, a space, then text.
-///   3. Require AT LEAST ONE `❯`-prefixed line in the matched cluster
-///      (Claude always renders the prompt with the cursor marker on the
-///      currently-highlighted option). Without the marker, treat as
+///   3. Require AT LEAST ONE marker-prefixed line in the matched cluster
+///      (agent CLIs render the prompt with the cursor marker on the
+///      currently highlighted option). Without the marker, treat as
 ///      prose.
 ///   4. Return the contiguous option numbers (typically `[1, 2, 3]` or
 ///      `[1, 2]`), or nil if no valid prompt block is found.
@@ -31,6 +32,11 @@ enum NumberedPromptDetector {
     /// Anything past this is older output that shouldn't be considered
     /// part of the current prompt.
     static let scanLineLimit = 30
+
+    /// Upper bound for dynamic in-app prompt buttons. This keeps accidental
+    /// log/prose matches bounded while allowing real multi-choice menus well
+    /// beyond notification-action limits.
+    static let maxOptionNumber = 99
 
     /// Detect a numbered prompt block. Returns the contiguous option
     /// numbers (1-based, ascending) or nil when no prompt detected.
@@ -94,8 +100,9 @@ enum NumberedPromptDetector {
     /// highlight moves between options.
     private static func normalizedOptionLine(_ line: String) -> String {
         var s = stripANSI(line).trimmingCharacters(in: .whitespaces)
-        if s.hasPrefix("❯ ") { s.removeFirst(2) }
-        else if s.hasPrefix("> ") { s.removeFirst(2) }
+        if let marker = promptMarkerPrefix(in: s) {
+            s.removeFirst(marker.count)
+        }
         return s.split(whereSeparator: { $0 == " " || $0 == "\t" }).joined(separator: " ")
     }
 
@@ -149,7 +156,7 @@ enum NumberedPromptDetector {
 
     /// Parse one line and return (number, hasMarker) if it looks like a
     /// Claude numbered-prompt line. nil otherwise.
-    /// Pattern: optional whitespace, optional `❯ ` cursor marker,
+    /// Pattern: optional whitespace, optional known cursor marker,
     /// digit(s), `.` or `)`, space, body.
     static func parseNumberedLine(_ line: String) -> (Int, Bool)? {
         // Strip ANSI-ish escape sequences (basic: ESC followed by `[`
@@ -160,14 +167,9 @@ enum NumberedPromptDetector {
 
         var rest = Substring(cleaned)
         var hasMarker = false
-        if rest.hasPrefix("❯ ") {
+        if let marker = promptMarkerPrefix(in: String(rest)) {
             hasMarker = true
-            rest = rest.dropFirst(2)
-        } else if rest.hasPrefix("> ") {
-            // ASCII fallback — some terminal shells render `>` instead
-            // of `❯` when the font lacks the glyph. Treat it the same.
-            hasMarker = true
-            rest = rest.dropFirst(2)
+            rest = rest.dropFirst(marker.count)
         }
 
         // Greedy digit run.
@@ -176,11 +178,21 @@ enum NumberedPromptDetector {
             digits.append(c)
             rest = rest.dropFirst()
         }
-        guard !digits.isEmpty, let n = Int(digits), n >= 1, n <= 9 else { return nil }
+        guard !digits.isEmpty,
+              let n = Int(digits),
+              n >= 1,
+              n <= maxOptionNumber else { return nil }
 
-        // Separator: `.` or `)` followed by a space.
-        guard rest.hasPrefix(". ") || rest.hasPrefix(") ") else { return nil }
+        // Separator: `.`, `)`, or `:` followed by a space. The colon form
+        // appears in some compact TUI prompt renderers.
+        guard rest.hasPrefix(". ") || rest.hasPrefix(") ") || rest.hasPrefix(": ") else { return nil }
         return (n, hasMarker)
+    }
+
+    private static let promptMarkers = ["❯ ", "› ", "> "]
+
+    private static func promptMarkerPrefix(in line: String) -> String? {
+        promptMarkers.first { line.hasPrefix($0) }
     }
 
     private static let ansiPrefix: Character = "\u{1B}"

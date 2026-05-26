@@ -4989,33 +4989,33 @@ struct InlineTerminalContent: View {
             .padding(.vertical, 6)
             .background(Color.white.opacity(0.06))
 
-            // §18 — context-aware numbered-prompt chips. When the
-            // detector finds Claude's `❯ 1. Yes / 2. No / 3. Cancel`
-            // pattern in the current content, render a strip of small
-            // chips so the user can tap an answer without typing.
-            // Hidden entirely when no prompt detected — same compact-UI
-            // discipline as the rest of the panel.
+            // §18 — context-aware numbered-prompt chips. When the shared
+            // detector finds an agent CLI's numeric choice menu, render one
+            // in-app button per detected option so Codex/Claude prompts with
+            // 1...N choices are answerable without typing.
             if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
                 if labsOneTapAnswer {
                     // §3.2 Labs — prominent, equal-width answer buttons with the
                     // prompt fingerprint so the Mac re-validates before injecting.
                     let fingerprint = NumberedPromptDetector.fingerprint(in: content)
-                    HStack(spacing: 8) {
-                        ForEach(options, id: \.self) { n in
-                            Button {
-                                onSendAction("select_\(n)", fingerprint)
-                            } label: {
-                                Text("\(n)")
-                                    .font(.system(size: 17, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(Color.white)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 40)
-                                    .background(Color.accentColor)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(options, id: \.self) { n in
+                                Button {
+                                    onSendAction("select_\(n)", fingerprint)
+                                } label: {
+                                    Text("\(n)")
+                                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.white)
+                                        .frame(minWidth: 46)
+                                        .frame(height: 40)
+                                        .background(Color.accentColor)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                }
+                                .accessibilityLabel("Pick option \(n)")
+                                .accessibilityHint("Submit \(n) to the current prompt")
+                                .accessibilityAddTraits(.isButton)
                             }
-                            .accessibilityLabel("Pick option \(n)")
-                            .accessibilityHint("Submit \(n) to the current prompt")
-                            .accessibilityAddTraits(.isButton)
                         }
                     }
                     .padding(.horizontal, 10)
@@ -5024,23 +5024,25 @@ struct InlineTerminalContent: View {
                 } else {
                     // §18 — compact chips (default). Tap emits `select_<n>`;
                     // no fingerprint → Mac injects without re-validation.
-                    HStack(spacing: 6) {
-                        ForEach(options, id: \.self) { n in
-                            Button {
-                                onSendAction("select_\(n)", nil)
-                            } label: {
-                                Text("\(n)")
-                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(Color.white)
-                                    .frame(width: 28, height: 24)
-                                    .background(Color.accentColor.opacity(0.85))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(options, id: \.self) { n in
+                                Button {
+                                    onSendAction("select_\(n)", nil)
+                                } label: {
+                                    Text("\(n)")
+                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(Color.white)
+                                        .frame(minWidth: 28)
+                                        .frame(height: 24)
+                                        .background(Color.accentColor.opacity(0.85))
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
+                                .accessibilityLabel("Pick option \(n)")
+                                .accessibilityHint("Submit \(n) to the current prompt")
+                                .accessibilityAddTraits(.isButton)
                             }
-                            .accessibilityLabel("Pick option \(n)")
-                            .accessibilityHint("Submit \(n) to the current Claude prompt")
-                            .accessibilityAddTraits(.isButton)
                         }
-                        Spacer()
                     }
                     .padding(.horizontal, 10)
                     .padding(.top, 4)

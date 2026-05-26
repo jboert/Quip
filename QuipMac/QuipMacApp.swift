@@ -1943,11 +1943,26 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     }
 
     /// One-tap answer actions eligible for §3.2 prompt re-validation.
-    static let answerActions: Set<String> = [
-        "press_y", "press_n",
-        "select_1", "select_2", "select_3", "select_4",
-        "select_5", "select_6", "select_7", "select_8", "select_9",
-    ]
+    nonisolated static func isAnswerAction(_ action: String) -> Bool {
+        action == "press_y" || action == "press_n" || selectedOptionNumber(from: action) != nil
+    }
+
+    /// Parse the shared dynamic in-app prompt action format. The wire string
+    /// stays `select_N`, but N is not hard-coded to 1...9 so the phone can
+    /// render and answer every detected numbered option.
+    nonisolated static func selectedOptionNumber(from action: String) -> Int? {
+        let prefix = "select_"
+        guard action.hasPrefix(prefix) else { return nil }
+        let raw = action.dropFirst(prefix.count)
+        guard !raw.isEmpty,
+              raw.allSatisfy(\.isNumber),
+              let n = Int(raw),
+              n >= 1,
+              n <= NumberedPromptDetector.maxOptionNumber else {
+            return nil
+        }
+        return n
+    }
 
     /// Pure decision: may we inject `action` given the prompt the phone saw
     /// (`expectedFingerprint`) versus what's on screen now (`liveContent`)?
@@ -1961,7 +1976,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return false
         }
         // For a numbered answer, also confirm N is still an offered option.
-        if action.hasPrefix("select_"), let n = Int(action.suffix(1)) {
+        if let n = selectedOptionNumber(from: action) {
             return NumberedPromptDetector.detect(in: liveContent)?.contains(n) ?? false
         }
         return true  // press_y / press_n — fingerprint match is sufficient
@@ -1979,13 +1994,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let wid = window.id
         let sessionId = window.iterm2SessionId
         let isTerminal = window.isTerminal
-        let text: String = {
+        guard let text: String = {
             switch action {
             case "press_y": return "y"
             case "press_n": return "n"
-            default: return String(action.suffix(1)) // select_N
+            default:
+                guard let n = Self.selectedOptionNumber(from: action) else { return nil }
+                return String(n)
             }
-        }()
+        }() else { return }
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer, windowManager] in
             let content = isTerminal
                 ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
@@ -2049,7 +2066,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // §3.2 — re-validate one-tap answers carrying a fingerprint before
         // injecting. nil fingerprint (older phones / in-app non-Labs taps /
         // non-answer actions) falls straight through to the legacy path.
-        if let fp = promptFingerprint, Self.answerActions.contains(action) {
+        if let fp = promptFingerprint, Self.isAnswerAction(action) {
             revalidateAnswer(action, for: window, expectedFingerprint: fp)
             return
         }
@@ -2074,6 +2091,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let runAfterDelay: (@escaping () -> Void) -> Void = { work in
             if injectionDelay == 0 { work() }
             else { DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) { work() } }
+        }
+        if let selectedOption = Self.selectedOptionNumber(from: action) {
+            runAfterDelay {
+                self.injectQuickActionSendText(String(selectedOption), to: wid, pressReturn: true,
+                                               terminalApp: termApp, windowName: wname,
+                                               cgWindowNumber: wn,
+                                               iterm2SessionId: window.iterm2SessionId)
+            }
+            return
         }
         switch action {
         case "press_return":
@@ -2126,19 +2152,6 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         case "press_y":
             runAfterDelay {
                 self.injectQuickActionSendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
-            }
-        // §18 — context-aware numbered-prompt selection. Phone sends
-        // `select_<n>` (1-9) when the user taps a numbered chip in the
-        // terminal panel; Mac types the digit + Return into the target
-        // window the same way press_y/press_n work.
-        case "select_1", "select_2", "select_3", "select_4",
-             "select_5", "select_6", "select_7", "select_8", "select_9":
-            let digit = String(action.suffix(1))
-            runAfterDelay {
-                self.injectQuickActionSendText(digit, to: wid, pressReturn: true,
-                                               terminalApp: termApp, windowName: wname,
-                                               cgWindowNumber: wn,
-                                               iterm2SessionId: window.iterm2SessionId)
             }
         // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
         // sends the iTerm2 menu shortcut for the corresponding action.
