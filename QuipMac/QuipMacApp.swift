@@ -1902,6 +1902,37 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// session was recreated under the same window, so the cached id no longer
     /// matches). On hit, the caller should refresh the session-id map and
     /// retry the injection once before reporting failure to the phone.
+    /// Inject text via `KeystrokeInjector.sendText` with the (#1) self-heal:
+    /// if iTerm2 reports the cached session id was "not found", refresh the
+    /// session-id map and retry once. Fire-and-forget — used by
+    /// handleQuickAction's answer cases (press_y / press_n / select_N) plus
+    /// press_return / clear_terminal / restart_claude.
+    @MainActor
+    private func injectQuickActionSendText(_ text: String, to wid: String, pressReturn: Bool,
+                                           terminalApp: TerminalApp, windowName: String,
+                                           cgWindowNumber: CGWindowID,
+                                           iterm2SessionId: String?) {
+        var r = keystrokeInjector.sendText(text, to: wid, pressReturn: pressReturn,
+                                           terminalApp: terminalApp, windowName: windowName,
+                                           cgWindowNumber: cgWindowNumber,
+                                           iterm2SessionId: iterm2SessionId)
+        if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: terminalApp) {
+            let sessions = WindowManager.fetchIterm2SessionIds()
+            windowManager.applyIterm2SessionIds(sessions)
+            if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
+               let newId = refreshed.iterm2SessionId, newId != iterm2SessionId {
+                NSLog("[Quip] quick_action self-heal: refreshed iTerm2 session id for %@", wid)
+                r = keystrokeInjector.sendText(text, to: wid, pressReturn: pressReturn,
+                                               terminalApp: terminalApp, windowName: windowName,
+                                               cgWindowNumber: cgWindowNumber,
+                                               iterm2SessionId: newId)
+            }
+        }
+        if !r.success {
+            webSocketServer.broadcast(ErrorMessage(reason: "Quick action failed: \(r.error ?? "unknown")"))
+        }
+    }
+
     nonisolated static func shouldSelfHealStaleSession(result: KeystrokeInjector.InjectionResult,
                                                        terminalApp: TerminalApp) -> Bool {
         guard !result.success, terminalApp == .iterm2 else { return false }
@@ -2051,7 +2082,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // same path reliably; the System Events path races the AX raise and
             // drops Return on iTerm2 when multiple windows are open.
             runAfterDelay {
-                keystrokeInjector.sendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                self.injectQuickActionSendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_ctrl_c":
             runAfterDelay {
@@ -2094,7 +2125,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
         case "press_y":
             runAfterDelay {
-                keystrokeInjector.sendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                self.injectQuickActionSendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         // §18 — context-aware numbered-prompt selection. Phone sends
         // `select_<n>` (1-9) when the user taps a numbered chip in the
@@ -2104,10 +2135,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
              "select_5", "select_6", "select_7", "select_8", "select_9":
             let digit = String(action.suffix(1))
             runAfterDelay {
-                keystrokeInjector.sendText(digit, to: wid, pressReturn: true,
-                                            terminalApp: termApp, windowName: wname,
-                                            cgWindowNumber: wn,
-                                            iterm2SessionId: window.iterm2SessionId)
+                self.injectQuickActionSendText(digit, to: wid, pressReturn: true,
+                                               terminalApp: termApp, windowName: wname,
+                                               cgWindowNumber: wn,
+                                               iterm2SessionId: window.iterm2SessionId)
             }
         // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
         // sends the iTerm2 menu shortcut for the corresponding action.
@@ -2131,17 +2162,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
         case "press_n":
             runAfterDelay {
-                keystrokeInjector.sendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                self.injectQuickActionSendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "clear_terminal":
             runAfterDelay {
-                keystrokeInjector.sendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                self.injectQuickActionSendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "restart_claude":
             runAfterDelay {
                 keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    keystrokeInjector.sendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                    self.injectQuickActionSendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
                 }
             }
         case "toggle_enabled":
