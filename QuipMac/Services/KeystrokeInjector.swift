@@ -18,10 +18,48 @@ enum TextInjectionRoute: String, Sendable {
 @Observable
 final class KeystrokeInjector {
 
+    /// Structured failure kinds — drives self-heal decisions without string-
+    /// matching the AppleScript error wording (#4).
+    enum InjectionError: Sendable, Equatable {
+        /// iTerm2 session uuid not found by the AppleScript walker — the
+        /// cached id is stale (session was recreated). Triggers self-heal:
+        /// refresh session-id map + retry once. (§)
+        case sessionNotFound
+        /// AppleScript blocked by TCC (Apple Events / Accessibility).
+        case tccDenied
+        /// Target window has gone away before injection started.
+        case windowClosed
+        /// Anything else; carries the original message for debugging.
+        case unknown(String)
+    }
+
     /// Result of a keystroke injection operation
     struct InjectionResult: Sendable {
         let success: Bool
         let error: String?
+        /// Structured kind, when classifiable. nil for older call sites or
+        /// when classification didn't yield a specific case. (#4)
+        let kind: InjectionError?
+
+        init(success: Bool, error: String?, kind: InjectionError? = nil) {
+            self.success = success
+            self.error = error
+            self.kind = kind
+        }
+    }
+
+    /// Classify a raw AppleScript error message into a structured `InjectionError`.
+    /// Pulled out for testing; runs on every executeAppleScript failure. (#4)
+    nonisolated static func classifyAppleScriptError(_ message: String) -> InjectionError {
+        let lower = message.lowercased()
+        if lower.contains("not found") { return .sessionNotFound }
+        if lower.contains("not authorized") || lower.contains("denied") || lower.contains("tcc") {
+            return .tccDenied
+        }
+        if lower.contains("window") && (lower.contains("closed") || lower.contains("doesn't exist")) {
+            return .windowClosed
+        }
+        return .unknown(message)
     }
 
     /// Which injection path the delay is being computed for. `.sendText`
@@ -957,7 +995,8 @@ final class KeystrokeInjector {
         if let errorInfo = errorInfo {
             let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "Unknown AppleScript error"
             print("[KeystrokeInjector] \(context): \(message)")
-            return InjectionResult(success: false, error: message)
+            return InjectionResult(success: false, error: message,
+                                   kind: Self.classifyAppleScriptError(message))
         }
 
         return InjectionResult(success: true, error: nil)

@@ -1,36 +1,66 @@
 import XCTest
 @testable import Quip
 
-/// Locks the predicate that decides when `send_text` should refresh the
-/// iTerm2 session-id map and retry once before failing. Triggered by the
-/// AppleScript "Quip: iTerm2 session ... not found" error path.
+/// Locks the predicate that decides when an injection failure should refresh
+/// the iTerm2 session-id map and retry once before failing. Prefers the
+/// structured `InjectionError.sessionNotFound` (#4); falls back to a string
+/// match for unclassified errors. Triggered by the AppleScript "Quip: iTerm2
+/// session ... not found" path.
 final class SendTextSelfHealTests: XCTestCase {
 
-    func test_iterm2_sessionNotFound_triggersSelfHeal() {
-        XCTAssertTrue(QuipMacApp.shouldSelfHealStaleSession(
-            injectionError: "Quip: iTerm2 session ABC123 not found",
-            terminalApp: .iterm2))
+    private func fail(_ message: String,
+                      kind: KeystrokeInjector.InjectionError? = nil) -> KeystrokeInjector.InjectionResult {
+        KeystrokeInjector.InjectionResult(success: false, error: message, kind: kind)
     }
 
-    func test_iterm2_caseInsensitive() {
-        XCTAssertTrue(QuipMacApp.shouldSelfHealStaleSession(
-            injectionError: "the SESSION was NOT FOUND",
-            terminalApp: .iterm2))
+    private func ok() -> KeystrokeInjector.InjectionResult {
+        KeystrokeInjector.InjectionResult(success: true, error: nil)
     }
 
-    func test_nilError_doesNotTrigger() {
-        XCTAssertFalse(QuipMacApp.shouldSelfHealStaleSession(
-            injectionError: nil, terminalApp: .iterm2))
+    // MARK: - shouldSelfHealStaleSession
+
+    func test_structuredSessionNotFound_triggersSelfHeal() {
+        let r = fail("anything", kind: .sessionNotFound)
+        XCTAssertTrue(QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: .iterm2))
+    }
+
+    func test_stringFallback_notFound_triggersSelfHeal() {
+        // Unclassified failure carrying a "not found" string still self-heals.
+        let r = fail("Quip: iTerm2 session ABC123 not found")
+        XCTAssertTrue(QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: .iterm2))
+    }
+
+    func test_success_doesNotTrigger() {
+        XCTAssertFalse(QuipMacApp.shouldSelfHealStaleSession(result: ok(), terminalApp: .iterm2))
     }
 
     func test_terminalApp_doesNotTriggerEvenWithNotFound() {
-        // Terminal.app has no per-session id concept; the heal path is iTerm-only.
-        XCTAssertFalse(QuipMacApp.shouldSelfHealStaleSession(
-            injectionError: "Quip: session not found", terminalApp: .terminal))
+        let r = fail("Quip: session not found", kind: .sessionNotFound)
+        XCTAssertFalse(QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: .terminal))
     }
 
     func test_unrelatedError_doesNotTrigger() {
-        XCTAssertFalse(QuipMacApp.shouldSelfHealStaleSession(
-            injectionError: "permission denied", terminalApp: .iterm2))
+        let r = fail("permission denied", kind: .tccDenied)
+        XCTAssertFalse(QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: .iterm2))
+    }
+
+    // MARK: - classifyAppleScriptError (#4)
+
+    func test_classify_sessionNotFound() {
+        XCTAssertEqual(KeystrokeInjector.classifyAppleScriptError("Quip: iTerm2 session ABC not found"),
+                       .sessionNotFound)
+    }
+
+    func test_classify_tccDenied() {
+        XCTAssertEqual(KeystrokeInjector.classifyAppleScriptError("Not authorized to send Apple events"),
+                       .tccDenied)
+    }
+
+    func test_classify_unknown_carriesMessage() {
+        if case .unknown(let msg) = KeystrokeInjector.classifyAppleScriptError("script timed out") {
+            XCTAssertEqual(msg, "script timed out")
+        } else {
+            XCTFail("expected .unknown(...)")
+        }
     }
 }

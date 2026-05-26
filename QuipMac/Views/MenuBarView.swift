@@ -10,6 +10,7 @@ struct MenuBarView: View {
     @Environment(CloudflareTunnel.self) private var tunnel
     @Environment(ConnectionLog.self) private var connectionLog
     @Environment(MacPermissionsStore.self) private var permissionsStore
+    @Environment(PushNotificationService.self) private var pushService
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,6 +27,15 @@ struct MenuBarView: View {
             if permissionsStore.anyDenied {
                 Divider()
                 permissionsSection
+            }
+
+            // (#2) APNs misconfig nudge — push silently drops when devices are
+            // registered but APNs metadata isn't entered. 534 silent skips/day
+            // in push.log went unseen until this surfaced. Only shows when the
+            // condition holds, same compact-UI discipline as the perms section.
+            if pushService.devices.count > 0 && APNsMetadataStore.keyId.isEmpty {
+                Divider()
+                apnsWarningSection
             }
 
             Divider()
@@ -309,6 +319,27 @@ struct MenuBarView: View {
     }
 
     // MARK: - Actions Section
+
+    private var apnsWarningSection: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .font(.system(size: 13))
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("APNs not configured")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("\(pushService.devices.count) registered device\(pushService.devices.count == 1 ? "" : "s") — pushes will not deliver until you enter your Apple Developer key in Settings → Notifications.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+    }
 
     private var actionsSection: some View {
         VStack(spacing: 2) {

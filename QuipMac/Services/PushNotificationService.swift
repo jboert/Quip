@@ -316,6 +316,29 @@ final class PushNotificationService {
         return "waiting_for_input"
     }
 
+    /// Build the APNs payload dict — pure for testability (#4). Mirrors the
+    /// shape the iOS app expects: `aps.alert/badge/category`, top-level
+    /// `quip_window_id` / `quip_event`, and §3.2's optional
+    /// `quip_options` + `quip_prompt_fingerprint` only when present.
+    nonisolated static func buildPayload(windowId: String, title: String, body: String,
+                                         attentionCount: Int, sound: Bool, isYesNo: Bool,
+                                         options: [Int]?, promptFingerprint: String?) -> [String: Any] {
+        var aps: [String: Any] = [
+            "alert": ["title": title, "body": body],
+            "badge": attentionCount,
+            "category": waitingCategory(options: options, isYesNo: isYesNo)
+        ]
+        if sound { aps["sound"] = "default" }
+        var payload: [String: Any] = [
+            "aps": aps,
+            "quip_window_id": windowId,
+            "quip_event": "waiting_for_input"
+        ]
+        if let options { payload["quip_options"] = options }
+        if let promptFingerprint { payload["quip_prompt_fingerprint"] = promptFingerprint }
+        return payload
+    }
+
     func notifyWaitingForInput(windowId: String, windowName: String, projectName: String?,
                                attentionCount: Int, selectedWindowId: String?,
                                options: [Int]? = nil, isYesNo: Bool = false,
@@ -414,32 +437,11 @@ final class PushNotificationService {
                 }
                 return "🤖 AI is waiting"
             }()
-            var aps: [String: Any] = [
-                "alert": [
-                    "title": title,
-                    "body": body
-                ],
-                "badge": attentionCount,
-                // (wishlist §15 v2 / Watch-actions path A.) Surfaces the
-                // Yes / No / 1 / 2 inline buttons on the lock screen and
-                // the paired Apple Watch. iOS picks the action set up
-                // from its registered UNNotificationCategory of the
-                // matching identifier. Older iOS clients that don't
-                // register the category fall back to the plain banner.
-                "category": Self.waitingCategory(options: options, isYesNo: isYesNo)
-            ]
-            if prefs.sound { aps["sound"] = "default" }
-
-            var payload: [String: Any] = [
-                "aps": aps,
-                "quip_window_id": windowId,
-                "quip_event": "waiting_for_input"
-            ]
-            // Dynamic one-tap answer metadata (§3.2): the option numbers the
-            // phone should render as actions, and the fingerprint it must echo
-            // back so the Mac can re-validate before injecting.
-            if let options { payload["quip_options"] = options }
-            if let promptFingerprint { payload["quip_prompt_fingerprint"] = promptFingerprint }
+            let payload = Self.buildPayload(
+                windowId: windowId, title: title, body: body,
+                attentionCount: attentionCount, sound: prefs.sound,
+                isYesNo: isYesNo, options: options, promptFingerprint: promptFingerprint
+            )
 
             // Encode now (on main) so the Task below captures Sendable Data
             // instead of an [String: Any] which is not Sendable.

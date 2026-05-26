@@ -73,6 +73,12 @@ struct QuipMacApp: App {
     @State private var ttsGeneration: [String: Int] = [:]
     /// Windows where Claude is actively thinking (detected from terminal content)
     @State private var thinkingWindows: Set<String> = []
+/// (#6) Per-window timestamp of the last `waiting_for_input` scrape, so
+/// rapid waiting↔thinking↔waiting bursts don't AppleScript-storm. Cached
+/// options/fingerprint reused inside `recentScrapeTTL`.
+@State private var lastWaitingScrapeAt: [String: Date] = [:]
+@State private var cachedWaitingScrape: [String: (options: [Int]?, isYesNo: Bool, fingerprint: String?)] = [:]
+private static let recentScrapeTTL: TimeInterval = 0.75
     /// First-seen-offscreen timestamp keyed by "<connId>:<windowId>". Drives
     /// the 5s grace period before emitting `qa_pair_lost { reason: "window_offscreen" }`.
     @State private var qaPairOffscreenSince: [String: Date] = [:]
@@ -355,22 +361,40 @@ struct QuipMacApp: App {
                 // state transition; we hop back to main to fire the push.
                 if !pushNotificationService.devices.isEmpty,
                    let window, window.isTerminal {
-                    let wn = window.windowNumber
-                    let termApp = terminalAppForWindow(window)
-                    let sessionId = window.iterm2SessionId
-                    DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, pushNotificationService] in
-                        let content = keystrokeInjector.readContent(
-                            terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId
-                        ) ?? ""
-                        let options = NumberedPromptDetector.detect(in: content)
-                        let isYesNo = NumberedPromptDetector.detectYesNo(in: content)
-                        let fingerprint = NumberedPromptDetector.fingerprint(in: content)
-                        DispatchQueue.main.async {
-                            pushNotificationService.notifyWaitingForInput(
-                                windowId: windowId, windowName: windowName, projectName: project,
-                                attentionCount: 1, selectedWindowId: clientSelectedWindowId,
-                                options: options, isYesNo: isYesNo, promptFingerprint: fingerprint
-                            )
+                    // (#6) Debounce: if we scraped this window within
+                    // `recentScrapeTTL`, reuse the cached options/fingerprint
+                    // instead of running another AppleScript. Avoids storming
+                    // during rapid waiting↔thinking oscillations.
+                    let now = Date()
+                    if let last = lastWaitingScrapeAt[windowId],
+                       now.timeIntervalSince(last) < Self.recentScrapeTTL,
+                       let cached = cachedWaitingScrape[windowId] {
+                        pushNotificationService.notifyWaitingForInput(
+                            windowId: windowId, windowName: windowName, projectName: project,
+                            attentionCount: 1, selectedWindowId: clientSelectedWindowId,
+                            options: cached.options, isYesNo: cached.isYesNo,
+                            promptFingerprint: cached.fingerprint
+                        )
+                    } else {
+                        let wn = window.windowNumber
+                        let termApp = terminalAppForWindow(window)
+                        let sessionId = window.iterm2SessionId
+                        DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, pushNotificationService] in
+                            let content = keystrokeInjector.readContent(
+                                terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId
+                            ) ?? ""
+                            let options = NumberedPromptDetector.detect(in: content)
+                            let isYesNo = NumberedPromptDetector.detectYesNo(in: content)
+                            let fingerprint = NumberedPromptDetector.fingerprint(in: content)
+                            DispatchQueue.main.async {
+                                self.lastWaitingScrapeAt[windowId] = Date()
+                                self.cachedWaitingScrape[windowId] = (options, isYesNo, fingerprint)
+                                pushNotificationService.notifyWaitingForInput(
+                                    windowId: windowId, windowName: windowName, projectName: project,
+                                    attentionCount: 1, selectedWindowId: clientSelectedWindowId,
+                                    options: options, isYesNo: isYesNo, promptFingerprint: fingerprint
+                                )
+                            }
                         }
                     }
                 } else {
@@ -1035,19 +1059,21 @@ struct QuipMacApp: App {
                     let injectAndLog: () -> Void = {
                         let tStart = Date()
                         var result = inject()
+                        var selfHealed = false
                         // Self-heal: if AppleScript couldn't find the iTerm2
                         // session (cached id went stale because the session
                         // was recreated), refresh the map and retry once with
                         // the fresh id before reporting failure to the phone.
                         // Bounded to one retry; the refresh is a one-shot
                         // AppleScript and only runs on the failure path.
-                        if Self.shouldSelfHealStaleSession(injectionError: result.error, terminalApp: termApp) {
+                        if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
                             let sessions = WindowManager.fetchIterm2SessionIds()
                             self.windowManager.applyIterm2SessionIds(sessions)
                             if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
                                let newId = refreshed.iterm2SessionId,
                                newId != window.iterm2SessionId {
                                 NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", msg.windowId)
+                                selfHealed = true
                                 if route == .pasteText {
                                     result = self.keystrokeInjector.pasteText(
                                         msg.text, to: msg.windowId, pressReturn: msg.pressReturn,
@@ -1064,7 +1090,7 @@ struct QuipMacApp: App {
                         let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
                         let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
                         let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
-                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty)")
+                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
                         if !result.success {
                             let reason = result.error ?? "unknown injection failure"
                             self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(reason)"))
@@ -1866,10 +1892,13 @@ struct QuipMacApp: App {
     /// session was recreated under the same window, so the cached id no longer
     /// matches). On hit, the caller should refresh the session-id map and
     /// retry the injection once before reporting failure to the phone.
-    nonisolated static func shouldSelfHealStaleSession(injectionError: String?,
+    nonisolated static func shouldSelfHealStaleSession(result: KeystrokeInjector.InjectionResult,
                                                        terminalApp: TerminalApp) -> Bool {
-        guard terminalApp == .iterm2, let err = injectionError else { return false }
-        return err.localizedCaseInsensitiveContains("not found")
+        guard !result.success, terminalApp == .iterm2 else { return false }
+        // Prefer the structured kind (set by classifyAppleScriptError); fall
+        // back to string for error paths that don't classify yet. (#4)
+        if result.kind == .sessionNotFound { return true }
+        return (result.error ?? "").localizedCaseInsensitiveContains("not found")
     }
 
     /// One-tap answer actions eligible for §3.2 prompt re-validation.
@@ -1921,10 +1950,26 @@ struct QuipMacApp: App {
                 ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
                 : ""
             let ok = Self.answerStillValid(action: action, expectedFingerprint: expectedFingerprint, liveContent: content)
+            // #3 — re-fire a fresh push with the now-current options so the
+            // user just taps again. Recompute now (still on bg) so the main
+            // hop has them ready.
+            let freshOptions = NumberedPromptDetector.detect(in: content)
+            let freshIsYesNo = NumberedPromptDetector.detectYesNo(in: content)
+            let freshFingerprint = NumberedPromptDetector.fingerprint(in: content)
             DispatchQueue.main.async {
                 guard ok else {
                     print("[Quip] one-tap answer DROPPED (prompt changed): action=\(action) window=\(wid)")
                     webSocketServer.broadcast(ErrorMessage(reason: "Prompt changed — not sent"))
+                    // Re-fire with fresh options when a numbered/y-n prompt is
+                    // still on screen — closes the loop instead of dead-ending. (#3)
+                    if freshFingerprint != nil, let win = windowManager.windows.first(where: { $0.id == wid }) {
+                        self.pushNotificationService.notifyWaitingForInput(
+                            windowId: wid, windowName: win.name, projectName: win.subtitle,
+                            attentionCount: 1, selectedWindowId: self.clientSelectedWindowId,
+                            options: freshOptions, isYesNo: freshIsYesNo,
+                            promptFingerprint: freshFingerprint
+                        )
+                    }
                     return
                 }
                 windowManager.focusWindow(wid)
@@ -2308,6 +2353,12 @@ struct QuipMacApp: App {
         thinkingWindows = thinkingWindows.intersection(allCurrentIds)
         claudeModeDetector.windowModes = claudeModeDetector.windowModes.filter { allCurrentIds.contains($0.key) }
         if let selected = clientSelectedWindowId, !allCurrentIds.contains(selected) {
+            // §7 diagnostic — selected window vanished from snapshot (iTerm
+            // respawn, window close, layout swap). Phone keeps its
+            // selectedWindowId pointing at the old id; it does NOT auto-resend
+            // SelectWindowMessage on reconnect, so subsequent pushes report
+            // clientSelectedWindowId=nil. Real fix: iOS resends on auth.
+            appendPushDiagnostic("clientSelectedWindowId nilled — window \(selected) no longer in snapshot")
             clientSelectedWindowId = nil
         }
     }
