@@ -380,6 +380,13 @@ final class WebSocketClient {
     /// almost certainly been dropped on the floor by the Mac.
     private var pendingSendTexts: [UUID: Date] = [:]
 
+    /// (#7) Last `SelectWindowMessage.windowId` we sent. Cached so we can
+    /// re-sync the Mac on every auth_result success — the Mac nils its
+    /// `clientSelectedWindowId` when the selected window vanishes from its
+    /// snapshot, and without a resend the phone's selection effectively
+    /// disappears Mac-side until the user re-picks.
+    private(set) var lastSelectedWindowId: String?
+
     /// Phase 3: latest classification from NWPathMonitor. Updated on every
     /// path change so the next `handleSendTextAck` can stamp the sample
     /// with the current radio without re-walking the path. `.unknown` until
@@ -735,6 +742,14 @@ final class WebSocketClient {
                 }
             }
         }
+        // (#7) Cache the last selection so we can re-sync the Mac on every
+        // auth_result success — Mac drops clientSelectedWindowId when the
+        // selected window vanishes from its snapshot (iTerm respawn, layout
+        // change), and the phone has no other prompt to re-pick. Caching
+        // here intercepts every existing call site without touching them.
+        if let sw = message as? SelectWindowMessage {
+            lastSelectedWindowId = sw.windowId
+        }
         do {
             let data = try JSONEncoder().encode(message)
             let string = String(data: data, encoding: .utf8) ?? ""
@@ -985,6 +1000,14 @@ final class WebSocketClient {
                     let reason: DisconnectReason = .authFailed(message: msg.error)
                     lastDisconnectReason = reason
                     lastError = reason.label
+                }
+                // (#7) On every successful auth, re-sync the Mac to the
+                // window the phone considers selected. Mac drops its copy
+                // when the selected window vanishes from its snapshot
+                // (iTerm respawn, layout change) and never gets it back
+                // until the user re-taps. Replaying here closes the gap.
+                if msg.success, let wid = lastSelectedWindowId {
+                    send(SelectWindowMessage(windowId: wid))
                 }
                 onAuthResult?(msg.success, msg.error)
             }
