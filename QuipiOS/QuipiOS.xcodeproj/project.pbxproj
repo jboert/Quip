@@ -33,6 +33,7 @@
 		2FDDC840F5A589B81D2517D0 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4E6BADD636034CE8C5EC9A /* MessageProtocol.swift */; };
 		2FE851D3B7E5A263C2E1A06F /* SilentModeDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFEC177041E6CF5C96C7D88 /* SilentModeDetector.swift */; };
 		35848956152082FFE9094000 /* PhoneLayoutChooserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BD4C0C02F1EAFBEEDC5EA1D /* PhoneLayoutChooserTests.swift */; };
+		37115D9F7AB88E301EEE4019 /* ImportPackSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31867ACCFA76453591CEE2ED /* ImportPackSheet.swift */; };
 		390A246B5D13F798E9B55E7B /* ImageRecompressor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6ED80C8277F668CC0B273C /* ImageRecompressor.swift */; };
 		3C69E42DAC8E6515F9BC3F03 /* WindowManagerSessionIdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764505DC63C7C214558A63CC /* WindowManagerSessionIdTests.swift */; };
 		413005C731BCDCED5438E47F /* InlineTerminalContentBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD67F0481CA1F97EEB2F5D7C /* InlineTerminalContentBranchTests.swift */; };
@@ -168,6 +169,7 @@
 		310DDC8B5BA9B05DA4632BF5 /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
 		3150B50687617E509C16EC1D /* ImagePickerPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePickerPresenter.swift; sourceTree = "<group>"; };
 		3153F1300EF9EB3372F1EE7A /* PushNotificationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationCenter.swift; sourceTree = "<group>"; };
+		31867ACCFA76453591CEE2ED /* ImportPackSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportPackSheet.swift; sourceTree = "<group>"; };
 		343D7EF269316EB5B3DCC796 /* MessageProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProtocolTests.swift; sourceTree = "<group>"; };
 		382370F0C983ABEC82E06430 /* KeychainDeviceID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainDeviceID.swift; sourceTree = "<group>"; };
 		38403BB3D3EAD614680767A6 /* dictation-vocab.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "dictation-vocab.txt"; sourceTree = "<group>"; };
@@ -369,6 +371,7 @@
 				AB1FAB05086E60FFC302C3E6 /* ContextMenuView.swift */,
 				466A4F2906BA7B078608620E /* DiagnosticsSheet.swift */,
 				3150B50687617E509C16EC1D /* ImagePickerPresenter.swift */,
+				31867ACCFA76453591CEE2ED /* ImportPackSheet.swift */,
 				BE0BC3568ECDD8FC3E78B940 /* PendingImagePreviewStrip.swift */,
 				46EF93D7DE43B8C363C6D49D /* QAPairLayoutView.swift */,
 				94FA5C2A4E68BD3594AAD1EF /* QAPairPickerSheet.swift */,
@@ -695,6 +698,7 @@
 				2E3F0351CC5E90C934E0F0B2 /* HardwareButtonHandler.swift in Sources */,
 				E634311FF9DEAEA0E074302E /* ImagePickerPresenter.swift in Sources */,
 				390A246B5D13F798E9B55E7B /* ImageRecompressor.swift in Sources */,
+				37115D9F7AB88E301EEE4019 /* ImportPackSheet.swift in Sources */,
 				D6951671B113FBEEB9B32067 /* KeychainBackendPINs.swift in Sources */,
 				E15A8F5B7E6A925B33ECA315 /* KeychainDeviceID.swift in Sources */,
 				439BF46992706F9951B43E48 /* LabsFlags.swift in Sources */,
