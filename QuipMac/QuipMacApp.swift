@@ -1034,7 +1034,32 @@ struct QuipMacApp: App {
                     }
                     let injectAndLog: () -> Void = {
                         let tStart = Date()
-                        let result = inject()
+                        var result = inject()
+                        // Self-heal: if AppleScript couldn't find the iTerm2
+                        // session (cached id went stale because the session
+                        // was recreated), refresh the map and retry once with
+                        // the fresh id before reporting failure to the phone.
+                        // Bounded to one retry; the refresh is a one-shot
+                        // AppleScript and only runs on the failure path.
+                        if Self.shouldSelfHealStaleSession(injectionError: result.error, terminalApp: termApp) {
+                            let sessions = WindowManager.fetchIterm2SessionIds()
+                            self.windowManager.applyIterm2SessionIds(sessions)
+                            if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
+                               let newId = refreshed.iterm2SessionId,
+                               newId != window.iterm2SessionId {
+                                NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", msg.windowId)
+                                if route == .pasteText {
+                                    result = self.keystrokeInjector.pasteText(
+                                        msg.text, to: msg.windowId, pressReturn: msg.pressReturn,
+                                        terminalApp: termApp, iterm2SessionId: newId)
+                                } else {
+                                    result = self.keystrokeInjector.sendText(
+                                        msg.text, to: msg.windowId, pressReturn: msg.pressReturn,
+                                        terminalApp: termApp, windowName: name,
+                                        cgWindowNumber: wn, iterm2SessionId: newId)
+                                }
+                            }
+                        }
                         let tEnd = Date()
                         let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
                         let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
@@ -1835,6 +1860,16 @@ struct QuipMacApp: App {
             // the set can't grow unbounded across long sessions.
             claimedSpawnedIds.formIntersection(currentIds)
         }
+    }
+
+    /// True when an injection failure looks like a stale iTerm2 session id (the
+    /// session was recreated under the same window, so the cached id no longer
+    /// matches). On hit, the caller should refresh the session-id map and
+    /// retry the injection once before reporting failure to the phone.
+    nonisolated static func shouldSelfHealStaleSession(injectionError: String?,
+                                                       terminalApp: TerminalApp) -> Bool {
+        guard terminalApp == .iterm2, let err = injectionError else { return false }
+        return err.localizedCaseInsensitiveContains("not found")
     }
 
     /// One-tap answer actions eligible for §3.2 prompt re-validation.
