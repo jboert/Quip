@@ -1253,12 +1253,14 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     break
                 }
                 thinkingWindows.insert(msg.windowId)
-                if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
-                    handleQuickAction(msg.action, for: window, promptFingerprint: msg.promptFingerprint)
-                } else {
+                guard windowManager.windows.contains(where: { $0.id == msg.windowId }) else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] quick_action DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
                     webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
+                    break
+                }
+                ensureITermSessionResolved(for: msg.windowId) { window in
+                    handleQuickAction(msg.action, for: window, promptFingerprint: msg.promptFingerprint)
                 }
             }
         case "stt_started":
