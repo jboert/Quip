@@ -31,6 +31,36 @@ AuthKey_*.p8
 apns-key*
 APNs-Key*
 
+# Environment files — assume any .env contains secrets.
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Apple code-signing assets — certificates, private keys, provisioning
+# profiles. Treat as PASSWORD-EQUIVALENT.
+*.p12
+*.pem
+*.key
+*.cer
+*.cert
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+ExportOptions.plist
+
+# Android signing — keystore holds the release-signing private key,
+# keystore.properties holds the password to unlock it.
+*.keystore
+*.jks
+keystore.properties
+
+# Firebase / Google service configs — contain API keys and project IDs.
+GoogleService-Info.plist
+google-services.json
+firebase-adminsdk-*.json
+serviceAccountKey*.json
+
 # Xcode
 xcuserdata/
 *.xcuserstate
