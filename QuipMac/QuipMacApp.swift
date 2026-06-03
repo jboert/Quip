@@ -73,6 +73,11 @@ struct QuipMacApp: App {
     @State private var ttsGeneration: [String: Int] = [:]
     /// Windows where Claude is actively thinking (detected from terminal content)
     @State private var thinkingWindows: Set<String> = []
+    // (review #1) In-flight + queued iTerm2 session resolves, keyed by windowId,
+    // so concurrent taps on an unresolved window run in tap order behind ONE
+    // fetch instead of racing multiple background fetchIterm2SessionIds calls.
+    @State private var iterm2ResolveInFlight: Set<String> = []
+    @State private var pendingIterm2Resolves: [String: [PendingResolve]] = [:]
 /// (#6) Per-window timestamp of the last `waiting_for_input` scrape, so
 /// rapid waiting↔thinking↔waiting bursts don't AppleScript-storm. Cached
 /// options/fingerprint reused inside `recentScrapeTTL`.
@@ -994,12 +999,6 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     break
                 }
                 AuditLogger.log(messageType: "send_text", clientIdentifier: "ws-client", textContent: msg.text)
-                guard windowManager.windows.contains(where: { $0.id == msg.windowId }) else {
-                    let known = windowManager.windows.map { $0.id }
-                    print("[Quip] send_text DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
-                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
-                    break
-                }
                 // tRecv = the moment the WS handler decoded the message.
                 // tStart = right before we kick AppleScript / paste; the
                 // async-resolve + focusDelay overhead lives in (tStart - tRecv).
@@ -1151,7 +1150,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     return
                 }
 
-                ensureITermSessionResolved(for: msg.windowId) { window in
+                ensureITermSessionResolved(for: msg.windowId, onMissing: {
+                    self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "window closed mid-action"))
+                }) { window in
                     let termApp = self.terminalAppForWindow(window)
                     self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
@@ -1252,15 +1253,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     )
                     break
                 }
-                thinkingWindows.insert(msg.windowId)
-                guard windowManager.windows.contains(where: { $0.id == msg.windowId }) else {
-                    let known = windowManager.windows.map { $0.id }
-                    print("[Quip] quick_action DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
-                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
-                    break
-                }
                 ensureITermSessionResolved(for: msg.windowId) { window in
-                    handleQuickAction(msg.action, for: window, promptFingerprint: msg.promptFingerprint)
+                    self.thinkingWindows.insert(msg.windowId)
+                    self.handleQuickAction(msg.action, for: window, promptFingerprint: msg.promptFingerprint)
                 }
             }
         case "stt_started":
@@ -2303,6 +2298,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         return Array(newLines.suffix(25)).joined(separator: "\n")
     }
 
+    /// One queued resolve waiting behind an in-flight iTerm2 session refresh
+    /// for the same windowId. (review #1)
+    private struct PendingResolve {
+        let perform: @MainActor @Sendable (ManagedWindow) -> Void
+        let onMissing: (@MainActor @Sendable () -> Void)?
+    }
+
     /// Ensure the window's iTerm2 session UUID is resolved before we
     /// fire keystroke/text injection. When the Mac just launched (or an
     /// iTerm2 window was created a split-second ago), `iterm2SessionId`
@@ -2314,18 +2316,19 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// refresh off-main and retries the injection with the freshly
     /// resolved window. For Terminal.app or already-mapped windows the
     /// callback runs synchronously on main with zero latency.
+    ///
+    /// This also centralizes the window existence-check (callers no longer
+    /// pre-guard) and serializes concurrent resolves for the same windowId so
+    /// a burst of taps can't reorder behind racing background fetches.
+    /// (review #1/#2/#3/#6/#8)
     @MainActor
     private func ensureITermSessionResolved(
         for windowId: String,
+        onMissing: (@MainActor @Sendable () -> Void)? = nil,
         perform: @escaping @MainActor @Sendable (ManagedWindow) -> Void
     ) {
         guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
-            // Wishlist §23 race C: caller already passed an existence guard,
-            // but if a Close fired between the caller's check and our entry
-            // we'd silently drop the keystroke / image-paste with no feedback.
-            // Surface to the phone so the user knows the action was lost.
-            print("[Quip] ensureITermSessionResolved: window \(windowId) gone before resolve")
-            webSocketServer.broadcast(ErrorMessage(reason: "Window closed mid-action"))
+            reportResolveMiss(windowId, stage: "before resolve", onMissing: onMissing)
             return
         }
         let needsResolve = window.bundleId == TerminalApp.iterm2.bundleIdentifier
@@ -2334,19 +2337,48 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             perform(window)
             return
         }
+        // (review #1/#8) Coalesce concurrent resolves for the SAME window: if a
+        // refresh is already in flight, queue this action behind it in tap order
+        // rather than kicking a second racing fetch whose completion could land
+        // out of order.
+        if iterm2ResolveInFlight.contains(windowId) {
+            pendingIterm2Resolves[windowId, default: []].append(
+                PendingResolve(perform: perform, onMissing: onMissing))
+            return
+        }
+        iterm2ResolveInFlight.insert(windowId)
         DispatchQueue.global(qos: .userInitiated).async {
             let sessions = WindowManager.fetchIterm2SessionIds()
             Task { @MainActor in
                 self.windowManager.applyIterm2SessionIds(sessions)
+                self.iterm2ResolveInFlight.remove(windowId)
+                let queued = self.pendingIterm2Resolves.removeValue(forKey: windowId) ?? []
                 guard let refreshed = self.windowManager.windows.first(where: { $0.id == windowId }) else {
-                    // Window closed during the off-main session-id refresh.
-                    // Same surfacing as the entry-time guard above.
-                    print("[Quip] ensureITermSessionResolved: window \(windowId) gone during session-id refresh")
-                    self.webSocketServer.broadcast(ErrorMessage(reason: "Window closed mid-action"))
+                    self.reportResolveMiss(windowId, stage: "during session-id refresh", onMissing: onMissing)
+                    for p in queued {
+                        self.reportResolveMiss(windowId, stage: "during session-id refresh", onMissing: p.onMissing)
+                    }
                     return
                 }
                 perform(refreshed)
+                for p in queued { p.perform(refreshed) }
             }
+        }
+    }
+
+    /// Centralized "window no longer exists" feedback for the resolver. Default
+    /// broadcasts ErrorMessage("Window no longer exists"); callers needing a
+    /// different message type (e.g. image_upload's ImageUploadErrorMessage) pass
+    /// an `onMissing` override. (review #3/#6)
+    @MainActor
+    private func reportResolveMiss(_ windowId: String, stage: String,
+                                   onMissing: (@MainActor @Sendable () -> Void)?) {
+        let known = windowManager.windows.map { $0.id }
+        print("[Quip] ensureITermSessionResolved: window \(windowId) gone \(stage). Known windows: \(known)")
+        if let onMissing {
+            onMissing()
+        } else {
+            webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
         }
     }
 
