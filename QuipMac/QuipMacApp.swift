@@ -1445,15 +1445,40 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         case "put_prompt":
             if let msg = MessageCoder.decode(PutPromptMessage.self, from: data) {
-                _ = promptLibrary.put(id: msg.id, label: msg.label, body: msg.body,
-                                      tags: msg.tags, targetAgent: msg.targetAgent, description: msg.description)
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] put_prompt DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
+                let savedURL = promptLibrary.put(id: msg.id, label: msg.label, body: msg.body,
+                                                 tags: msg.tags, targetAgent: msg.targetAgent, description: msg.description)
                 // put() rescans and rebroadcasts immediately; watcher still
-                // covers external file edits. Nothing to ack.
+                // covers external file edits. Ack lets the phone keep the
+                // editor open until the disk write has really happened.
+                if let messageId = msg.messageId {
+                    webSocketServer.broadcast(PutPromptAckMessage(
+                        messageId: messageId,
+                        id: msg.id,
+                        success: savedURL != nil,
+                        error: savedURL == nil ? "Prompt could not be saved on the Mac." : nil
+                    ))
+                }
             }
 
         case "delete_prompt":
             if let msg = MessageCoder.decode(DeletePromptMessage.self, from: data) {
-                _ = promptLibrary.delete(id: msg.id)
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] delete_prompt DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
+                let deleted = promptLibrary.delete(id: msg.id)
+                if let messageId = msg.messageId {
+                    webSocketServer.broadcast(DeletePromptAckMessage(
+                        messageId: messageId,
+                        id: msg.id,
+                        success: deleted,
+                        error: deleted ? nil : "Prompt could not be deleted on the Mac."
+                    ))
+                }
             }
 
         case "register_push_device":

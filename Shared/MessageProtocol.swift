@@ -690,6 +690,9 @@ struct PutPromptMessage: Codable, Sendable {
     let id: String
     let label: String
     let body: String
+    /// Correlates Mac persistence acks back to the mobile save action.
+    /// Optional so older clients can still write prompts without ack support.
+    let messageId: UUID?
     /// Optional pack metadata (§6.1) — persisted by the Mac as on-disk
     /// front-matter. All optional → old peers ignore / send nil.
     let tags: [String]?
@@ -697,14 +700,34 @@ struct PutPromptMessage: Codable, Sendable {
     let description: String?
 
     init(id: String, label: String, body: String,
+         messageId: UUID? = UUID(),
          tags: [String]? = nil, targetAgent: String? = nil, description: String? = nil) {
         self.type = "put_prompt"
         self.id = id
         self.label = label
         self.body = body
+        self.messageId = messageId
         self.tags = tags
         self.targetAgent = targetAgent
         self.description = description
+    }
+}
+
+/// Mac → iPhone. Confirms a prompt create/update reached disk, or returns the
+/// failure reason so the editor can stay open and show a specific error.
+struct PutPromptAckMessage: Codable, Sendable {
+    let type: String
+    let messageId: UUID
+    let id: String
+    let success: Bool
+    let error: String?
+
+    init(messageId: UUID, id: String, success: Bool, error: String? = nil) {
+        self.type = "put_prompt_ack"
+        self.messageId = messageId
+        self.id = id
+        self.success = success
+        self.error = error
     }
 }
 
@@ -712,10 +735,32 @@ struct PutPromptMessage: Codable, Sendable {
 struct DeletePromptMessage: Codable, Sendable {
     let type: String
     let id: String
+    /// Correlates Mac delete acks back to the mobile destructive action.
+    /// Optional for backwards compatibility with older clients.
+    let messageId: UUID?
 
-    init(id: String) {
+    init(id: String, messageId: UUID? = UUID()) {
         self.type = "delete_prompt"
         self.id = id
+        self.messageId = messageId
+    }
+}
+
+/// Mac → iPhone. Confirms a prompt delete reached disk, or returns the failure
+/// reason so the phone can show recoverable feedback.
+struct DeletePromptAckMessage: Codable, Sendable {
+    let type: String
+    let messageId: UUID
+    let id: String
+    let success: Bool
+    let error: String?
+
+    init(messageId: UUID, id: String, success: Bool, error: String? = nil) {
+        self.type = "delete_prompt_ack"
+        self.messageId = messageId
+        self.id = id
+        self.success = success
+        self.error = error
     }
 }
 

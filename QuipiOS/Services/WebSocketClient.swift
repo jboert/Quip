@@ -228,6 +228,10 @@ final class WebSocketClient {
     /// Phone caches into `promptLibrary` so the Prompts sheet can render
     /// without a fresh fetch.
     var onPromptLibrary: (([PromptEntry]) -> Void)?
+    /// Mac confirms prompt create/update reached disk, or reports why it failed.
+    var onPutPromptAck: ((PutPromptAckMessage) -> Void)?
+    /// Mac confirms prompt delete reached disk, or reports why it failed.
+    var onDeletePromptAck: ((DeletePromptAckMessage) -> Void)?
     /// Cached catalog from the Mac — published so SwiftUI views can
     /// observe directly (avoids piping through host state).
     var promptLibrary: [PromptEntry] = []
@@ -1179,6 +1183,20 @@ final class WebSocketClient {
                 NSLog("[WebSocketClient] prompt_library: %d prompts", msg.prompts.count)
                 promptLibrary = msg.prompts
                 onPromptLibrary?(msg.prompts)
+            }
+        case "put_prompt_ack":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(PutPromptAckMessage.self, from: data, msgType: peek.type) {
+                NSLog("[WebSocketClient] put_prompt_ack: id=%@ success=%d err=%@",
+                      msg.id, msg.success ? 1 : 0, msg.error ?? "none")
+                onPutPromptAck?(msg)
+            }
+        case "delete_prompt_ack":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(DeletePromptAckMessage.self, from: data, msgType: peek.type) {
+                NSLog("[WebSocketClient] delete_prompt_ack: id=%@ success=%d err=%@",
+                      msg.id, msg.success ? 1 : 0, msg.error ?? "none")
+                onDeletePromptAck?(msg)
             }
         case "whisper_status":
             guard isAuthenticated else { return }

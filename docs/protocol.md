@@ -520,6 +520,65 @@ Tap-to-open shortcut: the desktop calls `NSWorkspace.shared.open(...)` with the 
 | `"automation"` | Privacy & Security → Automation |
 | `"screenRecording"` | Privacy & Security → Screen Recording |
 
+## Prompt Library Mutations
+
+### put_prompt
+
+iPhone → Mac. Create or update a prompt file under `~/Library/Application Support/Quip/prompts/`. `messageId` is optional for backward compatibility; clients that send it should wait for `put_prompt_ack` before dismissing the editor.
+
+```json
+{
+  "type": "put_prompt",
+  "id": "ship-it",
+  "label": "Ship It",
+  "body": "Run the focused tests, commit, push, and report the result.",
+  "messageId": "11111111-2222-3333-4444-555555555555",
+  "tags": ["release"],
+  "targetAgent": "codex",
+  "description": "End-to-end ship loop"
+}
+```
+
+### put_prompt_ack
+
+Mac → iPhone. Sent after the prompt write either reaches disk or fails. The `messageId` echoes `put_prompt.messageId`.
+
+```json
+{
+  "type": "put_prompt_ack",
+  "messageId": "11111111-2222-3333-4444-555555555555",
+  "id": "ship-it",
+  "success": true,
+  "error": null
+}
+```
+
+### delete_prompt
+
+iPhone → Mac. Delete a prompt file by id. `messageId` is optional for backward compatibility; clients that send it should wait for `delete_prompt_ack` before treating the delete as durable.
+
+```json
+{
+  "type": "delete_prompt",
+  "id": "ship-it",
+  "messageId": "22222222-3333-4444-5555-666666666666"
+}
+```
+
+### delete_prompt_ack
+
+Mac → iPhone. Sent after the delete either reaches disk or fails. The `messageId` echoes `delete_prompt.messageId`.
+
+```json
+{
+  "type": "delete_prompt_ack",
+  "messageId": "22222222-3333-4444-5555-666666666666",
+  "id": "ship-it",
+  "success": false,
+  "error": "Prompt could not be deleted on the Mac."
+}
+```
+
 ## Message Routing
 
 The server reads the `type` field from the JSON envelope first, then deserializes into the appropriate struct. Unknown types are logged and ignored. Decode failures inside a known type send back an `error` message rather than silently dropping.
@@ -593,7 +652,7 @@ If we ever need explicit versioning (e.g. for a wire-incompatible change neither
 
 Side-effecting iOS→Mac messages carry an optional `messageId: UUID?` (added in §27). Mac dedupes via `MessageDedupeTable.checkAndRecord(_:)` — first arrival processes, second is silently dropped. Phones that double-tap or retry on reconnect won't double-fire.
 
-Coverage audit at commit `8fdbd66` confirmed every side-effecting Mac handler wraps the dedupe call. New handlers MUST do the same — see the canonical pattern near `case "send_text"` in `QuipMac/QuipMacApp.swift`. The list of side-effecting handlers as of 2026-05-06: `send_text`, `quick_action`, `duplicate_window`, `close_window`, `spawn_window`, `paste_prompt`, `attach_iterm_window`, `image_upload`. (GH #18 closed 2026-05-06 against this audit.)
+Coverage audit at commit `8fdbd66` confirmed every side-effecting Mac handler wraps the dedupe call. New handlers MUST do the same — see the canonical pattern near `case "send_text"` in `QuipMac/QuipMacApp.swift`. The list of side-effecting handlers as of 2026-06-04: `send_text`, `quick_action`, `duplicate_window`, `close_window`, `spawn_window`, `paste_prompt`, `put_prompt`, `delete_prompt`, `attach_iterm_window`, `image_upload`.
 
 `messageId` is `Optional` for backward-compat: older iOS builds that omit it still work — they just don't get dedupe protection. Side-effecting messages from those builds are processed every arrival.
 

@@ -354,13 +354,61 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     func testPutPromptMetadataRoundTrip() throws {
-        let m = PutPromptMessage(id: "p", label: "L", body: "B",
+        let mid = UUID()
+        let m = PutPromptMessage(id: "p", label: "L", body: "B", messageId: mid,
                                  tags: ["x"], targetAgent: "cursor", description: "d")
         let data = try XCTUnwrap(MessageCoder.encode(m))
         let r = try XCTUnwrap(MessageCoder.decode(PutPromptMessage.self, from: data))
+        XCTAssertEqual(r.messageId, mid)
         XCTAssertEqual(r.tags, ["x"])
         XCTAssertEqual(r.targetAgent, "cursor")
         XCTAssertEqual(r.description, "d")
+    }
+
+    func testPutPromptLegacyDecodesWithoutMessageID() throws {
+        let legacy = #"{"type":"put_prompt","id":"p","label":"L","body":"B"}"#
+        let data = try XCTUnwrap(legacy.data(using: .utf8))
+        let r = try XCTUnwrap(MessageCoder.decode(PutPromptMessage.self, from: data))
+        XCTAssertNil(r.messageId)
+        XCTAssertEqual(r.id, "p")
+        XCTAssertEqual(r.body, "B")
+    }
+
+    func testPromptMutationAcksRoundTrip() throws {
+        let putId = UUID()
+        let put = PutPromptAckMessage(messageId: putId, id: "ship", success: true)
+        let putData = try XCTUnwrap(MessageCoder.encode(put))
+        let putRestored = try XCTUnwrap(MessageCoder.decode(PutPromptAckMessage.self, from: putData))
+        XCTAssertEqual(putRestored.type, "put_prompt_ack")
+        XCTAssertEqual(putRestored.messageId, putId)
+        XCTAssertEqual(putRestored.id, "ship")
+        XCTAssertTrue(putRestored.success)
+        XCTAssertNil(putRestored.error)
+
+        let deleteId = UUID()
+        let delete = DeletePromptAckMessage(messageId: deleteId, id: "ship", success: false, error: "not found")
+        let deleteData = try XCTUnwrap(MessageCoder.encode(delete))
+        let deleteRestored = try XCTUnwrap(MessageCoder.decode(DeletePromptAckMessage.self, from: deleteData))
+        XCTAssertEqual(deleteRestored.type, "delete_prompt_ack")
+        XCTAssertEqual(deleteRestored.messageId, deleteId)
+        XCTAssertEqual(deleteRestored.id, "ship")
+        XCTAssertFalse(deleteRestored.success)
+        XCTAssertEqual(deleteRestored.error, "not found")
+    }
+
+    func testDeletePromptMessageRoundTripAndLegacyDecode() throws {
+        let mid = UUID()
+        let msg = DeletePromptMessage(id: "ship", messageId: mid)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let restored = try XCTUnwrap(MessageCoder.decode(DeletePromptMessage.self, from: data))
+        XCTAssertEqual(restored.messageId, mid)
+        XCTAssertEqual(restored.id, "ship")
+
+        let legacy = #"{"type":"delete_prompt","id":"ship"}"#
+        let legacyData = try XCTUnwrap(legacy.data(using: .utf8))
+        let legacyRestored = try XCTUnwrap(MessageCoder.decode(DeletePromptMessage.self, from: legacyData))
+        XCTAssertNil(legacyRestored.messageId)
+        XCTAssertEqual(legacyRestored.id, "ship")
     }
 
     func testDuplicateWindowMessageEncoding() throws {

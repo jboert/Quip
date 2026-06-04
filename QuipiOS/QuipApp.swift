@@ -7719,6 +7719,10 @@ struct PromptLibrarySheet: View {
     @State private var creatingNew: Bool = false
     @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
     @State private var shareItem: PackShareItem?
+    @State private var latestPutAck: PutPromptAckMessage?
+    @State private var pendingDeleteIDs: Set<String> = []
+    @State private var deleteTimeouts: [UUID: Task<Void, Never>] = [:]
+    @State private var deleteErrorMessage: String?
 
     var body: some View {
         List {
@@ -7736,10 +7740,11 @@ struct PromptLibrarySheet: View {
                         promptRow(entry)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
-                                    client.send(DeletePromptMessage(id: entry.id))
+                                    deletePrompt(entry)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                .disabled(pendingDeleteIDs.contains(entry.id))
                                 Button {
                                     editing = entry
                                 } label: {
@@ -7789,17 +7794,39 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(isPresented: $creatingNew) {
-            PromptEditorSheet(initial: nil) { id, label, body in
-                putPrompt(id: id, label: label, body: body)
+            PromptEditorSheet(initial: nil, latestAck: latestPutAck) { entry, messageId in
+                putPrompt(entry, messageId: messageId)
             }
         }
         .sheet(item: $editing) { entry in
-            PromptEditorSheet(initial: entry) { id, label, body in
-                putPrompt(id: id, label: label, body: body)
+            PromptEditorSheet(initial: entry, latestAck: latestPutAck) { entry, messageId in
+                putPrompt(entry, messageId: messageId)
             }
         }
         .sheet(item: $shareItem) { item in
             DiagnosticsShareSheet(items: [item.url])
+        }
+        .alert("Delete failed", isPresented: Binding(
+            get: { deleteErrorMessage != nil },
+            set: { if !$0 { deleteErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { deleteErrorMessage = nil }
+        } message: {
+            Text(deleteErrorMessage ?? "The prompt could not be deleted.")
+        }
+        .onAppear {
+            client.onPutPromptAck = { ack in
+                latestPutAck = ack
+            }
+            client.onDeletePromptAck = { ack in
+                handleDeleteAck(ack)
+            }
+        }
+        .onDisappear {
+            deleteTimeouts.values.forEach { $0.cancel() }
+            deleteTimeouts.removeAll()
+            client.onPutPromptAck = nil
+            client.onDeletePromptAck = nil
         }
     }
 
@@ -7823,6 +7850,11 @@ struct PromptLibrarySheet: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.green)
             }
+            if pendingDeleteIDs.contains(entry.id) {
+                Label("Deleting...", systemImage: "hourglass")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture { fire(entry, pressReturn: false) }
@@ -7838,26 +7870,70 @@ struct PromptLibrarySheet: View {
         }
     }
 
-    private func putPrompt(id: String, label: String, body: String) -> Bool {
+    private func putPrompt(_ entry: PromptEntry, messageId: UUID) -> Bool {
         guard client.isConnected && client.isAuthenticated else { return false }
-        return client.send(PutPromptMessage(id: id, label: label, body: body))
+        return client.send(PutPromptMessage(
+            id: entry.id,
+            label: entry.label,
+            body: entry.body,
+            messageId: messageId,
+            tags: entry.tags,
+            targetAgent: entry.targetAgent,
+            description: entry.description
+        ))
+    }
+
+    private func deletePrompt(_ entry: PromptEntry) {
+        guard client.isConnected && client.isAuthenticated else {
+            deleteErrorMessage = "Connect to the Mac before deleting prompts."
+            return
+        }
+        let messageId = UUID()
+        pendingDeleteIDs.insert(entry.id)
+        guard client.send(DeletePromptMessage(id: entry.id, messageId: messageId)) else {
+            pendingDeleteIDs.remove(entry.id)
+            deleteErrorMessage = "Could not send the delete request to the Mac."
+            return
+        }
+        deleteTimeouts[messageId]?.cancel()
+        deleteTimeouts[messageId] = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard pendingDeleteIDs.contains(entry.id) else { return }
+            pendingDeleteIDs.remove(entry.id)
+            deleteTimeouts.removeValue(forKey: messageId)
+            deleteErrorMessage = "Timed out waiting for the Mac to confirm delete."
+        }
+    }
+
+    private func handleDeleteAck(_ ack: DeletePromptAckMessage) {
+        deleteTimeouts[ack.messageId]?.cancel()
+        deleteTimeouts.removeValue(forKey: ack.messageId)
+        pendingDeleteIDs.remove(ack.id)
+        if !ack.success {
+            deleteErrorMessage = ack.error ?? "The Mac could not delete this prompt."
+        }
     }
 }
 
 /// Create / edit form for a single prompt. `initial=nil` = new-prompt
 /// flow (id field editable); non-nil = edit existing (id locked, only
-/// label/body mutable). Save fires the caller's onSave with the
-/// final (id, label, body) tuple. Caller returns false when it cannot
-/// queue the save, so the editor stays open instead of silently dropping.
+/// label/body mutable). Save fires the caller's onSave with the final entry
+/// and a correlation id. The sheet stays open until the Mac acks the disk
+/// write, so a queued WebSocket send is not mistaken for a saved prompt.
 struct PromptEditorSheet: View {
     let initial: PromptEntry?
-    let onSave: (_ id: String, _ label: String, _ body: String) -> Bool
+    let latestAck: PutPromptAckMessage?
+    let onSave: (_ entry: PromptEntry, _ messageId: UUID) -> Bool
     @Environment(\.dismiss) private var dismiss
 
     @State private var idText: String = ""
     @State private var labelText: String = ""
     @State private var bodyText: String = ""
     @State private var saveError: String?
+    @State private var pendingMessageId: UUID?
+    @State private var saveTimeout: Task<Void, Never>?
+
+    private var isSaving: Bool { pendingMessageId != nil }
 
     var body: some View {
         NavigationStack {
@@ -7908,22 +7984,56 @@ struct PromptEditorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        saveTimeout?.cancel()
+                        dismiss()
+                    }
+                    .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
                         let label = labelText.trimmingCharacters(in: .whitespaces)
-                        let body = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !id.isEmpty, !body.isEmpty else { return }
-                        if onSave(id, label.isEmpty ? id : label, body) {
-                            dismiss()
-                        } else {
+                        guard !id.isEmpty, !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                        let messageId = UUID()
+                        let entry = PromptEntry(
+                            id: id,
+                            label: label.isEmpty ? id : label,
+                            body: bodyText,
+                            tags: initial?.tags,
+                            targetAgent: initial?.targetAgent,
+                            description: initial?.description
+                        )
+                        guard onSave(entry, messageId) else {
                             saveError = "Connect to the Mac before saving prompts."
+                            return
+                        }
+                        pendingMessageId = messageId
+                        saveError = nil
+                        saveTimeout?.cancel()
+                        saveTimeout = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 8_000_000_000)
+                            guard pendingMessageId == messageId else { return }
+                            pendingMessageId = nil
+                            saveError = "Timed out waiting for the Mac to confirm save."
                         }
                     }
                     .disabled(idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                              || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || isSaving)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if isSaving {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Saving to Mac...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(.bar)
                 }
             }
             .onAppear {
@@ -7933,6 +8043,23 @@ struct PromptEditorSheet: View {
                     bodyText = initial.body
                 }
             }
+            .onChange(of: latestAck?.messageId) { _, _ in
+                handleAckIfNeeded()
+            }
+            .onDisappear {
+                saveTimeout?.cancel()
+            }
+        }
+    }
+
+    private func handleAckIfNeeded() {
+        guard let ack = latestAck, ack.messageId == pendingMessageId else { return }
+        saveTimeout?.cancel()
+        pendingMessageId = nil
+        if ack.success {
+            dismiss()
+        } else {
+            saveError = ack.error ?? "The Mac could not save this prompt."
         }
     }
 }
