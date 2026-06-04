@@ -1447,7 +1447,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             if let msg = MessageCoder.decode(PutPromptMessage.self, from: data) {
                 _ = promptLibrary.put(id: msg.id, label: msg.label, body: msg.body,
                                       tags: msg.tags, targetAgent: msg.targetAgent, description: msg.description)
-                // FS watcher will rescan + re-broadcast; nothing to ack.
+                // put() rescans and rebroadcasts immediately; watcher still
+                // covers external file edits. Nothing to ack.
             }
 
         case "delete_prompt":

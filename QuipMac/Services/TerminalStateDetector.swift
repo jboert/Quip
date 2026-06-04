@@ -83,17 +83,20 @@ final class TerminalStateDetector {
                 var pidUpdates: [String: pid_t] = [:]
                 // Collect child PIDs off main (spawns ps processes)
                 var childPidsByWindow: [String: Set<pid_t>] = [:]
+                let processSnapshot = Self.captureProcessSnapshot()
                 for (windowId, shellPid) in tracked {
                     if sttWindows.contains(windowId) { continue }
-                    let (detected, hasClaude, cli, resolvedPid) = self.detectState(shellPid: shellPid, tty: ttys[windowId], cpuThreshold: threshold)
+                    let (detected, hasClaude, cli, resolvedPid, children) = self.detectState(
+                        shellPid: shellPid,
+                        tty: ttys[windowId],
+                        cpuThreshold: threshold,
+                        snapshot: processSnapshot
+                    )
                     results.append((windowId, detected))
                     claudePresence[windowId] = hasClaude
                     cliByWindow[windowId] = cli
-                    let effectivePid = resolvedPid ?? shellPid
                     if let resolvedPid { pidUpdates[windowId] = resolvedPid }
-                    if let children = self.getChildProcesses(of: effectivePid) {
-                        childPidsByWindow[windowId] = Set(children.map(\.pid))
-                    }
+                    childPidsByWindow[windowId] = Set(children.map(\.pid))
                 }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
@@ -311,9 +314,15 @@ final class TerminalStateDetector {
     }
 
     private func pollAllWindows() {
+        let processSnapshot = Self.captureProcessSnapshot()
         for (windowId, shellPid) in trackedWindows {
             if windowStates[windowId] == .sttActive { continue }
-            let (detected, hasClaude, cli, resolvedPid) = detectState(shellPid: shellPid, tty: trackedTty[windowId], cpuThreshold: cpuIdleThreshold)
+            let (detected, hasClaude, cli, resolvedPid, _) = detectState(
+                shellPid: shellPid,
+                tty: trackedTty[windowId],
+                cpuThreshold: cpuIdleThreshold,
+                snapshot: processSnapshot
+            )
             if let resolvedPid {
                 trackedWindows[windowId] = resolvedPid
                 installProcessSource(windowId: windowId, pid: resolvedPid)
@@ -335,9 +344,16 @@ final class TerminalStateDetector {
     ///   (likely dead / respawned) AND the supplied iTerm2 TTY now points
     ///   to a different live shell. Caller writes it back into
     ///   `trackedWindows` so the next poll watches the live shell.
-    private nonisolated func detectState(shellPid: pid_t, tty: String?, cpuThreshold: Double) -> (TerminalState, Bool, CLIKind, pid_t?) {
+    /// - children: descendant processes used for this decision, returned so
+    ///   the poll loop can install kqueue watches without running ps again.
+    private nonisolated func detectState(
+        shellPid: pid_t,
+        tty: String?,
+        cpuThreshold: Double,
+        snapshot: ProcessSnapshot? = nil
+    ) -> (TerminalState, Bool, CLIKind, pid_t?, [ProcessInfo]) {
         var resolvedPid: pid_t? = nil
-        var children = getChildProcesses(of: shellPid) ?? []
+        var children = childProcesses(of: shellPid, snapshot: snapshot)
 
         // Empty descendants for an iTerm2 window with a known TTY usually
         // means the original shell has exited and a new shell now owns the
@@ -345,19 +361,19 @@ final class TerminalStateDetector {
         if children.isEmpty, let tty, !tty.isEmpty,
            let liveShell = Self.shellPidForTTY(tty), liveShell != shellPid {
             resolvedPid = liveShell
-            children = getChildProcesses(of: liveShell) ?? []
+            children = childProcesses(of: liveShell, snapshot: snapshot)
         }
 
         let cliKind = Self.classifyCLI(children: children)
         let aiProcesses = children.filter { Self.isAIProcess(comm: $0.command.lowercased()) }
 
         if aiProcesses.isEmpty {
-            return (.waitingForInput, false, cliKind, resolvedPid)
+            return (.waitingForInput, false, cliKind, resolvedPid, children)
         }
 
         let totalCPU = aiProcesses.reduce(0.0) { $0 + $1.cpuPercent }
         let state: TerminalState = totalCPU < cpuThreshold ? .waitingForInput : .neutral
-        return (state, true, cliKind, resolvedPid)
+        return (state, true, cliKind, resolvedPid, children)
     }
 
     /// Classify which AI CLI (if any) is the dominant process running in
@@ -394,6 +410,35 @@ final class TerminalStateDetector {
         let command: String
     }
 
+    private struct RawProcess {
+        let pid: pid_t
+        let cpu: Double
+        let command: String
+    }
+
+    private struct ProcessSnapshot {
+        let childrenByParent: [pid_t: [RawProcess]]
+        let processByPid: [pid_t: RawProcess]
+
+        func childProcesses(of parentPid: pid_t) -> [ProcessInfo] {
+            var descendants: Set<pid_t> = []
+            var queue = childrenByParent[parentPid] ?? []
+            var index = 0
+
+            while index < queue.count {
+                let proc = queue[index]
+                index += 1
+                guard descendants.insert(proc.pid).inserted else { continue }
+                queue.append(contentsOf: childrenByParent[proc.pid] ?? [])
+            }
+
+            return descendants.compactMap { pid -> ProcessInfo? in
+                guard let proc = processByPid[pid] else { return nil }
+                return ProcessInfo(pid: proc.pid, cpuPercent: proc.cpu, command: proc.command)
+            }
+        }
+    }
+
     /// Get ALL descendant processes of a given PID by walking the process tree.
     /// Uses `ps -ax` to get the full process list, then filters to descendants.
     ///
@@ -404,6 +449,17 @@ final class TerminalStateDetector {
     /// which unblocks ps and makes waitUntilExit instant. Stderr goes to
     /// /dev/null so we never risk the mirror-image deadlock on errPipe.
     private nonisolated func getChildProcesses(of parentPid: pid_t) -> [ProcessInfo]? {
+        Self.captureProcessSnapshot()?.childProcesses(of: parentPid)
+    }
+
+    private nonisolated func childProcesses(of parentPid: pid_t, snapshot: ProcessSnapshot?) -> [ProcessInfo] {
+        if let snapshot {
+            return snapshot.childProcesses(of: parentPid)
+        }
+        return getChildProcesses(of: parentPid) ?? []
+    }
+
+    private nonisolated static func captureProcessSnapshot() -> ProcessSnapshot? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
         task.arguments = ["-ax", "-o", "pid,ppid,pcpu,comm"]
@@ -426,8 +482,8 @@ final class TerminalStateDetector {
         guard let output = String(data: data, encoding: .utf8) else { return nil }
 
         // Parse all processes into (pid, ppid, cpu, comm)
-        struct RawProc { let pid: pid_t; let ppid: pid_t; let cpu: Double; let comm: String }
-        var allProcs: [RawProc] = []
+        var childrenByParent: [pid_t: [RawProcess]] = [:]
+        var processByPid: [pid_t: RawProcess] = [:]
         let lines = output.components(separatedBy: "\n").dropFirst()
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -438,25 +494,11 @@ final class TerminalStateDetector {
                   let ppid = pid_t(parts[1]) else { continue }
             let cpu = Double(parts[2]) ?? 0.0
             let comm = String(parts[3])
-            allProcs.append(RawProc(pid: pid, ppid: ppid, cpu: cpu, comm: comm))
+            let proc = RawProcess(pid: pid, cpu: cpu, command: comm)
+            childrenByParent[ppid, default: []].append(proc)
+            processByPid[pid] = proc
         }
 
-        // Walk the tree: find all descendants of parentPid
-        var descendantPids: Set<pid_t> = [parentPid]
-        var changed = true
-        while changed {
-            changed = false
-            for proc in allProcs {
-                if descendantPids.contains(proc.ppid) && !descendantPids.contains(proc.pid) {
-                    descendantPids.insert(proc.pid)
-                    changed = true
-                }
-            }
-        }
-        descendantPids.remove(parentPid)
-
-        return allProcs
-            .filter { descendantPids.contains($0.pid) }
-            .map { ProcessInfo(pid: $0.pid, cpuPercent: $0.cpu, command: $0.comm) }
+        return ProcessSnapshot(childrenByParent: childrenByParent, processByPid: processByPid)
     }
 }

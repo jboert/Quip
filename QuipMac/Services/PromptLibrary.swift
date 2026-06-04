@@ -24,21 +24,26 @@ final class PromptLibrary {
 
     /// Called when `entries` changes. Wired by the host to broadcast a
     /// PromptLibraryMessage to every connected client.
-    var onChange: (([PromptEntry]) -> Void)?
+    var onChange: (@MainActor ([PromptEntry]) -> Void)?
 
     private var watcher: DispatchSourceFileSystemObject?
     private var watcherFD: Int32 = -1
+    private var pendingWatcherRescan: DispatchWorkItem?
 
     /// `~/Library/Application Support/Quip/prompts/`. Created on first
     /// access if missing, with a README inside so the user knows what
     /// goes there.
     static var directory: URL {
+        if let directoryOverrideForTests {
+            return directoryOverrideForTests
+        }
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSHomeDirectory())
                 .appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("Quip/prompts", isDirectory: true)
     }
+    static var directoryOverrideForTests: URL?
 
     func start() {
         ensureDirExists()
@@ -48,6 +53,8 @@ final class PromptLibrary {
     }
 
     func stop() {
+        pendingWatcherRescan?.cancel()
+        pendingWatcherRescan = nil
         watcher?.cancel()
         watcher = nil
         if watcherFD >= 0 {
@@ -77,8 +84,9 @@ final class PromptLibrary {
                                        tags: tags, targetAgent: targetAgent, description: description)
         do {
             try fileBody.write(to: url, atomically: true, encoding: .utf8)
-            // FS watcher will fire and rescan; return immediately so the
-            // calling handler can ack the phone fast.
+            // Keep clients in sync immediately. The file watcher remains a
+            // fallback for external edits and coalesced writes.
+            rescan()
             return url
         } catch {
             print("[PromptLibrary] put failed for \(safeID): \(error)")
@@ -95,6 +103,7 @@ final class PromptLibrary {
         let url = Self.directory.appendingPathComponent("\(safeID).txt")
         do {
             try FileManager.default.removeItem(at: url)
+            rescan()
             return true
         } catch {
             print("[PromptLibrary] delete failed for \(safeID): \(error)")
@@ -281,7 +290,7 @@ final class PromptLibrary {
             queue: DispatchQueue.global(qos: .utility)
         )
         source.setEventHandler { [weak self] in
-            DispatchQueue.main.async { self?.rescan() }
+            DispatchQueue.main.async { self?.scheduleWatcherRescan() }
         }
         source.setCancelHandler { [weak self] in
             if let fd = self?.watcherFD, fd >= 0 { close(fd) }
@@ -289,5 +298,15 @@ final class PromptLibrary {
         }
         source.resume()
         watcher = source
+    }
+
+    private func scheduleWatcherRescan() {
+        pendingWatcherRescan?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingWatcherRescan = nil
+            self?.rescan()
+        }
+        pendingWatcherRescan = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 }

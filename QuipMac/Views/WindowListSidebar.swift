@@ -13,10 +13,12 @@ struct WindowListSidebar: View {
     @State private var newProjectDirectory: String = ""
 
     var body: some View {
+        let snapshot = sidebarSnapshot()
+
         VStack(spacing: 0) {
-            header
+            header(count: snapshot.rows.count)
             Divider()
-            windowList
+            windowList(snapshot: snapshot)
             Divider()
             bottomBar
         }
@@ -26,11 +28,11 @@ struct WindowListSidebar: View {
 
     // MARK: - Header
 
-    private var header: some View {
+    private func header(count: Int) -> some View {
         HStack {
             Text("Windows")
                 .font(.headline)
-            Text("(\(orderedWindows.count))")
+            Text("(\(count))")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -54,71 +56,134 @@ struct WindowListSidebar: View {
 
     // MARK: - Window List
 
-    private var orderedWindows: [ManagedWindow] {
+    private struct SidebarSnapshot {
+        let rows: [SidebarRowModel]
+    }
+
+    private struct SidebarRowModel: Identifiable {
+        let window: ManagedWindow
+        let index: Int
+        let previousSameRankID: String?
+        let nextSameRankID: String?
+
+        var id: String { window.id }
+    }
+
+    private func sidebarSnapshot() -> SidebarSnapshot {
+        let ordered = orderedWindows()
+        let rows = ordered.enumerated().map { index, window in
+            let rank = sidebarRank(window)
+            let nextIndex = ordered.index(after: index)
+            let previousID = index > ordered.startIndex && sidebarRank(ordered[index - 1]) == rank
+                ? ordered[index - 1].id
+                : nil
+            let nextID = ordered.indices.contains(nextIndex) && sidebarRank(ordered[nextIndex]) == rank
+                ? ordered[nextIndex].id
+                : nil
+
+            return SidebarRowModel(
+                window: window,
+                index: index + 1,
+                previousSameRankID: previousID,
+                nextSameRankID: nextID
+            )
+        }
+        return SidebarSnapshot(rows: rows)
+    }
+
+    private func orderedWindows() -> [ManagedWindow] {
         let allWindows = windowManager.windows
-        var ordered: [ManagedWindow] = []
+        var windowsByID: [String: ManagedWindow] = [:]
+        windowsByID.reserveCapacity(allWindows.count)
+        for window in allWindows {
+            windowsByID[window.id] = window
+        }
 
         // First, add windows in the saved order
+        var ordered: [ManagedWindow] = []
+        var orderedIDs = Set<String>()
+        ordered.reserveCapacity(allWindows.count)
         for id in windowOrder {
-            if let window = allWindows.first(where: { $0.id == id }) {
+            if let window = windowsByID[id] {
                 ordered.append(window)
+                orderedIDs.insert(id)
             }
         }
 
         // Then append any new windows not yet in the order
         for window in allWindows {
-            if !windowOrder.contains(window.id) {
+            if !orderedIDs.contains(window.id) {
                 ordered.append(window)
             }
         }
 
-        // Group terminal windows (Terminal.app / iTerm2) at the top. Within each
-        // group the user's manual ordering from windowOrder is preserved.
-        let terminals = ordered.filter { $0.isTerminal }
-        let others = ordered.filter { !$0.isTerminal }
-        return terminals + others
+        // Rank the useful rows first without losing the user's manual order
+        // inside each bucket. Disabled terminal shells should not sit above
+        // enabled app/target windows just because they are terminals.
+        return ordered.enumerated().sorted { lhs, rhs in
+            let lhsRank = sidebarRank(lhs.element)
+            let rhsRank = sidebarRank(rhs.element)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
+    private func sidebarRank(_ window: ManagedWindow) -> Int {
+        if window.bundleId == TerminalApp.iterm2.bundleIdentifier, window.isEnabled { return 0 }
+        if window.isTerminal, window.isEnabled { return 1 }
+        if window.isTarget, window.isOnVisibleScreen, window.isEnabled { return 2 }
+        if window.isEnabled { return 3 }
+        if window.isTarget, window.isOnVisibleScreen { return 4 }
+        if window.bundleId == TerminalApp.iterm2.bundleIdentifier { return 5 }
+        if window.isTerminal { return 6 }
+        return 7
     }
 
     /// Sync windowOrder binding with current window list — called outside of body evaluation
     private func syncWindowOrder() {
         let allWindows = windowManager.windows
+        var knownOrderIDs = Set(windowOrder)
         for window in allWindows {
-            if !windowOrder.contains(window.id) {
+            if !knownOrderIDs.contains(window.id) {
                 windowOrder.append(window.id)
+                knownOrderIDs.insert(window.id)
             }
         }
         let activeIds = Set(allWindows.map(\.id))
         windowOrder.removeAll { !activeIds.contains($0) }
     }
 
-    private var windowList: some View {
+    private func windowList(snapshot: SidebarSnapshot) -> some View {
         List(selection: $selectedWindowId) {
-            ForEach(Array(orderedWindows.enumerated()), id: \.element.id) { index, window in
+            ForEach(snapshot.rows) { row in
                 WindowRow(
-                    window: window,
-                    index: index + 1,
-                    isSelected: selectedWindowId == window.id,
+                    window: row.window,
+                    index: row.index,
+                    isSelected: selectedWindowId == row.window.id,
                     onToggle: { enabled in
-                        windowManager.toggleWindow(window.id, enabled: enabled)
+                        windowManager.toggleWindow(row.window.id, enabled: enabled)
                     },
-                    onMoveUp: index > 0 ? {
-                        let id = window.id
-                        if let idx = windowOrder.firstIndex(of: id), idx > 0 {
-                            windowOrder.swapAt(idx, idx - 1)
-                        }
-                    } : nil,
-                    onMoveDown: index < orderedWindows.count - 1 ? {
-                        let id = window.id
-                        if let idx = windowOrder.firstIndex(of: id), idx < windowOrder.count - 1 {
-                            windowOrder.swapAt(idx, idx + 1)
-                        }
-                    } : nil
+                    onMoveUp: moveAction(for: row.window.id, neighborID: row.previousSameRankID),
+                    onMoveDown: moveAction(for: row.window.id, neighborID: row.nextSameRankID)
                 )
-                .tag(window.id)
+                .tag(row.window.id)
             }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+    }
+
+    private func moveAction(for id: String, neighborID: String?) -> (() -> Void)? {
+        guard let neighborID else { return nil }
+        return { moveWindow(id, beside: neighborID) }
+    }
+
+    private func moveWindow(_ id: String, beside neighborID: String) {
+        guard let source = windowOrder.firstIndex(of: id),
+              let destination = windowOrder.firstIndex(of: neighborID) else {
+            return
+        }
+        windowOrder.swapAt(source, destination)
     }
 
     // MARK: - Bottom Bar
@@ -366,4 +431,3 @@ private struct WindowRow: View {
         }
     }
 }
-

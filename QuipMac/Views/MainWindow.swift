@@ -17,7 +17,7 @@ struct MainWindow: View {
         NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
     }
 
-    private var localWSURL: String {
+    private static func computeLocalWSURL() -> String {
         let port = 8765
         var address = "localhost"
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
@@ -46,6 +46,7 @@ struct MainWindow: View {
     @State private var selectedDisplayId: String?
     @State private var selectedWindowId: String?
     @State private var windowOrder: [String] = []
+    @State private var localWSURL: String = MainWindow.computeLocalWSURL()
 
     @State private var layoutMode: LayoutMode = .columns
     @State private var customTemplate: CustomLayoutTemplate = .largeLeftSmallRight
@@ -69,6 +70,7 @@ struct MainWindow: View {
         .onAppear {
             windowManager.refreshDisplays()
             windowManager.refreshWindowList()
+            localWSURL = Self.computeLocalWSURL()
             if selectedDisplayId == nil {
                 selectedDisplayId = windowManager.displays.first(where: { $0.isMain })?.id
                     ?? windowManager.displays.first?.id
@@ -78,7 +80,10 @@ struct MainWindow: View {
 
     // MARK: - Detail Content
 
+    @ViewBuilder
     private var detailContent: some View {
+        let snapshot = layoutSnapshot
+
         VStack(spacing: 0) {
             // Layout + monitor row
             HStack(spacing: 12) {
@@ -102,8 +107,8 @@ struct MainWindow: View {
 
             // Layout preview
             LayoutPreview(
-                windows: displayWindows,
-                frames: currentFrames,
+                windows: snapshot.displayWindows,
+                frames: snapshot.currentFrames,
                 layoutMode: layoutMode,
                 isDragToResizeEnabled: isDragToResizeEnabled,
                 customFrames: $customFrames,
@@ -112,7 +117,7 @@ struct MainWindow: View {
                 }
             )
             .animation(.spring(duration: 0.4), value: layoutMode)
-            .animation(.spring(duration: 0.4), value: enabledWindowCount)
+            .animation(.spring(duration: 0.4), value: snapshot.enabledWindowCount)
 
             Divider()
 
@@ -357,6 +362,31 @@ struct MainWindow: View {
 
     // MARK: - Computed Properties
 
+    private struct LayoutSnapshot {
+        let displayWindows: [ManagedWindow]
+        let enabledWindowCount: Int
+        let currentFrames: [NormalizedRect]
+    }
+
+    private var layoutSnapshot: LayoutSnapshot {
+        let displayWindows = displayWindows
+        let enabledWindowCount = displayWindows.lazy.filter(\.isEnabled).count
+        let currentFrames: [NormalizedRect]
+
+        switch layoutMode {
+        case .custom:
+            currentFrames = customTemplate.frames(for: enabledWindowCount)
+        default:
+            currentFrames = LayoutCalculator.calculate(mode: layoutMode, windowCount: enabledWindowCount)
+        }
+
+        return LayoutSnapshot(
+            displayWindows: displayWindows,
+            enabledWindowCount: enabledWindowCount,
+            currentFrames: currentFrames
+        )
+    }
+
     private var selectedDisplay: WindowManager.DisplayInfo? {
         if let id = selectedDisplayId {
             return windowManager.displays.first { $0.id == id }
@@ -374,13 +404,23 @@ struct MainWindow: View {
     }
 
     private var orderedWindows: [ManagedWindow] {
+        let allWindows = windowManager.windows
+        var windowsByID: [String: ManagedWindow] = [:]
+        windowsByID.reserveCapacity(allWindows.count)
+        for window in allWindows {
+            windowsByID[window.id] = window
+        }
+
         var result: [ManagedWindow] = []
+        var orderedIDs = Set<String>()
+        result.reserveCapacity(allWindows.count)
         for id in windowOrder {
-            if let w = windowManager.windows.first(where: { $0.id == id }) {
+            if let w = windowsByID[id] {
                 result.append(w)
+                orderedIDs.insert(id)
             }
         }
-        for w in windowManager.windows where !windowOrder.contains(w.id) {
+        for w in allWindows where !orderedIDs.contains(w.id) {
             result.append(w)
         }
         return result

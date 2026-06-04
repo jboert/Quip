@@ -759,8 +759,13 @@ final class WebSocketClient {
               transport.rawValue, currentNetworkClass.rawValue, variance, host)
     }
 
-    func send<T: Codable>(_ message: T) {
-        guard let task = webSocketTask else { return }
+    @discardableResult
+    func send<T: Codable>(_ message: T) -> Bool {
+        guard let task = webSocketTask else {
+            NSLog("[WebSocketClient] send skipped kind=%@ err=no active socket",
+                  String(describing: T.self))
+            return false
+        }
         // Latency tracking — record the moment we put a SendTextMessage on
         // the wire so the SendTextAck handler can compute total round-trip.
         // Messages without a messageId are ignored (older protocol, Mac can't
@@ -791,9 +796,11 @@ final class WebSocketClient {
                           String(describing: T.self), error.localizedDescription)
                 }
             }
+            return true
         } catch {
             NSLog("[WebSocketClient] send encode FAILED kind=%@ err=%@",
                   String(describing: T.self), error.localizedDescription)
+            return false
         }
     }
 

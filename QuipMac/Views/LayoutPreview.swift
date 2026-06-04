@@ -19,6 +19,8 @@ struct LayoutPreview: View {
     }
 
     var body: some View {
+        let enabled = enabledWindows
+
         GeometryReader { geo in
             let pb = previewRect(in: geo.size)
 
@@ -26,12 +28,14 @@ struct LayoutPreview: View {
                 monitorBackground(previewBounds: pb)
 
                 // Tiles
-                ForEach(Array(enabledWindows.enumerated()), id: \.element.id) { index, window in
+                ForEach(Array(enabled.enumerated()), id: \.element.id) { index, window in
                     if index < frames.count {
                         let rect = tileRect(frame: frames[index], in: pb)
                         let color = Color(hex: window.assignedColor)
                         let isDragging = dragState?.fromIndex == index
-                        let isTarget = targetIndex(in: pb) == index && dragState != nil && dragState?.fromIndex != index
+                        let isTarget = targetIndex(in: pb, enabledWindowCount: enabled.count) == index
+                            && dragState != nil
+                            && dragState?.fromIndex != index
 
                         ZStack {
                             RoundedRectangle(cornerRadius: 8)
@@ -61,8 +65,8 @@ struct LayoutPreview: View {
                 }
 
                 // Dragged tile overlay (follows cursor)
-                if let ds = dragState, ds.fromIndex < enabledWindows.count, ds.fromIndex < frames.count {
-                    let window = enabledWindows[ds.fromIndex]
+                if let ds = dragState, ds.fromIndex < enabled.count, ds.fromIndex < frames.count {
+                    let window = enabled[ds.fromIndex]
                     let origRect = tileRect(frame: frames[ds.fromIndex], in: pb)
                     let color = Color(hex: window.assignedColor)
 
@@ -88,7 +92,7 @@ struct LayoutPreview: View {
                     .onChanged { value in
                         if dragState == nil {
                             // Find which tile the drag started in
-                            if let idx = indexAt(point: value.startLocation, in: pb) {
+                            if let idx = indexAt(point: value.startLocation, in: pb, windowCount: enabled.count) {
                                 dragState = DragState(fromIndex: idx, currentPoint: value.location)
                             }
                         } else {
@@ -97,7 +101,8 @@ struct LayoutPreview: View {
                     }
                     .onEnded { value in
                         if let ds = dragState {
-                            if let toIdx = indexAt(point: value.location, in: pb), toIdx != ds.fromIndex {
+                            if let toIdx = indexAt(point: value.location, in: pb, windowCount: enabled.count),
+                               toIdx != ds.fromIndex {
                                 onReorder?(ds.fromIndex, toIdx)
                             }
                         }
@@ -112,13 +117,13 @@ struct LayoutPreview: View {
         windows.filter(\.isEnabled)
     }
 
-    private func targetIndex(in pb: CGRect) -> Int? {
+    private func targetIndex(in pb: CGRect, enabledWindowCount: Int) -> Int? {
         guard let ds = dragState else { return nil }
-        return indexAt(point: ds.currentPoint, in: pb)
+        return indexAt(point: ds.currentPoint, in: pb, windowCount: enabledWindowCount)
     }
 
-    private func indexAt(point: CGPoint, in pb: CGRect) -> Int? {
-        for i in 0..<min(enabledWindows.count, frames.count) {
+    private func indexAt(point: CGPoint, in pb: CGRect, windowCount: Int) -> Int? {
+        for i in 0..<min(windowCount, frames.count) {
             let rect = tileRect(frame: frames[i], in: pb)
             if rect.contains(point) { return i }
         }

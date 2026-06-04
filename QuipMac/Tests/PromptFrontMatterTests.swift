@@ -72,4 +72,57 @@ final class PromptFrontMatterTests: XCTestCase {
         XCTAssertEqual(p.tags, ["x"])
         XCTAssertNil(p.targetAgent)
     }
+
+    // MARK: write-through refresh
+
+    @MainActor
+    func test_put_updatesEntriesAndNotifiesSynchronously() throws {
+        try withTemporaryPromptDirectory { library, recorder in
+            XCTAssertNotNil(library.put(id: "ship it", label: "Ship It", body: "ship the code"))
+
+            XCTAssertEqual(library.entries.map(\.id), ["ship-it"])
+            XCTAssertEqual(library.entries.first?.label, "Ship It")
+            XCTAssertEqual(library.entries.first?.body, "ship the code")
+            XCTAssertEqual(recorder.changes.map { $0.map(\.id) }, [["ship-it"]])
+        }
+    }
+
+    @MainActor
+    func test_delete_updatesEntriesAndNotifiesSynchronously() throws {
+        try withTemporaryPromptDirectory { library, recorder in
+            XCTAssertNotNil(library.put(id: "ship", label: "Ship", body: "ship the code"))
+            recorder.changes.removeAll()
+
+            XCTAssertTrue(library.delete(id: "ship"))
+
+            XCTAssertTrue(library.entries.isEmpty)
+            XCTAssertEqual(recorder.changes.map { $0.map(\.id) }, [[]])
+        }
+    }
+
+    @MainActor
+    private func withTemporaryPromptDirectory(
+        _ body: (PromptLibrary, ChangeRecorder) throws -> Void
+    ) throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("PromptLibraryTests-\(UUID().uuidString)",
+                                                              isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        PromptLibrary.directoryOverrideForTests = dir
+        defer {
+            PromptLibrary.directoryOverrideForTests = nil
+            try? fm.removeItem(at: dir)
+        }
+
+        let library = PromptLibrary()
+        let recorder = ChangeRecorder()
+        library.onChange = { recorder.changes.append($0) }
+
+        try body(library, recorder)
+    }
+
+    @MainActor
+    private final class ChangeRecorder {
+        var changes: [[PromptEntry]] = []
+    }
 }

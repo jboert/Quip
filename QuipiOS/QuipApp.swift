@@ -7790,12 +7790,12 @@ struct PromptLibrarySheet: View {
         }
         .sheet(isPresented: $creatingNew) {
             PromptEditorSheet(initial: nil) { id, label, body in
-                client.send(PutPromptMessage(id: id, label: label, body: body))
+                putPrompt(id: id, label: label, body: body)
             }
         }
         .sheet(item: $editing) { entry in
             PromptEditorSheet(initial: entry) { id, label, body in
-                client.send(PutPromptMessage(id: id, label: label, body: body))
+                putPrompt(id: id, label: label, body: body)
             }
         }
         .sheet(item: $shareItem) { item in
@@ -7837,20 +7837,27 @@ struct PromptLibrarySheet: View {
             if lastFiredId == entry.id { lastFiredId = nil }
         }
     }
+
+    private func putPrompt(id: String, label: String, body: String) -> Bool {
+        guard client.isConnected && client.isAuthenticated else { return false }
+        return client.send(PutPromptMessage(id: id, label: label, body: body))
+    }
 }
 
 /// Create / edit form for a single prompt. `initial=nil` = new-prompt
 /// flow (id field editable); non-nil = edit existing (id locked, only
 /// label/body mutable). Save fires the caller's onSave with the
-/// final (id, label, body) tuple — caller then sends a PutPromptMessage.
+/// final (id, label, body) tuple. Caller returns false when it cannot
+/// queue the save, so the editor stays open instead of silently dropping.
 struct PromptEditorSheet: View {
     let initial: PromptEntry?
-    let onSave: (_ id: String, _ label: String, _ body: String) -> Void
+    let onSave: (_ id: String, _ label: String, _ body: String) -> Bool
     @Environment(\.dismiss) private var dismiss
 
     @State private var idText: String = ""
     @State private var labelText: String = ""
     @State private var bodyText: String = ""
+    @State private var saveError: String?
 
     var body: some View {
         NavigationStack {
@@ -7888,6 +7895,14 @@ struct PromptEditorSheet: View {
                 } footer: {
                     Text("Sent verbatim to the active terminal when you tap the row in Prompts. No Markdown parsing, no template expansion.")
                 }
+
+                if let saveError {
+                    Section {
+                        Text(saveError)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.red)
+                    }
+                }
             }
             .navigationTitle(initial == nil ? "New Prompt" : "Edit Prompt")
             .navigationBarTitleDisplayMode(.inline)
@@ -7901,8 +7916,11 @@ struct PromptEditorSheet: View {
                         let label = labelText.trimmingCharacters(in: .whitespaces)
                         let body = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !id.isEmpty, !body.isEmpty else { return }
-                        onSave(id, label.isEmpty ? id : label, body)
-                        dismiss()
+                        if onSave(id, label.isEmpty ? id : label, body) {
+                            dismiss()
+                        } else {
+                            saveError = "Connect to the Mac before saving prompts."
+                        }
                     }
                     .disabled(idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                               || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
