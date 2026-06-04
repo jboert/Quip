@@ -766,6 +766,12 @@ Tickets §50–§56 (QR pairing, iCloud KVS sync, ~~iPad layout~~ tabled, Apple 
 
 **Deferred to later v:** chains (multi-step prompts), search/filter when catalog grows past one screen.
 
+### 58. Review hardening loop - layout order, prompt trust, terminal polling
+
+**Status:** Planned 2026-06-04. Plan: `docs/superpowers/plans/2026-06-04-review-hardening-loop.md`.
+
+**Scope:** Four independently shippable iterations from the review pass: unify Mac layout order and selected-display Arrange; add ack-based prompt save/delete with metadata preservation and ID collision UX; add TerminalStateDetector generation/backpressure/stale-result guards; close polish items such as drag-to-resize promise, terminal spawn path quoting, accessibility labels, protocol docs, and hardware install verification.
+
 ---
 
 ## Completed
