@@ -279,6 +279,9 @@ private struct GeneralTab: View {
                     macPermRow(name: "Automation (iTerm)", granted: perms.appleEvents, pane: .automation)
                     macPermRow(name: "Screen Recording", granted: perms.screenRecording, pane: .screenRecording)
                 }
+                Text("If System Settings already shows Quip enabled but the row stays red, turn Quip off and back on there. Screen Recording changes may require relaunching Quip.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Terminal") {
@@ -420,16 +423,7 @@ private struct GeneralTab: View {
     }
 
     private func openSettingsPane(_ pane: MacSettingsPane) {
-        let urlString: String
-        switch pane {
-        case .accessibility:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-        case .automation:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-        case .screenRecording:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        }
-        guard let url = URL(string: urlString) else { return }
+        guard let url = pane.systemSettingsURL else { return }
         NSWorkspace.shared.open(url)
     }
 }

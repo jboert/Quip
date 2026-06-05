@@ -898,6 +898,25 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(decoded.pane, .accessibility)
     }
 
+    func testMacSettingsPaneSystemSettingsURLs() {
+        XCTAssertEqual(
+            MacSettingsPane.accessibility.systemSettingsURLString,
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        )
+        XCTAssertEqual(
+            MacSettingsPane.automation.systemSettingsURLString,
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        )
+        XCTAssertEqual(
+            MacSettingsPane.screenRecording.systemSettingsURLString,
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        )
+
+        for pane in MacSettingsPane.allCases {
+            XCTAssertNotNil(pane.systemSettingsURL)
+        }
+    }
+
     private func jsonDict(from data: Data) throws -> [String: Any] {
         try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]

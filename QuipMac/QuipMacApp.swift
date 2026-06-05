@@ -169,6 +169,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(tailscale)
                 .environment(connectionLog)
                 .environment(permissionsStore)
+                .environment(pushNotificationService)
                 .onAppear { startServicesOnce() }
         }
         .menuBarExtraStyle(.window)
@@ -544,16 +545,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// Triggered by the phone tapping a red ❌ row in its perm strip.
     @MainActor
     private func openSettingsPane(_ pane: MacSettingsPane) {
-        let urlString: String
-        switch pane {
-        case .accessibility:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-        case .automation:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-        case .screenRecording:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        }
-        guard let url = URL(string: urlString) else { return }
+        guard let url = pane.systemSettingsURL else { return }
         NSWorkspace.shared.open(url)
     }
 

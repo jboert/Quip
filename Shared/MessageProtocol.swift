@@ -642,7 +642,7 @@ struct PromptEntry: Codable, Sendable, Hashable, Identifiable {
     /// older peers — additive, so existing prompts and old Mac/phone builds
     /// keep working unchanged.
     let tags: [String]?
-    let targetAgent: String?  // "claude" | "codex" | "cursor" | "any"
+    let targetAgent: String?  // "claude" | "codex" | "cursor" | "grok" | "any"
     let description: String?
 
     /// Convenience for the iOS list row — first 120 chars of the
@@ -1160,6 +1160,21 @@ enum MacSettingsPane: String, Codable, Sendable, CaseIterable {
     case accessibility
     case automation
     case screenRecording
+
+    var systemSettingsURLString: String {
+        switch self {
+        case .accessibility:
+            return "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case .automation:
+            return "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        case .screenRecording:
+            return "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+    }
+
+    var systemSettingsURL: URL? {
+        URL(string: systemSettingsURLString)
+    }
 }
 
 /// Mac → iPhone. Snapshot of what's currently granted on the Mac. Sent on

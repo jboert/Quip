@@ -11,7 +11,8 @@ import SwiftUI
 /// Apple/iOS-only. All flags default false so an upgrade never silently turns
 /// a beta behavior on. (§0)
 enum LabsFlags {
-    /// Surface Cursor (`cursor-agent`) in the new-session agent picker. (§7.4)
+    /// Legacy Cursor (`cursor-agent`) flag. Kept so older defaults decode, but
+    /// the feature is hidden from Settings while the agent path is paused.
     static let cursorAgent = "labs.cursorAgent"
     /// Promote in-app numbered prompt chips to prominent, fingerprint-validated
     /// one-tap answer buttons when a window is waiting. (§3.2)
@@ -19,11 +20,9 @@ enum LabsFlags {
     /// Enable export/import of prompt + hot-button "packs" via the Share Sheet. (§6.1)
     static let promptPackSharing = "labs.promptPackSharing"
 
-    /// One row per flag for the Settings → Quip Labs section.
-    /// Order here is display order.
-    static let all: [(key: String, title: String, summary: String)] = [
-        (cursorAgent, "Cursor agent",
-         "Add Cursor (cursor-agent) to the new-session agent picker."),
+    /// One row per visible flag for the Settings → Quip Labs section.
+    /// Order here is display order. Cursor stays out of Settings for now.
+    static let visible: [(key: String, title: String, summary: String)] = [
         (oneTapAnswer, "One-tap answers",
          "Big contextual answer buttons when an agent is waiting; the Mac re-checks the prompt before sending."),
         (promptPackSharing, "Prompt & button packs",
@@ -31,17 +30,17 @@ enum LabsFlags {
     ]
 }
 
-/// Settings → Quip Labs section. One toggle per `LabsFlags.all` entry.
+/// Settings → Quip Labs section. One toggle per `LabsFlags.visible` entry.
 struct LabsSection: View {
     var body: some View {
         Section {
-            ForEach(LabsFlags.all, id: \.key) { feature in
+            ForEach(LabsFlags.visible, id: \.key) { feature in
                 LabsToggleRow(key: feature.key, title: feature.title, summary: feature.summary)
             }
         } header: {
-            Text("Quip Labs")
+            Text("Beta")
         } footer: {
-            Text("Experimental features, off by default. They may change or break between updates.")
+            Text("Optional experiments. Off by default.")
         }
     }
 }

@@ -277,6 +277,10 @@ struct MenuBarView: View {
                                   detail: "needed for screenshot fallback",
                                   pane: .screenRecording)
                 }
+                Text("If Quip is already enabled, toggle it off and back on.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
             }
         }
         .padding(12)
@@ -305,16 +309,7 @@ struct MenuBarView: View {
     }
 
     private func openPane(_ pane: MacSettingsPane) {
-        let urlString: String
-        switch pane {
-        case .accessibility:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-        case .automation:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-        case .screenRecording:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        }
-        guard let url = URL(string: urlString) else { return }
+        guard let url = pane.systemSettingsURL else { return }
         NSWorkspace.shared.open(url)
     }
 

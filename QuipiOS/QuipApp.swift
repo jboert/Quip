@@ -1226,7 +1226,6 @@ struct MainiOSView: View {
     @State private var showQRScanner = false
     @State private var showSpawnPicker = false
     @AppStorage("spawnAgent") private var spawnAgentRaw: String = SpawnAgent.claude.rawValue
-    @AppStorage(LabsFlags.cursorAgent) private var labsCursorAgent = false
     /// Which tab the Spawn sheet is on. "new" shows project directories
     /// (classic path), "attach" shows the list of iTerm windows currently
     /// open on the Mac that Quip isn't already tracking.
@@ -1821,9 +1820,7 @@ struct MainiOSView: View {
     private var spawnSheetNewTab: some View {
         VStack(spacing: 0) {
             Picker("Agent", selection: $spawnAgentRaw) {
-                // Cursor is gated behind the Labs flag (§7.4); everything else
-                // always shows.
-                ForEach(SpawnAgent.allCases.filter { $0 != .cursor || labsCursorAgent }, id: \.self) { agent in
+                ForEach(SpawnAgent.allCases.filter { $0 != .cursor }, id: \.self) { agent in
                     Text(agent.displayName).tag(agent.rawValue)
                 }
             }
@@ -1832,6 +1829,11 @@ struct MainiOSView: View {
             .padding(.top, 10)
             .padding(.bottom, 8)
             .accessibilityLabel("New session agent")
+            .onAppear {
+                if spawnAgentRaw == SpawnAgent.cursor.rawValue {
+                    spawnAgentRaw = SpawnAgent.claude.rawValue
+                }
+            }
 
             if projectDirectories.isEmpty {
                 ContentUnavailableView(
@@ -5695,9 +5697,9 @@ struct SettingsSheet: View {
                 // for the 99% of sessions where everything's fine.
                 macPermsSection
 
-                // Appearance — tight single section. URL tray limit stepper
-                // sits inline behind the toggle so enabling the tray doesn't
-                // spawn a second row.
+                // Appearance — common visual preferences stay inline so the
+                // user can tune the main screen without drilling through
+                // another detail page.
                 Section {
                     Picker("Theme", selection: $appearanceModeRaw) {
                         Text("Auto").tag("auto")
@@ -5724,50 +5726,64 @@ struct SettingsSheet: View {
                 } header: {
                     Text("Appearance")
                 } footer: {
-                    Text("Theme overrides the system Light/Dark setting (Auto follows system). Content mode: Auto picks image when available, falls back to text. Image and Text lock the panel to one mode so it stops flickering when the Mac's screenshot stream drops out.")
+                    Text("Auto content mode uses images when available and falls back to text.")
                 }
 
-                // Keyboard — both keyboard-row customizers behind one
-                // section header so the Settings page reads in three
-                // logical groups: Appearance, Keyboard, Notifications.
+                // Prompts — Mac-managed library of paste-and-run prompts,
+                // including the local prompt generator entry point.
+                Section {
+                    NavigationLink {
+                        PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider)
+                    } label: {
+                        settingsLinkRow(
+                            title: "Prompts",
+                            subtitle: "Library, generator, paste-and-submit",
+                            systemImage: "wand.and.stars",
+                            tint: .purple,
+                            trailing: "\(client.promptLibrary.count) on Mac"
+                        )
+                    }
+                } header: {
+                    Text("Prompts")
+                }
+
                 Section {
                     NavigationLink {
                         QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw, client: client)
                     } label: {
-                        HStack {
-                            Text("Quick Buttons")
-                            Spacer()
-                            Text(quickButtonsSummary)
-                                .foregroundStyle(.secondary)
-                        }
+                        settingsLinkRow(
+                            title: "Quick Buttons",
+                            subtitle: "Customize the command row",
+                            systemImage: "keyboard",
+                            tint: .blue,
+                            trailing: quickButtonsSummary
+                        )
                     }
                     NavigationLink {
                         MainRowButtonsSheet()
                     } label: {
-                        Text("Main Row Buttons")
+                        settingsLinkRow(
+                            title: "Main Row Buttons",
+                            subtitle: "Choose the large bottom controls",
+                            systemImage: "rectangle.bottomthird.inset.filled",
+                            tint: .teal
+                        )
                     }
                 } header: {
                     Text("Keyboard")
                 }
 
-                // Notifications — behind a NavigationLink so the main
-                // Settings page stays scannable. Inline summary on the right
-                // gives a one-glance read on whether push is on, paused, or
-                // currently quiet without drilling in.
                 Section {
                     NavigationLink {
-                        NotificationsSettingsSheet(
-                            client: client,
-                            pushRegistration: pushRegistration
-                        )
+                        NotificationsSettingsSheet(client: client, pushRegistration: pushRegistration)
                     } label: {
-                        HStack {
-                            Text("Notifications")
-                            Spacer()
-                            Text(notificationsSummary)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                        settingsLinkRow(
+                            title: "Notifications",
+                            subtitle: notificationsDetail,
+                            systemImage: "bell.badge",
+                            tint: .orange,
+                            trailing: notificationsSummary
+                        )
                     }
                 } header: {
                     Text("Notifications")
@@ -5775,26 +5791,6 @@ struct SettingsSheet: View {
 
                 // Quip Labs — opt-in beta features, all off by default. (§0)
                 LabsSection()
-
-                // Prompts — Mac-managed library of paste-and-run prompts
-                // (~/Library/Application Support/Quip/prompts/*.txt).
-                // Tap a row → Mac sendText's the body into the active
-                // window. Mirrors the Stream Deck "clipboard prompt"
-                // pattern. (wishlist §57)
-                Section {
-                    NavigationLink {
-                        PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider)
-                    } label: {
-                        HStack {
-                            Text("Prompts")
-                            Spacer()
-                            Text("\(client.promptLibrary.count) on Mac")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Prompts")
-                }
 
                 // Diagnostics — pinned at the bottom of Settings since it's
                 // a triage tool, not part of the day-to-day. Surfaces the
@@ -5804,18 +5800,25 @@ struct SettingsSheet: View {
                     NavigationLink {
                         ConnectionDiagnosticsSheet(client: client)
                     } label: {
-                        HStack {
-                            Text("Connection diagnostics")
-                            Spacer()
-                            Text("\(client.recentConnectionEvents.count) events")
-                                .foregroundStyle(.secondary)
-                        }
+                        settingsLinkRow(
+                            title: "Connection",
+                            subtitle: "Recent reconnect and Mac log events",
+                            systemImage: "network",
+                            tint: .indigo,
+                            trailing: "\(client.recentConnectionEvents.count) events"
+                        )
                     }
                     NavigationLink {
                         LatencyDiagnosticsSheet(client: client)
                     } label: {
                         HStack(spacing: 8) {
-                            Text("Latency")
+                            settingsIcon("speedometer", tint: .gray)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Latency")
+                                Text("Round-trip timing by send path")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             LatencySummary.from(samples: client.latencySamples)
                                 .badgeView()
@@ -5835,6 +5838,7 @@ struct SettingsSheet: View {
                         }
                     } label: {
                         HStack {
+                            settingsIcon("info.circle", tint: .gray)
                             Text("Version")
                                 .foregroundStyle(.primary)
                             Spacer()
@@ -5853,8 +5857,6 @@ struct SettingsSheet: View {
                     .accessibilityHint("Tap to copy version to clipboard")
                 } header: {
                     Text("About")
-                } footer: {
-                    Text("Tap to copy — useful when reporting issues.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -5954,6 +5956,39 @@ struct SettingsSheet: View {
         }
     }
 
+    private func settingsLinkRow(title: String,
+                                 subtitle: String? = nil,
+                                 systemImage: String,
+                                 tint: Color,
+                                 trailing: String? = nil) -> some View {
+        HStack(spacing: 10) {
+            settingsIcon(systemImage, tint: tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            if let trailing {
+                Text(trailing)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func settingsIcon(_ systemImage: String, tint: Color) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: 28, height: 28)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
     /// Send the current settings state to the Mac so it can honor them
     /// at push-send time. Fires on every toggle change and from onAppear.
     /// No-op when we don't yet have a device token (nothing to key on
@@ -5993,6 +6028,17 @@ struct SettingsSheet: View {
             return "Quiet \(formatHour(quietHoursStart))–\(formatHour(quietHoursEnd))"
         }
         return "On"
+    }
+
+    fileprivate var notificationsDetail: String {
+        if pushPaused { return "Push alerts are paused" }
+        if quietHoursEnabled {
+            return "Quiet hours \(formatHour(quietHoursStart))-\(formatHour(quietHoursEnd))"
+        }
+        if pushForegroundBanner {
+            return "Foreground banners enabled"
+        }
+        return pushSound ? "Sound and banners enabled" : "Silent banners enabled"
     }
 
     /// Compact summary shown next to the Quick Buttons NavigationLink. Slot
@@ -7717,6 +7763,9 @@ struct PromptLibrarySheet: View {
     @State private var lastFiredId: String?
     @State private var editing: PromptEntry?
     @State private var creatingNew: Bool = false
+    @State private var showingGenerator: Bool = false
+    @State private var pendingGeneratedDraft: PromptEntry?
+    @State private var generatedDraft: PromptEntry?
     @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
     @State private var shareItem: PackShareItem?
     @State private var latestPutAck: PutPromptAckMessage?
@@ -7772,10 +7821,19 @@ struct PromptLibrarySheet: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    showingGenerator = true
+                } label: {
+                    Image(systemName: "wand.and.stars")
+                }
+                .accessibilityLabel("Generate prompt")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
                     creatingNew = true
                 } label: {
                     Image(systemName: "plus")
                 }
+                .accessibilityLabel("New prompt")
             }
             // §6.1 — export the whole library as a shareable .quippack (Labs).
             if labsPromptPacks && !client.promptLibrary.isEmpty {
@@ -7795,6 +7853,22 @@ struct PromptLibrarySheet: View {
         }
         .sheet(isPresented: $creatingNew) {
             PromptEditorSheet(initial: nil, latestAck: latestPutAck) { entry, messageId in
+                putPrompt(entry, messageId: messageId)
+            }
+        }
+        .sheet(isPresented: $showingGenerator, onDismiss: {
+            if let draft = pendingGeneratedDraft {
+                pendingGeneratedDraft = nil
+                generatedDraft = draft
+            }
+        }) {
+            PromptGeneratorSheet(existingIDs: Set(client.promptLibrary.map(\.id))) { draft in
+                pendingGeneratedDraft = draft
+                showingGenerator = false
+            }
+        }
+        .sheet(item: $generatedDraft) { draft in
+            PromptEditorSheet(initial: nil, draft: draft, latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -7922,6 +7996,7 @@ struct PromptLibrarySheet: View {
 /// write, so a queued WebSocket send is not mistaken for a saved prompt.
 struct PromptEditorSheet: View {
     let initial: PromptEntry?
+    var draft: PromptEntry? = nil
     let latestAck: PutPromptAckMessage?
     let onSave: (_ entry: PromptEntry, _ messageId: UUID) -> Bool
     @Environment(\.dismiss) private var dismiss
@@ -8000,9 +8075,9 @@ struct PromptEditorSheet: View {
                             id: id,
                             label: label.isEmpty ? id : label,
                             body: bodyText,
-                            tags: initial?.tags,
-                            targetAgent: initial?.targetAgent,
-                            description: initial?.description
+                            tags: metadataSource?.tags,
+                            targetAgent: metadataSource?.targetAgent,
+                            description: metadataSource?.description
                         )
                         guard onSave(entry, messageId) else {
                             saveError = "Connect to the Mac before saving prompts."
@@ -8037,10 +8112,10 @@ struct PromptEditorSheet: View {
                 }
             }
             .onAppear {
-                if let initial {
-                    idText = initial.id
-                    labelText = initial.label == initial.id ? "" : initial.label
-                    bodyText = initial.body
+                if let source = initial ?? draft {
+                    idText = source.id
+                    labelText = source.label == source.id ? "" : source.label
+                    bodyText = source.body
                 }
             }
             .onChange(of: latestAck?.messageId) { _, _ in
@@ -8050,6 +8125,10 @@ struct PromptEditorSheet: View {
                 saveTimeout?.cancel()
             }
         }
+    }
+
+    private var metadataSource: PromptEntry? {
+        initial ?? draft
     }
 
     private func handleAckIfNeeded() {
