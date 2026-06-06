@@ -55,6 +55,14 @@ enum LogPaths {
         return directory.appendingPathComponent("qa-mode.log").path
     }
 
+    /// swrm board-integration tailer: per-project event-log tail lifecycle
+    /// (start/stop), cursor advances, delivered events, and trigger
+    /// firings. One line per event. See the swrm-board-integration PRD.
+    static var swrmPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("swrm.log").path
+    }
+
     private static func ensureDirectoryExists() {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }

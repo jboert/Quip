@@ -3,5 +3,51 @@
 PRD: prd.json (source: tasks/prd-swrm-board-integration.md)
 Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
 
+## Codebase Patterns
+- BUILD: QuipMac uses xcodegen. After adding/removing any source file, run
+  `cd QuipMac && xcodegen generate` BEFORE xcodebuild — sources glob `path: .`
+  so new files auto-join the target on regen. project.pbxproj is generated (commit it).
+- BUILD CMD: `cd QuipMac && xcodebuild build -project QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS'`.
+- TEST HOST HANGS HEADLESS: `xcodebuild test ...` fails with "test runner hung
+  before establishing connection" for ALL suites (the full Quip.app is the
+  TEST_HOST and won't launch in this sandbox). NOT a per-test bug. Verify pure
+  logic via a standalone `swift file.swift` run; note tests need Xcode/user to run.
+- SWIFT 6 (app target SWIFT_VERSION 6.0): a mutable `static var` on a plain
+  enum/struct (non-actor) is a concurrency error. Use `nonisolated(unsafe) static var`
+  for test-only overrides, OR put the static inside a `@MainActor` type (the
+  PromptLibrary.directoryOverrideForTests pattern). Tests run Swift 5 mode.
+- App logs: add a `LogPaths.<name>Path` accessor (QuipMac/Services/LogPaths.swift),
+  append with the WebSocketServer.wslog idiom (FileHandle seekToEnd / else createFile).
+- swrm reader contract lives at ~/Projects/swrm/native/SwrmCore/Sources/SwrmCore/EventLog.swift
+  (TS twin: ~/Projects/swrm/src/events/subscribe.ts). Copy, don't reinvent.
+
 ## Iteration log
-(empty — first iteration pending)
+
+## 2026-06-06 — US-001 (swrm event-log tailer service)
+- Added QuipMac/Services/SwrmEventTailer.swift:
+  - SwrmEvent / SwrmEventData (data trimmed to {title,from,to} per PRD)
+  - SwrmEventReader: read()/readIncremental()/parse — copied verbatim from swrm
+    EventLog.swift, torn-trailing-line tolerant (holds back segment after last \n,
+    nextOffset never passes last complete-line boundary), seq>since dedupe gate.
+  - SwrmCursor + SwrmCursorStore: byte+seq cursor persisted to
+    ~/Library/Application Support/Quip/swrm/cursors/<sanitized-root>.json (OUTSIDE .swrm/).
+  - SwrmEventTailer (@MainActor @Observable): start()/stop(), fs-watch on the .swrm/
+    DIR (not the file — log may not exist / gets atomically replaced) + poll-timer
+    fallback (2s). Pumps serialized via isPumping/pumpQueued; file read off-main on
+    ioQueue, cursor mutate + onEvents delivery on main. Best-effort, non-throwing.
+  - SwrmEventTailer.globalLog → LogPaths.swrmPath (~/Library/Logs/Quip/swrm.log).
+- Added LogPaths.swrmPath accessor.
+- Added QuipMac/Tests/SwrmEventTailerTests.swift (reader seam + cursor store).
+- Files: QuipMac/Services/SwrmEventTailer.swift (new), QuipMac/Tests/SwrmEventTailerTests.swift (new),
+  QuipMac/Services/LogPaths.swift, QuipMac/QuipMac.xcodeproj/project.pbxproj (xcodegen regen).
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED. Reader/cursor logic ALL PASS via standalone swift run.
+- **Learnings for future iterations:**
+  - The tailer is delivery-only; title cache (US-003), trigger predicate (US-004),
+    push/inject (US-005/007), lifecycle wiring (US-008) consume `onEvents`/`SwrmEventReader.read`.
+    SwrmEventReader.read(projectRoot:) is already present for the US-003 cold-start seed.
+  - DON'T re-slurp on every tick: readIncremental seeks by byte cursor. Watch the DIR.
+  - US-008 first-launch policy: seed cursor to latest seq to avoid a historical-move
+    notification storm (set cursor.seq + byteOffset=EOF on a fresh root before tailing).
+  - SwrmCursorStore.directoryOverrideForTests + PromptLibrary.directoryOverrideForTests
+    are the test-injection pattern for app-support-backed stores.
+---

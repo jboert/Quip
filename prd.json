@@ -18,8 +18,8 @@
         "xcodebuild (QuipMac) succeeds"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "SwrmEventTailer.swift added (reader copied from swrm EventLog.swift, trimmed data to {title,from,to}; byte+seq cursor in app-support/Quip/swrm/cursors via SwrmCursorStore; .swrm/ dir fs-watch + 2s poll fallback; LogPaths.swrmPath). xcodebuild QuipMac SUCCEEDED. Reader+cursor logic verified via standalone swift run (torn-line hold-back, advancing cursor, seq gate, missing-file no-op all pass). XCTest SwrmEventTailerTests written + compiles, but the QuipMacTests host hangs headless in this env ('test runner hung before establishing connection') — PRE-EXISTING: existing suites (e.g. WhisperOutputCleanerTests) hang identically. User should run tests from Xcode to confirm."
     },
     {
       "id": "US-002",
