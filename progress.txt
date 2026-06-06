@@ -1,0 +1,7 @@
+# Ralph progress · ralph/swrm-board-integration · started 2026-06-05
+
+PRD: prd.json (source: tasks/prd-swrm-board-integration.md)
+Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
+
+## Iteration log
+(empty — first iteration pending)
