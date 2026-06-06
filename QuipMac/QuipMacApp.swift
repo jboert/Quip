@@ -215,11 +215,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         // swrm board integration: route every tailer's events through the
         // coordinator, which applies the "story started" trigger and fans out
-        // the phone card (US-004) + APNs push (US-005); terminal inject (US-007) later.
+        // the phone card (US-004) + APNs push (US-005) + terminal inject (US-007).
         // Tailers start live on add (US-002); start-at-launch for persisted
         // roots + first-launch cursor seed is US-008.
         swrmStoryCoordinator.webSocketServer = webSocketServer
         swrmStoryCoordinator.pushNotificationService = pushNotificationService
+        swrmStoryCoordinator.windowManager = windowManager
+        swrmStoryCoordinator.keystrokeInjector = keystrokeInjector
         swrmProjectStore.onTailerEvents = { [swrmStoryCoordinator] tailer, events in
             swrmStoryCoordinator.handle(tailer: tailer, events: events)
         }

@@ -113,8 +113,8 @@
         "xcodebuild succeeds; manual: move a swrm card -> matching iTerm shows the notice line, unsubmitted (user verify)"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "SwrmStoryCoordinator gained weak windowManager + keystrokeInjector. handleStoryStarted fires injectNotice(rootPath:taskId:title:) AFTER the US-004 card + US-005 push (each side-effect independent/best-effort). injectNotice: Self.matchTerminal(windows:rootPath:zOrderIds:) finds the tracked window whose cwdPath canonical-equals tailer.projectRoot.path; on >1 match tiebreaks by z-order (earliest in WindowManager.fetchWindowList() CG front-to-back == most-recently-active, off-screen sorts last). No match -> globalLog skip. Matched but iterm2SessionId==nil (Terminal.app cwdPath is always nil so never matches; this covers an iTerm session not yet resolved) -> globalLog skip (MVP iTerm2-only, no focus-stealing front-window fallback). Otherwise keystrokeInjector.sendText(notice, pressReturn:false, terminalApp:.iterm2, iterm2SessionId:) — the session-id AppleScript path writes via 'unique id' WITHOUT activate, so never steals focus; pressReturn:false means the line is never submitted. noticeLine='# swrm: started \"<title>\" (#<id>)' (leading # so a shell treats it as a comment if the user later hits return). canonicalPath: expandingTildeInPath + standardizingPath + strip trailing slash. matchTerminal + noticeLine are static/pure (testable). Wired swrmStoryCoordinator.windowManager + .keystrokeInjector in QuipMacApp.startServicesOnce. Files: SwrmStoryCoordinator.swift, QuipMacApp.swift (NO new files -> no xcodegen regen). Gate: xcodebuild QuipMac BUILD SUCCEEDED. matcher/notice/canonicalPath logic verified via standalone swift run (9/9: exact, trailing-slash, no-match, nil/empty cwd skip, z-order frontmost, off-screen-sorts-last, notice format, fallback title). No unit-test acceptance criterion for this story. Manual (user verify): move a swrm card to In Progress -> matching iTerm shows the notice line, unsubmitted."
     },
     {
       "id": "US-008",

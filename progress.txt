@@ -248,3 +248,49 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
     QuipMacApp needSubtitles gate) — same cadence as subtitle. A just-opened
     iTerm window can have stale/nil cwdPath for up to one subtitle cycle.
 ---
+
+## 2026-06-06 — US-007 (Inject a notice line into the matching terminal)
+- SwrmStoryCoordinator: added weak `windowManager` + weak `keystrokeInjector`
+  (owned by the app scene; nil => inject side-effect no-ops). handleStoryStarted
+  now calls injectNotice(rootPath:taskId:title:) AFTER the US-004 card + US-005
+  push — each side-effect independent + best-effort.
+- injectNotice:
+  - target = Self.matchTerminal(windows: windowManager.windows, rootPath:
+    tailer.projectRoot.path, zOrderIds: WindowManager.fetchWindowList().map(\.id)).
+  - none -> globalLog "no tracked terminal" + skip.
+  - matched but iterm2SessionId == nil -> globalLog skip (MVP iTerm2-only; no
+    focus-stealing front-window fallback). Terminal.app cwdPath is always nil so
+    it can't match here anyway — this branch really covers an unresolved iTerm
+    session.
+  - else keystrokeInjector.sendText(notice, pressReturn:false, terminalApp:.iterm2,
+    iterm2SessionId:) — the iTerm2 session-id AppleScript path writes via
+    `unique id` WITHOUT `activate`, so it never steals focus; pressReturn:false
+    => the line is never submitted.
+- noticeLine(title:taskId:) = '# swrm: started "<title>" (#<id>)' — leading # so a
+  shell/REPL treats it as a comment if the user later hits return.
+- matchTerminal(windows:rootPath:zOrderIds:) + canonicalPath are static & pure:
+  filter by cwdPath canonical-equality to rootPath; on >1 match pick the one
+  earliest in zOrderIds (CG front-to-back == most-recently-active; off-screen ids
+  absent from zOrder sort last via Int.max).
+- Wired swrmStoryCoordinator.windowManager + .keystrokeInjector in
+  QuipMacApp.startServicesOnce (alongside the existing webSocketServer + push).
+- Files: QuipMac/Services/SwrmStoryCoordinator.swift, QuipMac/QuipMacApp.swift.
+  NO new files -> no xcodegen regen, no pbxproj churn.
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED. Logic verified via standalone swift
+  run (9/9: exact, trailing-slash, no-match, nil/empty cwd skip, z-order
+  frontmost, off-screen-sorts-last, notice format, fallback title).
+- **Learnings for future iterations:**
+  - CGWindowListCopyWindowInfo(.optionOnScreenOnly) returns front-to-back z-order,
+    which IS macOS recency order — use it as the "most-recently-active" tiebreak
+    instead of adding new per-window timestamp tracking. But windowManager.windows
+    is reordered by the user's customOrder (sidebar), NOT z-order, so you must
+    re-fetch fetchWindowList() at decision time to get recency.
+  - iTerm2 sendText with iterm2SessionId set never activates iTerm (writes by
+    `unique id`) -> the only focus-safe inject path. Terminal.app path DOES
+    activate; never route swrm notices there.
+  - cwdPath comparison must be canonicalized both sides (tilde/.././trailing-slash)
+    — iTerm's `path` var and the normalized store root can differ by a trailing /.
+  - US-008 remaining: start tailers at launch + stop on quit/background
+    (swrmProjectStore.startAll()/stopAll() already exist, NOT yet called), and the
+    first-launch cursor-to-EOF seed to avoid a historical-move storm.
+---
