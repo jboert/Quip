@@ -128,8 +128,8 @@
         "Manual end-to-end (user verify): swrm repo configured + iTerm at that root, drag a card to In Progress -> within ~1s phone card/push + iTerm notice line"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Lifecycle wired in QuipMacApp.startServicesOnce: swrmProjectStore.startAll() starts a tailer for every persisted root at launch (US-002 only started them live on add); a NotificationCenter.default observer on NSApplication.willTerminateNotification (NOT the NSWorkspace center used elsewhere) calls swrmProjectStore.stopAll() to release fs-watch fds + poll timers on quit. The single SwrmStoryCoordinator (US-004/005/007) already fans tailer triggers to card+push+inject, each independent/best-effort. First-launch storm guard: SwrmEventTailer captures hadPersistedCursor in init (new SwrmCursorStore.exists(forRootPath:)); start() calls new seedCursorToLatest() ONLY for a fresh root — readIncremental(byteOffset:0) advances the cursor to the last complete-line boundary + highest seq WITHOUT delivering (torn trailing line held back, picked up whole on the next real pump). Titles still seed separately (seedTitleCache, cursor-independent) so a later real move resolves. Files: SwrmEventTailer.swift, QuipMacApp.swift (NO new files -> no xcodegen regen). Gate: xcodebuild QuipMac + QuipiOS BUILD SUCCEEDED, no new warnings in changed files. Seed/no-storm logic verified via standalone swift run (seed skips all history, torn tail held, only genuinely-new events deliver, no historical in_progress storm — ALL PASS). Manual end-to-end (user verify): configure swrm repo + iTerm at that root, drag a card to In Progress -> within ~1s phone card/push + iTerm notice line; existing configured roots fire WITHOUT a re-add after relaunch; no notification storm on first configuring a mid-history project."
     }
   ]
 }

@@ -294,3 +294,48 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
     (swrmProjectStore.startAll()/stopAll() already exist, NOT yet called), and the
     first-launch cursor-to-EOF seed to avoid a historical-move storm.
 ---
+
+## 2026-06-06 — US-008 (Lifecycle wiring + end-to-end verification)
+- QuipMacApp.startServicesOnce: after wiring the coordinator (US-004/005/007),
+  call swrmProjectStore.startAll() so a tailer starts for EVERY persisted root
+  at launch (US-002 only started them live on add — so cards/pushes fired only
+  for a root added that session). Added a NotificationCenter.default observer on
+  NSApplication.willTerminateNotification -> swrmProjectStore.stopAll() to release
+  fs-watch fds + poll timers on quit. NOTE: willTerminate posts on
+  NotificationCenter.default, NOT NSWorkspace.shared.notificationCenter (the
+  workspace center used for didActivateApplication/didWake in the same method).
+- SwrmEventTailer first-launch storm guard:
+  - SwrmCursorStore.exists(forRootPath:) — does a cursor file already exist?
+  - SwrmEventTailer captures `hadPersistedCursor` in init.
+  - start() calls new seedCursorToLatest() ONLY when !hadPersistedCursor. It runs
+    readIncremental(byteOffset:0, since:0), sets cursor.byteOffset = nextOffset
+    (last COMPLETE-line boundary; torn trailing line held back) + cursor.seq =
+    max seq, persists — WITHOUT delivering. So configuring a project mid-history
+    doesn't replay every past task.moved->in_progress as a card/push/inject storm.
+  - seedTitleCache() still runs first and is cursor-INDEPENDENT (reads seq 0), so
+    a later real move still resolves its title even though history wasn't delivered.
+- Files: QuipMac/Services/SwrmEventTailer.swift, QuipMac/QuipMacApp.swift.
+  NO new files -> no xcodegen regen.
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED + xcodebuild QuipiOS BUILD SUCCEEDED.
+  No new warnings in changed files. Seed/no-storm logic verified via standalone
+  swift run (seed skips all 4 history lines incl. an in_progress move ×3, torn
+  tail held, post-seed pump delivers ONLY genuinely-new seqs [5,6], in_progress
+  storm = [5] only — ALL PASS).
+- **Learnings for future iterations:**
+  - Two cursor "zero" states are NOT equivalent: a missing cursor FILE (fresh
+    root -> seed to EOF, skip history) vs a persisted {0,0} (resume from start).
+    SwrmCursorStore.load() returns .zero for both; SwrmCursorStore.exists() is the
+    discriminator. Don't collapse them or you reintroduce the first-launch storm.
+  - The first-launch seed reuses readIncremental's torn-line discipline instead
+    of stat()'ing file size — so a half-written trailing line at configure time
+    isn't swallowed; it's held back and delivered whole on the next real pump.
+  - macOS app teardown: NSApplication.willTerminateNotification is the reliable
+    quit hook for a menubar app (there's no meaningful "background"); it fires on
+    NotificationCenter.default. The closure is @Sendable under Swift 6 — use
+    MainActor.assumeIsolated to touch the @MainActor store (we scheduled it on
+    queue:.main so the assume is sound), same idiom as the 2s snapshot timer.
+  - ALL 8 user stories now pass. The integration is start-to-finish: persisted
+    roots tail at launch -> story moved to in_progress -> coordinator fans out
+    phone card (US-004) + APNs push (US-005) + iTerm notice (US-007), each
+    best-effort; quit stops every tailer cleanly.
+---

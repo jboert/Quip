@@ -263,6 +263,13 @@ enum SwrmCursorStore {
         directory.appendingPathComponent(filename(forRootPath: rootPath))
     }
 
+    /// Whether a cursor has ever been persisted for this root. Used by the
+    /// tailer's US-008 first-launch policy to distinguish a brand-new root
+    /// (seed past history, no replay) from a resume (honor the saved cursor).
+    static func exists(forRootPath rootPath: String) -> Bool {
+        FileManager.default.fileExists(atPath: cursorURL(forRootPath: rootPath).path)
+    }
+
     static func load(forRootPath rootPath: String) -> SwrmCursor {
         let url = cursorURL(forRootPath: rootPath)
         guard let data = try? Data(contentsOf: url),
@@ -308,6 +315,12 @@ final class SwrmEventTailer {
     private var cursor: SwrmCursor
     private var started = false
 
+    // US-008 first-launch policy: true only when a cursor was already persisted
+    // for this root at init. A fresh root (false) seeds its cursor to the end of
+    // the current log on `start()` so configuring a project mid-history doesn't
+    // replay every past `task.moved` as a "story started" card/push/inject storm.
+    private let hadPersistedCursor: Bool
+
     // US-003: in-memory story-title cache keyed by aggregateID. `task.moved`
     // carries only {from,to} — never a title — so the title is learned from the
     // `task.created`/`task.planned` events that DO carry `data.title`, both as
@@ -331,6 +344,7 @@ final class SwrmEventTailer {
         self.projectRoot = projectRoot
         self.pollInterval = pollInterval
         self.cursor = SwrmCursorStore.load(forRootPath: projectRoot.path)
+        self.hadPersistedCursor = SwrmCursorStore.exists(forRootPath: projectRoot.path)
     }
 
     /// Begin tailing. Catches up from the persisted cursor immediately, then
@@ -340,6 +354,9 @@ final class SwrmEventTailer {
         started = true
         Self.globalLog("start: \(projectRoot.path) (cursor offset=\(cursor.byteOffset) seq=\(cursor.seq))")
         seedTitleCache()     // US-003: seed title cache from full history (file-only)
+        if !hadPersistedCursor {
+            seedCursorToLatest()  // US-008: skip pre-existing history on first launch
+        }
         requestPump()        // catch up on anything written while we were down
         startWatching()
         startPolling()
@@ -391,6 +408,30 @@ final class SwrmEventTailer {
     func resolvedTitle(forAggregateID id: String) -> String {
         if let title = titleCache[id], !title.isEmpty { return title }
         return "Story #\(id)"
+    }
+
+    // MARK: first-launch cursor seed (US-008)
+
+    /// US-008: advance the cursor to the end of the current log WITHOUT
+    /// delivering, so a root configured mid-history doesn't replay every past
+    /// `task.moved` to `in_progress` as a fresh "story started" storm of
+    /// cards/pushes/injects. Reuses the reader's torn-line discipline:
+    /// `readIncremental(byteOffset:0)` returns `nextOffset` at the last
+    /// complete-line boundary (a half-written trailing line is held back and
+    /// picked up whole on the next real pump) and the highest seq seen. Only
+    /// called for a fresh root (no persisted cursor). File-only; titles are
+    /// seeded separately by `seedTitleCache` (cursor-independent), so a later
+    /// real move still resolves its title.
+    private func seedCursorToLatest() {
+        let fileURL = SwrmEventReader.eventsFileURL(projectRoot: projectRoot)
+        let result = SwrmEventReader.readIncremental(
+            fileURL: fileURL, byteOffset: 0, since: 0)
+        cursor.byteOffset = result.nextOffset
+        if let maxSeq = result.events.map(\.seq).max() {
+            cursor.seq = max(cursor.seq, maxSeq)
+        }
+        SwrmCursorStore.save(cursor, forRootPath: projectRoot.path)
+        Self.globalLog("first-launch seed: \(projectRoot.path) cursor advanced to offset=\(cursor.byteOffset) seq=\(cursor.seq) (no historical replay)")
     }
 
     // MARK: pump

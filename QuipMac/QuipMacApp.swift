@@ -225,6 +225,23 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         swrmProjectStore.onTailerEvents = { [swrmStoryCoordinator] tailer, events in
             swrmStoryCoordinator.handle(tailer: tailer, events: events)
         }
+        // US-008: start a tailer for every persisted root now (US-002 only
+        // starts them live on add). Each fresh root seeds its cursor to the end
+        // of its current log inside start(), so configuring a project doesn't
+        // replay historical moves as a card/push/inject storm.
+        swrmProjectStore.startAll()
+        // Stop every tailer on quit so the fs-watch fds + poll timers release
+        // cleanly. willTerminateNotification posts on NotificationCenter.default
+        // (unlike the NSWorkspace notifications used elsewhere in this method).
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                swrmProjectStore.stopAll()
+            }
+        }
 
         // CRITICAL: register the message + auth callbacks BEFORE
         // start(). On a no-PIN-required Mac the listener becomes ready
