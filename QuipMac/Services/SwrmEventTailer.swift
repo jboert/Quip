@@ -300,6 +300,13 @@ final class SwrmEventTailer {
     private var cursor: SwrmCursor
     private var started = false
 
+    // US-003: in-memory story-title cache keyed by aggregateID. `task.moved`
+    // carries only {from,to} — never a title — so the title is learned from the
+    // `task.created`/`task.planned` events that DO carry `data.title`, both as
+    // they stream (`ingestTitles`) and via a one-shot full-history seed at
+    // start (`seedTitleCache`). File-only: no swrm SQLite access.
+    private(set) var titleCache: [String: String] = [:]
+
     private var watcher: DispatchSourceFileSystemObject?
     private var watcherFD: Int32 = -1
     private var pollTimer: DispatchSourceTimer?
@@ -324,6 +331,7 @@ final class SwrmEventTailer {
         guard !started else { return }
         started = true
         Self.globalLog("start: \(projectRoot.path) (cursor offset=\(cursor.byteOffset) seq=\(cursor.seq))")
+        seedTitleCache()     // US-003: seed title cache from full history (file-only)
         requestPump()        // catch up on anything written while we were down
         startWatching()
         startPolling()
@@ -342,6 +350,40 @@ final class SwrmEventTailer {
 
     /// The current resume point (exposed for tests/diagnostics).
     var currentCursor: SwrmCursor { cursor }
+
+    // MARK: title cache (US-003)
+
+    /// Event types that carry a story title in `data.title`. `task.moved`
+    /// deliberately does NOT — hence the cache.
+    private static let titleBearingTypes: Set<String> = ["task.created", "task.planned"]
+
+    /// One-shot full read of the project's history to (re)seed the title cache.
+    /// Independent of the byte cursor, so titles from a `task.created` consumed
+    /// in a prior run (now behind the cursor) survive a restart. File-only — no
+    /// swrm SQLite. Synchronous; the per-project log is small (see `read` doc).
+    /// `@discardableResult` returns the cache size for tests/diagnostics.
+    @discardableResult
+    func seedTitleCache() -> Int {
+        ingestTitles(from: SwrmEventReader.read(projectRoot: projectRoot))
+        return titleCache.count
+    }
+
+    /// Absorb titles from any title-bearing events in `events` into the cache.
+    /// Later titles win (an edited story title overwrites an earlier one).
+    func ingestTitles(from events: [SwrmEvent]) {
+        for ev in events where Self.titleBearingTypes.contains(ev.type) {
+            guard let title = ev.data.title, !title.isEmpty, !ev.aggregateID.isEmpty
+            else { continue }
+            titleCache[ev.aggregateID] = title
+        }
+    }
+
+    /// Resolve a story's display title by aggregateID, with the PRD fallback
+    /// `Story #<id>` when no title was ever seen (no crash, no blank).
+    func resolvedTitle(forAggregateID id: String) -> String {
+        if let title = titleCache[id], !title.isEmpty { return title }
+        return "Story #\(id)"
+    }
 
     // MARK: pump
 
@@ -368,6 +410,10 @@ final class SwrmEventTailer {
                 SwrmCursorStore.save(self.cursor, forRootPath: rootPath)
 
                 if !result.events.isEmpty {
+                    // US-003: learn titles from this batch (seq-sorted, so a
+                    // task.created precedes a same-batch task.moved) BEFORE
+                    // delivery, so onEvents handlers can resolve titles.
+                    self.ingestTitles(from: result.events)
                     Self.globalLog("delivered \(result.events.count) event(s) from \(rootPath) (cursor offset=\(self.cursor.byteOffset) seq=\(self.cursor.seq))")
                     self.onEvents?(result.events)
                 }

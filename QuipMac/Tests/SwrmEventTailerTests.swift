@@ -126,4 +126,73 @@ final class SwrmEventTailerTests: XCTestCase {
         XCTAssertTrue(a.hasSuffix(".json"))
         XCTAssertFalse(a.hasPrefix("_"), "leading separators stripped")
     }
+
+    // MARK: title cache (US-003)
+
+    /// Write an `.ndjson` log into `<tmpDir>/.swrm/events.ndjson` so a tailer
+    /// rooted at `tmpDir` can seed from it (file-only, no SQLite).
+    private func writeProjectLog(_ contents: String) {
+        let swrm = tmpDir.appendingPathComponent(".swrm", isDirectory: true)
+        try! FileManager.default.createDirectory(at: swrm, withIntermediateDirectories: true)
+        try! contents.data(using: .utf8)!.write(
+            to: swrm.appendingPathComponent("events.ndjson"))
+    }
+
+    @MainActor
+    func test_titleCache_createdThenMoved_resolvesTitle() {
+        // task.created carries the title; task.moved (in_progress) carries none.
+        writeProjectLog(
+            line(seq: 1, type: "task.created", id: "5", title: "Wire the spine") + "\n" +
+            line(seq: 2, type: "task.moved", id: "5", to: "in_progress") + "\n")
+
+        let tailer = SwrmEventTailer(projectRoot: tmpDir)
+        let seeded = tailer.seedTitleCache()
+
+        XCTAssertEqual(seeded, 1, "one title learned from history")
+        XCTAssertEqual(tailer.resolvedTitle(forAggregateID: "5"), "Wire the spine",
+                       "moved event's title comes from the cached created event")
+    }
+
+    @MainActor
+    func test_titleCache_plannedSeedsTitle() {
+        // task.planned also carries data.title.
+        writeProjectLog(line(seq: 1, type: "task.planned", id: "8", title: "Plan it") + "\n")
+
+        let tailer = SwrmEventTailer(projectRoot: tmpDir)
+        tailer.seedTitleCache()
+
+        XCTAssertEqual(tailer.resolvedTitle(forAggregateID: "8"), "Plan it")
+    }
+
+    @MainActor
+    func test_titleCache_movedWithoutPriorCreated_fallsBackToStoryID() {
+        // A moved event whose created was never seen → fallback, never blank.
+        writeProjectLog(line(seq: 1, type: "task.moved", id: "99", to: "in_progress") + "\n")
+
+        let tailer = SwrmEventTailer(projectRoot: tmpDir)
+        tailer.seedTitleCache()
+
+        XCTAssertTrue(tailer.titleCache.isEmpty, "moved carries no title to cache")
+        XCTAssertEqual(tailer.resolvedTitle(forAggregateID: "99"), "Story #99")
+    }
+
+    @MainActor
+    func test_titleCache_unknownAggregate_fallsBackToStoryID() {
+        let tailer = SwrmEventTailer(projectRoot: tmpDir)
+        XCTAssertEqual(tailer.resolvedTitle(forAggregateID: "123"), "Story #123",
+                       "empty cache → fallback")
+    }
+
+    @MainActor
+    func test_titleCache_ingestStream_laterTitleWins() {
+        let tailer = SwrmEventTailer(projectRoot: tmpDir)
+        let created = SwrmEventReader.read(fileURL: writeFile(
+            line(seq: 1, type: "task.created", id: "3", title: "First") + "\n" +
+            line(seq: 2, type: "task.created", id: "3", title: "Renamed") + "\n"))
+
+        tailer.ingestTitles(from: created)
+
+        XCTAssertEqual(tailer.resolvedTitle(forAggregateID: "3"), "Renamed",
+                       "a later title-bearing event overwrites an earlier one")
+    }
 }

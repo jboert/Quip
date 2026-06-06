@@ -90,3 +90,36 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
     init, only live add/remove. First-launch cursor-seed (US-008) should run BEFORE
     startAll() to avoid the historical-move storm.
 ---
+
+## 2026-06-06 — US-003 (Story title resolution, file-only)
+- Extended QuipMac/Services/SwrmEventTailer.swift (no new files):
+  - titleCache: [aggregateID: String] (private(set)). task.moved carries only
+    {from,to}, never a title — so titles are learned elsewhere.
+  - ingestTitles(from:) absorbs data.title from titleBearingTypes
+    {task.created, task.planned}; non-empty title + non-empty id; later wins.
+  - resolvedTitle(forAggregateID:) → cached title or "Story #<id>" fallback.
+  - seedTitleCache() @discardableResult: one-shot SwrmEventReader.read(projectRoot:)
+    full-history slurp at start() BEFORE requestPump. Cursor-INDEPENDENT (reads
+    from seq 0) so it recovers titles from a task.created consumed in a prior run
+    that now sits behind the byte cursor — the warm-restart case. File-only.
+  - Pump now calls ingestTitles(from: result.events) BEFORE onEvents delivery,
+    so a same-batch task.moved sees its task.created (events are seq-sorted asc).
+- Added 5 @MainActor XCTest cases to QuipMac/Tests/SwrmEventTailerTests.swift
+  (created→moved resolves, planned seeds, moved-without-created → Story #<id>,
+  unknown id fallback, ingest later-title-wins). writeProjectLog helper writes
+  <tmpDir>/.swrm/events.ndjson so a tailer rooted at tmpDir can seed.
+- Files: QuipMac/Services/SwrmEventTailer.swift, QuipMac/Tests/SwrmEventTailerTests.swift.
+  NO new files ⇒ no xcodegen regen needed (glob only matters when files are added/removed).
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED. Cache logic ALL PASS via standalone swift run.
+- **Learnings for future iterations:**
+  - US-004 trigger handler resolves the card/notice title with
+    tailer.resolvedTitle(forAggregateID: ev.aggregateID) — the tailer arg is
+    delivered by SwrmProjectStore.onTailerEvents (US-002 seam). No extra plumbing.
+  - The title cache is per-tailer (per project root). That's correct: aggregateIDs
+    are only unique within a swrm project. Don't hoist it to a global cache.
+  - seedTitleCache() is synchronous on @MainActor in start(). Single-project log
+    is small (read() doc says cheap), so the brief main-thread blip at start beats
+    an async seed racing the first pump. If logs ever get huge, move to ioQueue
+    and gate requestPump on seed completion (the ordering invariant: seed before
+    any delivery so onEvents handlers can resolve titles).
+---

@@ -50,8 +50,8 @@
         "xcodebuild succeeds"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added title cache to SwrmEventTailer: private(set) titleCache [aggregateID:title]. ingestTitles(from:) absorbs data.title from task.created/task.planned (Set titleBearingTypes), later title wins. resolvedTitle(forAggregateID:) returns cached or 'Story #<id>' fallback. seedTitleCache() does a one-shot SwrmEventReader.read(projectRoot:) full-history read at start() (cursor-independent — recovers titles from a created consumed in a prior run, behind the byte cursor); synchronous, file-only, no SQLite. Pump ingests each delivered batch BEFORE onEvents (seq-sorted ⇒ created precedes same-batch moved). xcodebuild QuipMac BUILD SUCCEEDED. Cache logic verified via standalone swift run (created→moved, planned seed, fallback, later-title-wins ALL PASS). Added 5 XCTest cases (SwrmEventTailerTests, @MainActor); test host hangs headless per US-001 — user runs from Xcode."
     },
     {
       "id": "US-004",
