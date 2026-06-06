@@ -123,3 +123,53 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
     and gate requestPump on seed completion (the ordering invariant: seed before
     any delivery so onEvents handlers can resolve titles).
 ---
+
+## 2026-06-06 — US-004 (Trigger filter + phone card over WebSocket)
+- Shared/MessageProtocol.swift: added SwrmStoryStartedMessage
+  {type='swrm_story_started', project, taskId, title, ts} — Codable+Sendable,
+  init sets type. Lives in ../Shared so BOTH QuipMac and QuipiOS targets see it.
+- QuipMac/Services/SwrmEventTailer.swift: added pure predicate
+  `SwrmEvent.isStoryStarted` (type=='task.moved' && data.to=='in_progress').
+  Pure ⇒ unit-testable with no I/O; the single trigger US-004/005/007 fan out from.
+- QuipMac/Services/SwrmStoryCoordinator.swift (NEW, @MainActor): the single
+  fan-out point. handle(tailer:events:) filters batch by isStoryStarted; per
+  match resolves title (tailer.resolvedTitle, US-003), project = event.project
+  ?? projectRoot.lastPathComponent, broadcasts the card (weak webSocketServer).
+  US-005 (push) + US-007 (inject) add methods here; US-008 owns lifecycle.
+- QuipMac/QuipMacApp.swift: @State swrmStoryCoordinator; in startServicesOnce
+  set coordinator.webSocketServer + swrmProjectStore.onTailerEvents =
+  coordinator.handle (the US-002 onTailerEvents seam, finally consumed).
+- iOS 3-layer message chain (per multibackend wire() rule):
+  (1) WebSocketClient: onSwrmStoryStarted callback + 'swrm_story_started' case
+      (isAuthenticated-gated, decodeMessage).
+  (2) BackendConnectionManager: onSwrmStoryStarted decl + c.onSwrmStoryStarted
+      bridge in wire() (weak self/session).
+  (3) QuipApp host: manager.onSwrmStoryStarted → errorToast banner
+      'swrm ▶ <title> · <project>' (4s), active-session gated like onError.
+- QuipMac/Tests/SwrmEventTailerTests.swift: +4 predicate cases (in_progress
+  true; done/todo false; nil-to false; created/completed+in_progress false).
+- Files: Shared/MessageProtocol.swift, QuipMac/Services/SwrmEventTailer.swift,
+  QuipMac/Services/SwrmStoryCoordinator.swift (new), QuipMac/QuipMacApp.swift,
+  QuipMac/Tests/SwrmEventTailerTests.swift,
+  QuipiOS/Services/WebSocketClient.swift, QuipiOS/Services/BackendConnectionManager.swift,
+  QuipiOS/QuipApp.swift, both project.pbxproj (xcodegen regen — Mac had a new file).
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED + xcodebuild QuipiOS BUILD SUCCEEDED.
+- **Learnings for future iterations:**
+  - QA SIM UDID CHANGED: the dedicated Quip QA sim is now
+    3B2ACF04-1B0A-4842-827C-5B1699B8D4F8 (OS 26.4.1) — the memory's
+    D853A014-… is stale/gone. Use `id=3B2ACF04-…` for QuipiOS sim builds.
+  - SwrmStoryCoordinator is THE extension point for US-005/US-007: add
+    sendPush(...) / injectNotice(...) calls inside handleStoryStarted, each
+    independently best-effort (wrap so one failure doesn't suppress the card).
+    It already has tailer (→ projectRoot for US-007 cwd match) + resolved title.
+  - A new Mac→iOS message needs FOUR touch points: (1) the struct in
+    Shared/MessageProtocol.swift, (2) WebSocketClient case+callback,
+    (3) BackendConnectionManager decl+wire() bridge, (4) QuipApp host hook.
+    Miss (3) and the host hook silently never fires (multibackend wire rule).
+  - US-004 reuses errorToast as the card surface (zero new render plumbing).
+    If a dedicated styled swrm card is wanted later, add a @State swrmCard in
+    QuipApp + a binding through MainiOSView like errorToast at line ~204.
+  - onTailerEvents fires only for RUNNING tailers; US-002 starts them live on
+    add. So US-004 cards work for a root added this session; persisted-root
+    start-at-launch (so cards fire without a re-add) is US-008's startAll().
+---

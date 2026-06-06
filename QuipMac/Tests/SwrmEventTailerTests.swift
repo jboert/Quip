@@ -195,4 +195,33 @@ final class SwrmEventTailerTests: XCTestCase {
         XCTAssertEqual(tailer.resolvedTitle(forAggregateID: "3"), "Renamed",
                        "a later title-bearing event overwrites an earlier one")
     }
+
+    // MARK: US-004 — "story started" trigger predicate (pure)
+
+    /// Parse a single NDJSON line into a SwrmEvent via the reader (the only
+    /// public constructor path) so predicate tests exercise real decoded data.
+    private func event(type: String, id: String, to: String? = nil) -> SwrmEvent {
+        let url = writeFile(line(seq: 1, type: type, id: id, to: to) + "\n")
+        return SwrmEventReader.read(fileURL: url).first!
+    }
+
+    func test_trigger_taskMovedToInProgress_isStoryStarted() {
+        XCTAssertTrue(event(type: "task.moved", id: "7", to: "in_progress").isStoryStarted)
+    }
+
+    func test_trigger_movedToOtherColumn_isNotStoryStarted() {
+        XCTAssertFalse(event(type: "task.moved", id: "7", to: "done").isStoryStarted)
+        XCTAssertFalse(event(type: "task.moved", id: "7", to: "todo").isStoryStarted)
+    }
+
+    func test_trigger_movedWithNoTo_isNotStoryStarted() {
+        XCTAssertFalse(event(type: "task.moved", id: "7", to: nil).isStoryStarted)
+    }
+
+    func test_trigger_otherTypeToInProgress_isNotStoryStarted() {
+        // Only task.moved trips the trigger — a created/completed event that
+        // happened to carry to=in_progress must not.
+        XCTAssertFalse(event(type: "task.created", id: "7", to: "in_progress").isStoryStarted)
+        XCTAssertFalse(event(type: "task.completed", id: "7", to: "in_progress").isStoryStarted)
+    }
 }

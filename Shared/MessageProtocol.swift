@@ -163,6 +163,28 @@ struct StateChangeMessage: Codable, Sendable {
     }
 }
 
+/// Mac → iPhone. Fired when a swrm story is moved into the `in_progress`
+/// column ("Started"). The Mac tails the project's `.swrm/events.ndjson`
+/// (SwrmEventTailer); on a `task.moved → in_progress` event it resolves the
+/// story title (file-only title cache, US-003) and broadcasts this card so
+/// the phone surfaces it immediately. `taskId` is the swrm aggregateID;
+/// `ts` is the event's ISO-8601 timestamp.
+struct SwrmStoryStartedMessage: Codable, Sendable {
+    let type: String
+    let project: String
+    let taskId: String
+    let title: String
+    let ts: String
+
+    init(project: String, taskId: String, title: String, ts: String) {
+        self.type = "swrm_story_started"
+        self.project = project
+        self.taskId = taskId
+        self.title = title
+        self.ts = ts
+    }
+}
+
 /// Mac → iPhone. Fired when the Mac's frontmost tracked window changes
 /// (NSWorkspace activation + AX focused-window observers, throttled). The
 /// phone uses this to follow Mac focus when the user has the "Auto" pref

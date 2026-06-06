@@ -63,6 +63,9 @@ final class BackendConnectionManager {
     /// but only when that session is the active one. The manager passes the
     /// session pointer so the host can compare against `activeBackendID`.
     var onLayoutUpdate: ((BackendSession, LayoutUpdate) -> Void)?
+    /// swrm story moved into `in_progress` ("Started"). Host shows a card/toast
+    /// for the active session. (US-004.)
+    var onSwrmStoryStarted: ((BackendSession, SwrmStoryStartedMessage) -> Void)?
     var onStateChange: ((BackendSession, String, String) -> Void)?
     var onTerminalContent: ((BackendSession, String, String, String?, [String]?) -> Void)?
     var onOutputDelta: ((BackendSession, String, String, String, Bool) -> Void)?
@@ -834,6 +837,11 @@ final class BackendConnectionManager {
                 }
             }
             self.onLayoutUpdate?(session, update)
+        }
+
+        c.onSwrmStoryStarted = { [weak self, weak session] msg in
+            guard let self, let session else { return }
+            self.onSwrmStoryStarted?(session, msg)
         }
 
         c.onStateChange = { [weak self, weak session] windowId, newState in

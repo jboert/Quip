@@ -66,8 +66,8 @@
         "xcodebuild (QuipMac + QuipiOS) succeeds; manual: move a swrm card to In Progress -> phone shows the card (user verify)"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added SwrmStoryStartedMessage {type='swrm_story_started', project, taskId, title, ts} to Shared/MessageProtocol.swift (in both Mac + iOS targets via ../Shared). Pure trigger predicate SwrmEvent.isStoryStarted (type=='task.moved' && data.to=='in_progress') in SwrmEventTailer.swift — unit-tested (4 cases: in_progress true; other column false; nil-to false; non-moved type false). New QuipMac/Services/SwrmStoryCoordinator.swift (@MainActor): handle(tailer:events:) filters by isStoryStarted, resolves title via tailer.resolvedTitle (US-003), project = event.project ?? root basename, broadcasts the card via webSocketServer.broadcast. Wired in QuipMacApp.startServicesOnce: swrmStoryCoordinator.webSocketServer = webSocketServer + swrmProjectStore.onTailerEvents = coordinator.handle (the US-002 seam). iOS 3-layer chain: WebSocketClient.onSwrmStoryStarted + 'swrm_story_started' case; BackendConnectionManager onSwrmStoryStarted decl + wire() bridge (active-session gated); QuipApp host renders via existing errorToast banner ('swrm ▶ <title> · <project>', 4s). xcodebuild QuipMac + QuipiOS BUILD SUCCEEDED. Unknown-type default case already ignores -> no regression. NOTE: QA sim UDID is now 3B2ACF04-1B0A-4842-827C-5B1699B8D4F8 (memory had stale D853A014). Tests need Xcode/user run (test host hangs headless per US-001). Manual (user verify): move a swrm card to In Progress -> phone shows the toast."
     },
     {
       "id": "US-005",

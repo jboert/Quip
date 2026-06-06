@@ -564,6 +564,20 @@ struct QuipApp: App {
             }
         }
 
+        // US-004 — swrm "story started" card. MVP surfaces it through the
+        // existing toast banner (title + project); a dedicated styled card is
+        // later polish. Fires for the active session only, like the others.
+        manager.onSwrmStoryStarted = { session, msg in
+            guard session.backendID == manager.activeBackendID else { return }
+            DispatchQueue.main.async {
+                let toast = "swrm ▶ \(msg.title) · \(msg.project)"
+                errorToast = toast
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    if errorToast == toast { errorToast = nil }
+                }
+            }
+        }
+
         // Task 16 — QA pair invalidated by Mac (the paired window closed
         // or otherwise vanished). `BackendConnectionManager.wire()` has
         // already nilled `session.qaPair`, so the conditional in

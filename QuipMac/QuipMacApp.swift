@@ -62,6 +62,7 @@ struct QuipMacApp: App {
     @State private var promptLibrary = PromptLibrary()
     @State private var pushNotificationService = PushNotificationService()
     @State private var swrmProjectStore = SwrmProjectStore()
+    @State private var swrmStoryCoordinator = SwrmStoryCoordinator()
     @State private var whisperService: WhisperDictationService?
     @State private var whisperStatusStore = WhisperStatusStore()
     @State private var whisperReaper: Timer?
@@ -211,6 +212,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         webSocketServer.connectionLog = connectionLog
         let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
         webSocketServer.requireAuth = requirePIN
+
+        // swrm board integration: route every tailer's events through the
+        // coordinator, which applies the "story started" trigger and fans out
+        // the phone card (US-004; push US-005 + terminal inject US-007 later).
+        // Tailers start live on add (US-002); start-at-launch for persisted
+        // roots + first-launch cursor seed is US-008.
+        swrmStoryCoordinator.webSocketServer = webSocketServer
+        swrmProjectStore.onTailerEvents = { [swrmStoryCoordinator] tailer, events in
+            swrmStoryCoordinator.handle(tailer: tailer, events: events)
+        }
 
         // CRITICAL: register the message + auth callbacks BEFORE
         // start(). On a no-PIN-required Mac the listener becomes ready

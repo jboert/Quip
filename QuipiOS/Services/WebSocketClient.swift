@@ -172,6 +172,9 @@ final class WebSocketClient {
     var lastDisconnectReason: DisconnectReason?
 
     var onLayoutUpdate: ((LayoutUpdate) -> Void)?
+    /// Mac → phone: a swrm story was moved into `in_progress` ("Started").
+    /// (project, taskId, title, ts). The host renders a card/toast. (US-004.)
+    var onSwrmStoryStarted: ((SwrmStoryStartedMessage) -> Void)?
     var onStateChange: ((String, String) -> Void)?
     var onTerminalContent: ((String, String, String?, [String]?) -> Void)?  // (windowId, content, screenshot, urls)
     var onOutputDelta: ((String, String, String, Bool) -> Void)?  // (windowId, windowName, text, isFinal)
@@ -1068,6 +1071,12 @@ final class WebSocketClient {
             if let update = Self.decodeMessage(LayoutUpdate.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] layout_update: %d windows", update.windows.count)
                 onLayoutUpdate?(update)
+            }
+        case "swrm_story_started":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(SwrmStoryStartedMessage.self, from: data, msgType: peek.type) {
+                NSLog("[WebSocketClient] swrm_story_started: %@ / %@", msg.project, msg.title)
+                onSwrmStoryStarted?(msg)
             }
         case "state_change":
             guard isAuthenticated else { return }

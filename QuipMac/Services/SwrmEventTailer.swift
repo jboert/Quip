@@ -39,6 +39,14 @@ struct SwrmEvent: Identifiable, Equatable {
     var agentName: String? {
         actor.hasPrefix("agent:") ? String(actor.dropFirst("agent:".count)) : nil
     }
+
+    /// US-004 trigger predicate: a story was moved into the `in_progress`
+    /// column ("Started"). Pure — depends only on the event envelope, so it
+    /// is directly unit-testable with no I/O. The card (US-004), push (US-005)
+    /// and terminal inject (US-007) all fan out from this one condition.
+    var isStoryStarted: Bool {
+        type == "task.moved" && data.to == "in_progress"
+    }
 }
 
 /// The subset of an event's `data` payload Quip uses: a story title (on
