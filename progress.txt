@@ -51,3 +51,42 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
   - SwrmCursorStore.directoryOverrideForTests + PromptLibrary.directoryOverrideForTests
     are the test-injection pattern for app-support-backed stores.
 ---
+
+## 2026-06-06 — US-002 (Configurable swrm project roots + Settings UI)
+- Added QuipMac/Services/SwrmProjectStore.swift (@MainActor @Observable):
+  - roots: [String] persisted to UserDefaults key "swrmProjectRoots" (JSON),
+    init load + persist-on-mutation — verbatim PushNotificationService pattern.
+  - tailers: [String: SwrmEventTailer] — one per root. add(path:) appends +
+    persists + startTailer; remove(path:) removes + persists + stopTailer. LIVE
+    (no restart). startAll()/stopAll() present for US-008 but NOT called at init.
+  - validate(path:) -> AddError? : .notADirectory if not an existing dir,
+    .duplicate if already configured. "can contain .swrm/" ⇒ any existing dir
+    qualifies (a dir can always gain a subdir), so existing-dir is the only gate.
+  - onTailerEvents hook: var with didSet that rewires every running tailer; the
+    seam US-004/US-008 set once to receive (tailer, [SwrmEvent]). wire() installs
+    a weak-self/weak-tailer onEvents bridge per tailer.
+  - normalize(): expandingTildeInPath + standardizingPath so dupe keys are stable.
+- Added SwrmTab to QuipMac/Views/SettingsView.swift + its tabItem ("swrm",
+  square.stack.3d.up). Folder-picker add (NSOpenPanel canChooseDirectories),
+  inline red error on reject, per-row remove (xmark.circle), ContentUnavailableView
+  empty state, footer count. Reads store via @Environment(SwrmProjectStore.self).
+- Wired QuipMacApp.swift: @State swrmProjectStore + .environment(swrmProjectStore)
+  on the Settings scene.
+- Files: QuipMac/Services/SwrmProjectStore.swift (new), QuipMac/Views/SettingsView.swift,
+  QuipMac/QuipMacApp.swift, QuipMac/QuipMac.xcodeproj/project.pbxproj (xcodegen regen).
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED. No unit test in this story's criteria.
+- **Learnings for future iterations:**
+  - A new Settings TAB needs THREE edits: (1) a `private struct FooTab: View` in
+    SettingsView.swift, (2) its `.tabItem` inside the TabView, (3) if it reads a
+    new @Observable store, add `.environment(store)` to the `Settings { SettingsView() }`
+    block in QuipMacApp.swift AND a `@State private var store = …` there. Miss (3)
+    and the tab crashes at runtime (missing environment), not at compile time.
+  - SwrmProjectStore.onTailerEvents is the SINGLE wiring point for US-004 (card),
+    US-005 (push), US-007 (inject): set it in a coordinator and it forwards
+    (SwrmEventTailer, [SwrmEvent]) for every root. The tailer arg gives you
+    projectRoot for terminal-cwd matching (US-006/US-007).
+  - US-008 must call store.startAll() in startServicesOnce() and store.stopAll()
+    on quit/background — US-002 deliberately does NOT auto-start persisted roots at
+    init, only live add/remove. First-launch cursor-seed (US-008) should run BEFORE
+    startAll() to avoid the historical-move storm.
+---

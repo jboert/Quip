@@ -33,8 +33,8 @@
         "xcodebuild succeeds; manual: add the swrm repo root, confirm it persists across relaunch (user verify)"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added QuipMac/Services/SwrmProjectStore.swift (@MainActor @Observable): roots persisted to UserDefaults key 'swrmProjectRoots' as JSON [String] (PushNotificationService pattern); one SwrmEventTailer per root in a [path:tailer] dict; add(path:)/remove(path:) start/stop a tailer live; validate(path:) rejects non-existing-folder + dupes (a dir can always gain a .swrm/ subdir, so existing-dir is the gate). startAll()/stopAll() exist for US-008 app-launch wiring but are NOT called at init. onTailerEvents hook (didSet rewires running tailers) is the seam US-004/US-008 consume. Added SwrmTab to QuipMac/Views/SettingsView.swift (folder-picker add, inline error, per-root remove, ContentUnavailableView empty state) + tabItem; wired .environment(swrmProjectStore) into the Settings scene and @State in QuipMacApp. xcodegen regen + xcodebuild QuipMac BUILD SUCCEEDED. Manual (user verify): add the swrm repo root, confirm it persists across relaunch."
     },
     {
       "id": "US-003",

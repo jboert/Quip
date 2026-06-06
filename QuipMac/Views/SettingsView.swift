@@ -53,6 +53,11 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Notifications", systemImage: "bell.badge")
                 }
+
+            SwrmTab()
+                .tabItem {
+                    Label("swrm", systemImage: "square.stack.3d.up")
+                }
         }
         // Vertical resize is the common ask (long tabs like Connection
         // overflow). Horizontal also resizable now — at 520 the 8 toolbar
@@ -221,6 +226,98 @@ private struct NotificationsTab: View {
                 pushService.removeDevice(token: device.token)
             } catch {
                 testStatus.append("✗ \(device.token.prefix(8))… \(error)")
+            }
+        }
+    }
+}
+
+// MARK: - swrm Tab
+//
+// Configures which swrm project roots Quip watches. Each root persists in
+// UserDefaults (key "swrmProjectRoots") via SwrmProjectStore and runs one
+// SwrmEventTailer. Add (folder picker) starts a tailer live; remove stops
+// it — no app restart. Invalid paths (not an existing folder, or a dupe)
+// surface inline.
+
+private struct SwrmTab: View {
+    @Environment(SwrmProjectStore.self) private var store
+    @State private var addError: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if store.roots.isEmpty {
+                ContentUnavailableView(
+                    "No swrm Projects",
+                    systemImage: "square.stack.3d.up",
+                    description: Text("Add a swrm project root to get a phone card, push, and a terminal notice when one of its stories is moved to In Progress.")
+                )
+            } else {
+                List {
+                    ForEach(store.roots, id: \.self) { root in
+                        HStack {
+                            Image(systemName: "folder.fill")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text((root as NSString).lastPathComponent)
+                                    .font(.body)
+                                Text(root)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+
+                            Spacer()
+
+                            Button(role: .destructive) {
+                                store.remove(path: root)
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            if let addError {
+                Text(addError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+            }
+
+            Divider()
+
+            HStack {
+                Text("Watching \(store.roots.count) project\(store.roots.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    addProject()
+                } label: {
+                    Label("Add Project…", systemImage: "plus")
+                }
+                .padding(8)
+            }
+        }
+    }
+
+    private func addProject() {
+        addError = nil
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a swrm project root (the folder that contains, or will contain, .swrm/)"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            if let error = store.add(path: url.path) {
+                addError = error.localizedDescription
             }
         }
     }

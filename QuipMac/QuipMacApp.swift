@@ -61,6 +61,7 @@ struct QuipMacApp: App {
     @State private var connectionLog = ConnectionLog()
     @State private var promptLibrary = PromptLibrary()
     @State private var pushNotificationService = PushNotificationService()
+    @State private var swrmProjectStore = SwrmProjectStore()
     @State private var whisperService: WhisperDictationService?
     @State private var whisperStatusStore = WhisperStatusStore()
     @State private var whisperReaper: Timer?
@@ -186,6 +187,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(pushNotificationService)
                 .environment(whisperStatusStore)
                 .environment(promptLibrary)
+                .environment(swrmProjectStore)
         }
         .windowResizability(.contentSize)
     }

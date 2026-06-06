@@ -12,7 +12,7 @@
 		10651D74B2A895F33F9D4F2B /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F512A11137B9D4537AB6361B /* MessageProtocolTests.swift */; };
 		107399D353901EBFF5FB310B /* NetworkMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BE934418962AAB550CF87F /* NetworkMode.swift */; };
 		116314BEF65175C6546B7FD6 /* PushRegisteredDeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E4F97BA0BB789B8E2A1D6 /* PushRegisteredDeviceStoreTests.swift */; };
-		11A6AAD6433ACC71ADACACBF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_E83AC183-411B-4375-8BF5-BC50DA7A0F0B" /* Assets.xcassets */; };
+		116DF14DCB6F5873A109B3C8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_5311676C-74F8-47D2-8B23-0D12B77835D7" /* Assets.xcassets */; };
 		13D5412FA1D65684388478B6 /* MirrorDesktopFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 589E484D563BAA76B0634F61 /* MirrorDesktopFilterTests.swift */; };
 		14DAC6065803A0A60587E902 /* AuthThrottleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12DF63C5377F483607D75CFB /* AuthThrottleTests.swift */; };
 		15E7F693296D17701B7805E9 /* KeystrokeInjectorWriteExpressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37933B6AB818F38B0D7418F /* KeystrokeInjectorWriteExpressionTests.swift */; };
@@ -66,6 +66,7 @@
 		8C5CC0BB9ED7FED3AFFB743C /* MacPermissionsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0099B4C1B3306F6031BCE766 /* MacPermissionsStore.swift */; };
 		9084D0AD136CA9E40A96DE7E /* PushNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BBF33D3BEF237F79631FBD /* PushNotificationService.swift */; };
 		91B496CB2B04169F2B61774A /* PromptFingerprintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3C0CFE09F08EFDD17BA8533 /* PromptFingerprintTests.swift */; };
+		93A9E1EA072D98C5CEF798FA /* SwrmProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5625C3D6E07EBFA079D355E8 /* SwrmProjectStore.swift */; };
 		99CB71752F02DDBC17142390 /* AuthThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9B0051B1E4D19C01D69982E /* AuthThrottle.swift */; };
 		9B14028A9DB92595F7817179 /* PushPayloadShapeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DED44761438FC65105E7CFD /* PushPayloadShapeTests.swift */; };
 		9B4D46C0E2C0623E6F9BE1C6 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C947C022B2F6D1CB4FED43F /* MainWindow.swift */; };
@@ -95,6 +96,7 @@
 		D7510A191B9F0BD7B01E4102 /* CrashRecoveryAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EFE2BF974A88EAE20764610 /* CrashRecoveryAgent.swift */; };
 		D771CA86FD23E660375CC1AC /* WindowListSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAFA76040229EEE779AC055 /* WindowListSidebar.swift */; };
 		DB25E0C4E38ECC8B9A42D04D /* PermissionProbeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4A88C19C3BFF8C38C0B2E4 /* PermissionProbeService.swift */; };
+		E10AF908AF15A2A2849BD2C7 /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_2FB3D7E2-FC32-4AA3-98D7-A6B381476892" /* QuipMacApp.swift */; };
 		E1671AA42F6C302F2E176941 /* ClaudeModeScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1DC52BCF5C78516007D8A /* ClaudeModeScannerTests.swift */; };
 		E16F140F49A779C15EAA0862 /* SecretRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F854257F09ED55190DA9754 /* SecretRedactor.swift */; };
 		E3D52168C6ED0D7E035F86C8 /* WhisperStatusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CCA0A3EEB84C493F8E430E /* WhisperStatusStore.swift */; };
@@ -108,7 +110,6 @@
 		F0BDBE94C7CB5AD6685E33E5 /* BonjourAdvertiser.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBFB66F35E0DB7CFEA44761B /* BonjourAdvertiser.swift */; };
 		F6BAA00D69BD1F037B3D22A1 /* TerminalColorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */; };
 		F77CFDC85D04FA667F66028B /* AudioRingBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6789468087C0DADB2E58869D /* AudioRingBufferTests.swift */; };
-		F87DE21F899AE0B485A56E5F /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_2BD2A8BA-AB68-41D0-857A-2B6EAF52D42C" /* QuipMacApp.swift */; };
 		FB072CFAFE2EFEBE82AC01D4 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD884FDC1F567F0F5B50B23C /* Constants.swift */; };
 /* End PBXBuildFile section */
 
@@ -148,6 +149,7 @@
 		4AF071C3CBB7547A6D15F74D /* ITermWindowListParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ITermWindowListParserTests.swift; sourceTree = "<group>"; };
 		4C870D635AF297B21DA5049D /* CrashRecoveryAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashRecoveryAgentTests.swift; sourceTree = "<group>"; };
 		4D27715C83416E12D0A2488F /* PTTWindowTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTWindowTracker.swift; sourceTree = "<group>"; };
+		5625C3D6E07EBFA079D355E8 /* SwrmProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwrmProjectStore.swift; sourceTree = "<group>"; };
 		589E484D563BAA76B0634F61 /* MirrorDesktopFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorDesktopFilterTests.swift; sourceTree = "<group>"; };
 		59067A8D71C751C4B8C256E3 /* AnswerRevalidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnswerRevalidationTests.swift; sourceTree = "<group>"; };
 		5B283E1205AA8D907541BB47 /* QuipMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuipMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -225,9 +227,9 @@
 		FBBECC11724C6B7430E8A8DA /* APNsJWTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNsJWTTests.swift; sourceTree = "<group>"; };
 		FCED427FE66EE6DA2A41FDF7 /* SpawnedWindowPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnedWindowPickerTests.swift; sourceTree = "<group>"; };
 		FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalColorManager.swift; sourceTree = "<group>"; };
-		"TEMP_2BD2A8BA-AB68-41D0-857A-2B6EAF52D42C" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
-		"TEMP_85AFD9B6-DB14-47BC-8B8E-9BF0D22B2A9F" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_E83AC183-411B-4375-8BF5-BC50DA7A0F0B" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		"TEMP_2FB3D7E2-FC32-4AA3-98D7-A6B381476892" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
+		"TEMP_5311676C-74F8-47D2-8B23-0D12B77835D7" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		"TEMP_60A14FC3-76C9-4EF0-9428-AC480B24F777" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -319,6 +321,7 @@
 				7F854257F09ED55190DA9754 /* SecretRedactor.swift */,
 				9B53B909CD918FD29E0E39F1 /* SpawnedWindowPicker.swift */,
 				86F64E75C339D12BE8A6DB9B /* SwrmEventTailer.swift */,
+				5625C3D6E07EBFA079D355E8 /* SwrmProjectStore.swift */,
 				88BE6CF66C22B39C6DAACAA1 /* TailscaleService.swift */,
 				FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */,
 				B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */,
@@ -431,12 +434,12 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		"TEMP_CF1FBEE2-C33C-484B-9EF9-1E86C8630FC1" /* QuipMac */ = {
+		"TEMP_E6070517-41E3-4413-9183-20DC7E2D9375" /* QuipMac */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_2BD2A8BA-AB68-41D0-857A-2B6EAF52D42C" /* QuipMacApp.swift */,
-				"TEMP_E83AC183-411B-4375-8BF5-BC50DA7A0F0B" /* Assets.xcassets */,
-				"TEMP_85AFD9B6-DB14-47BC-8B8E-9BF0D22B2A9F" /* Info.plist */,
+				"TEMP_2FB3D7E2-FC32-4AA3-98D7-A6B381476892" /* QuipMacApp.swift */,
+				"TEMP_5311676C-74F8-47D2-8B23-0D12B77835D7" /* Assets.xcassets */,
+				"TEMP_60A14FC3-76C9-4EF0-9428-AC480B24F777" /* Info.plist */,
 				01F35C2822B34832E53B989E /* Tools */,
 				F621177D73579FB347509BD2 /* Resources */,
 				D32FA749E86D0C4ECD728F1E /* Models */,
@@ -530,7 +533,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				11A6AAD6433ACC71ADACACBF /* Assets.xcassets in Resources */,
+				116DF14DCB6F5873A109B3C8 /* Assets.xcassets in Resources */,
 				425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */,
 				26DDE2C09EA9C7C18FB8903D /* import-streamdeck-prompts.sh in Resources */,
 				CA061A5EA5E9FFFED7B88CA6 /* kokoro_tts.py in Resources */,
@@ -603,12 +606,13 @@
 				DB25E0C4E38ECC8B9A42D04D /* PermissionProbeService.swift in Sources */,
 				6925B6D4A4F5388EF3BA18EC /* PromptLibrary.swift in Sources */,
 				9084D0AD136CA9E40A96DE7E /* PushNotificationService.swift in Sources */,
-				F87DE21F899AE0B485A56E5F /* QuipMacApp.swift in Sources */,
+				E10AF908AF15A2A2849BD2C7 /* QuipMacApp.swift in Sources */,
 				879115E516EAFBE69CFC6E51 /* SeamStitcher.swift in Sources */,
 				E16F140F49A779C15EAA0862 /* SecretRedactor.swift in Sources */,
 				63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */,
 				037F6BF0E1EA86A00CAABE95 /* SpawnedWindowPicker.swift in Sources */,
 				59088EE38013B3450B199345 /* SwrmEventTailer.swift in Sources */,
+				93A9E1EA072D98C5CEF798FA /* SwrmProjectStore.swift in Sources */,
 				166D5EA3635FC5603D18D5A6 /* TailscaleService.swift in Sources */,
 				F6BAA00D69BD1F037B3D22A1 /* TerminalColorManager.swift in Sources */,
 				2D3A9D787C29669647538F78 /* TerminalStateDetector.swift in Sources */,
