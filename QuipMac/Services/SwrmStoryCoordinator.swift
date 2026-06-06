@@ -24,8 +24,14 @@ final class SwrmStoryCoordinator {
     /// app scene does — and must not keep it alive past teardown.
     weak var webSocketServer: WebSocketServer?
 
-    init(webSocketServer: WebSocketServer? = nil) {
+    /// The push registry/sender (US-005). Weak for the same reason — owned by
+    /// the app scene. When nil (not yet wired), the push side-effect no-ops.
+    weak var pushNotificationService: PushNotificationService?
+
+    init(webSocketServer: WebSocketServer? = nil,
+         pushNotificationService: PushNotificationService? = nil) {
         self.webSocketServer = webSocketServer
+        self.pushNotificationService = pushNotificationService
     }
 
     /// Wired to `SwrmProjectStore.onTailerEvents`. Filters a tailer's freshly
@@ -49,6 +55,13 @@ final class SwrmStoryCoordinator {
         let card = SwrmStoryStartedMessage(
             project: project, taskId: event.aggregateID, title: title, ts: event.ts)
         webSocketServer?.broadcast(card)
+
+        // US-005 — APNs push so the alert lands even when Quip is
+        // backgrounded. Independent + best-effort: the registry no-ops on
+        // missing APNs config / no registered devices, and a send failure on
+        // one device never suppresses the card above or the other devices.
+        pushNotificationService?.notifySwrmStoryStarted(
+            project: project, taskId: event.aggregateID, title: title)
     }
 
     /// Prefer the event's own `project` label; fall back to the root folder

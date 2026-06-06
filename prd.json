@@ -82,8 +82,8 @@
         "xcodebuild succeeds; manual: background Quip, move a card -> push arrives (user verify)"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added PushNotificationService.buildSwrmPayload(project:taskId:title:sound:) — pure builder mirroring buildPayload: aps.alert title 'Started - <project>' / body '<title> -> In Progress', sound when enabled, top-level quip_event='swrm_story_started' + quip_swrm_task_id; no badge/category (not an attention queue). Added notifySwrmStoryStarted(project:taskId:title:) — iterates registered devices reusing the SAME per-device gating as notifyWaitingForInput (paused, bannerEnabled, isQuietNow) but DROPS the selection/all-windows gate (swrm event isn't tied to a phone-selected window) and the 30s debounce (story moves are discrete; collapseId already coalesces). collapseId='swrm-<project>-<taskId>'; APNsError.unregistered -> removeDevice; encodes payload to Data on main before the per-device Task (Swift 6 Sendable). SwrmStoryCoordinator gained weak pushNotificationService + fires it in handleStoryStarted AFTER the US-004 card (each side-effect independent/best-effort). Wired swrmStoryCoordinator.pushNotificationService = pushNotificationService in QuipMacApp.startServicesOnce. Added 2 XCTest cases to PushPayloadShapeTests (swrm payload shape + sound:false omit). Files: PushNotificationService.swift, SwrmStoryCoordinator.swift, QuipMacApp.swift, Tests/PushPayloadShapeTests.swift (NO new files -> no xcodegen regen). Gate: xcodebuild QuipMac BUILD SUCCEEDED. Payload logic verified via standalone swift run. Tests need Xcode/user run (host hangs headless per US-001). Manual (user verify): background Quip, move a card -> push arrives titled 'Started - <project>'."
     },
     {
       "id": "US-006",

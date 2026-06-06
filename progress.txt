@@ -173,3 +173,46 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
     add. So US-004 cards work for a root added this session; persisted-root
     start-at-launch (so cards fire without a re-add) is US-008's startAll().
 ---
+
+## 2026-06-06 — US-005 (APNs push for a started story)
+- PushNotificationService.swift (no new file):
+  - buildSwrmPayload(project:taskId:title:sound:) — pure static builder
+    paralleling buildPayload. aps.alert.title "Started - <project>",
+    aps.alert.body "<title> -> In Progress", aps.sound "default" iff sound.
+    Top-level quip_event="swrm_story_started" + quip_swrm_task_id=<id>. NO
+    badge/category (a story-started alert isn't an attention queue).
+  - notifySwrmStoryStarted(project:taskId:title:) — device loop. Reuses the
+    SAME per-device gating subset as notifyWaitingForInput: paused,
+    bannerEnabled, isQuietNow. DELIBERATELY drops the selection/all-windows
+    gate (swrm events aren't tied to a phone-selected terminal) and the 30s
+    debounce (story moves are discrete user actions; collapseId coalesces
+    repeats). collapseId="swrm-<project>-<taskId>". APNsError.unregistered ->
+    removeDevice. Payload encoded to Data on main, then per-device fire-and-
+    forget Task (Swift-6 Sendable boundary, same trick as the waiting path).
+- SwrmStoryCoordinator.swift: + weak pushNotificationService; handleStoryStarted
+  fires the push AFTER the US-004 broadcast. Each side-effect independent +
+  best-effort (a push failure never suppresses the card).
+- QuipMacApp.swift startServicesOnce: swrmStoryCoordinator.pushNotificationService
+  = pushNotificationService (one line next to the webSocketServer wire).
+- Tests/PushPayloadShapeTests.swift: +2 cases (swrm payload title/body/extras
+  + no badge/category; sound:false omits sound).
+- Files: PushNotificationService.swift, SwrmStoryCoordinator.swift,
+  QuipMacApp.swift, Tests/PushPayloadShapeTests.swift. NO new files ⇒ no
+  xcodegen regen.
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED. Payload verified via standalone swift.
+- **Learnings for future iterations:**
+  - There are now TWO push entry points on PushNotificationService:
+    notifyWaitingForInput (terminal state) and notifySwrmStoryStarted (swrm).
+    They SHARE cachedClient + the prefs gating helpers but have different
+    gate subsets — don't fold them together; the waiting path's selection +
+    debounce gates are wrong for discrete swrm events.
+  - US-005 is Mac-only. The payload carries quip_event + quip_swrm_task_id so
+    a FUTURE iOS story could deep-link a tapped swrm push, but US-005 itself
+    requires no QuipiOS change (the in-app card is US-004's WebSocket path).
+  - SwrmStoryCoordinator.handleStoryStarted is now the 2-of-3 fan-out (card +
+    push). US-007 adds injectNotice(...) here as the third best-effort limb;
+    it has `tailer.projectRoot` for the cwd match (US-006 captures cwdPath).
+  - To add another push class, copy the buildSwrmPayload + notify* pair shape:
+    one pure builder (unit-test in PushPayloadShapeTests) + one device loop
+    that picks only the gates that make sense for that event class.
+---

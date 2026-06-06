@@ -56,4 +56,30 @@ final class PushPayloadShapeTests: XCTestCase {
         // Options still travel so the in-app view can render them all.
         XCTAssertEqual(dict["quip_options"] as? [Int], [1, 2, 3, 4, 5])
     }
+
+    // MARK: swrm "story started" payload (US-005)
+
+    func test_swrmPayload_titleBodyAndExtras() throws {
+        let dict = PushNotificationService.buildSwrmPayload(
+            project: "Quip", taskId: "42", title: "Add dark mode", sound: true)
+        let aps = try XCTUnwrap(dict["aps"] as? [String: Any])
+        let alert = try XCTUnwrap(aps["alert"] as? [String: Any])
+        XCTAssertEqual(alert["title"] as? String, "Started - Quip")
+        XCTAssertEqual(alert["body"] as? String, "Add dark mode -> In Progress")
+        XCTAssertEqual(aps["sound"] as? String, "default")
+        XCTAssertEqual(dict["quip_event"] as? String, "swrm_story_started")
+        XCTAssertEqual(dict["quip_swrm_task_id"] as? String, "42")
+        // Not an attention-queue alert — no badge/category.
+        XCTAssertNil(aps["badge"])
+        XCTAssertNil(aps["category"])
+        XCTAssertNil(dict["quip_window_id"])
+    }
+
+    func test_swrmPayload_soundFalse_omitsSound() throws {
+        let dict = PushNotificationService.buildSwrmPayload(
+            project: "swrm", taskId: "7", title: "Story #7", sound: false)
+        let aps = try XCTUnwrap(dict["aps"] as? [String: Any])
+        XCTAssertNil(aps["sound"])
+        XCTAssertEqual(dict["quip_swrm_task_id"] as? String, "7")
+    }
 }

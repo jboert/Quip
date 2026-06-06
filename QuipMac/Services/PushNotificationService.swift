@@ -339,6 +339,104 @@ final class PushNotificationService {
         return payload
     }
 
+    /// Build the APNs payload for a swrm "story started" event (US-005).
+    /// Pure for testability, mirroring `buildPayload`. Distinct from the
+    /// waiting_for_input shape: `quip_event` is `swrm_story_started` and the
+    /// story id rides in `quip_swrm_task_id` so the iOS push handler can
+    /// route/deep-link it independently of terminal-window pushes. No
+    /// `badge`/`category` — a story-started alert isn't an attention queue.
+    nonisolated static func buildSwrmPayload(project: String, taskId: String,
+                                             title: String, sound: Bool) -> [String: Any] {
+        var aps: [String: Any] = [
+            "alert": ["title": "Started - \(project)", "body": "\(title) -> In Progress"]
+        ]
+        if sound { aps["sound"] = "default" }
+        return [
+            "aps": aps,
+            "quip_event": "swrm_story_started",
+            "quip_swrm_task_id": taskId
+        ]
+    }
+
+    /// Fire a "story started" push to every registered device (US-005).
+    /// Reuses the per-device gating from `notifyWaitingForInput` — paused,
+    /// bannerEnabled, quiet-hours — but deliberately drops the
+    /// selection/all-windows gate (a swrm event isn't tied to the phone's
+    /// selected terminal) and the 30s debounce (story moves are discrete
+    /// user actions, and `collapseId` already coalesces repeat moves of the
+    /// same story). Best-effort: silent no-op on missing config / no devices.
+    func notifySwrmStoryStarted(project: String, taskId: String, title: String) {
+        guard !devices.isEmpty else { return }
+
+        let keyId = APNsMetadataStore.keyId
+        let teamId = APNsMetadataStore.teamId
+        let bundleId = APNsMetadataStore.bundleId
+        guard !keyId.isEmpty, !teamId.isEmpty, !bundleId.isEmpty else {
+            quipPushLog("swrm_story_started skipped — APNs not configured in Settings → Notifications")
+            return
+        }
+
+        let client: APNsClient
+        do {
+            client = try cachedClient(keyId: keyId, teamId: teamId, bundleId: bundleId)
+        } catch {
+            quipPushLog("APNsClient init failed (swrm): \(error)")
+            return
+        }
+
+        let devicesSnapshot = devices
+        let prefsSnapshot = preferences
+        let now = Date()
+        // Repeated moves of one story collapse to a single lock-screen alert.
+        let collapse = "swrm-\(project)-\(taskId)"
+
+        for device in devicesSnapshot {
+            let prefs = prefsSnapshot[device.token] ?? .defaults
+            let tokenPrefix = device.token.prefix(8)
+            if prefs.paused {
+                quipPushLog("skip paused (swrm) — device=\(tokenPrefix) task=\(taskId)")
+                continue
+            }
+            if !prefs.bannerEnabled {
+                quipPushLog("skip banner_disabled (swrm) — device=\(tokenPrefix) task=\(taskId)")
+                continue
+            }
+            if prefs.isQuietNow(now: now) {
+                let range = "\(prefs.quietHoursStart?.description ?? "nil")-\(prefs.quietHoursEnd?.description ?? "nil")"
+                quipPushLog("skip quiet_hours (swrm) — device=\(tokenPrefix) tz=\(prefs.timeZone ?? "mac") range=\(range)")
+                continue
+            }
+
+            let payload = Self.buildSwrmPayload(
+                project: project, taskId: taskId, title: title, sound: prefs.sound)
+            // Encode on main → Sendable Data crosses into the Task below.
+            guard let payloadData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+                quipPushLog("could not encode swrm payload for task=\(taskId)")
+                continue
+            }
+
+            let capturedClient = client
+            let capturedDevice = device
+            let capturedToken = capturedDevice.token
+            Task {
+                do {
+                    try await capturedClient.send(
+                        payloadData: payloadData,
+                        toDevice: capturedDevice,
+                        collapseId: collapse
+                    )
+                    quipPushLog("swrm push sent to \(capturedToken.prefix(8))… task=\(taskId)")
+                } catch APNsError.unregistered {
+                    await MainActor.run {
+                        self.removeDevice(token: capturedToken)
+                    }
+                } catch {
+                    quipPushLog("swrm push failed for \(capturedToken.prefix(8))…: \(error)")
+                }
+            }
+        }
+    }
+
     func notifyWaitingForInput(windowId: String, windowName: String, projectName: String?,
                                attentionCount: Int, selectedWindowId: String?,
                                options: [Int]? = nil, isYesNo: Bool = false,
