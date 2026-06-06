@@ -18,7 +18,12 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
     let id: String                // Unique identifier (bundleId + windowNumber)
     let name: String              // Window title
     let app: String               // Application name
-    var subtitle: String          // Directory path or secondary info
+    var subtitle: String          // Directory basename for display (secondary info)
+    /// Full working-directory path for this terminal window (iTerm2 only),
+    /// captured from iTerm's `path` session variable. `subtitle` is its
+    /// basename; this is the whole path so a swrm project root can be matched
+    /// exactly (US-006/US-007). nil for Terminal.app (no shell-var access).
+    var cwdPath: String?
     let bundleId: String          // Application bundle identifier
     let icon: NSImage?            // App icon (non-Sendable but only used on MainActor)
     var isEnabled: Bool           // Whether this window participates in layouts
@@ -270,7 +275,8 @@ final class WindowManager {
             if let existing = windows.first(where: { $0.id == info.id }) {
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
-                    subtitle: existing.subtitle, bundleId: info.bundleId, icon: icon,
+                    subtitle: existing.subtitle, cwdPath: existing.cwdPath,
+                    bundleId: info.bundleId, icon: icon,
                     isEnabled: existing.isEnabled, assignedColor: existing.assignedColor,
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: existing.iterm2SessionId,
@@ -280,7 +286,8 @@ final class WindowManager {
             } else {
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
-                    subtitle: "", bundleId: info.bundleId, icon: icon,
+                    subtitle: "", cwdPath: nil,
+                    bundleId: info.bundleId, icon: icon,
                     isEnabled: false, assignedColor: assignColor(),
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
@@ -556,10 +563,18 @@ final class WindowManager {
         let tty: String
     }
 
+    /// One terminal window's directory info: the basename for display plus the
+    /// full cwd path (iTerm2 only). Kept together so the off-main fetch and the
+    /// on-main apply thread one value through (US-006).
+    struct SubtitleInfo: Sendable {
+        let subtitle: String   // basename, for display
+        let cwdPath: String?   // full path; nil when unknown (e.g. empty / Terminal.app)
+    }
+
     /// Fetch subtitles off main — runs AppleScript that can block for 1-3 seconds.
-    /// Returns a dictionary of CGWindowID → subtitle string.
-    nonisolated static func fetchSubtitles() -> [CGWindowID: String] {
-        var result: [CGWindowID: String] = [:]
+    /// Returns a dictionary of CGWindowID → directory info (basename + full path).
+    nonisolated static func fetchSubtitles() -> [CGWindowID: SubtitleInfo] {
+        var result: [CGWindowID: SubtitleInfo] = [:]
 
         // iTerm2 subtitles via AppleScript
         let script = """
@@ -588,7 +603,10 @@ final class WindowManager {
                     let parts = line.split(separator: ":", maxSplits: 1)
                     guard parts.count == 2, let wid = Int(parts[0]) else { continue }
                     let path = String(parts[1])
-                    result[CGWindowID(wid)] = (path as NSString).lastPathComponent
+                    result[CGWindowID(wid)] = SubtitleInfo(
+                        subtitle: (path as NSString).lastPathComponent,
+                        cwdPath: path.isEmpty ? nil : path
+                    )
                 }
             }
         }
@@ -770,13 +788,16 @@ final class WindowManager {
     }
 
     /// Apply pre-fetched subtitles to windows. Call on main.
-    func applySubtitles(_ subtitles: [CGWindowID: String]) {
-        for (wid, folder) in subtitles {
+    func applySubtitles(_ subtitles: [CGWindowID: SubtitleInfo]) {
+        for (wid, info) in subtitles {
             if let index = windows.firstIndex(where: { $0.windowNumber == wid }) {
-                windows[index].subtitle = folder
+                windows[index].subtitle = info.subtitle
+                windows[index].cwdPath = info.cwdPath
             }
         }
-        // Terminal.app — extract from window name
+        // Terminal.app — extract from window name. The name only yields a
+        // basename, so cwdPath stays nil (Terminal.app has no shell-var access);
+        // downstream exact-path matching (US-007) skips these gracefully.
         for i in windows.indices where windows[i].bundleId == "com.apple.Terminal" {
             let name = windows[i].name
             if name.contains("—") {

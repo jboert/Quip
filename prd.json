@@ -97,8 +97,8 @@
         "xcodebuild succeeds; manual: open an iTerm session in a known dir, confirm cwdPath is the full path (user verify)"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "ManagedWindow gained `var cwdPath: String?` (full iTerm cwd; nil for Terminal.app / unknown). fetchSubtitles() now returns [CGWindowID: SubtitleInfo] where SubtitleInfo {subtitle (basename, unchanged display), cwdPath (full path, nil when empty)} — the full `path` iTerm var was already fetched, just reduced to lastPathComponent before; now both are kept. applySubtitles() sets subtitle+cwdPath from SubtitleInfo; Terminal.app branch still sets basename-only subtitle (cwdPath stays nil). Both ManagedWindow init sites updated (existing.cwdPath carry-over / nil for new). QuipMacApp snapshot loop passes the dict through by inference — no annotation change. Empty path -> nil (not \"\") so US-007 exact-match never matches blank to a root. NO new files -> no xcodegen regen. Gate: xcodebuild QuipMac BUILD SUCCEEDED. No new acceptance unit test required by criteria; QAModeBroadcastTests memberwise-init helper needs no change (optional `var` defaults to nil in synthesized init). Manual (user verify): open an iTerm session in a known dir, confirm cwdPath is the full path."
     },
     {
       "id": "US-007",

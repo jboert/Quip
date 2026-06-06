@@ -216,3 +216,35 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
     one pure builder (unit-test in PushPayloadShapeTests) + one device loop
     that picks only the gates that make sense for that event class.
 ---
+
+## 2026-06-06 — US-006 (Capture full terminal working-directory path)
+- QuipMac/Services/WindowManager.swift (no new files):
+  - ManagedWindow: + `var cwdPath: String?` — full iTerm cwd, nil for
+    Terminal.app / unknown. subtitle stays the basename (display unchanged).
+  - New nested `struct SubtitleInfo: Sendable {subtitle, cwdPath}`. fetchSubtitles()
+    return type String -> SubtitleInfo. The AppleScript already read iTerm's
+    `path` var in full; the old code threw it away via lastPathComponent. Now
+    subtitle = basename, cwdPath = path (nil when empty).
+  - applySubtitles(): sets both subtitle + cwdPath from SubtitleInfo. Terminal.app
+    branch unchanged (basename-only subtitle; cwdPath stays nil — no shell-var access).
+  - Both ManagedWindow init sites carry cwdPath (existing.cwdPath / nil for new).
+  - QuipMacApp snapshot loop (line ~472/481) passes the dict through by type
+    inference — no annotation, so the return-type change is transparent there.
+- Files: QuipMac/Services/WindowManager.swift only. NO new files -> no xcodegen regen.
+- Gate: xcodebuild QuipMac BUILD SUCCEEDED.
+- **Learnings for future iterations:**
+  - US-007 cwd match: find tracked window with `cwdPath == projectRoot` (exact;
+    Terminal.app windows have cwdPath==nil so they auto-skip; if multiple match,
+    most-recently-active). Empty iTerm path was mapped to nil (NOT "") on purpose
+    so a blank cwd never collides with a real root.
+  - SwrmStoryCoordinator already has `tailer.projectRoot` (US-002 seam) — that's
+    the value to compare against `window.cwdPath`. Inject via KeystrokeInjector
+    using the window's iterm2SessionId (US-007).
+  - ManagedWindow is `@unchecked Sendable`; optional `var` stored props default
+    to nil in the synthesized memberwise init, so QAModeBroadcastTests's mw()
+    helper compiled without adding cwdPath. Don't bother passing it in tests
+    unless a test needs a specific cwd.
+  - cwdPath only refreshes on the subtitle cycle (every ~5th snapshot tick,
+    QuipMacApp needSubtitles gate) — same cadence as subtitle. A just-opened
+    iTerm window can have stale/nil cwdPath for up to one subtitle cycle.
+---
