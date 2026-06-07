@@ -133,11 +133,12 @@ final class SpeechService {
 
     func requestAuthorization() {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
-        if speechStatus == .authorized {
+        let recordPermission = AVAudioSession.sharedInstance().recordPermission
+        if Self.hasCaptureAuthorization(speechStatus: speechStatus, recordPermission: recordPermission) {
             isAuthorized = true
             return
         }
-        if speechStatus == .denied || speechStatus == .restricted {
+        if speechStatus == .denied || speechStatus == .restricted || recordPermission == .denied {
             isAuthorized = false
             return
         }
@@ -145,17 +146,36 @@ final class SpeechService {
             DispatchQueue.main.async { self?.isAuthorized = authorized }
         }
         DispatchQueue.global().async {
-            SFSpeechRecognizer.requestAuthorization { status in
-                guard status == .authorized else { callback(false); return }
+            let requestMic: @Sendable () -> Void = {
                 AVAudioApplication.requestRecordPermission { granted in
                     callback(granted)
                 }
             }
+            if speechStatus == .authorized {
+                requestMic()
+                return
+            }
+            SFSpeechRecognizer.requestAuthorization { status in
+                guard status == .authorized else { callback(false); return }
+                requestMic()
+            }
         }
     }
 
-    func startRecording() {
-        guard isAuthorized, !isRecording else { return }
+    nonisolated static func hasCaptureAuthorization(
+        speechStatus: SFSpeechRecognizerAuthorizationStatus,
+        recordPermission: AVAudioSession.RecordPermission
+    ) -> Bool {
+        speechStatus == .authorized && recordPermission == .granted
+    }
+
+    @discardableResult
+    func startRecording() -> Bool {
+        guard isAuthorized, !isRecording else {
+            NSLog("[Quip][PTT] startRecording rejected authorized=%d alreadyRecording=%d",
+                  isAuthorized ? 1 : 0, isRecording ? 1 : 0)
+            return false
+        }
         isRecording = true
         transcribedText = ""
 
@@ -206,7 +226,10 @@ final class SpeechService {
                 }
             }
         case .remote:
-            guard let ws = webSocket else { isRecording = false; return }
+            guard let ws = webSocket else {
+                isRecording = false
+                return false
+            }
             let sender = WhisperAudioSender(sessionId: sessionToken) { chunk in
                 Task { @MainActor in ws.sendAudioChunk(chunk) }
             }
@@ -229,6 +252,7 @@ final class SpeechService {
                 }
             )
         }
+        return true
     }
 
     /// Stop recording. If `completion` is supplied, it is invoked on the main

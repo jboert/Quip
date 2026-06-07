@@ -822,8 +822,12 @@ struct QuipApp: App {
         // Pin the windowId for this recording — stopRecording must not re-read
         // selectedWindowId, because a mid-recording select_window push or a
         // layout-update reassignment can change it underneath us.
+        guard speech.startRecording() else {
+            print("[Quip][PTT] startRecording bail: speech service rejected start")
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
         pttTracker.begin(windowId: windowId)
-        speech.startRecording()
         isRecording = true
         // Haptic: heavy impact for recording start
         let generator = UIImpactFeedbackGenerator(style: .heavy)

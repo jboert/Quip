@@ -310,9 +310,33 @@ final class PTTStressTests: XCTestCase {
         let service = SpeechService()
         // Don't require authorization for this — just exercise the guard path.
         // Starting without auth is already a no-op per SpeechService.startRecording.
+        XCTAssertFalse(service.startRecording())
         service.stopRecording()
         service.stopRecording()  // must not crash or throw
         XCTAssertFalse(service.isRecording)
+    }
+
+    func testCaptureAuthorizationRequiresSpeechAndMicrophone() {
+        XCTAssertTrue(SpeechService.hasCaptureAuthorization(
+            speechStatus: .authorized,
+            recordPermission: .granted
+        ))
+        XCTAssertFalse(SpeechService.hasCaptureAuthorization(
+            speechStatus: .authorized,
+            recordPermission: .denied
+        ))
+        XCTAssertFalse(SpeechService.hasCaptureAuthorization(
+            speechStatus: .authorized,
+            recordPermission: .undetermined
+        ))
+        XCTAssertFalse(SpeechService.hasCaptureAuthorization(
+            speechStatus: .denied,
+            recordPermission: .granted
+        ))
+        XCTAssertFalse(SpeechService.hasCaptureAuthorization(
+            speechStatus: .restricted,
+            recordPermission: .granted
+        ))
     }
 
     func testFlushPolicyDefaults() {
