@@ -48,6 +48,13 @@ enum LogPaths {
         return directory.appendingPathComponent("latency.log").path
     }
 
+    /// Image upload pipeline diagnostics. One line per save/inject/ack/error
+    /// so phone-side spinners can be traced without needing Xcode attached.
+    static var imageUploadPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("image-upload.log").path
+    }
+
     /// QA mode pair lifecycle: set/clear/lost events + per-tick broadcast
     /// filter counts. One line per event.
     static var qaModePath: String {

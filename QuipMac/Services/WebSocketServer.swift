@@ -684,6 +684,16 @@ final class WebSocketServer {
         print("[WebSocketServer] \(msg)")
     }
 
+    private nonisolated static func oversizedImageId(from data: Data) -> String? {
+        let prefix = Data(data.prefix(4096))
+        guard let text = String(data: prefix, encoding: .utf8),
+              text.contains("\"type\":\"image_upload\""),
+              let keyRange = text.range(of: "\"imageId\":\"") else { return nil }
+        let remainder = text[keyRange.upperBound...]
+        guard let end = remainder.firstIndex(of: "\"") else { return nil }
+        return String(remainder[..<end])
+    }
+
     // addConnection is handled inline in newConnectionHandler to avoid
     // DispatchQueue.main.async delay which causes ECONNABORTED
 
@@ -862,6 +872,7 @@ final class WebSocketServer {
                 if data.count > WSLimits.maxMessageBytes {
                     KokoroTTSDebug.log("WS: dropping oversized msg \(data.count) bytes")
                     print("[WebSocketServer] Dropping oversized message (\(data.count) bytes)")
+                    Self.wslog("drop_oversized bytes=\(data.count) image_id=\(Self.oversizedImageId(from: data) ?? "<unknown>")")
                     self.receiveMessage(on: connection)
                     return
                 }

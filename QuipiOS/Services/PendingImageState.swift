@@ -21,6 +21,8 @@ enum ImageUploadFailure: String, Equatable {
     /// Mac broadcast `could not save image` — disk write failed
     /// (Caches dir missing, permissions issue, full disk).
     case macDiskWrite
+    /// Local recompression failed or the Mac dropped an oversized frame.
+    case tooLarge
     /// Anything else — render the raw reason. Catch-all so we never
     /// silently swallow a new error string.
     case other
@@ -32,6 +34,7 @@ enum ImageUploadFailure: String, Equatable {
         case .unknownWindow:  return "Window closed before delivery"
         case .invalidData:    return "Image data invalid"
         case .macDiskWrite:   return "Mac couldn't save image"
+        case .tooLarge:       return "Image too large"
         case .other:          return "Upload failed"
         }
     }
@@ -45,6 +48,7 @@ enum ImageUploadFailure: String, Equatable {
         case .unknownWindow:  return "Pick window"
         case .invalidData:    return "Try another"
         case .macDiskWrite:   return "Retry"
+        case .tooLarge:       return "Try smaller"
         case .other:          return ""
         }
     }
@@ -65,6 +69,9 @@ enum ImageUploadFailure: String, Equatable {
         }
         if lower.contains("could not save") || lower.contains("write failed") || lower.contains("disk") {
             return .macDiskWrite
+        }
+        if lower.contains("too large") || lower.contains("oversized") || lower.contains("too big") {
+            return .tooLarge
         }
         return .other
     }

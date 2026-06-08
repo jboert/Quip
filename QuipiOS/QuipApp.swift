@@ -2439,7 +2439,7 @@ struct MainiOSView: View {
                 case .unknownWindow:
                     pendingImage.clear()
                     showBackendPicker = true
-                case .invalidData, .macDiskWrite, .other:
+                case .invalidData, .macDiskWrite, .tooLarge, .other:
                     pendingImage.clear()
                 }
             })

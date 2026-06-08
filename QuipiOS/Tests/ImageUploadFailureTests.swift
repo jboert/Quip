@@ -41,6 +41,11 @@ final class ImageUploadFailureTests: XCTestCase {
         XCTAssertEqual(ImageUploadFailure.classify(reason: "write failed"), .macDiskWrite)
     }
 
+    func test_tooLarge_classified() {
+        XCTAssertEqual(ImageUploadFailure.classify(reason: "image too large to send"), .tooLarge)
+        XCTAssertEqual(ImageUploadFailure.classify(reason: "dropping oversized message"), .tooLarge)
+    }
+
     func test_unknownReason_fallsThroughToOther() {
         XCTAssertEqual(ImageUploadFailure.classify(reason: "Mac is grumpy today"), .other)
     }
@@ -59,6 +64,7 @@ final class ImageUploadFailureTests: XCTestCase {
         XCTAssertFalse(ImageUploadFailure.unknownWindow.actionLabel.isEmpty)
         XCTAssertFalse(ImageUploadFailure.invalidData.actionLabel.isEmpty)
         XCTAssertFalse(ImageUploadFailure.macDiskWrite.actionLabel.isEmpty)
+        XCTAssertFalse(ImageUploadFailure.tooLarge.actionLabel.isEmpty)
         XCTAssertEqual(ImageUploadFailure.other.actionLabel, "")
     }
 }

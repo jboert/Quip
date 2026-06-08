@@ -337,6 +337,51 @@ final class TerminalStateDetector {
         }
     }
 
+    /// Synchronous one-window refresh for command handlers that are about to
+    /// route input. The periodic poll loop normally keeps `windowCLIKind`
+    /// fresh, but image upload needs a just-in-time answer because Codex uses
+    /// a different injection path than Claude/shell and stale classification
+    /// turns into a saved-but-not-attached image.
+    func refreshCLIKind(for windowId: String) -> CLIKind {
+        guard let shellPid = trackedWindows[windowId] else {
+            return windowCLIKind[windowId] ?? .shell
+        }
+
+        if windowStates[windowId] == .sttActive {
+            return windowCLIKind[windowId] ?? .shell
+        }
+
+        let processSnapshot = Self.captureProcessSnapshot()
+        let (detected, hasClaude, cli, resolvedPid, children) = detectState(
+            shellPid: shellPid,
+            tty: trackedTty[windowId],
+            cpuThreshold: cpuIdleThreshold,
+            snapshot: processSnapshot
+        )
+        if let resolvedPid {
+            let oldPid = trackedWindows[windowId] ?? 0
+            trackedWindows[windowId] = resolvedPid
+            NSLog("[TerminalStateDetector] Re-resolved shell PID for window %@: %d -> %d (on-demand)", windowId, oldPid, resolvedPid)
+            installProcessSource(windowId: windowId, pid: resolvedPid)
+        }
+        applyPollResults([(windowId, detected)])
+        if hasClaude {
+            windowsWithClaudeProcess.insert(windowId)
+        } else {
+            windowsWithClaudeProcess.remove(windowId)
+        }
+        windowCLIKind[windowId] = cli
+
+        let currentPids = Set(children.map(\.pid))
+        let known = knownChildren[windowId] ?? []
+        knownChildren[windowId] = currentPids
+        for pid in currentPids.subtracting(known) {
+            installProcessSource(windowId: windowId, pid: pid)
+        }
+
+        return cli
+    }
+
     /// Detect whether a shell's child process (claude/codex/node) is busy or idle.
     /// Returns (state, hasAIProcess, cliKind, resolvedPid):
     /// - state, hasAIProcess, cliKind: same as before

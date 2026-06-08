@@ -45,6 +45,30 @@ fileprivate func appendLatency(_ message: String) {
     }
 }
 
+/// Append one structured line per image upload pipeline event. This is the
+/// companion to latency.log for the `image_upload` event slice.
+fileprivate func appendImageUploadDiagnostic(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        let path = LogPaths.imageUploadPath
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
+fileprivate func imageUploadLogValue(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\n", with: "\\n")
+        .replacingOccurrences(of: "\r", with: "\\r")
+}
+
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -1144,12 +1168,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         case "image_upload":
             if let msg = MessageCoder.decode(ImageUploadMessage.self, from: data) {
+                let uploadId = String(msg.imageId.prefix(8))
+                let tRecv = Date()
                 AuditLogger.log(messageType: "image_upload", clientIdentifier: "ws-client", textContent: msg.filename)
+                appendImageUploadDiagnostic("recv id=\(uploadId) window=\(msg.windowId) filename=\"\(imageUploadLogValue(msg.filename))\" mime=\"\(imageUploadLogValue(msg.mimeType))\" frame_bytes=\(data.count) b64_len=\(msg.data.count)")
 
                 // Resolve target window first — fail fast, don't write the file if it's gone.
                 guard windowManager.windows.contains(where: { $0.id == msg.windowId }) else {
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] image_upload DROPPED: unknown windowId=\(msg.windowId). Known windows: \(known)")
+                    appendImageUploadDiagnostic("error id=\(uploadId) stage=resolve_window reason=unknown_window known_count=\(known.count)")
                     webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "unknown window"))
                     return
                 }
@@ -1158,6 +1186,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 let savedURL: URL
                 do {
                     savedURL = try imageUploadHandler.save(message: msg)
+                    appendImageUploadDiagnostic("saved id=\(uploadId) path=\"\(imageUploadLogValue(savedURL.path))\"")
                 } catch {
                     print("[Quip] image_upload failed: \(error)")
                     let reason: String
@@ -1171,11 +1200,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     default:
                         reason = "upload failed"
                     }
+                    appendImageUploadDiagnostic("error id=\(uploadId) stage=save reason=\"\(imageUploadLogValue(reason))\" detail=\"\(imageUploadLogValue(String(describing: error)))\"")
                     webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: reason))
                     return
                 }
 
                 ensureITermSessionResolved(for: msg.windowId, onMissing: {
+                    appendImageUploadDiagnostic("error id=\(uploadId) stage=resolve_session reason=window_closed_mid_action")
                     self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: "window closed mid-action"))
                 }) { window in
                     let termApp = self.terminalAppForWindow(window)
@@ -1193,39 +1224,59 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     //   path-typing behavior — same as before this branch
                     //   existed, so a window we can't classify still works as
                     //   before.
-                    let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+                    let cachedCliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+                    let cliKind = self.terminalStateDetector.refreshCLIKind(for: msg.windowId)
                     let delay = KeystrokeInjector.focusDelay(
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
                     let finishInjection: () -> Void = {
-                        let result: KeystrokeInjector.InjectionResult
-                        switch cliKind {
-                        case .codex:
-                            result = self.keystrokeInjector.pasteImage(
-                                at: savedURL, to: msg.windowId,
-                                terminalApp: termApp, iterm2SessionId: window.iterm2SessionId
-                            )
-                        case .claude, .shell, .cursor, .grok:
-                            // Cursor's TUI takes a typed absolute path like
-                            // Claude Code (not pasted bytes like Codex).
-                            // Grok prompt text uses clipboard paste, but image
-                            // attachment is not yet known to support pasted bytes.
-                            // Verify on-device; move to the .codex branch if
-                            // Cursor/Grok needs clipboard image paste instead.
-                            let textToInject = savedURL.path + " "
-                            result = self.keystrokeInjector.sendText(
-                                textToInject, to: msg.windowId, pressReturn: false,
-                                terminalApp: termApp, windowName: name, cgWindowNumber: wn,
-                                iterm2SessionId: window.iterm2SessionId
-                            )
+                        let tStart = Date()
+                        let route = cliKind == .codex ? "pasteImage" : "sendTextPath"
+                        let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sessionId in
+                            switch cliKind {
+                            case .codex:
+                                return self.keystrokeInjector.pasteImage(
+                                    at: savedURL, to: msg.windowId,
+                                    terminalApp: termApp, iterm2SessionId: sessionId
+                                )
+                            case .claude, .shell, .cursor, .grok:
+                                // Cursor's TUI takes a typed absolute path like
+                                // Claude Code (not pasted bytes like Codex).
+                                // Grok prompt text uses clipboard paste, but image
+                                // attachment is not yet known to support pasted bytes.
+                                // Verify on-device; move to the .codex branch if
+                                // Cursor/Grok needs clipboard image paste instead.
+                                let textToInject = savedURL.path + " "
+                                return self.keystrokeInjector.sendText(
+                                    textToInject, to: msg.windowId, pressReturn: false,
+                                    terminalApp: termApp, windowName: name, cgWindowNumber: wn,
+                                    iterm2SessionId: sessionId
+                                )
+                            }
                         }
+                        var result = doInject(window.iterm2SessionId)
+                        var selfHealed = false
+                        if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
+                            let sessions = WindowManager.fetchIterm2SessionIds()
+                            self.windowManager.applyIterm2SessionIds(sessions)
+                            if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
+                               let newId = refreshed.iterm2SessionId,
+                               newId != window.iterm2SessionId {
+                                selfHealed = true
+                                result = doInject(newId)
+                            }
+                        }
+                        let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
+                        let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
                         if result.success {
                             print("[Quip] image_upload: delivered to windowId=\(msg.windowId) cli=\(cliKind.rawValue)")
+                            appendImageUploadDiagnostic("ack id=\(uploadId) route=\(route) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) inject_ms=\(injectMs) total_ms=\(totalMs) self_heal=\(selfHealed ? 1 : 0)")
                             self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
                         } else {
                             let err = result.error ?? "couldn't deliver image"
                             print("[Quip] image_upload injection FAILED for windowId=\(msg.windowId) cli=\(cliKind.rawValue): \(err)")
+                            appendImageUploadDiagnostic("error id=\(uploadId) stage=inject route=\(route) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) inject_ms=\(injectMs) total_ms=\(totalMs) self_heal=\(selfHealed ? 1 : 0) reason=\"\(imageUploadLogValue(err))\"")
                             self.webSocketServer.broadcast(ImageUploadErrorMessage(imageId: msg.imageId, reason: err))
                         }
                     }
