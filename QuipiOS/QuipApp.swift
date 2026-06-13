@@ -1049,8 +1049,8 @@ enum PTTReadiness: String, Equatable, CaseIterable {
 
     var label: String {
         switch self {
-        case .ready:     return "Ready for Codex"
-        case .wrongCLI:  return "Selected window isn't Codex"
+        case .ready:     return "Ready for voice"
+        case .wrongCLI:  return "Selected window isn't a voice CLI"
         case .offline:   return "Not connected"
         case .micDenied: return "Microphone permission denied"
         }
@@ -1070,7 +1070,15 @@ enum PTTReadiness: String, Equatable, CaseIterable {
                           selectedCLI: CLIKind?) -> PTTReadiness {
         if !isAuthorized { return .micDenied }
         if !isAuthenticated { return .offline }
-        return selectedCLI == .codex ? .ready : .wrongCLI
+        // Voice is ready when the selected window is a paste-path AI CLI.
+        // Both Codex and Grok route through the Mac's pasteText path (see
+        // TextInjectionRoute.choose) and accept dictated prompts identically.
+        // Grok was missed when its routing landed (420272e) — this enum stayed
+        // Codex-only, so Grok panes wrongly read "isn't Codex". (GH I.)
+        switch selectedCLI {
+        case .codex, .grok: return .ready
+        case .claude, .cursor, .shell, .none: return .wrongCLI
+        }
     }
 
     /// Tiny inline tag shown next to the icon when the state isn't `.ready`.
@@ -1085,9 +1093,10 @@ enum PTTReadiness: String, Equatable, CaseIterable {
             case .claude:  return "claude"
             case .shell:   return "shell"
             case .cursor:  return "cursor"
-            case .grok:    return "grok"
             case .none:    return "?"
-            case .codex:   return nil  // Defensive: classify() shouldn't put us here
+            // Defensive: classify() maps codex/grok → .ready, so neither
+            // reaches a .wrongCLI badge. Kept exhaustive for the compiler.
+            case .codex, .grok: return nil
             }
         case .offline:   return nil    // Top-bar status pill already covers it
         case .micDenied: return "no mic"
@@ -2222,8 +2231,9 @@ struct MainiOSView: View {
             .accessibilityLabel("Connection: \(topStatus.label)")
             .accessibilityHint(manager.paired.isEmpty ? "No backends paired yet" : "Open backend picker")
             // PTT readiness — green only when a volume-button press would
-            // actually reach Codex. Yellow when connected but selected
-            // window is Claude / shell. Red when mic permission is denied.
+            // actually reach a paste-path voice CLI (Codex or Grok). Yellow
+            // when connected but selected window is Claude / cursor / shell.
+            // Red when mic permission is denied.
             // The optional shortHint surfaces *which* CLI is foregrounded
             // (or "no mic") so the user knows why it's not green without
             // having to dig into Settings.

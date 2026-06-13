@@ -5,6 +5,23 @@
 import Foundation
 import Observation
 
+/// Append one structured line per on-demand CLI classification to
+/// `classify.log`. Append-only, failures swallowed — a logger must never crash
+/// the detector. Companion to latency.log: latency records what we *did* with
+/// the routed input, this records *why* a given CLIKind was chosen.
+fileprivate func appendClassifyLog(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = LogPaths.classifyPath
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
+
 // MARK: - TerminalStateDetector
 
 @MainActor
@@ -370,7 +387,16 @@ final class TerminalStateDetector {
         } else {
             windowsWithClaudeProcess.remove(windowId)
         }
+        let prevCli = windowCLIKind[windowId]
         windowCLIKind[windowId] = cli
+
+        // Durable breadcrumb for "voice/image landed nowhere": record the
+        // chosen kind, the kind we'd have used off the stale poll cache, the
+        // resolved shell PID, and the raw `comm` list the classifier matched
+        // against. When PTT into a Codex/Grok pane silently drops, this line
+        // tells us which layer failed (classifier vs PID-tracking vs inject).
+        let comms = children.map { $0.command }.joined(separator: "|")
+        appendClassifyLog("refresh window=\(windowId) chosen=\(cli.rawValue) cached=\(prevCli?.rawValue ?? "none") pid=\(resolvedPid ?? shellPid) children=\(children.count) comms=[\(comms)]")
 
         let currentPids = Set(children.map(\.pid))
         let known = knownChildren[windowId] ?? []

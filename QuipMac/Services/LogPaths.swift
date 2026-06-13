@@ -70,6 +70,20 @@ enum LogPaths {
         return directory.appendingPathComponent("swrm.log").path
     }
 
+    /// CLI classification decisions — one line per on-demand `refreshCLIKind`
+    /// (the just-in-time path PTT/send_text and image_upload take right before
+    /// routing input). Records the chosen `CLIKind`, the prior cached kind, and
+    /// the raw process `comm` list the classifier saw. This is the missing
+    /// "why did voice land in the wrong place / nowhere" breadcrumb: a line
+    /// reading `chosen=shell comms=[zsh|grok]` proves the classifier saw grok
+    /// but returned shell (classifier bug), vs `comms=[zsh]` (process-tree walk
+    /// missed the agent → stale PID), vs `chosen=grok` (paste/inject is at
+    /// fault, not classification). One line per user action, not per poll.
+    static var classifyPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("classify.log").path
+    }
+
     private static func ensureDirectoryExists() {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }

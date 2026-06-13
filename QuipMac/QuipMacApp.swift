@@ -1070,7 +1070,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     //   character-id 13 CR fires submit reliably).
                     // - Default (.shell / unknown / nil) preserves the
                     //   pre-Story-I behavior.
-                    let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+                    // Just-in-time re-classify before routing — DON'T trust the
+                    // periodic poll cache. PTT into a Codex/Grok pane silently
+                    // vanished for months because a stale `.shell`/`.claude`
+                    // cache routed voice down the `sendText` PTY-write path,
+                    // which Codex's/Grok's composer drops on the floor. This is
+                    // the same hardening image_upload got in 1286251; send_text
+                    // (the PTT path) never received it. `refreshCLIKind` also
+                    // re-resolves a respawned shell PID via the stable TTY.
+                    let cachedCliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+                    let cliKind = self.terminalStateDetector.refreshCLIKind(for: msg.windowId)
                     // Diagnostic: log tracked PID + tty so post-mortem can
                     // tell stale-PID respawn from genuine "no codex running"
                     // when cliKind=shell but an agent CLI is visible on screen.
@@ -1138,7 +1147,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
                         let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
                         let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
-                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
+                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
                         if !result.success {
                             let reason = result.error ?? "unknown injection failure"
                             self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(reason)"))
