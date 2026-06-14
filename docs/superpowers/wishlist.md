@@ -6,6 +6,45 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-06-13 (PTT into Grok/Codex panes — fix + telemetry)
+
+HEAD `5151384` (committed, **not pushed** — eb-branch). Both apps installed (Mac via stable recipe, seal
+valid; iOS to iPhone 17 Pro Max). Reported symptom: voice push-to-talk "doesn't recognize" Grok/Codex —
+transcript lands nowhere, no log explains why, unresolved for months.
+
+### Root cause (evidence-backed)
+- **Stale-cache routing on the PTT path.** `send_text` (PTT) read the periodic poll's `windowCLIKind`
+  cache. A stale `.shell`/`.claude` read routed voice down the `sendText` PTY-write path, which Codex's/
+  Grok's composer silently drops (documented in TerminalStateDetector header, lines 26-29). `image_upload`
+  was hardened with just-in-time `refreshCLIKind()` in `1286251`; `send_text` never was.
+- **No decision telemetry.** Classification logged its verdict (`cli=shell`) but never its inputs (the
+  process list), so a misclassification left zero trace — the months-long "why".
+- **Codex-hardcoded readiness badge.** `PTTReadiness.classify()` (`8b22b10`) returned `.ready` only for
+  `.codex`; the Grok routing commit (`420272e`) added the `.grok` hint but missed the gate, so Grok panes
+  read "Selected window isn't Codex".
+
+### Shipped (`5151384`)
+- `send_text` now calls `refreshCLIKind()` (JIT re-classify + TTY-based PID re-resolve), mirroring
+  image_upload. `cached_cli=` added to the latency line.
+- New `classify.log` (`LogPaths.classifyPath`): one line per on-demand classification — `chosen` kind,
+  prior `cached` kind, resolved PID, and the raw `comm` list the classifier matched. Confirmed writing live.
+- `PTTReadiness.classify()` generalized to Codex **or** Grok; labels CLI-neutral ("Ready for voice").
+- `PTTReadinessTests` (7 cases incl. Grok regression). iOS tests pass; Mac builds.
+
+### ⚠️ Open acceptance test (blocked on hardware — user)
+Live end-to-end NOT yet confirmed: needs `grok` running in an iTerm pane, selected on phone, then a PTT.
+Watch `~/Library/Logs/Quip/classify.log`:
+- `chosen=grok cached=shell` → **smoking gun**, proves the stale-cache path was the months-long failure.
+- `chosen=shell comms=[...grok...]` → deeper classifier bug (grok seen but not matched) — chase next.
+First quick check needs no press: selecting a Grok pane should flip the mic badge green "Ready for voice".
+
+### Install-recipe gotcha (saved to memory)
+`ditto` doesn't prune. Debug→Release install left orphan `__preview.dylib` + `Quip.debug.dylib` in
+`/Applications/Quip.app/Contents/MacOS/` → broken seal (`codesign --verify` = "sealed resource invalid").
+Fix is surgical `rm -f` of the two orphans + re-verify, never `rm -rf` the bundle (resets TCC).
+
+---
+
 ## Session log — 2026-05-24 (Quip Labs beta features — §0 + §7.4 shipped)
 
 HEAD `9003bcd`. Four-feature Labs effort, built by **extension** (no parallel systems).
