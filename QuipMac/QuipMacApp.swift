@@ -1070,16 +1070,32 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     //   character-id 13 CR fires submit reliably).
                     // - Default (.shell / unknown / nil) preserves the
                     //   pre-Story-I behavior.
-                    // Just-in-time re-classify before routing — DON'T trust the
-                    // periodic poll cache. PTT into a Codex/Grok pane silently
-                    // vanished for months because a stale `.shell`/`.claude`
-                    // cache routed voice down the `sendText` PTY-write path,
-                    // which Codex's/Grok's composer drops on the floor. This is
-                    // the same hardening image_upload got in 1286251; send_text
-                    // (the PTT path) never received it. `refreshCLIKind` also
+                    // Re-classify before routing ONLY when the cache is
+                    // ambiguous. PTT into a Codex/Grok pane silently vanished
+                    // for months because a stale `.shell` cache (dead/unresolved
+                    // shell PID → empty children → classifyCLI returns `.shell`)
+                    // routed voice down the `sendText` PTY-write path, which
+                    // Codex's/Grok's composer drops on the floor.
+                    //
+                    // But the just-in-time refresh runs a synchronous `ps -ax`
+                    // (~250ms on a busy Mac) — paying that on EVERY press
+                    // regressed the common Claude path from ~75ms to ~350ms
+                    // (snappy → ok). So gate it: a *positive* cached kind
+                    // (codex/grok/claude/cursor) is trustworthy because
+                    // `classifyCLI` matches the agents BEFORE the node/claude
+                    // fallback, so a live agent never hides behind `.shell`
+                    // once any poll has seen it. Only `.shell` (or nil) is
+                    // ambiguous enough to warrant the re-classify, which also
                     // re-resolves a respawned shell PID via the stable TTY.
+                    // image_upload stays unconditional (rare + already slow).
+                    // (Accepted gap: codex/grok launched into a pane cached as
+                    // .claude within one poll gap still routes sendText for that
+                    // press; empirically unobserved across a day of presses —
+                    // classify.log/latency cached_cli will surface it if real.)
                     let cachedCliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
-                    let cliKind = self.terminalStateDetector.refreshCLIKind(for: msg.windowId)
+                    let cliKind = cachedCliKind == .shell
+                        ? self.terminalStateDetector.refreshCLIKind(for: msg.windowId)
+                        : cachedCliKind
                     // Diagnostic: log tracked PID + tty so post-mortem can
                     // tell stale-PID respawn from genuine "no codex running"
                     // when cliKind=shell but an agent CLI is visible on screen.
