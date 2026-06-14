@@ -31,12 +31,21 @@ transcript lands nowhere, no log explains why, unresolved for months.
 - `PTTReadiness.classify()` generalized to Codex **or** Grok; labels CLI-neutral ("Ready for voice").
 - `PTTReadinessTests` (7 cases incl. Grok regression). iOS tests pass; Mac builds.
 
-### ⚠️ Open acceptance test (blocked on hardware — user)
-Live end-to-end NOT yet confirmed: needs `grok` running in an iTerm pane, selected on phone, then a PTT.
-Watch `~/Library/Logs/Quip/classify.log`:
-- `chosen=grok cached=shell` → **smoking gun**, proves the stale-cache path was the months-long failure.
-- `chosen=shell comms=[...grok...]` → deeper classifier bug (grok seen but not matched) — chase next.
-First quick check needs no press: selecting a Grok pane should flip the mic badge green "Ready for voice".
+### ✅ Acceptance test PASSED on hardware (2026-06-14)
+latency.log shows 5/5 Grok+Codex PTT presses `success=1` via `pasteText` (00:37–06:30):
+`cli=grok cached_cli=grok`, `cli=codex cached_cli=codex`. Symptom fixed.
+**Caveat:** every sample had `cli == cached_cli` — the stale-cache *divergence* (`cached=shell chosen=grok`)
+was never captured, so "stale cache was THE months-long cause" stays consistent-but-unproven; the presses
+likely would have succeeded off cache too. The fix is correct hardening regardless.
+
+### Follow-up shipped (`317530f`) — latency regression I introduced, then fixed
+Unconditional `refreshCLIKind()` (`ps -ax`) on every send_text regressed common Claude PTT
+~75ms→~350ms total (snappy→ok). Gated the re-classify to `cachedCliKind == .shell` only (the documented
+stale case); positive caches (codex/grok/claude/cursor) are trusted since classifyCLI matches agents
+before the node/claude fallback. Restores snappy on positive-cache presses. Accepted gap: codex/grok
+launched into a `.claude`-cached pane within one poll gap routes sendText for that one press
+(empirically unobserved; latency `cached_cli` + classify.log will surface it). **Needs a quick re-press
+check on the `317530f` build to confirm Claude PTT is back to <250ms.**
 
 ### Install-recipe gotcha (saved to memory)
 `ditto` doesn't prune. Debug→Release install left orphan `__preview.dylib` + `Quip.debug.dylib` in
