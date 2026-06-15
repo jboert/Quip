@@ -1129,64 +1129,92 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                                             iterm2SessionId: window.iterm2SessionId)
                         }
                     }
-                    let injectAndLog: () -> Void = {
-                        let tStart = Date()
-                        var result = inject()
-                        var selfHealed = false
-                        // Self-heal: if AppleScript couldn't find the iTerm2
-                        // session (cached id went stale because the session
-                        // was recreated), refresh the map and retry once with
-                        // the fresh id before reporting failure to the phone.
-                        // Bounded to one retry; the refresh is a one-shot
-                        // AppleScript and only runs on the failure path.
-                        if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                            let sessions = WindowManager.fetchIterm2SessionIds()
-                            self.windowManager.applyIterm2SessionIds(sessions)
-                            if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
-                               let newId = refreshed.iterm2SessionId,
-                               newId != window.iterm2SessionId {
-                                NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", msg.windowId)
-                                selfHealed = true
-                                if route == .pasteText {
-                                    result = self.keystrokeInjector.pasteText(
-                                        msg.text, to: msg.windowId, pressReturn: msg.pressReturn,
-                                        terminalApp: termApp, iterm2SessionId: newId)
-                                } else {
-                                    result = self.keystrokeInjector.sendText(
-                                        msg.text, to: msg.windowId, pressReturn: msg.pressReturn,
-                                        terminalApp: termApp, windowName: name,
-                                        cgWindowNumber: wn, iterm2SessionId: newId)
+                    if route == .pasteText {
+                        // Codex/Grok pasteText AppleScript: run OFF the main
+                        // actor. On a busy main thread its Apple Event reply-wait
+                        // inflated from ~0.5s to ~2.5s AND blocked main the whole
+                        // time, starving the WS keepalive (a cause of the phone
+                        // connection resets). pasteText is nonisolated + stateless,
+                        // so the background closure captures only the Sendable
+                        // injector + value locals; the main hop (matching the
+                        // line-660 readContent precedent) does self-heal / log /
+                        // broadcast against main-actor state.
+                        let ksi = self.keystrokeInjector
+                        let text = msg.text
+                        let wid = msg.windowId
+                        let pr = msg.pressReturn
+                        let sid = window.iterm2SessionId
+                        let mid = msg.messageId
+                        let textLen = msg.text.count
+                        let runOffMain: () -> Void = {
+                            let tStart = Date()
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                let primary = ksi.pasteText(text, to: wid, pressReturn: pr,
+                                                            terminalApp: termApp, iterm2SessionId: sid)
+                                DispatchQueue.main.async { [self] in
+                                    var result = primary
+                                    var selfHealed = false
+                                    if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
+                                        let sessions = WindowManager.fetchIterm2SessionIds()
+                                        self.windowManager.applyIterm2SessionIds(sessions)
+                                        if let refreshed = self.windowManager.windows.first(where: { $0.id == wid }),
+                                           let newId = refreshed.iterm2SessionId, newId != sid {
+                                            NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", wid)
+                                            selfHealed = true
+                                            result = self.keystrokeInjector.pasteText(text, to: wid, pressReturn: pr,
+                                                                                      terminalApp: termApp, iterm2SessionId: newId)
+                                        }
+                                    }
+                                    let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
+                                    let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
+                                    let rid = mid?.uuidString.prefix(8) ?? "nil"
+                                    appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(textLen) press_return=\(pr ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
+                                    if !result.success {
+                                        self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(result.error ?? "unknown injection failure")"))
+                                    }
+                                    if result.success, let mid {
+                                        self.webSocketServer.broadcast(SendTextAckMessage(messageId: mid, injectMs: injectMs, totalMs: totalMs, path: routingPath))
+                                    }
                                 }
                             }
                         }
-                        let tEnd = Date()
-                        let injectMs = Int(tEnd.timeIntervalSince(tStart) * 1000)
-                        let totalMs = Int(tEnd.timeIntervalSince(tRecv) * 1000)
-                        let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
-                        appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
-                        if !result.success {
-                            let reason = result.error ?? "unknown injection failure"
-                            self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(reason)"))
+                        if delay == 0 {
+                            runOffMain()
+                        } else {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { runOffMain() }
                         }
-                        // Round-trip ack — phone subtracts injectMs/totalMs
-                        // from its own send→ack delta to derive net_rtt.
-                        // Skipped if no messageId (older client) — phone has
-                        // no way to correlate the ack back to its outbound.
-                        // Also skipped on failed injection so latency samples
-                        // do not record failed sends as delivered text.
-                        if result.success, let mid = msg.messageId {
-                            self.webSocketServer.broadcast(SendTextAckMessage(
-                                messageId: mid,
-                                injectMs: injectMs,
-                                totalMs: totalMs,
-                                path: routingPath
-                            ))
-                        }
-                    }
-                    if delay == 0 {
-                        injectAndLog()
                     } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { injectAndLog() }
+                        // sendText (Claude, ~0.2s): unchanged inline-on-main path.
+                        let injectAndLog: () -> Void = {
+                            let tStart = Date()
+                            var result = inject()
+                            var selfHealed = false
+                            if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
+                                let sessions = WindowManager.fetchIterm2SessionIds()
+                                self.windowManager.applyIterm2SessionIds(sessions)
+                                if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
+                                   let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
+                                    NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", msg.windowId)
+                                    selfHealed = true
+                                    result = self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: newId)
+                                }
+                            }
+                            let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
+                            let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
+                            let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
+                            appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
+                            if !result.success {
+                                self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(result.error ?? "unknown injection failure")"))
+                            }
+                            if result.success, let mid = msg.messageId {
+                                self.webSocketServer.broadcast(SendTextAckMessage(messageId: mid, injectMs: injectMs, totalMs: totalMs, path: routingPath))
+                            }
+                        }
+                        if delay == 0 {
+                            injectAndLog()
+                        } else {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { injectAndLog() }
+                        }
                     }
                 }
             }

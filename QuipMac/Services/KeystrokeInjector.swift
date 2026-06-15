@@ -345,8 +345,8 @@ final class KeystrokeInjector {
     /// "send and keep composer open" variant; we use plain Enter to match
     /// the existing `pressReturn` semantics in `sendText`.
     @discardableResult
-    func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
-                   terminalApp: TerminalApp, iterm2SessionId: String?) -> InjectionResult {
+    nonisolated func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
+                               terminalApp: TerminalApp, iterm2SessionId: String?) -> InjectionResult {
         let pb = NSPasteboard.general
         let previousString = pb.string(forType: .string)
         pb.clearContents()
@@ -987,7 +987,7 @@ final class KeystrokeInjector {
     }
 
     /// Execute an AppleScript and return the result
-    private func executeAppleScript(_ source: String, context: String) -> InjectionResult {
+    nonisolated private func executeAppleScript(_ source: String, context: String) -> InjectionResult {
         guard let appleScript = NSAppleScript(source: source) else {
             let msg = "Failed to create NSAppleScript"
             print("[KeystrokeInjector] \(context): \(msg)")
