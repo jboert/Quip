@@ -79,19 +79,29 @@ final class PromptLibrary {
              tags: [String]? = nil, targetAgent: String? = nil, description: String? = nil) -> URL? {
         let safeID = Self.sanitizeID(id)
         guard !safeID.isEmpty else { return nil }
+        // Saving a prompt crashed the WHOLE Mac app (2026-06-14 18:14): the
+        // path went PromptLibrary.put → String.write(to:atomically:) →
+        // swift-foundation writeToFileAux → SIGTRAP (a runtime trap, NOT a
+        // thrown error — so the old do/catch couldn't catch it). The prompts
+        // directory already existed with 26 files at the time, so this was
+        // the atomic temp+rename machinery trapping, not a missing folder.
+        //
+        // Fix: write via the ObjC `FileManager.createFile` (returns Bool,
+        // never throws, never traps) instead of any swift-foundation atomic
+        // write. A prompt .txt is small and non-critical, so the loss of
+        // atomicity is fine. ensureDirExists() keeps the parent present.
+        ensureDirExists()
         let url = Self.directory.appendingPathComponent("\(safeID).txt")
         let fileBody = Self.renderFile(id: safeID, label: label, body: body,
                                        tags: tags, targetAgent: targetAgent, description: description)
-        do {
-            try fileBody.write(to: url, atomically: true, encoding: .utf8)
-            // Keep clients in sync immediately. The file watcher remains a
-            // fallback for external edits and coalesced writes.
-            rescan()
-            return url
-        } catch {
-            print("[PromptLibrary] put failed for \(safeID): \(error)")
+        guard FileManager.default.createFile(atPath: url.path, contents: Data(fileBody.utf8)) else {
+            print("[PromptLibrary] put failed for \(safeID): createFile returned false")
             return nil
         }
+        // Keep clients in sync immediately. The file watcher remains a
+        // fallback for external edits and coalesced writes.
+        rescan()
+        return url
     }
 
     /// Delete the prompt file for the given id. README.txt is excluded
