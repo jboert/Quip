@@ -43,6 +43,15 @@ production incident (Mac app crash). Root causes were all distinct from how they
    watchdog → reset (would feel grok/codex-specific). Hypothesis, unconfirmed.
 4. **Push** — 6 commits await explicit confirmation.
 
+## Update — Codex/Grok PTT speed fix (commit `640457c`, installed v1.5.5, UNVERIFIED)
+Root-caused the 2.5–3.1s grok/codex inject: NSAppleScript itself is only ~500ms (proven via osascript +
+swift harness timing), but `pasteText` ran on the **contended main actor** — the Apple Event reply-wait is
+serviced on the run loop, so a busy main loop inflated 0.5s→2.5s AND blocked main (starving WS keepalive →
+likely a cause of the connection resets). Fix: `pasteText`/`executeAppleScript` made `nonisolated`; send_text
+runs the pasteText route on a background queue, hops to main only for self-heal/log/broadcast (line-660
+`readContent` precedent). sendText (Claude) unchanged. **Pending:** press grok/codex PTT and confirm
+`latency.log` `inject_ms` drops ~2500 → ~500–800ms (idle phone all session, never pressed on this build).
+
 ## Resume command for a fresh session
 "On Quip eb-branch (6 unpushed commits, Mac v1.5.5 installed): confirm on the reconnected iPhone 17 Pro Max
 that the Grok mic badge is green and saving a prompt no longer crashes the Mac, then investigate the
