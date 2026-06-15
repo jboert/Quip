@@ -6,6 +6,41 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-06-15 (prompt-save crash + connection triage)
+
+HEAD `997a196` (local, unpushed). User reported "Erroring" (screenshot: "Connect to the Mac before
+saving prompts") + "PTT and mobile quip not working with grok and codex".
+
+### Root cause: the Mac app was DEAD, not a CLI bug
+- **Prompt-save crashed the whole Mac app** (2026-06-14 18:14): `PromptLibrary.put` →
+  `String.write(to:atomically:)` → swift-foundation `writeToFileAux` → **SIGTRAP** (runtime trap, not a
+  thrown error → put's do/catch couldn't catch it → whole app died → every phone WS connection dropped).
+  Prompts dir already had 26 files, so it was the atomic temp+rename machinery trapping, NOT a missing dir.
+- A dead Mac = phone can't connect = PTT/save/everything fails. Grok/Codex were just what was being tested;
+  **routing is proven working** (latency.log: grok presses `success=1` via pasteText at 17:09 on the
+  317530f build).
+
+### Shipped (`997a196`)
+- `PromptLibrary.put` writes via ObjC `FileManager.createFile(atPath:contents:)` (Bool, never
+  throws/traps) instead of swift-foundation atomic write. `ensureDirExists()` added defensively.
+- `PromptPutDirectoryTests` regression (put into missing dir → creates + writes, no crash). Test + build green.
+- Mac rebuilt + reinstalled (stable recipe, seal valid, running). Exact swift-foundation trap trigger not
+  pinned (single occurrence); createFile sidesteps the trapping path entirely.
+
+### ⚠️ Open — WebSocket connection instability (pre-existing, NOT from this work)
+websocket.log: 5486 resets vs 1743 ready. Pattern:
+- **WiFi** (192.168.4.34) reaches ready→authenticated and holds 3+ min when phone is foreground (carried
+  the 17:09 grok presses). Works.
+- **Tailscale** (100.72.13.19) opens a fresh connection every ~60s that goes `preparing` → **never
+  `ready`** → reset. Redundant path failing to handshake — wasted churn, not the carrier.
+- Since 17:10 the phone held no connection (backgrounded/locked/off-wifi). Immediate remedy: foreground +
+  reconnect/relaunch the phone app on the same wifi (per check-socket-first).
+- **Follow-ups to investigate:** (1) why the Tailscale path never completes the WS handshake (only
+  `preparing`); (2) hypothesis — `pasteText` blocks the Mac main thread ~2.5s/press; 3 grok presses ≈ 7.5s
+  could trip the phone's 25s stall watchdog → reset (would feel "grok/codex-specific").
+
+---
+
 ## Session log — 2026-06-13 (PTT into Grok/Codex panes — fix + telemetry)
 
 HEAD `5151384` (committed, **not pushed** — eb-branch). Both apps installed (Mac via stable recipe, seal
