@@ -509,3 +509,38 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     remote path client.onTranscriptResult ~:98 (confirm it flows the same final
     sink before deciding where to apply the corrector).
 ---
+
+## 2026-06-16 — US-004 (Expand PTT dictation vocabulary) [iOS PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- QuipiOS/Resources/dictation-vocab.txt: appended 17 bias terms (20 -> 37 lines):
+  slash stems compact/plan/clear/prd/caveman/ultrareview; agents
+  Codex/Grok/Cursor/Kokoro; Simulator/keystroke/Xcodegen/entitlements/APNs/
+  keychain/devicectl. Tailscale (was line 17) + monospace (line 6) CONFIRMED
+  already present -> NOT re-added. File stays one-term-per-line plain text.
+- Resource-only story: NO Swift change. DictationVocab.loadBundled() (SpeechService
+  .swift:17) -> load(from:) (:9) reads it; cachedVocab (:498) feeds
+  request.contextualStrings at :620 (local on-device request) and :774 (the
+  remote-handoff request). 37 terms is well under DictationVocab.maxTerms=100.
+- Files: QuipiOS/Resources/dictation-vocab.txt, prd.json, progress.txt.
+- Gate: `xcodebuild build -project QuipiOS.xcodeproj -scheme QuipiOS -destination
+  'generic/platform=iOS Simulator'` -> ** BUILD SUCCEEDED **. Verified the file is
+  IN the bundle: the freshly built Quip.app/dictation-vocab.txt has 37 lines incl.
+  devicectl/Codex/ultrareview/Tailscale/monospace. Manual on-device dictation
+  verify (local/disconnected path) is the user's pass per PRD.
+- **Learnings for future iterations:**
+  - DictationVocab.load (SpeechService.swift:9) does split-on-newline + trim +
+    drop-blank + prefix(maxTerms). There is NO comment syntax — a '#'-prefixed
+    line would ship as a literal contextualStrings bias phrase. Keep the file
+    pure vocab; do NOT add header/comment lines.
+  - Resources/ is a FOLDER REFERENCE that globs into Copy-Bundle-Resources, so
+    editing an existing resource needs NO pbxproj/project edit and ships on the
+    next build (same as dropping a file into Models/Services/Views). Confirmed by
+    grepping the built Quip.app product, not just the source.
+  - US-005 (TranscriptCorrector.swift) is the LAST story and is the harder one:
+    it adds a NEW top-level Swift file + a NEW test file, both of which MUST be
+    added to the QuipiOS and QuipiOSTests build phases manually (checked-in
+    .xcodeproj does NOT xcodegen-glob top-level files — only the folder-ref dirs
+    glob). Apply the corrector at the FINAL sink only (onUpdateCallback isFinal:true
+    ~:711); FIRST confirm the remote client.onTranscriptResult ~:98 path flows
+    through that same final sink (if it has a separate exit, correct there too).
+---

@@ -67,8 +67,8 @@
         "Manual (user verify, local path = disconnected): on-device dictation of the new terms improves"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Appended 17 new bias terms to QuipiOS/Resources/dictation-vocab.txt (20->37 lines, well under DictationVocab.maxTerms=100): slash stems compact/plan/clear/prd/caveman/ultrareview, agents Codex/Grok/Cursor/Kokoro, plus Simulator/keystroke/Xcodegen/entitlements/APNs/keychain/devicectl. Tailscale (line 17) + monospace (line 6) confirmed already present, NOT duplicated. File stays one-term-per-line plain text. NOTE: DictationVocab.load (SpeechService.swift:9) trims+drops-blank lines but has NO comment syntax, so every non-blank line ships as a contextualStrings bias string — kept it pure vocab (no '#' headers). No code change: Resources/ is a folder-ref that globs into the QuipiOS Copy-Bundle-Resources phase, so the edited file auto-ships (verified: the freshly built Quip.app/dictation-vocab.txt has all 37 terms incl. devicectl/Codex/ultrareview/Tailscale/monospace). loadBundled() -> request.contextualStrings at SpeechService:620 (live) + :774 (remote-handoff request). Gate: xcodebuild QuipiOS (generic/platform=iOS Simulator, Swift-6) ** BUILD SUCCEEDED **. Manual on-device dictation verify (local/disconnected path) is the user's pass per PRD."
     },
     {
       "id": "US-005",
