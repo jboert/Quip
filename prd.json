@@ -34,8 +34,8 @@
         "Manual (user verify): + -> Custom Button, type a slash -> preview + label update live; footers visible; Save -> pill appears and fires"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "CustomButtonForm (QuipApp.swift) now opens with a top 'Preview' section rendering a live previewPill that mirrors the customQuickButton chrome (9pt mono label / 16x16 symbol on the tinted chip via QuipColors chipFill+chipText). Label auto-fills from the payload (slash->command word, text->first ~8 chars, keystroke->option label) via labelEdited gate: the Label TextField writes through a custom Binding that sets labelEdited on a real edit, while autofillLabelIfNeeded() writes label directly on .onChange(of: text/keystroke/payloadKind); clearing the field re-enables auto-fill; hydrate() marks an existing label explicit so edit never clobbers. Action section converted to header/footer form with a per-type actionFooter (Slash: auto-submit guidance + the /x... same-first-letter auto-group tip; Text; Keystroke). SF Symbol placeholder now 'SF Symbol e.g. bolt.fill (optional)' + a Label-section footer noting blank->auto-fill and symbol-replaces-label. QuickButtonsSheet empty state now reads 'Tap + -> Custom Button...' and the add sheet's first section gained a footer pointing at Custom Button. No customButtonsJSON wire change (CustomButton/CustomPayload untouched). Gate: xcodebuild QuipiOS (generic/platform=iOS Simulator, Swift-6) ** BUILD SUCCEEDED **. Manual on-device verify (type a slash -> preview + label update live; footers visible; Save -> pill appears and fires) is the user's pass per PRD."
     },
     {
       "id": "US-003",

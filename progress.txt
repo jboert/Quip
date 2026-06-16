@@ -402,3 +402,56 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - QA sim is gone again; `generic/platform=iOS Simulator` is the reliable
     boot-free compile gate. Don't chase the memory's UDIDs.
 ---
+
+## 2026-06-16 — US-002 (Custom-button add-key clarity) [iOS PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- QuipiOS/QuipApp.swift, struct CustomButtonForm:
+  - Added a top "Preview" Form section with `previewPill` — a standalone view
+    that MIRRORS the customQuickButton row chrome (9pt monospaced label OR
+    16x16 SF Symbol, .foregroundStyle(colors.chipText), pad 4x5, minWidth 20 /
+    minHeight 28, chipFill bg, RoundedRectangle radius 5). It is a visual copy,
+    NOT a call into the host's customQuickButton(_:) (that method needs the
+    host's `colors`/`selectedWindowId`/fireCustomButton env; the form is a
+    separate struct). Added `@Environment(\.colorScheme)` + a computed
+    `colors: QuipColors` to get the same chip palette as QuickButtonsSheet.
+  - Live label auto-fill: new `labelEdited` @State gate. The Label TextField now
+    binds through a custom Binding whose setter flips labelEdited (true on a
+    non-empty manual edit, false when cleared). `autofillLabelIfNeeded()` writes
+    `label` DIRECTLY (bypassing that setter, so it isn't seen as a user edit)
+    and is fired from `.onChange(of: text/keystroke/payloadKind)`. derivedLabel()
+    = slash->command word after '/', text->first 8 chars, keystroke->option
+    label. hydrate() sets labelEdited=true for an existing button so editing
+    never auto-clobbers the saved label.
+  - Action Section converted to header/footer form; `actionFooter` is a
+    @ViewBuilder switch on payloadKind (Slash footer carries the auto-submit
+    guidance + the "/x… auto-group" tip; Text + Keystroke have their own).
+  - SF Symbol field placeholder -> "SF Symbol e.g. bolt.fill (optional)" + a
+    Label-section footer ("blank -> auto-fill"; "symbol replaces label").
+  - QuickButtonsSheet: empty-state copy -> "Tap + → “Custom Button” to make your
+    own, or pick a built-in." + a footer on the add sheet's first section
+    pointing at Custom Button.
+- No wire-format change: CustomButton / CustomPayload / customButtonsJSON
+  untouched. save()/isValid logic unchanged (auto-fill just guarantees a
+  non-empty label sooner, which Save already required).
+- Files: QuipiOS/QuipApp.swift, prd.json, progress.txt.
+- Gate: `xcodebuild build -project QuipiOS.xcodeproj -scheme QuipiOS
+  -destination 'generic/platform=iOS Simulator'` -> ** BUILD SUCCEEDED **.
+  Manual on-device verify (live preview/label, footers, Save→fires) = user's pass.
+- **Learnings for future iterations:**
+  - The "auto-fill that yields to a manual edit" pattern: keep the @State the
+    TextField shows, but write user edits through a Binding setter that records
+    an `edited` flag, and write programmatic fills to the @State DIRECTLY. The
+    setter never sees the programmatic write, so the flag stays clean and the
+    fill keeps tracking until the user actually types. Clearing the field flips
+    the flag back off (resume auto-fill).
+  - QuipColors(scheme: colorScheme) is the shared chip palette — any view that
+    wants the keyboard-row pill look needs `@Environment(\.colorScheme)` + that
+    computed `colors`, then chipFill/chipText. Defined in Views/QuipTheme.swift.
+  - The pill chrome is duplicated in THREE spots now: host customQuickButton(_:)
+    (:4412), QuickButtonsSheet.customPillPreview/builtinPillPreview, and now
+    CustomButtonForm.previewPill. They're intentionally separate (different
+    enclosing structs / env) but MUST stay visually in sync — font 9 mono /
+    pad 4x5 / radius 5 / minWidth 20. If you restyle the row pill, update all three.
+  - US-003 (hold-any-slash palette) is next: slotRowView ~:4241, SlashGroupMember
+    ~:4085 — re-grep, line numbers drifted again after this edit.
+---
