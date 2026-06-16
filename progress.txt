@@ -4,6 +4,30 @@ PRD: prd.json (source: tasks/prd-swrm-board-integration.md)
 Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
 
 ## Codebase Patterns
+### iOS PRD (Settings/keyboard/voice UX — eb-branch, current prd.json)
+- BUILD GATE (iOS): `cd QuipiOS && xcodebuild build -project QuipiOS.xcodeproj
+  -scheme QuipiOS -destination 'generic/platform=iOS Simulator'`. The named QA
+  sim UDIDs in memory/progress are ALL STALE (3B2ACF04-… now gone too); the only
+  booted-capable sim is iPhone 17 Pro CFCE8360-508E-4A66-B0FD-615D8CD2A549 (OS 26.5).
+  For a pure Swift-6 compile gate use `generic/platform=iOS Simulator` — no device
+  match needed, no boot. QuipiOS uses a CHECKED-IN .xcodeproj (NOT xcodegen, unlike
+  QuipMac) — adding a new Swift file means adding it to the project's build phase
+  (Models/Resources/Services/Views are folder refs that glob, so files dropped in
+  those dirs auto-join; a brand-new top-level file does not).
+- SETTINGS ROWS: the canonical row chrome is `settingsLinkRow(...)` +
+  `settingsIcon(_:tint:)` in QuipApp.swift (~:5983/:6008). settingsIcon is the
+  28×28 tinted rounded-rect chip (tint.opacity(0.12) bg). There are now TWO
+  settingsLinkRow overloads: `trailing: String?` and a generic
+  `@ViewBuilder trailing: () -> Trailing`. Swift disambiguates by call site
+  (String arg vs trailing closure). Use the closure overload for badge/stateful
+  trailings; reuse it instead of hand-rolling an HStack so spacing/chrome stays
+  consistent. macPermsSection is INTENTIONALLY not on this chrome (red/green
+  semantics) — leave it.
+- NATIVE STORIES: per prd.json, the pass gate is xcodebuild succeeding (+ noted
+  unit tests). On-device/manual verify is the USER's pass — note it in the story,
+  don't block on it. The Ralph "browser testing" step does NOT apply (native SwiftUI).
+
+### Mac/swrm PRD (prior, all 8 passed)
 - BUILD: QuipMac uses xcodegen. After adding/removing any source file, run
   `cd QuipMac && xcodegen generate` BEFORE xcodebuild — sources glob `path: .`
   so new files auto-join the target on regen. project.pbxproj is generated (commit it).
@@ -338,4 +362,43 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
     roots tail at launch -> story moved to in_progress -> coordinator fans out
     phone card (US-004) + APNs push (US-005) + iTerm notice (US-007), each
     best-effort; quit stops every tailer cleanly.
+---
+
+## 2026-06-16 — US-001 (Settings row visual consistency) [iOS PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- New PRD on eb-branch (Settings/keyboard/voice UX, iOS-only). progress.txt above
+  is from the prior swrm PRD — kept for pattern history.
+- QuipiOS/QuipApp.swift:
+  - Added a generic `settingsLinkRow<Trailing: View>(title:subtitle:systemImage:
+    tint:@ViewBuilder trailing:)` overload right after the existing `trailing:
+    String?` one. Identical icon-chip chrome (settingsIcon + title/subtitle VStack
+    + Spacer), but renders an arbitrary trailing view. Overload resolution: a
+    trailing closure picks this; `trailing:` String picks the old one — existing
+    Notifications/Connection callers untouched.
+  - Latency row (was a hand-built HStack spacing:8) → settingsLinkRow with
+    `LatencySummary.from(samples:).badgeView()` as the trailing closure.
+  - Version button → settingsLinkRow(info.circle, .gray) with the if versionCopied
+    "Copied".transition(.opacity) else appVersionDisplay.monospacedDigit() as the
+    trailing closure. Kept .buttonStyle(.plain) + tap-to-copy action + accessibility
+    hint, so the copy + Copied confirmation transition behave identically.
+  - macPermsSection left unchanged (red/green semantics intentional).
+- Files changed: QuipiOS/QuipApp.swift, prd.json, progress.txt.
+- Gate: `xcodebuild build -project QuipiOS.xcodeproj -scheme QuipiOS -destination
+  'generic/platform=iOS Simulator'` → ** BUILD SUCCEEDED **. No new warnings in
+  changed lines (only pre-existing deprecation warnings elsewhere in the file).
+  Manual on-device verify (Settings → Diagnostics chip parity, badge intact,
+  Version still copies) is the user's pass per PRD.
+- **Learnings for future iterations:**
+  - US-002 (CustomButtonForm live pill preview) and US-003 (hold-any-slash palette)
+    are the next two. CustomButtonForm is at ~:7063, the customQuickButton pill
+    chrome to reuse is at ~:4412, slotRowView at ~:4241, SlashGroupMember at ~:4085
+    (line numbers will drift after this edit — re-grep, don't trust them blindly).
+  - QuipiOS is a checked-in .xcodeproj, not xcodegen. No `xcodegen generate` step.
+    New top-level Swift file (e.g. US-005's TranscriptCorrector.swift / its test)
+    must be added to the QuipiOS (and QuipiOSTests) build phase manually — verify
+    via xcodebuild after, since a missing membership compiles green but ships nothing.
+  - For UI stories, prefer reusing settingsLinkRow / settingsIcon (and the pill
+    chrome at :4412) over new HStacks — the PRD's whole US-001 theme is "one chrome".
+  - QA sim is gone again; `generic/platform=iOS Simulator` is the reliable
+    boot-free compile gate. Don't chase the memory's UDIDs.
 ---

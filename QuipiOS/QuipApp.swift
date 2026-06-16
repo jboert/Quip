@@ -5837,15 +5837,12 @@ struct SettingsSheet: View {
                     NavigationLink {
                         LatencyDiagnosticsSheet(client: client)
                     } label: {
-                        HStack(spacing: 8) {
-                            settingsIcon("speedometer", tint: .gray)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Latency")
-                                Text("Round-trip timing by send path")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
+                        settingsLinkRow(
+                            title: "Latency",
+                            subtitle: "Round-trip timing by send path",
+                            systemImage: "speedometer",
+                            tint: .gray
+                        ) {
                             LatencySummary.from(samples: client.latencySamples)
                                 .badgeView()
                         }
@@ -5861,11 +5858,11 @@ struct SettingsSheet: View {
                             await MainActor.run { versionCopied = false }
                         }
                     } label: {
-                        HStack {
-                            settingsIcon("info.circle", tint: .gray)
-                            Text("Version")
-                                .foregroundStyle(.primary)
-                            Spacer()
+                        settingsLinkRow(
+                            title: "Version",
+                            systemImage: "info.circle",
+                            tint: .gray
+                        ) {
                             if versionCopied {
                                 Text("Copied")
                                     .foregroundStyle(.secondary)
@@ -6002,6 +5999,33 @@ struct SettingsSheet: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+        }
+    }
+
+    /// Trailing-view overload of `settingsLinkRow`. Same icon-chip chrome as the
+    /// `String?` variant above, but the row can supply an arbitrary trailing view
+    /// (a tinted badge, a swappable "Copied" label) instead of plain secondary
+    /// text. Swift picks this overload when the call uses a trailing closure and
+    /// the String? one when `trailing:` is a String, so existing callers are
+    /// untouched.
+    private func settingsLinkRow<Trailing: View>(title: String,
+                                                 subtitle: String? = nil,
+                                                 systemImage: String,
+                                                 tint: Color,
+                                                 @ViewBuilder trailing: () -> Trailing) -> some View {
+        HStack(spacing: 10) {
+            settingsIcon(systemImage, tint: tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            trailing()
         }
     }
 

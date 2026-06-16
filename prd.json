@@ -16,8 +16,8 @@
         "Manual (user verify): Settings -> Diagnostics shows Latency + Version with the standard chip; badge intact; Version still copies"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added @ViewBuilder trailing overload of settingsLinkRow (QuipApp.swift); Latency row now passes LatencySummary.badgeView() through it; Version button uses the helper (info.circle) keeping tap-to-copy + 'Copied' .transition(.opacity). macPermsSection untouched. Gate: xcodebuild QuipiOS BUILD SUCCEEDED (generic iOS Simulator, Swift-6). Manual on-device verify is the user's pass. NOTE: the dedicated Quip QA sim UDID 3B2ACF04-… is now GONE too — only available sim is iPhone 17 Pro CFCE8360-508E-4A66-B0FD-615D8CD2A549 (OS 26.5); used generic/platform=iOS Simulator for the compile gate."
     },
     {
       "id": "US-002",
