@@ -88,6 +88,25 @@ runs the pasteText route on a background queue, hops to main only for self-heal/
   client) and/or queue+retry the save through a flap. Needs iOS rebuild (disruptive). PARKED — don't crack
   under context pressure.**
 
+## Update 4 — 2026-06-15 PM: clipboard-clobber fix (committed, UNINSTALLED, UNPUSHED)
+- Code review surfaced a **pre-existing** clipboard bug: `pasteText`/`pasteImage`/`sendText[Claude]` each stomp
+  `NSPasteboard.general`, restore after a delay. Overlapping grok/codex pastes (serial queue ~0.5s apart, inside
+  the 0.6s restore window) → 2nd call snapshots the 1st's INJECTED text as the "original", staggered restores
+  clobber each other → user's clipboard left holding the injected prompt.
+- Fix `735ec29`: shared lock-guarded coordinator `beginClipboardInjection`/`endClipboardInjection` —
+  snapshot real original once per burst (0→1), restore once when last injection drains. Restore stays
+  async-on-main so the line-1169 main-thread self-heal caller never blocks. All 3 paste paths route through it.
+- **Verified:** standalone coordinator-logic check (overlap/single/sequential pass) + `xcodebuild
+  build-for-testing` exit 0 (app + `KeystrokeInjectorClipboardTests` compile). NOT run on host (avoided a TCC
+  prompt from the DerivedData app); test runs in CI. Real Swift-6 compile caught a `@MainActor`-isolated
+  `static let NSLock` that SourceKit missed → fixed with `nonisolated` (see memory `reference_swift6_compile_oracle`).
+- **State:** `735ec29` committed, **eb-branch ahead 1, UNPUSHED** (push policy — "Proceed" was denied as
+  non-explicit). NOT installed — rides the next Mac rebuild. Acceptance test then: copy text → fire 2+ grok
+  voice sends → clipboard still holds the copied text.
+- **Flap still live:** Mac listed twice on the phone (LAN + Tailscale). websocket.log 05:41:56Z shows LAN +
+  TWO Tailscale sockets failing together. Zero-code fix in the user's hands: delete one backend entry. See
+  memory `project_ws_dual_backend_flap`.
+
 ## Resume command for a fresh session
 "On Quip eb-branch (in sync with origin, Mac v1.5.5 installed): prompt-save mobile→Mac is proven working and
 all session work is pushed. The open issue is the dual-backend connection flap (phone holds two ESTABLISHED
