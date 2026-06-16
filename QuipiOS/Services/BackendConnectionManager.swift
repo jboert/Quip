@@ -726,6 +726,21 @@ final class BackendConnectionManager {
     /// Caller guarantees the group represents the same Mac (either same
     /// id OR overlapping URL set). First row's metadata wins for
     /// non-mergeable fields (name, kind, pinned).
+    /// Order merged URLs Tailscale-FIRST, then by `urlPriority`. A Tailscale
+    /// peer (100.64/10 or *.ts.net, i.e. `urlPriority == 2`) is reachable on
+    /// any network, so for a phone that roams off home Wi-Fi it's the stable
+    /// primary — it avoids the reconnect churn of a LAN-only primary that
+    /// dies every time you leave the LAN. LAN/Bonjour stay as faster
+    /// fallbacks for when you're home. (User preference; single-path
+    /// backends are unaffected since there's nothing to reorder.)
+    static func mergedURLOrder(_ urls: [String]) -> [String] {
+        urls.sorted { a, b in
+            let ta = urlPriority(a) == 2, tb = urlPriority(b) == 2
+            if ta != tb { return ta }                  // Tailscale first
+            return urlPriority(a) < urlPriority(b)      // else existing priority
+        }
+    }
+
     private static func mergeRows(_ group: [PairedBackend]) -> PairedBackend {
         var seen = Set<String>()
         var allURLs: [String] = []
@@ -735,7 +750,7 @@ final class BackendConnectionManager {
                 allURLs.append(url)
             }
         }
-        allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+        allURLs = Self.mergedURLOrder(allURLs)
         var merged = group[0]
         merged.url = allURLs.first ?? merged.url
         merged.fallbackURLs = Array(allURLs.dropFirst())
@@ -969,6 +984,35 @@ final class BackendConnectionManager {
             // Rekey the synthetic legacy id to the daemon's real UUID.
             let oldID = session.backendID
             if oldID == identity.deviceID { return }
+
+            // Same-Mac consolidation. If another backend row already holds
+            // this deviceID, THIS session is a second path to the same Mac
+            // (e.g. Tailscale arriving after LAN). Merge this path's URL into
+            // the existing backend and tear THIS duplicate down — never
+            // overwrite the existing session, which orphaned a still-live
+            // client and produced the dual-socket "flap". The keeper holds
+            // its live connection; the merged (Tailscale-first) URL list is
+            // used on its next reconnect.
+            if let keepIdx = self.paired.firstIndex(where: { $0.id == identity.deviceID }),
+               let dupIdx = self.paired.firstIndex(where: { $0.id == oldID }) {
+                var allURLs = self.paired[keepIdx].urlsInOrder
+                for u in self.paired[dupIdx].urlsInOrder where !allURLs.contains(u) { allURLs.append(u) }
+                allURLs = Self.mergedURLOrder(allURLs)
+                self.paired[keepIdx].enabled = self.paired[keepIdx].enabled || self.paired[dupIdx].enabled
+                self.paired[keepIdx].url = allURLs.first ?? self.paired[keepIdx].url
+                self.paired[keepIdx].fallbackURLs = Array(allURLs.dropFirst())
+                self.paired[keepIdx].lastUsed = Date()
+                self.paired.remove(at: dupIdx)
+                c.disconnect()
+                self.sessions.removeValue(forKey: oldID)
+                KeychainBackendPINs.delete(backendID: oldID)
+                if self.activeBackendID == oldID { self.activeBackendID = identity.deviceID }
+                self.savePaired()
+                return
+            }
+
+            // Rekey: rename this session's row from the synthetic legacy id
+            // to the daemon's real UUID (first/only path to this Mac).
             KeychainBackendPINs.rekey(from: oldID, to: identity.deviceID)
             self.sessions.removeValue(forKey: oldID)
             // BackendSession.backendID is `let`; rebuild the session under the
