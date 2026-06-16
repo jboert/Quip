@@ -1,135 +1,92 @@
 {
   "project": "Quip",
-  "branchName": "ralph/swrm-board-integration",
-  "description": "Make QuipMac a subscriber to swrm's event spine: when a swrm story is moved to in_progress (Started), surface it on the phone (WebSocket card + APNs push) and inject a notice line into the matching Mac terminal. swrm requires ZERO changes — Quip copies swrm's EventLog.readIncremental reader and tails <root>/.swrm/events.ndjson. All work in QuipMac (Swift). Source PRD: tasks/prd-swrm-board-integration.md. Native: gate = xcodebuild/swift build succeeds + unit tests where noted; on-device/manual verify is the user's pass (note it in the story).",
+  "branchName": "eb-branch",
+  "description": "Three iOS-only UX surfaces on eb-branch. (1) Modernize the Settings sheet for visual consistency. (2) Make the customizable quick-button row ('custom keyboard') clearer to configure + add a hold-for-all-slash-commands palette. (3) Reduce Quip-vocabulary mangling in the PTT voice->text pipeline on BOTH the local SFSpeech and remote Mac-Whisper paths. ALL work is iOS-only (QuipiOS) with NO Mac rebuild and NO persistence schema change (quickSlotsJSON / customButtonsJSON unchanged). The strongest voice fix (Mac Whisper initial_prompt biasing) is a deferred follow-up because it needs a Mac rebuild. Source spec: docs/superpowers/specs/2026-06-16-settings-modernize-keyboard-ux-design.md. Native: gate = xcodebuild (QuipiOS, Swift-6 mode) succeeds + the noted unit tests compile/pass; on-device/manual verify is the user's pass (note it in the story). NEVER push eb-branch without an explicit literal 'push'.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "swrm event-log tailer service",
-      "description": "As a developer, I need a QuipMac service that incrementally tails a swrm project's .swrm/events.ndjson and delivers parsed events.",
+      "title": "Settings row visual consistency",
+      "description": "As a user, I want every Settings row to share one modern visual style so the page looks consistent.",
       "acceptanceCriteria": [
-        "New QuipMac/Services/SwrmEventTailer.swift with start()/stop()",
-        "Copies swrm reader contract from swrm native/SwrmCore/Sources/SwrmCore/EventLog.swift: a SwrmEvent struct (seq, ts, project, actor, type, aggregateType, aggregateID, data{from,to,title}) and readIncremental(fileURL:byteOffset:since:)->(events,nextOffset) semantics, torn-trailing-line tolerant (hold partial final segment across pumps)",
-        "Per-project byte+seq cursor persisted to QuipMac app-support (NOT inside .swrm/); resumes on restart with no replay or gap (mirror swrm src/events/subscribe.ts cursor authority)",
-        "Pumps driven by a DispatchSource/fs watch on the project's .swrm/ directory (watch dir not file) with a poll-timer fallback",
-        "Best-effort + non-throwing: missing dir/log logs a warning and no-ops, never crashes",
-        "Writes to ~/Library/Logs/Quip/swrm.log via a new LogPaths.swrmPath accessor",
-        "Unit test: feed a fixture .ndjson including a torn last line; assert delivered events + advancing cursor",
-        "xcodebuild (QuipMac) succeeds"
+        "Add a trailing-@ViewBuilder overload settingsLinkRow<Trailing: View>(title:subtitle:systemImage:tint:trailing:) so a row can supply a trailing view instead of only a String (QuipiOS/QuipApp.swift, helper at :5983)",
+        "Convert the Latency row (:5837) to the tinted-chip helper, passing the LatencySummary().badgeView() as the trailing view",
+        "Convert the Version button (:5856) to the tinted-chip helper (info.circle), preserving its tap-to-copy + 'Copied' confirmation transition",
+        "Leave macPermsSection unchanged (its red/green semantics are intentional)",
+        "xcodebuild (QuipiOS) succeeds",
+        "Manual (user verify): Settings -> Diagnostics shows Latency + Version with the standard chip; badge intact; Version still copies"
       ],
       "priority": 1,
-      "passes": true,
-      "notes": "SwrmEventTailer.swift added (reader copied from swrm EventLog.swift, trimmed data to {title,from,to}; byte+seq cursor in app-support/Quip/swrm/cursors via SwrmCursorStore; .swrm/ dir fs-watch + 2s poll fallback; LogPaths.swrmPath). xcodebuild QuipMac SUCCEEDED. Reader+cursor logic verified via standalone swift run (torn-line hold-back, advancing cursor, seq gate, missing-file no-op all pass). XCTest SwrmEventTailerTests written + compiles, but the QuipMacTests host hangs headless in this env ('test runner hung before establishing connection') — PRE-EXISTING: existing suites (e.g. WhisperOutputCleanerTests) hang identically. User should run tests from Xcode to confirm."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-002",
-      "title": "Configurable swrm project roots + Settings UI",
-      "description": "As a user, I want to tell Quip which swrm projects to watch.",
+      "title": "Custom-button add-key clarity",
+      "description": "As a user, I want it to be obvious how to add a custom key and what it will look like.",
       "acceptanceCriteria": [
-        "A list of swrm project root paths persists in UserDefaults under 'swrmProjectRoots' (JSON [String]), following the registeredPushDevices persistence pattern (PushNotificationService.swift)",
-        "A Settings section in the existing SettingsView (QuipMacApp.swift) lists configured roots with add (folder picker) + remove",
-        "Add validates the path contains or can contain a .swrm/ dir; invalid paths show an inline error",
-        "One SwrmEventTailer runs per configured root; add/remove starts/stops its tailer live (no app restart)",
-        "xcodebuild succeeds; manual: add the swrm repo root, confirm it persists across relaunch (user verify)"
+        "CustomButtonForm (QuipiOS/QuipApp.swift:7063) shows a LIVE pill preview at the top, reusing the customQuickButton chrome (:4412), updating as the user types",
+        "Label auto-fills from the payload when empty (slash -> command text, text -> first ~8 chars, keystroke -> option label); an explicit label is never overwritten",
+        "Per-type explanatory footers: Slash (auto-submit guidance + a tip that same-first-letter slash keys auto-group into a /x... menu), Text, Keystroke",
+        "SF Symbol field gets a placeholder example (e.g. bolt.fill) + an optional/falls-back-to-label note",
+        "QuickButtonsSheet empty-state / add entry copy clearly points at '+ -> Custom Button'",
+        "No change to customButtonsJSON wire format",
+        "xcodebuild (QuipiOS) succeeds",
+        "Manual (user verify): + -> Custom Button, type a slash -> preview + label update live; footers visible; Save -> pill appears and fires"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "Added QuipMac/Services/SwrmProjectStore.swift (@MainActor @Observable): roots persisted to UserDefaults key 'swrmProjectRoots' as JSON [String] (PushNotificationService pattern); one SwrmEventTailer per root in a [path:tailer] dict; add(path:)/remove(path:) start/stop a tailer live; validate(path:) rejects non-existing-folder + dupes (a dir can always gain a .swrm/ subdir, so existing-dir is the gate). startAll()/stopAll() exist for US-008 app-launch wiring but are NOT called at init. onTailerEvents hook (didSet rewires running tailers) is the seam US-004/US-008 consume. Added SwrmTab to QuipMac/Views/SettingsView.swift (folder-picker add, inline error, per-root remove, ContentUnavailableView empty state) + tabItem; wired .environment(swrmProjectStore) into the Settings scene and @State in QuipMacApp. xcodegen regen + xcodebuild QuipMac BUILD SUCCEEDED. Manual (user verify): add the swrm repo root, confirm it persists across relaunch."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-003",
-      "title": "Story title resolution (file-only)",
-      "description": "As a user, I want the started-story notice to show the title, even though task.moved carries only {from,to}.",
+      "title": "Hold-any-slash-key slash palette",
+      "description": "As a user, I want to hold any slash key to pick from all slash commands, not only when two share a first letter.",
       "acceptanceCriteria": [
-        "Tailer maintains an in-memory title cache keyed by aggregateID, populated from task.created and task.planned events (which carry data.title) as they stream",
-        "On task.moved to in_progress, title is looked up from the cache by aggregateID",
-        "Cold-start cache miss: tailer does a one-shot full EventLog.read(projectRoot:) at startup to seed the cache, then tails incrementally",
-        "Fallback when title still unknown: 'Story #<id>' (no crash, no blank)",
-        "No swrm SQLite access (file-only)",
-        "Unit test: created-then-moved fixture yields the title; moved-without-prior-created yields 'Story #<id>'",
-        "xcodebuild succeeds"
+        "In slotRowView (QuipiOS/QuipApp.swift:4241), slash-category pills (built-in isSlashCommand and custom .slash) get a long-press Menu / .contextMenu listing ALL slash commands (built-in slash QuickButtons + custom .slash buttons)",
+        "Menu items fire via the existing fireQuickButton / fireCustomButton; reuse SlashGroupMember (:4085) as the element type",
+        "Primary single-tap behavior of each pill is unchanged",
+        "Palette is NOT attached to answer/keystroke pills (slash-only gesture meaning)",
+        "Accessibility hint 'Long-press for all slash commands' on slash pills",
+        "Existing auto-grouping (/x... tap-menu) still works; horizontal row scroll is NOT degraded by the long-press gesture (prior gesture-conflict precedent at :6419)",
+        "xcodebuild (QuipiOS) succeeds",
+        "Manual (user verify): long-press a lone /plan pill -> menu of all slash commands -> tap /compact fires it; single tap still fires /plan; row still scrolls"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "Added title cache to SwrmEventTailer: private(set) titleCache [aggregateID:title]. ingestTitles(from:) absorbs data.title from task.created/task.planned (Set titleBearingTypes), later title wins. resolvedTitle(forAggregateID:) returns cached or 'Story #<id>' fallback. seedTitleCache() does a one-shot SwrmEventReader.read(projectRoot:) full-history read at start() (cursor-independent — recovers titles from a created consumed in a prior run, behind the byte cursor); synchronous, file-only, no SQLite. Pump ingests each delivered batch BEFORE onEvents (seq-sorted ⇒ created precedes same-batch moved). xcodebuild QuipMac BUILD SUCCEEDED. Cache logic verified via standalone swift run (created→moved, planned seed, fallback, later-title-wins ALL PASS). Added 5 XCTest cases (SwrmEventTailerTests, @MainActor); test host hangs headless per US-001 — user runs from Xcode."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-004",
-      "title": "Trigger filter + phone card over WebSocket",
-      "description": "As a user, I want a card on my phone the moment a story is Started.",
+      "title": "Expand PTT dictation vocabulary",
+      "description": "As a user, I want the local on-device recognizer biased toward Quip vocabulary so common dev terms stop mangling.",
       "acceptanceCriteria": [
-        "Pure trigger predicate (unit-tested): type=='task.moved' && data.to=='in_progress'",
-        "New outbound message type in Shared/MessageProtocol.swift: SwrmStoryStartedMessage { type='swrm_story_started', project, taskId, title, ts }",
-        "On trigger QuipMac calls webSocketServer.broadcast(_:) (WebSocketServer.swift) with that message",
-        "QuipiOS handles 'swrm_story_started' and renders a card/toast (title + project)",
-        "No regression to existing message handling (unknown types already ignored)",
-        "xcodebuild (QuipMac + QuipiOS) succeeds; manual: move a swrm card to In Progress -> phone shows the card (user verify)"
+        "QuipiOS/Resources/dictation-vocab.txt expanded with the demonstrably-mangled + working vocabulary: slash-command stems (compact, plan, clear, prd, caveman, ultrareview), agent names (Codex, Grok, Cursor, Kokoro), Simulator, keystroke, Xcodegen, entitlements, APNs, keychain, devicectl, Tailscale (confirm present), monospace (confirm present)",
+        "File stays one-term-per-line plain text (loaded by DictationVocab.loadBundled(), applied as request.contextualStrings at SpeechService:620 and :774)",
+        "No code change required beyond the resource (verify it is in the QuipiOS bundle/Resources build phase)",
+        "xcodebuild (QuipiOS) succeeds",
+        "Manual (user verify, local path = disconnected): on-device dictation of the new terms improves"
       ],
       "priority": 4,
-      "passes": true,
-      "notes": "Added SwrmStoryStartedMessage {type='swrm_story_started', project, taskId, title, ts} to Shared/MessageProtocol.swift (in both Mac + iOS targets via ../Shared). Pure trigger predicate SwrmEvent.isStoryStarted (type=='task.moved' && data.to=='in_progress') in SwrmEventTailer.swift — unit-tested (4 cases: in_progress true; other column false; nil-to false; non-moved type false). New QuipMac/Services/SwrmStoryCoordinator.swift (@MainActor): handle(tailer:events:) filters by isStoryStarted, resolves title via tailer.resolvedTitle (US-003), project = event.project ?? root basename, broadcasts the card via webSocketServer.broadcast. Wired in QuipMacApp.startServicesOnce: swrmStoryCoordinator.webSocketServer = webSocketServer + swrmProjectStore.onTailerEvents = coordinator.handle (the US-002 seam). iOS 3-layer chain: WebSocketClient.onSwrmStoryStarted + 'swrm_story_started' case; BackendConnectionManager onSwrmStoryStarted decl + wire() bridge (active-session gated); QuipApp host renders via existing errorToast banner ('swrm ▶ <title> · <project>', 4s). xcodebuild QuipMac + QuipiOS BUILD SUCCEEDED. Unknown-type default case already ignores -> no regression. NOTE: QA sim UDID is now 3B2ACF04-1B0A-4842-827C-5B1699B8D4F8 (memory had stale D853A014). Tests need Xcode/user run (test host hangs headless per US-001). Manual (user verify): move a swrm card to In Progress -> phone shows the toast."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-005",
-      "title": "APNs push for a started story",
-      "description": "As a user, I want a push even when Quip is backgrounded.",
+      "title": "TranscriptCorrector for both PTT paths",
+      "description": "As a user, I want Quip terms corrected even on the remote Whisper path that has no biasing, since that's the path I hit when connected.",
       "acceptanceCriteria": [
-        "On trigger, send an APNs push to all registered devices via APNsClient.send(payloadData:toDevice:collapseId:), building the payload like PushNotificationService.buildPayload",
-        "Title 'Started - <project>'; body '<story title> -> In Progress'",
-        "Payload includes quip_event:'swrm_story_started' + quip_swrm_task_id",
-        "Respects existing per-device prefs (paused, quiet hours) reusing PushNotificationService gating",
-        "collapseId = 'swrm-<project>-<taskId>' so repeated moves of one story collapse",
-        "xcodebuild succeeds; manual: background Quip, move a card -> push arrives (user verify)"
+        "New QuipiOS/Services/TranscriptCorrector.swift: a value type holding a curated map of high-confidence mishearings -> canonical Quip terms (e.g. 'tail scale'->'Tailscale', 'mono type'->'monospace', 'x code'->'Xcode', 'web socket'->'WebSocket', 'co-dex'->'Codex')",
+        "Matching is case-insensitive, whole-word/phrase (word-boundary) only, preserves surrounding text AND the leading/trailing whitespace the send pipeline relies on",
+        "Applied to the FINAL transcript only (not partials) at the convergence point in SpeechService (the onUpdateCallback(..., isFinal:true) delivery at :711)",
+        "FIRST confirm the remote path (client.onTranscriptResult at SpeechService:98) flows through that same final sink; if it has a separate exit, apply the corrector there too so the remote Whisper output is corrected",
+        "Conservative: only entries unambiguous in a Quip/dev context; never remap a token that is a common English word in normal use",
+        "New QuipiOS/Tests/TranscriptCorrectorTests.swift: assert the captured mangling examples map to canonical terms AND that non-Quip prose passes through untouched",
+        "xcodebuild (QuipiOS) succeeds; tests compile/pass",
+        "Manual (user verify, connected = remote path): PTT a sentence with Tailscale/monospace/Codex -> transcript shows canonical spelling; ordinary dictation unchanged"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": "Added PushNotificationService.buildSwrmPayload(project:taskId:title:sound:) — pure builder mirroring buildPayload: aps.alert title 'Started - <project>' / body '<title> -> In Progress', sound when enabled, top-level quip_event='swrm_story_started' + quip_swrm_task_id; no badge/category (not an attention queue). Added notifySwrmStoryStarted(project:taskId:title:) — iterates registered devices reusing the SAME per-device gating as notifyWaitingForInput (paused, bannerEnabled, isQuietNow) but DROPS the selection/all-windows gate (swrm event isn't tied to a phone-selected window) and the 30s debounce (story moves are discrete; collapseId already coalesces). collapseId='swrm-<project>-<taskId>'; APNsError.unregistered -> removeDevice; encodes payload to Data on main before the per-device Task (Swift 6 Sendable). SwrmStoryCoordinator gained weak pushNotificationService + fires it in handleStoryStarted AFTER the US-004 card (each side-effect independent/best-effort). Wired swrmStoryCoordinator.pushNotificationService = pushNotificationService in QuipMacApp.startServicesOnce. Added 2 XCTest cases to PushPayloadShapeTests (swrm payload shape + sound:false omit). Files: PushNotificationService.swift, SwrmStoryCoordinator.swift, QuipMacApp.swift, Tests/PushPayloadShapeTests.swift (NO new files -> no xcodegen regen). Gate: xcodebuild QuipMac BUILD SUCCEEDED. Payload logic verified via standalone swift run. Tests need Xcode/user run (host hangs headless per US-001). Manual (user verify): background Quip, move a card -> push arrives titled 'Started - <project>'."
-    },
-    {
-      "id": "US-006",
-      "title": "Capture full terminal working-directory path",
-      "description": "As a developer, I need each tracked terminal's full cwd (not just basename) so a project root can be matched exactly.",
-      "acceptanceCriteria": [
-        "WindowManager.fetchSubtitles() is extended to ALSO capture the full path from iTerm's variable named 'path' (currently reduced to basename)",
-        "ManagedWindow gains a cwdPath: String? field set alongside subtitle",
-        "Existing subtitle (basename) behavior unchanged (no UI regression)",
-        "Terminal.app windows (no shell-var access) leave cwdPath nil, handled gracefully downstream",
-        "xcodebuild succeeds; manual: open an iTerm session in a known dir, confirm cwdPath is the full path (user verify)"
-      ],
-      "priority": 6,
-      "passes": true,
-      "notes": "ManagedWindow gained `var cwdPath: String?` (full iTerm cwd; nil for Terminal.app / unknown). fetchSubtitles() now returns [CGWindowID: SubtitleInfo] where SubtitleInfo {subtitle (basename, unchanged display), cwdPath (full path, nil when empty)} — the full `path` iTerm var was already fetched, just reduced to lastPathComponent before; now both are kept. applySubtitles() sets subtitle+cwdPath from SubtitleInfo; Terminal.app branch still sets basename-only subtitle (cwdPath stays nil). Both ManagedWindow init sites updated (existing.cwdPath carry-over / nil for new). QuipMacApp snapshot loop passes the dict through by inference — no annotation change. Empty path -> nil (not \"\") so US-007 exact-match never matches blank to a root. NO new files -> no xcodegen regen. Gate: xcodebuild QuipMac BUILD SUCCEEDED. No new acceptance unit test required by criteria; QAModeBroadcastTests memberwise-init helper needs no change (optional `var` defaults to nil in synthesized init). Manual (user verify): open an iTerm session in a known dir, confirm cwdPath is the full path."
-    },
-    {
-      "id": "US-007",
-      "title": "Inject a notice line into the matching terminal",
-      "description": "As a user, I want the Started story echoed into the Claude terminal for that project.",
-      "acceptanceCriteria": [
-        "On trigger, find the tracked window whose cwdPath == <project root_path> (exact; if multiple, most-recently-active; if none, skip silently + log)",
-        "Inject a single notice line via KeystrokeInjector.sendText(_:to:pressReturn:terminalApp:iterm2SessionId:) using the window's iterm2SessionId",
-        "No auto-submit: notice is informational text (e.g. '# swrm: started \"<title>\" (#<id>)') injected with pressReturn:false; must NOT execute or send a prompt",
-        "Never steals focus (use the session-id iTerm path, not window-focus injection)",
-        "Terminal.app windows (no iterm2SessionId) skipped with a logged note (MVP = iTerm2 only)",
-        "xcodebuild succeeds; manual: move a swrm card -> matching iTerm shows the notice line, unsubmitted (user verify)"
-      ],
-      "priority": 7,
-      "passes": true,
-      "notes": "SwrmStoryCoordinator gained weak windowManager + keystrokeInjector. handleStoryStarted fires injectNotice(rootPath:taskId:title:) AFTER the US-004 card + US-005 push (each side-effect independent/best-effort). injectNotice: Self.matchTerminal(windows:rootPath:zOrderIds:) finds the tracked window whose cwdPath canonical-equals tailer.projectRoot.path; on >1 match tiebreaks by z-order (earliest in WindowManager.fetchWindowList() CG front-to-back == most-recently-active, off-screen sorts last). No match -> globalLog skip. Matched but iterm2SessionId==nil (Terminal.app cwdPath is always nil so never matches; this covers an iTerm session not yet resolved) -> globalLog skip (MVP iTerm2-only, no focus-stealing front-window fallback). Otherwise keystrokeInjector.sendText(notice, pressReturn:false, terminalApp:.iterm2, iterm2SessionId:) — the session-id AppleScript path writes via 'unique id' WITHOUT activate, so never steals focus; pressReturn:false means the line is never submitted. noticeLine='# swrm: started \"<title>\" (#<id>)' (leading # so a shell treats it as a comment if the user later hits return). canonicalPath: expandingTildeInPath + standardizingPath + strip trailing slash. matchTerminal + noticeLine are static/pure (testable). Wired swrmStoryCoordinator.windowManager + .keystrokeInjector in QuipMacApp.startServicesOnce. Files: SwrmStoryCoordinator.swift, QuipMacApp.swift (NO new files -> no xcodegen regen). Gate: xcodebuild QuipMac BUILD SUCCEEDED. matcher/notice/canonicalPath logic verified via standalone swift run (9/9: exact, trailing-slash, no-match, nil/empty cwd skip, z-order frontmost, off-screen-sorts-last, notice format, fallback title). No unit-test acceptance criterion for this story. Manual (user verify): move a swrm card to In Progress -> matching iTerm shows the notice line, unsubmitted."
-    },
-    {
-      "id": "US-008",
-      "title": "Lifecycle wiring + end-to-end verification",
-      "description": "As a user, I want the integration to start with the app and work end to end.",
-      "acceptanceCriteria": [
-        "Tailers for all configured roots start in startServicesOnce() (QuipMacApp.swift) and stop on quit/background",
-        "A single coordinator wires tailer trigger -> (US-004 card, US-005 push, US-007 inject), each independently best-effort",
-        "First-launch seeds cursor to latest seq (no historical-move notification storm)",
-        "xcodebuild (QuipMac + QuipiOS) succeeds; no new warnings in changed files",
-        "Manual end-to-end (user verify): swrm repo configured + iTerm at that root, drag a card to In Progress -> within ~1s phone card/push + iTerm notice line"
-      ],
-      "priority": 8,
-      "passes": true,
-      "notes": "Lifecycle wired in QuipMacApp.startServicesOnce: swrmProjectStore.startAll() starts a tailer for every persisted root at launch (US-002 only started them live on add); a NotificationCenter.default observer on NSApplication.willTerminateNotification (NOT the NSWorkspace center used elsewhere) calls swrmProjectStore.stopAll() to release fs-watch fds + poll timers on quit. The single SwrmStoryCoordinator (US-004/005/007) already fans tailer triggers to card+push+inject, each independent/best-effort. First-launch storm guard: SwrmEventTailer captures hadPersistedCursor in init (new SwrmCursorStore.exists(forRootPath:)); start() calls new seedCursorToLatest() ONLY for a fresh root — readIncremental(byteOffset:0) advances the cursor to the last complete-line boundary + highest seq WITHOUT delivering (torn trailing line held back, picked up whole on the next real pump). Titles still seed separately (seedTitleCache, cursor-independent) so a later real move resolves. Files: SwrmEventTailer.swift, QuipMacApp.swift (NO new files -> no xcodegen regen). Gate: xcodebuild QuipMac + QuipiOS BUILD SUCCEEDED, no new warnings in changed files. Seed/no-storm logic verified via standalone swift run (seed skips all history, torn tail held, only genuinely-new events deliver, no historical in_progress storm — ALL PASS). Manual end-to-end (user verify): configure swrm repo + iTerm at that root, drag a card to In Progress -> within ~1s phone card/push + iTerm notice line; existing configured roots fire WITHOUT a re-add after relaunch; no notification storm on first configuring a mid-history project."
+      "passes": false,
+      "notes": ""
     }
   ]
 }
