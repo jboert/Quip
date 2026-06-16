@@ -869,9 +869,17 @@ final class WebSocketClient {
 
         NSLog("[WebSocketClient] Connecting to %@", url.absoluteString)
 
-        // Connection timeout — if ping doesn't respond within 8 seconds, give up
+        // Connection timeout — give up if the initial ping doesn't respond.
+        // Adaptive: when a fallback URL remains (LAN primary + Tailscale /
+        // Cloudflare fallback), use a short 4s budget so a dead/unreachable
+        // primary fails over fast instead of stalling ~8s. On the LAST URL
+        // (no fallback left) keep the full 8s so a slow-but-reachable tunnel
+        // link still gets a fair chance. A reachable LAN/tunnel handshake +
+        // ping completes well under 4s, so this only trims the dead-primary case.
+        let hasFallbackURL = currentURLIndex + 1 < connectURLs.count
+        let connectTimeoutNs: UInt64 = hasFallbackURL ? 4_000_000_000 : 8_000_000_000
         connectionTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            try? await Task.sleep(nanoseconds: connectTimeoutNs)
             guard let self, !Task.isCancelled else { return }
             if !self.isConnected && self.isConnecting {
                 NSLog("[WebSocketClient] Connection timeout")
