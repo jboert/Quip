@@ -86,6 +86,58 @@ final class KeystrokeInjector {
         }
     }
 
+    // MARK: - Clipboard injection coordinator
+    //
+    // pasteText / pasteImage / sendText[Claude Desktop] all stomp
+    // NSPasteboard.general to inject content, then restore the user's
+    // clipboard after a delay. When injections overlap — rapid grok/codex
+    // voice sends land on the paste serial queue ~0.5s apart, inside the
+    // 0.6s restore window — a naive per-call snapshot captures the PREVIOUS
+    // injection instead of the user's real clipboard, and the staggered
+    // restores clobber each other, leaving injected prompt text on the
+    // user's clipboard. This coordinator snapshots the real original ONCE
+    // per burst (the 0→1 transition) and restores it exactly once, when the
+    // last outstanding injection finishes. NSLock-guarded so the off-main
+    // paste-queue callers and the main-actor self-heal retry stay serialized.
+    // nonisolated: the @MainActor class would otherwise isolate these statics
+    // to main, but they're touched from the off-main paste queue too. The lock
+    // (Sendable, immutable) provides the actual synchronization; the mutable
+    // vars are nonisolated(unsafe) because that synchronization is manual.
+    nonisolated private static let clipboardLock = NSLock()
+    nonisolated(unsafe) private static var clipboardOriginal: String?
+    nonisolated(unsafe) private static var clipboardOutstanding = 0
+
+    /// Mark one clipboard injection in flight, snapshotting the user's real
+    /// clipboard on the first (0→1) call of a burst. Returns the burst's
+    /// original string (identical for every call within the burst). Must be
+    /// paired with `endClipboardInjection`. Safe from any thread.
+    @discardableResult
+    nonisolated static func beginClipboardInjection() -> String? {
+        clipboardLock.lock()
+        defer { clipboardLock.unlock() }
+        if clipboardOutstanding == 0 {
+            clipboardOriginal = NSPasteboard.general.string(forType: .string)
+        }
+        clipboardOutstanding += 1
+        return clipboardOriginal
+    }
+
+    /// Restore the burst's original clipboard after `delay`s, but only when
+    /// this is the LAST outstanding injection — so a burst restores once to
+    /// the real original, never an intermediate injected value. The restore
+    /// runs under the lock so a new burst can't re-snapshot mid-restore.
+    nonisolated static func endClipboardInjection(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            clipboardLock.lock()
+            defer { clipboardLock.unlock() }
+            clipboardOutstanding = max(0, clipboardOutstanding - 1)
+            guard clipboardOutstanding == 0 else { return }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            if let original = clipboardOriginal { pb.setString(original, forType: .string) }
+        }
+    }
+
     // MARK: - Send Text
 
     /// Send text to a specific terminal window, optionally pressing Return after.
@@ -114,9 +166,14 @@ final class KeystrokeInjector {
             // only reliable text insertion method. Save/restore the user's
             // clipboard so we don't clobber it.
             let pb = NSPasteboard.general
-            let previousContents = pb.string(forType: .string)
+            // Shared coordinator (see beginClipboardInjection) restores once
+            // after the burst; +0.1s since Cmd+V into Electron lands fast.
+            Self.beginClipboardInjection()
             pb.clearContents()
             pb.setString(text, forType: .string)
+            // defer (not an explicit call) so the counter can't leak if an
+            // early return is ever added below — matches pasteText/pasteImage.
+            defer { Self.endClipboardInjection(after: 0.1) }
 
             let returnCmd = pressReturn ? "\n                    key code 36" : ""
             let pasteScript = """
@@ -128,16 +185,7 @@ final class KeystrokeInjector {
                 end tell
             end tell
             """
-            let result = executeAppleScript(pasteScript, context: "sendText to \(windowId) [Claude Desktop paste]")
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                if let prev = previousContents {
-                    pb.setString(prev, forType: .string)
-                }
-            }
-            return result
+            return executeAppleScript(pasteScript, context: "sendText to \(windowId) [Claude Desktop paste]")
 
         case .terminal:
             // Always use System Events keystrokes for Terminal.app to avoid
@@ -247,25 +295,13 @@ final class KeystrokeInjector {
         // there is acceptable since this whole flow assumes the user wants
         // an image on the clipboard for one moment anyway.
         let pb = NSPasteboard.general
-        let previousString = pb.string(forType: .string)
+        // Shared coordinator: restore once after the burst even if a text
+        // paste overlaps this image paste (both touch NSPasteboard.general).
+        Self.beginClipboardInjection()
         pb.clearContents()
         pb.writeObjects([image])
-
-        defer {
-            // Restore after a short delay — if we restore before AppleScript
-            // gets to the paste, Cmd+V grabs the wrong content. 0.6s is the
-            // empirical floor on a fast Mac; iTerm2's paste-confirm dialog
-            // (if enabled) extends past this but the paste itself completes
-            // in time.
-            let restore = previousString
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                if let s = restore {
-                    pb.setString(s, forType: .string)
-                }
-            }
-        }
+        // 0.6s: floor before Cmd+V lands; iTerm2 paste-confirm may extend past it.
+        defer { Self.endClipboardInjection(after: 0.6) }
 
         switch terminalApp {
         case .iterm2:
@@ -348,23 +384,14 @@ final class KeystrokeInjector {
     nonisolated func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
                                terminalApp: TerminalApp, iterm2SessionId: String?) -> InjectionResult {
         let pb = NSPasteboard.general
-        let previousString = pb.string(forType: .string)
+        // Shared coordinator restores the user's clipboard once after the
+        // burst — overlapping grok/codex pastes (serial queue, ~0.5s apart,
+        // inside the 0.6s window) must not leave injected prompt text behind.
+        Self.beginClipboardInjection()
         pb.clearContents()
         pb.setString(text, forType: .string)
-
-        defer {
-            // Restore after a delay — same rationale as pasteImage. 0.6s is
-            // empirically the floor on a fast Mac; faster restore can race
-            // the paste keystroke and clobber the pasted text.
-            let restore = previousString
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                if let s = restore {
-                    pb.setString(s, forType: .string)
-                }
-            }
-        }
+        // 0.6s: empirical floor before Cmd+V lands; faster restore races the paste.
+        defer { Self.endClipboardInjection(after: 0.6) }
 
         switch terminalApp {
         case .iterm2:
