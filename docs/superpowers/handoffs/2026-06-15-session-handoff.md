@@ -52,6 +52,26 @@ runs the pasteText route on a background queue, hops to main only for self-heal/
 `readContent` precedent). sendText (Claude) unchanged. **Pending:** press grok/codex PTT and confirm
 `latency.log` `inject_ms` drops ~2500 → ~500–800ms (idle phone all session, never pressed on this build).
 
+## Update 2 — parallel-agent tracks + follow-on fixes (commits `de9936f`, `85e0af2`)
+- **Serial paste queue (`de9936f`, Mac v1.5.5 installed):** code review of `640457c` found the off-main
+  pasteText used the CONCURRENT global queue → rapid presses could race the shared NSPasteboard
+  snapshot/restore + interleave keystrokes. Fixed: dedicated SERIAL queue `com.quip.mac.paste-inject`
+  (still off-main = fast, but ordered + race-free).
+- **iOS adaptive connect timeout (`85e0af2`, installed on iPhone 17 Pro Max):** unreachable primary URL
+  stalled the full 8s before failover. Now 4s while a fallback URL remains, 8s on the last URL. Cuts the
+  dead-Tailscale-primary stall in half. UNVERIFIED on a bad network.
+- **Tailscale never-`ready` (Track A — PARKED, do NOT rush):** root cause is the Mac WS listener binds
+  IPv4-only (`WebSocketServer.swift:288`) but the Tailscale direct peer path is IPv6. The obvious fix
+  (parallel v4+v6 listeners) is DOCUMENTED TO FAIL in `start()` (lines 198–212): EADDRINUSE, because
+  NWListener forces `IPV6_V6ONLY` with no knob. Real fix = raw POSIX socket with `IPV6_V6ONLY=0` wrapped
+  into Network.framework — a hard, low-level change to the PROVEN WS server. Symptom already softened by
+  the adaptive timeout; wifi carries everything. Tackle in a focused session, not under context pressure.
+- **Remaining safe iOS micro-wins (not done):** defer notification-category registration + permission
+  prompts off the first frame (`QuipApp.swift:267,460`, few-hundred-ms cold start); eager-auth RTT
+  (`WebSocketClient.swift:888–922` — has a `requireAuth=false` footgun, do server-side).
+
+**Commits now ahead of origin: 13** (still UNPUSHED — awaiting explicit "push").
+
 ## Resume command for a fresh session
 "On Quip eb-branch (6 unpushed commits, Mac v1.5.5 installed): confirm on the reconnected iPhone 17 Pro Max
 that the Grok mic badge is green and saving a prompt no longer crashes the Mac, then investigate the
