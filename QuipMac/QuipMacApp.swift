@@ -79,6 +79,11 @@ struct QuipMacApp: App {
     @State private var terminalColorManager = TerminalColorManager()
     @State private var keystrokeInjector = KeystrokeInjector()
     private let imageUploadHandler = ImageUploadHandler.defaultProduction()
+    /// Serial queue for off-main pasteText injection. SERIAL (not the concurrent
+    /// global pool) so back-to-back presses keep their order and never race the
+    /// shared NSPasteboard snapshot/restore — while still running off the main
+    /// actor so the ~0.5s AppleScript doesn't block main / starve the WS keepalive.
+    private static let pasteInjectQueue = DispatchQueue(label: "com.quip.mac.paste-inject", qos: .userInitiated)
     @State private var tunnel = CloudflareTunnel()
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
@@ -1148,7 +1153,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         let textLen = msg.text.count
                         let runOffMain: () -> Void = {
                             let tStart = Date()
-                            DispatchQueue.global(qos: .userInitiated).async {
+                            Self.pasteInjectQueue.async {
                                 let primary = ksi.pasteText(text, to: wid, pressReturn: pr,
                                                             terminalApp: termApp, iterm2SessionId: sid)
                                 DispatchQueue.main.async { [self] in
