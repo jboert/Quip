@@ -10,10 +10,21 @@ Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
   sim UDIDs in memory/progress are ALL STALE (3B2ACF04-… now gone too); the only
   booted-capable sim is iPhone 17 Pro CFCE8360-508E-4A66-B0FD-615D8CD2A549 (OS 26.5).
   For a pure Swift-6 compile gate use `generic/platform=iOS Simulator` — no device
-  match needed, no boot. QuipiOS uses a CHECKED-IN .xcodeproj (NOT xcodegen, unlike
-  QuipMac) — adding a new Swift file means adding it to the project's build phase
-  (Models/Resources/Services/Views are folder refs that glob, so files dropped in
-  those dirs auto-join; a brand-new top-level file does not).
+  match needed, no boot. ADDING A NEW SWIFT FILE: the checked-in pbxproj lists every
+  file EXPLICITLY (no Xcode-16 FileSystemSynchronized folder groups), so a new file
+  does NOT auto-join. BUT `xcodegen` IS installed (/usr/local/bin/xcodegen) and
+  QuipiOS/project.yml globs the QuipiOS target via `path: .` and QuipiOSTests via
+  `path: Tests`. So: drop the new file in Services/ (or Tests/), run
+  `cd QuipiOS && xcodegen generate`, and it produces a CLEAN incremental add
+  (US-005: +8 lines for 2 new files, zero churn) — do NOT hand-edit the pbxproj.
+  (Earlier notes said "checked-in, no xcodegen step"; that's only true for EDITS to
+  existing files — for NEW files, xcodegen generate is the correct, low-risk path.)
+  NOTE: QuipiOS builds Swift 5 LANGUAGE MODE (project.yml SWIFT_VERSION "5",
+  SWIFT_STRICT_CONCURRENCY minimal) — the PRD's "Swift-6 mode" wording is aspirational;
+  CI's Xcode 16.4 keeps it on 5. QuipiOSTests TEST_HOST is the full Quip.app so a
+  headless `xcodebuild test` hangs — use `xcodebuild build-for-testing` to prove a
+  new test compiles, and verify pure logic via a standalone `swiftc Foo.swift main.swift`
+  run (top-level test code must live in a file literally named main.swift).
 - SETTINGS ROWS: the canonical row chrome is `settingsLinkRow(...)` +
   `settingsIcon(_:tint:)` in QuipApp.swift (~:5983/:6008). settingsIcon is the
   28×28 tinted rounded-rect chip (tint.opacity(0.12) bg). There are now TWO
@@ -543,4 +554,60 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     glob). Apply the corrector at the FINAL sink only (onUpdateCallback isFinal:true
     ~:711); FIRST confirm the remote client.onTranscriptResult ~:98 path flows
     through that same final sink (if it has a separate exit, correct there too).
+---
+
+## 2026-06-16 — US-005 (TranscriptCorrector for both PTT paths) [iOS PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- NEW QuipiOS/Services/TranscriptCorrector.swift: a Foundation-only `struct`
+  value type (TranscriptCorrector.shared) holding a curated mishearing->canonical
+  rule set. Each rule is a case-insensitive NSRegularExpression; init wraps every
+  curated pattern in `\b(?:…)\b` so matching is WHOLE-WORD/PHRASE only and
+  stringByReplacingMatches touches only the matched span -> surrounding text +
+  leading/trailing whitespace (the send pipeline relies on it) are preserved.
+  Rules ORDERED longest-phrase-first so the specific form wins:
+  `x\s*code\s*gen`->Xcodegen, `tail\s+scale`->Tailscale, `mono\s*type`->monospace,
+  `web\s*socket`->WebSocket, `co[-\s]+dex`->Codex, `x\s*code`->Xcode.
+  Conservative: the ONLY real-English remap (monotype->monospace) is the user's
+  documented dictation artifact; bare "codex" is deliberately NOT remapped (real
+  word) — only the hyphen/space two-token forms via `co[-\s]+dex`. Replacement uses
+  NSRegularExpression.escapedTemplate so a future $/\ in a canonical term stays literal.
+- WIRED into SpeechService.stopRecording at BOTH final exits (final transcript
+  ONLY, never partials):
+  - LOCAL: the worker.start `finished` branch -> `pending?(TranscriptCorrector.shared.correct(text ?? ""))`.
+  - REMOTE: session.stop's completion is a SEPARATE exit (confirmed per PRD) ->
+    `let corrected = …correct(text); self.transcribedText = corrected; cb?(corrected)`.
+    This is the path that mangles most (remote Whisper has NO contextualStrings
+    biasing — that only exists on the local SFSpeech request at :620/:774).
+  - Partial transcribedText updates (local :224, remote caption :250) left
+    UNCORRECTED — partials must not be rewritten (criterion).
+- NEW QuipiOS/Tests/TranscriptCorrectorTests.swift: 12 XCTest cases — captured
+  manglings->canonical, longer-phrase-wins (x code gen->Xcodegen), case-insensitive,
+  whole-word-only (xcoder/retail untouched), whitespace+newline preserved, ordinary
+  prose/empty/whitespace pass through untouched.
+- Files: QuipiOS/Services/TranscriptCorrector.swift (new), QuipiOS/Services/SpeechService.swift,
+  QuipiOS/Tests/TranscriptCorrectorTests.swift (new),
+  QuipiOS/QuipiOS.xcodeproj/project.pbxproj (xcodegen regen, +8 lines), prd.json, progress.txt.
+- Gate: `xcodebuild build … 'generic/platform=iOS Simulator'` -> ** BUILD SUCCEEDED **;
+  `xcodebuild build-for-testing …` -> ** TEST BUILD SUCCEEDED ** (TranscriptCorrectorTests
+  compiles into QuipiOSTests). Corrector logic verified 18/18 PASS via standalone
+  `swiftc Services/TranscriptCorrector.swift /tmp/main.swift` run (headless XCTest run
+  hangs: TEST_HOST=full Quip.app). Manual on-device verify (connected=remote path) =
+  user's pass per PRD.
+- **Learnings for future iterations:**
+  - The PRD pinned the local final sink as "onUpdateCallback(…, isFinal:true) at :711",
+    but that AudioWorker line is only 1 of 3 local-final emit points (:650 error,
+    :665 normal-final, :711 hard-cap). They ALL collapse into SpeechService's single
+    `finished` branch, so correcting at the SpeechService CALLER (not the worker's
+    emit sites) is the true single convergence for local — and the remote session.stop
+    completion is a genuinely separate exit that needs its own correct() call. Anchor
+    on the caller, not the worker.
+  - ALL 5 stories now pass. The voice pipeline is two-layered: US-004 biases the
+    LOCAL on-device recognizer (contextualStrings, disconnected path); US-005's
+    TranscriptCorrector is the post-hoc fix for BOTH paths and the ONLY fix the remote
+    Whisper path gets. The deferred follow-up (Mac Whisper initial_prompt biasing,
+    needs a Mac rebuild) would add biasing to the remote path at the source.
+  - To extend the corrector: add a `(pattern, replacement)` tuple to
+    `defaultPatternMap` — patterns are the inner body only (no `\b`; init adds them),
+    `\s+` = spoken gap, `\s*` also accepts the run-together token. Keep it
+    conservative: never add a bare common-English word as a LHS.
 ---

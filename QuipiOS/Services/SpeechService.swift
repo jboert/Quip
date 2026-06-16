@@ -218,7 +218,9 @@ final class SpeechService {
                     if finished {
                         let pending = self.pendingStopCompletion
                         self.pendingStopCompletion = nil
-                        pending?(text ?? "")
+                        // Final transcript only (never partials) — correct Quip
+                        // vocabulary mishearings before handing to the send path.
+                        pending?(TranscriptCorrector.shared.correct(text ?? ""))
                         if isCurrent { self.activeSessionToken = nil }
                     } else if isCurrent, let text {
                         self.transcribedText = text
@@ -287,11 +289,16 @@ final class SpeechService {
                     }
                     let cb = self.pendingStopCompletion
                     self.pendingStopCompletion = nil
-                    self.transcribedText = text
+                    // Remote Whisper has NO contextualStrings biasing, so this is
+                    // the path that mangles Quip terms most. Correct the FINAL
+                    // transcript here (separate exit from the local `finished`
+                    // branch) before it reaches transcribedText / the send path.
+                    let corrected = TranscriptCorrector.shared.correct(text)
+                    self.transcribedText = corrected
                     self.activeSessionToken = nil
                     self.remoteSession = nil
                     NSLog("[Quip][PTT] remote firing cb pendingNotNil=%d", cb != nil ? 1 : 0)
-                    cb?(text)
+                    cb?(corrected)
                 }
             }
             isRecording = false
