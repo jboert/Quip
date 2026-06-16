@@ -28,7 +28,7 @@ final class PromptLibrary {
 
     private var watcher: DispatchSourceFileSystemObject?
     private var watcherFD: Int32 = -1
-    private var pendingWatcherRescan: DispatchWorkItem?
+    private var watcherRescanTask: Task<Void, Never>?
 
     /// `~/Library/Application Support/Quip/prompts/`. Created on first
     /// access if missing, with a README inside so the user knows what
@@ -53,8 +53,8 @@ final class PromptLibrary {
     }
 
     func stop() {
-        pendingWatcherRescan?.cancel()
-        pendingWatcherRescan = nil
+        watcherRescanTask?.cancel()
+        watcherRescanTask = nil
         watcher?.cancel()
         watcher = nil
         if watcherFD >= 0 {
@@ -299,24 +299,42 @@ final class PromptLibrary {
             eventMask: [.write, .delete, .rename, .extend, .attrib],
             queue: DispatchQueue.global(qos: .utility)
         )
-        source.setEventHandler { [weak self] in
-            DispatchQueue.main.async { self?.scheduleWatcherRescan() }
+        // DispatchSource invokes these handlers on a background dispatch
+        // queue. They MUST be @Sendable — that forces them NONISOLATED.
+        // Otherwise the compiler infers @MainActor isolation (PromptLibrary is
+        // @MainActor), and the runtime traps via swift_task_checkIsolatedSwift
+        // the instant DispatchSource calls the closure off-main, BEFORE any
+        // body runs (so an inner Task/assumeIsolated can't save it). This was
+        // the repeated SIGTRAP on 2026-06-15 (20:55 / 21:07 / 21:11), firing
+        // on every prompts-dir change — including put()'s own write. The hop
+        // to the MainActor happens via a Task INSIDE the @Sendable closure.
+        let onEvent: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor in self?.scheduleWatcherRescan() }
         }
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.watcherFD, fd >= 0 { close(fd) }
-            self?.watcherFD = -1
+        source.setEventHandler(handler: onEvent)
+        let onCancel: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.watcherFD >= 0 else { return }
+                close(self.watcherFD)
+                self.watcherFD = -1
+            }
         }
+        source.setCancelHandler(handler: onCancel)
         source.resume()
         watcher = source
     }
 
     private func scheduleWatcherRescan() {
-        pendingWatcherRescan?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.pendingWatcherRescan = nil
+        // 0.15s debounce so a burst of file-system events (e.g. an atomic
+        // write's temp-create + rename, or a bulk import) coalesces into one
+        // rescan. A cancellable @MainActor Task replaces the old
+        // DispatchWorkItem — rescan() is main-actor state, and the Task runs
+        // on the actor's executor (no isolation-assert trap).
+        watcherRescanTask?.cancel()
+        watcherRescanTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
             self?.rescan()
         }
-        pendingWatcherRescan = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 }
