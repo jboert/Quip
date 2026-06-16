@@ -52,8 +52,8 @@
         "Manual (user verify): long-press a lone /plan pill -> menu of all slash commands -> tap /compact fires it; single tap still fires /plan; row still scrolls"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added two helpers in QuipApp.swift before slotRowView: allSlashMembers() returns the full slash set — QuickButton.allCases.filter(\\.isSlashCommand) (built-ins, incl. bare '/') + every custom .slash button — INDEPENDENT of the row (the palette's point is reaching unpinned commands; the existing /x… tap-menu still only groups same-first-letter pills on the row). slashPalette<Content: View>(_:) wraps a pill with .contextMenu listing allSlashMembers(), each firing via the existing fireQuickButton/fireCustomButton (reusing SlashGroupMember as the element type), plus accessibilityHint 'Long-press for all slash commands'. slotRowView now wraps .builtinButton pills with slashPalette ONLY when b.isSlashCommand, and .customButton pills ONLY when payload is .slash — answer/keystroke pills get nothing (slash-only gesture). .slashGroup left untouched so its /x… tap-menu is unchanged. Chose .contextMenu over a manual LongPressGesture/.simultaneousGesture so the horizontal ScrollView pan is never stolen (system context-menu recognizer yields to an in-progress scroll) — satisfies the no-scroll-degradation + gesture-conflict-precedent criterion. Primary single-tap unchanged (Button action). No wire-format / persistence change. Gate: xcodebuild QuipiOS (generic/platform=iOS Simulator, Swift-6) ** BUILD SUCCEEDED **. Manual on-device verify (long-press a lone /plan -> menu of all slash commands -> tap /compact fires it; single tap still fires /plan; row still scrolls) is the user's pass per PRD."
     },
     {
       "id": "US-004",

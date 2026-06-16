@@ -455,3 +455,57 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - US-003 (hold-any-slash palette) is next: slotRowView ~:4241, SlashGroupMember
     ~:4085 — re-grep, line numbers drifted again after this edit.
 ---
+
+## 2026-06-16 — US-003 (Hold-any-slash-key slash palette) [iOS PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- QuipiOS/QuipApp.swift, two new helpers added immediately BEFORE slotRowView:
+  - allSlashMembers() -> [SlashGroupMember]: QuickButton.allCases.filter(\.isSlashCommand)
+    mapped to .builtin (declaration order, INCLUDES bare "/" since its action
+    sends "/" => isSlashCommand true) + every customButtonDefs entry whose payload
+    is .slash, as .custom. INDEPENDENT of what's pinned in the row — that's the
+    whole point (the /x… tap-menu only groups same-first-letter pills already on
+    the row; this palette reaches the unpinned ones).
+  - slashPalette<Content: View>(_:) @ViewBuilder: wraps a pill in .contextMenu
+    that ForEach(allSlashMembers()) renders a Button firing via the EXISTING
+    fireQuickButton(.builtin)/fireCustomButton(.custom) — reuses SlashGroupMember
+    as the element type (same dispatch the slashGroupMenuButton tap-menu uses).
+    Adds .accessibilityHint("Long-press for all slash commands").
+- slotRowView switch: .builtinButton wrapped with slashPalette ONLY when
+  b.isSlashCommand; .customButton wrapped ONLY when `if case .slash = c.payload`.
+  Answer/keystroke pills get nothing (slash-only gesture). .slashGroup case
+  untouched => its /x… tap-menu auto-grouping is unchanged.
+- WHY .contextMenu (not LongPressGesture/.simultaneousGesture): the row is a
+  horizontal ScrollView (portrait, ~:2758) / folded into the landscape main HStack.
+  The system context-menu recognizer YIELDS to an in-progress scroll pan, so a
+  drag scrolls and only a stationary hold opens the palette — horizontal scroll is
+  not degraded (the gesture-conflict precedent the PRD cites at ~:6419 is the
+  Button-eats-scroll-in-List lesson; same "don't fight scroll" principle). Primary
+  single-tap stays the pill's own Button action — unchanged.
+- No customButtonsJSON / quickSlotsJSON / persistence change. No new files =>
+  no project.pbxproj edit needed.
+- Files: QuipiOS/QuipApp.swift, prd.json, progress.txt.
+- Gate: `xcodebuild build -project QuipiOS.xcodeproj -scheme QuipiOS -destination
+  'generic/platform=iOS Simulator'` -> ** BUILD SUCCEEDED **. Native SwiftUI =>
+  the Ralph browser-testing step does NOT apply. Manual on-device verify
+  (long-press a lone /plan -> all-slash menu -> tap /compact fires; single tap
+  fires /plan; row still scrolls) is the user's pass per PRD.
+- **Learnings for future iterations:**
+  - .accessibilityHint applied in slashPalette (outermost) OVERRIDES the per-pill
+    hint set inside quickActionButton/customQuickButton — so slash pills now read
+    "Long-press for all slash commands" instead of "Quick action"/"Custom shortcut".
+    Intended (PRD criterion). The .disabled(selectedWindowId==nil) still conveys the
+    no-window state via trait, so the lost "No window selected" hint is acceptable.
+  - SlashGroupMember is now consumed by BOTH slashGroupMenuButton (tap, row-scoped,
+    same-first-letter) and slashPalette (long-press, all-slash). If you add a slash
+    QuickButton case, it auto-appears in the palette (allCases-driven) — no edit.
+  - slashPalette takes a concrete `Content: View` generic and wraps it; the if/else
+    in slotRowView returns different concrete types but @ViewBuilder's
+    _ConditionalContent handles that — no AnyView needed.
+  - US-004 (dictation-vocab.txt expansion) + US-005 (TranscriptCorrector.swift,
+    NEW file => MUST add to QuipiOS + QuipiOSTests build phases manually, the
+    checked-in .xcodeproj does NOT xcodegen-glob top-level files) are the last two.
+    Voice pipeline: DictationVocab.loadBundled() -> request.contextualStrings at
+    SpeechService ~:620/:774; final sink onUpdateCallback(...isFinal:true) ~:711;
+    remote path client.onTranscriptResult ~:98 (confirm it flows the same final
+    sink before deciding where to apply the corrector).
+---

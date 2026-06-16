@@ -4235,6 +4235,47 @@ struct MainiOSView: View {
         .disabled(selectedWindowId == nil)
     }
 
+    /// Every slash command the user can reach from the long-press palette:
+    /// all built-in slash `QuickButton`s (declaration order) followed by all
+    /// custom `.slash` buttons (definition order). Deliberately INDEPENDENT of
+    /// what's pinned in the row — the palette's whole purpose is to reach the
+    /// slash commands the user didn't pin (vs. the `/x…` tap-menu, which only
+    /// surfaces same-first-letter pills already on the row).
+    private func allSlashMembers() -> [SlashGroupMember] {
+        var members: [SlashGroupMember] = QuickButton.allCases
+            .filter(\.isSlashCommand)
+            .map { .builtin($0) }
+        for c in customButtonDefs {
+            if case .slash = c.payload { members.append(.custom(c)) }
+        }
+        return members
+    }
+
+    /// Attach the "hold for all slash commands" palette to a slash-category
+    /// pill. Uses `.contextMenu` rather than a manual `LongPressGesture` /
+    /// `.simultaneousGesture` on purpose: the system context-menu recognizer
+    /// yields to an in-progress scroll pan, so the horizontal row keeps
+    /// scrolling (gesture-conflict precedent ~:6419) and the pill's primary
+    /// single-tap (its `Button` action) is untouched. Answer/keystroke pills
+    /// must NOT get this — the long-press meaning is slash-only.
+    @ViewBuilder
+    private func slashPalette<Content: View>(_ content: Content) -> some View {
+        content
+            .contextMenu {
+                ForEach(allSlashMembers()) { member in
+                    Button {
+                        switch member {
+                        case .builtin(let b): fireQuickButton(b)
+                        case .custom(let c): fireCustomButton(c)
+                        }
+                    } label: {
+                        Text(member.displayName)
+                    }
+                }
+            }
+            .accessibilityHint("Long-press for all slash commands")
+    }
+
     /// Render the full slot row — built-ins, customs, spacers, and grouped
     /// `/x…` menus — in the user's chosen order.
     @ViewBuilder
@@ -4243,9 +4284,19 @@ struct MainiOSView: View {
         ForEach(items) { item in
             switch item {
             case .builtinButton(let b):
-                quickActionButton(b)
+                // Slash pills (incl. the bare "/") get the hold-for-all-slash
+                // palette; answer/keystroke pills don't (slash-only gesture).
+                if b.isSlashCommand {
+                    slashPalette(quickActionButton(b))
+                } else {
+                    quickActionButton(b)
+                }
             case .customButton(let c):
-                customQuickButton(c)
+                if case .slash = c.payload {
+                    slashPalette(customQuickButton(c))
+                } else {
+                    customQuickButton(c)
+                }
             case .promptButton(let pid, let label):
                 promptQuickButton(promptID: pid, label: label)
             case .promptsPicker:
