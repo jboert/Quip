@@ -5759,6 +5759,9 @@ struct SettingsSheet: View {
 
                 // Prompts — Mac-managed library of paste-and-run prompts,
                 // including the local prompt generator entry point.
+                // Input — the prompt library plus the customizable button
+                // rows, all "what you send and how" under one header (folded
+                // the former standalone Prompts section in here).
                 Section {
                     NavigationLink {
                         PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider)
@@ -5771,11 +5774,6 @@ struct SettingsSheet: View {
                             trailing: "\(client.promptLibrary.count) on Mac"
                         )
                     }
-                } header: {
-                    Text("Prompts")
-                }
-
-                Section {
                     NavigationLink {
                         QuickButtonsSheet(enabledQuickButtonsRaw: $enabledQuickButtonsRaw, client: client)
                     } label: {
@@ -5798,7 +5796,7 @@ struct SettingsSheet: View {
                         )
                     }
                 } header: {
-                    Text("Keyboard")
+                    Text("Input")
                 }
 
                 Section {
@@ -5852,11 +5850,9 @@ struct SettingsSheet: View {
                                 .badgeView()
                         }
                     }
-                } header: {
-                    Text("Diagnostics")
-                }
-
-                Section {
+                    // Version row, folded in from the old standalone About
+                    // section to save a row — it's reference info, same as
+                    // the rest of Diagnostics.
                     Button {
                         UIPasteboard.general.string = "Quip iOS \(Self.appVersionDisplay)"
                         versionCopied = true
@@ -5884,7 +5880,7 @@ struct SettingsSheet: View {
                     .buttonStyle(.plain)
                     .accessibilityHint("Tap to copy version to clipboard")
                 } header: {
-                    Text("About")
+                    Text("Diagnostics")
                 }
             }
             .listStyle(.insetGrouped)
