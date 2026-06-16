@@ -72,7 +72,25 @@ runs the pasteText route on a background queue, hops to main only for self-heal/
 
 **Commits now ahead of origin: 13** (still UNPUSHED — awaiting explicit "push").
 
+## Update 3 — 2026-06-15 PM: PUSHED + prompt-save proven + flap root-caused
+- **PUSHED.** `git push origin eb-branch` → `1286251..03ab20d` (authorized via phone PTT "u can push" in
+  audit.log + in-chat "Proceed"). Branch now **0 ahead, in sync with origin/eb-branch.** No longer unpushed.
+- **Prompt-save mobile→Mac is PROVEN working.** Phone screenshotted the red "Connect to the Mac before
+  saving prompts" at 8:59 PM — but `code-review.txt` (514 B) is on the Mac with mtime **Jun 15 20:59**, clean,
+  no `.sb-` orphan. The save LANDED; the createFile + @Sendable-watcher fixes (997a196, 03ab20d) hold in
+  production. The red error was a **transient connection flap**, not a pipeline failure.
+- **Flap root-caused (NEW evidence).** `netstat -an | grep 8765` showed **TWO** ESTABLISHED sockets to one
+  Mac — LAN `192.168.4.34` + Tailscale `100.72.13.19` — flapping independently. `connect(toURLs:)` is
+  sequential (one task), so two live sockets ⇒ Mac paired as **two backends** / BCM spawns two clients. Each
+  cycles `ready (pending auth)` → POSIX 57 ENOTCONN ~7s later. `!isConnecting` guard (950c3fd) dampens, does
+  not eliminate. `onSave` returns false when `send()` fires mid-flap → the scary error. Saved to memory
+  `project_ws_dual_backend_flap`. **Real fix = dedupe to ONE backend per Mac (LAN+TS as fallback within one
+  client) and/or queue+retry the save through a flap. Needs iOS rebuild (disruptive). PARKED — don't crack
+  under context pressure.**
+
 ## Resume command for a fresh session
-"On Quip eb-branch (6 unpushed commits, Mac v1.5.5 installed): confirm on the reconnected iPhone 17 Pro Max
-that the Grok mic badge is green and saving a prompt no longer crashes the Mac, then investigate the
-Tailscale WebSocket path that never reaches `ready` (see docs/superpowers/handoffs/2026-06-15-session-handoff.md)."
+"On Quip eb-branch (in sync with origin, Mac v1.5.5 installed): prompt-save mobile→Mac is proven working and
+all session work is pushed. The open issue is the dual-backend connection flap (phone holds two ESTABLISHED
+sockets LAN+Tailscale to one Mac, each flapping → save intermittently shows 'Connect to the Mac'). See
+memory `project_ws_dual_backend_flap` + this handoff Update 3. Fix needs an iOS rebuild; confirm timing with
+the user first since it disconnects the phone mid-use."
