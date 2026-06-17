@@ -7226,10 +7226,28 @@ struct CustomButtonForm: View {
                         TextField("/foo or /foo arg", text: $text)
                             .autocorrectionDisabled(true)
                             .textInputAutocapitalization(.never)
-                        Toggle("Auto-submit (press Return)", isOn: $autoSubmit)
+                        Toggle(isOn: $autoSubmit) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Submit when tapped")
+                                Text(autoSubmit
+                                     ? "Sends the text, then presses Return"
+                                     : "Inserts the text — you tap Send yourself")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     case .rawText:
                         TextField("Text to send", text: $text)
-                        Toggle("Auto-submit (press Return)", isOn: $autoSubmit)
+                        Toggle(isOn: $autoSubmit) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Submit when tapped")
+                                Text(autoSubmit
+                                     ? "Sends the text, then presses Return"
+                                     : "Inserts the text — you tap Send yourself")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     case .keystroke:
                         Picker("Key", selection: $keystroke) {
                             ForEach(Self.keystrokeOptions, id: \.action) { opt in
