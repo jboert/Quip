@@ -611,3 +611,47 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     `\s+` = spoken gap, `\s*` also accepts the run-together token. Keep it
     conservative: never add a bare common-English word as a LHS.
 ---
+
+## 2026-06-16 — US-001 (Grow TranscriptCorrector map with real-use mishearings) [Kaizen PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- NEW PRD active: git f2694d0 swapped prd.json to the Kaizen follow-up batch
+  (US-001 corrector terms, US-002 install-recipe doc, US-003 Mac WhisperKit bias).
+  The iOS PRD log above (US-001..005) is the PRIOR batch — TranscriptCorrector.swift
+  already exists from its US-005. THIS US-001 only GROWS the map.
+- QuipiOS/Services/TranscriptCorrector.swift: appended TWO tuples to
+  defaultPatternMap (the only PRD terms not already present):
+    (#"fin+\s+tech"#, "Fintech")  // "fin tech"/"finn tech"; `fin+` covers single/double n
+    (#"whisperers"#,  "Whisper")  // plural mishearing, documented artifact like monotype
+  The PRD's other four ('x code','co dex','tail scale','mono type') were ALREADY in
+  the map from the prior US-005 -> NOT duplicated (PRD said "only if not already present").
+  No init/correct() change: new rules ride the existing `\b(?:…)\b` wrap +
+  case-insensitive + escapedTemplate replacement; final-transcript-only wiring untouched.
+- QuipiOS/Tests/TranscriptCorrectorTests.swift: +test_finTech_mapsToFintech
+  (fin/finn tech), +test_whisperers_mapsToWhisper, +test_newTermNearMisses_notRemapped
+  (singular "whisperer", lone "fin"/"tech" pass through — proves the two new rules
+  can't over-match).
+- Files: QuipiOS/Services/TranscriptCorrector.swift,
+  QuipiOS/Tests/TranscriptCorrectorTests.swift, prd.json, progress.txt.
+  NO new files -> NO pbxproj/xcodegen change (edits to existing target members only).
+- Gate: `xcodebuild build … 'generic/platform=iOS Simulator'` -> ** BUILD SUCCEEDED **;
+  `xcodebuild build-for-testing …` -> ** TEST BUILD SUCCEEDED ** (new cases compile
+  into QuipiOSTests). Standalone `swiftc TranscriptCorrector.swift main.swift` logic
+  check = 15/15 PASS (incl. case-insensitive, embedded, whitespace-preserve, near-miss
+  untouched, + regression of tailscale/xcodegen/codex/prose/empty). Headless XCTest
+  still hangs (TEST_HOST=full Quip.app) — standalone run is the logic oracle.
+  iOS-only, NO Mac rebuild. Manual on-device dictation verify (connected/remote path,
+  where the corrector is the ONLY fix) = user's pass per PRD.
+- **Learnings for future iterations:**
+  - CHECK FOR DUPLICATES FIRST when a PRD lists corrector terms: 4 of the 6 listed
+    were already shipped by the prior PRD's US-005. Read defaultPatternMap before
+    adding — the PRD's "only if not already present" is load-bearing, blind-adding
+    would have created dupe rules (harmless at runtime but noisy/wrong).
+  - `fin+` (one-or-more n) is the compact way to absorb a recognizer that emits
+    either "fin" or "finn"; pairs with `\s+` to require the two-token spoken form so
+    a lone "fin" (fish fin) is never touched. Same conservative bar as the existing map.
+  - For each new rule, add a paired NEGATIVE test (near-miss singular / lone word)
+    not just the positive remap — it locks the \b boundary against future over-match.
+  - US-002 (next, priority 2) is DOC-ONLY (README install/trust-gate note, no code,
+    no build). US-003 (last) is the Mac WhisperKit decode bias — needs a Mac REBUILD
+    + manual reinstall/TCC re-grant, so it's correctly sequenced last.
+---

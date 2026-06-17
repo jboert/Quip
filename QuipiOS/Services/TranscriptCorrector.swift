@@ -51,6 +51,8 @@ struct TranscriptCorrector {
         (#"web\s*socket"#,   "WebSocket"),  // "web socket" / "websocket"
         (#"co[-\s]+dex"#,    "Codex"),      // "co-dex" / "co dex" — NOT bare "codex" (real word)
         (#"x\s*code"#,       "Xcode"),      // "x code" / "xcode"
+        (#"fin+\s+tech"#,    "Fintech"),    // "fin tech" / "finn tech" (two-token spoken form only)
+        (#"whisperers"#,     "Whisper"),    // plural mishearing of "Whisper" (documented artifact)
     ]
 
     init(patternMap: [(pattern: String, replacement: String)] = TranscriptCorrector.defaultPatternMap) {

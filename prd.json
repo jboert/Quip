@@ -16,8 +16,8 @@
         "No behavior change beyond the added substitutions"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added two non-duplicate rules to TranscriptCorrector.defaultPatternMap: `fin+\\s+tech`->Fintech ('fin tech'/'finn tech', two-token form only) and `whisperers`->Whisper. The other four PRD terms ('x code','co dex','tail scale','mono type') were ALREADY present from US-005 -> not duplicated. Existing \\b…\\b word-boundary + case-insensitive + final-transcript-only discipline preserved (new rules ride the same init wrap). Tests: +test_finTech_mapsToFintech, +test_whisperers_mapsToWhisper, +test_newTermNearMisses_notRemapped (singular 'whisperer'/'fin'/'tech' pass through). Gate: xcodebuild build + build-for-testing both SUCCEEDED; standalone swiftc logic check 15/15 PASS (headless XCTest hangs — TEST_HOST=Quip.app). iOS/no-Mac-rebuild. Manual on-device dictation verify (esp. connected/remote path) = user's pass."
     },
     {
       "id": "US-002",

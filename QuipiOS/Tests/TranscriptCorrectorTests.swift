@@ -43,6 +43,15 @@ final class TranscriptCorrectorTests: XCTestCase {
         XCTAssertEqual(corrector.correct("x code gen"), "Xcodegen")
     }
 
+    func test_finTech_mapsToFintech() {
+        XCTAssertEqual(corrector.correct("fin tech"), "Fintech")
+        XCTAssertEqual(corrector.correct("finn tech"), "Fintech")
+    }
+
+    func test_whisperers_mapsToWhisper() {
+        XCTAssertEqual(corrector.correct("whisperers"), "Whisper")
+    }
+
     // MARK: Surrounding text + whitespace preservation
 
     func test_phraseEmbeddedInSentence_surroundingTextPreserved() {
@@ -64,6 +73,14 @@ final class TranscriptCorrectorTests: XCTestCase {
     func test_substringInsideLargerWord_notRemapped() {
         XCTAssertEqual(corrector.correct("xcoder"), "xcoder")
         XCTAssertEqual(corrector.correct("retail scale model"), "retail scale model")
+    }
+
+    func test_newTermNearMisses_notRemapped() {
+        // Singular "whisperer" and the lone words "fin"/"tech" must pass through —
+        // only the exact mishearings ("whisperers", "fin tech") may be remapped.
+        XCTAssertEqual(corrector.correct("a whisperer in the dark"), "a whisperer in the dark")
+        XCTAssertEqual(corrector.correct("the fin of the fish"), "the fin of the fish")
+        XCTAssertEqual(corrector.correct("low tech"), "low tech")
     }
 
     // MARK: Non-Quip prose passes through untouched
