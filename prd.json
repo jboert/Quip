@@ -1,92 +1,55 @@
 {
   "project": "Quip",
   "branchName": "eb-branch",
-  "description": "Three iOS-only UX surfaces on eb-branch. (1) Modernize the Settings sheet for visual consistency. (2) Make the customizable quick-button row ('custom keyboard') clearer to configure + add a hold-for-all-slash-commands palette. (3) Reduce Quip-vocabulary mangling in the PTT voice->text pipeline on BOTH the local SFSpeech and remote Mac-Whisper paths. ALL work is iOS-only (QuipiOS) with NO Mac rebuild and NO persistence schema change (quickSlotsJSON / customButtonsJSON unchanged). The strongest voice fix (Mac Whisper initial_prompt biasing) is a deferred follow-up because it needs a Mac rebuild. Source spec: docs/superpowers/specs/2026-06-16-settings-modernize-keyboard-ux-design.md. Native: gate = xcodebuild (QuipiOS, Swift-6 mode) succeeds + the noted unit tests compile/pass; on-device/manual verify is the user's pass (note it in the story). NEVER push eb-branch without an explicit literal 'push'.",
+  "description": "Kaizen follow-up batch (eb-branch). Small compounding improvements after the settings/keyboard/voice batch (now shipped, all passes:true in git history + docs/superpowers/specs/2026-06-16-settings-modernize-keyboard-ux-design.md). This queue: (1) grow the TranscriptCorrector map with mishearings observed in real use, (2) document the dev-app install/trust-gate recipe so the next install skips the hour-long rabbit hole, (3) the deferred strongest voice fix — bias the Mac's WhisperKit decode with Quip vocabulary so the REMOTE path stops mangling at generation time (this one needs a Mac rebuild + manual install/TCC re-grant, so it is LAST). Native: gate = xcodebuild succeeds (QuipiOS for US-001; QuipMac for US-003) + noted unit tests compile/pass; on-device/manual verify is the user's pass (note it in the story). Do NOT rebuild the Mac for US-001/US-002 (iOS/doc only). NEVER push eb-branch without an explicit literal 'push'.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Settings row visual consistency",
-      "description": "As a user, I want every Settings row to share one modern visual style so the page looks consistent.",
+      "title": "Grow TranscriptCorrector map with real-use mishearings",
+      "description": "As a user, I want Quip terms that mangled in real sessions to auto-correct, so voice input keeps getting cleaner over time.",
       "acceptanceCriteria": [
-        "Add a trailing-@ViewBuilder overload settingsLinkRow<Trailing: View>(title:subtitle:systemImage:tint:trailing:) so a row can supply a trailing view instead of only a String (QuipiOS/QuipApp.swift, helper at :5983)",
-        "Convert the Latency row (:5837) to the tinted-chip helper, passing the LatencySummary().badgeView() as the trailing view",
-        "Convert the Version button (:5856) to the tinted-chip helper (info.circle), preserving its tap-to-copy + 'Copied' confirmation transition",
-        "Leave macPermsSection unchanged (its red/green semantics are intentional)",
-        "xcodebuild (QuipiOS) succeeds",
-        "Manual (user verify): Settings -> Diagnostics shows Latency + Version with the standard chip; badge intact; Version still copies"
+        "Add high-confidence entries to TranscriptCorrector.defaultPatternMap (QuipiOS/Services/TranscriptCorrector.swift:47): 'finn tech'/'fin tech' -> 'Fintech'; 'whisperers' -> 'Whisper'; 'x code' -> 'Xcode'; 'co dex'/'co-dex' -> 'Codex'; 'tail scale' -> 'Tailscale' and 'mono type' -> 'monospace' (only if not already present — do not duplicate)",
+        "Keep the existing matching discipline: word-boundary (the map is wrapped in \\b...\\b at :60), case-insensitive, applied to final transcript only",
+        "CONSERVATIVE: do not add any left-hand side that is a normal English word/phrase (e.g. NEVER add 'pare'/'pay'/'plan'); only unambiguous dev/Quip terms",
+        "Extend QuipiOS/Tests/TranscriptCorrectorTests.swift with a case per new term AND a 'leave ordinary prose untouched' assertion",
+        "xcodebuild (QuipiOS) succeeds; tests compile/pass",
+        "No behavior change beyond the added substitutions"
       ],
       "priority": 1,
-      "passes": true,
-      "notes": "Added @ViewBuilder trailing overload of settingsLinkRow (QuipApp.swift); Latency row now passes LatencySummary.badgeView() through it; Version button uses the helper (info.circle) keeping tap-to-copy + 'Copied' .transition(.opacity). macPermsSection untouched. Gate: xcodebuild QuipiOS BUILD SUCCEEDED (generic iOS Simulator, Swift-6). Manual on-device verify is the user's pass. NOTE: the dedicated Quip QA sim UDID 3B2ACF04-… is now GONE too — only available sim is iPhone 17 Pro CFCE8360-508E-4A66-B0FD-615D8CD2A549 (OS 26.5); used generic/platform=iOS Simulator for the compile gate."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-002",
-      "title": "Custom-button add-key clarity",
-      "description": "As a user, I want it to be obvious how to add a custom key and what it will look like.",
+      "title": "Document the dev-app install + trust-gate recipe",
+      "description": "As a developer, I want the install steps to warn about the iOS first-trust gate so a future install doesn't turn into an hour of false debugging.",
       "acceptanceCriteria": [
-        "CustomButtonForm (QuipiOS/QuipApp.swift:7063) shows a LIVE pill preview at the top, reusing the customQuickButton chrome (:4412), updating as the user types",
-        "Label auto-fills from the payload when empty (slash -> command text, text -> first ~8 chars, keystroke -> option label); an explicit label is never overwritten",
-        "Per-type explanatory footers: Slash (auto-submit guidance + a tip that same-first-letter slash keys auto-group into a /x... menu), Text, Keystroke",
-        "SF Symbol field gets a placeholder example (e.g. bolt.fill) + an optional/falls-back-to-label note",
-        "QuickButtonsSheet empty-state / add entry copy clearly points at '+ -> Custom Button'",
-        "No change to customButtonsJSON wire format",
-        "xcodebuild (QuipiOS) succeeds",
-        "Manual (user verify): + -> Custom Button, type a slash -> preview + label update live; footers visible; Save -> pill appears and fires"
+        "In README.md, near the existing 'Install iPhone app over the air' section, add a short NOTE block: a development-signed app installed via `xcrun devicectl device install app` will NOT launch until the signing cert is trusted once on the device; `xcrun devicectl device process launch` returns a Security error ('invalid code signature, inadequate entitlements or its profile has not been explicitly trusted') until then — this is NOT a build defect",
+        "State the fix: launch once via Xcode Run on the connected device (establishes trust), OR on the phone tap the app then Settings -> General -> VPN & Device Management -> trust the developer; after that devicectl install + home-screen tap work normally",
+        "One sentence noting an `id=<device>` Debug build also emits Quip.debug.dylib/__preview.dylib (debugger-coupled); the documented `-destination 'generic/platform=iOS'` recipe is the one to use",
+        "Doc-only change — no code, no Mac rebuild",
+        "Markdown renders (no broken fences); wording matches the project's existing README voice"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "CustomButtonForm (QuipApp.swift) now opens with a top 'Preview' section rendering a live previewPill that mirrors the customQuickButton chrome (9pt mono label / 16x16 symbol on the tinted chip via QuipColors chipFill+chipText). Label auto-fills from the payload (slash->command word, text->first ~8 chars, keystroke->option label) via labelEdited gate: the Label TextField writes through a custom Binding that sets labelEdited on a real edit, while autofillLabelIfNeeded() writes label directly on .onChange(of: text/keystroke/payloadKind); clearing the field re-enables auto-fill; hydrate() marks an existing label explicit so edit never clobbers. Action section converted to header/footer form with a per-type actionFooter (Slash: auto-submit guidance + the /x... same-first-letter auto-group tip; Text; Keystroke). SF Symbol placeholder now 'SF Symbol e.g. bolt.fill (optional)' + a Label-section footer noting blank->auto-fill and symbol-replaces-label. QuickButtonsSheet empty state now reads 'Tap + -> Custom Button...' and the add sheet's first section gained a footer pointing at Custom Button. No customButtonsJSON wire change (CustomButton/CustomPayload untouched). Gate: xcodebuild QuipiOS (generic/platform=iOS Simulator, Swift-6) ** BUILD SUCCEEDED **. Manual on-device verify (type a slash -> preview + label update live; footers visible; Save -> pill appears and fires) is the user's pass per PRD."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-003",
-      "title": "Hold-any-slash-key slash palette",
-      "description": "As a user, I want to hold any slash key to pick from all slash commands, not only when two share a first letter.",
+      "title": "Bias Mac WhisperKit decode with Quip vocabulary (remote path)",
+      "description": "As a user, I want the remote (Mac Whisper) PTT path biased toward Quip terms at generation time, since that's the path I hit when connected and the iOS corrector only cleans output after the fact.",
       "acceptanceCriteria": [
-        "In slotRowView (QuipiOS/QuipApp.swift:4241), slash-category pills (built-in isSlashCommand and custom .slash) get a long-press Menu / .contextMenu listing ALL slash commands (built-in slash QuickButtons + custom .slash buttons)",
-        "Menu items fire via the existing fireQuickButton / fireCustomButton; reuse SlashGroupMember (:4085) as the element type",
-        "Primary single-tap behavior of each pill is unchanged",
-        "Palette is NOT attached to answer/keystroke pills (slash-only gesture meaning)",
-        "Accessibility hint 'Long-press for all slash commands' on slash pills",
-        "Existing auto-grouping (/x... tap-menu) still works; horizontal row scroll is NOT degraded by the long-press gesture (prior gesture-conflict precedent at :6419)",
-        "xcodebuild (QuipiOS) succeeds",
-        "Manual (user verify): long-press a lone /plan pill -> menu of all slash commands -> tap /compact fires it; single tap still fires /plan; row still scrolls"
+        "Find the Mac transcription call: QuipMac uses WhisperKit (QuipMacApp.swift ~:1722 `WhisperKit(model: \"openai_whisper-base\")`, transcription via WhisperDictationService). Locate where it builds DecodingOptions / calls transcribe",
+        "Seed the decode with a Quip-vocabulary prompt so domain terms win ties: pass prompt/prefix tokens via WhisperKit DecodingOptions (e.g. promptTokens from a short vocab string like 'Quip, Tailscale, monospace, Codex, Grok, Xcode, WebSocket, Whisper, SwiftUI'), guarded so an unavailable API degrades to current behavior (no crash, no regression)",
+        "Reuse the same vocabulary source of truth where practical (mirror QuipiOS/Resources/dictation-vocab.txt terms; a small hardcoded Mac-side list is acceptable for v1)",
+        "No protocol/wire change required (Mac biases its own decode); if a Shared field is added it must be optional + back-compatible",
+        "Gate: xcodebuild (QuipMac, Swift-6) BUILD SUCCEEDED with no new warnings in changed files; add a small pure unit test for the prompt-string/token builder if one is extracted",
+        "NEEDS A MAC REBUILD + manual reinstall (TCC re-grant) — mark install + on-device verify as the USER's pass per reference_quip_install_recipe; do NOT block the story on hardware verify",
+        "Manual (user verify, connected/remote path): PTT 'Tailscale monospace Codex' shows canonical spelling more reliably than output-correction alone"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "Added two helpers in QuipApp.swift before slotRowView: allSlashMembers() returns the full slash set — QuickButton.allCases.filter(\\.isSlashCommand) (built-ins, incl. bare '/') + every custom .slash button — INDEPENDENT of the row (the palette's point is reaching unpinned commands; the existing /x… tap-menu still only groups same-first-letter pills on the row). slashPalette<Content: View>(_:) wraps a pill with .contextMenu listing allSlashMembers(), each firing via the existing fireQuickButton/fireCustomButton (reusing SlashGroupMember as the element type), plus accessibilityHint 'Long-press for all slash commands'. slotRowView now wraps .builtinButton pills with slashPalette ONLY when b.isSlashCommand, and .customButton pills ONLY when payload is .slash — answer/keystroke pills get nothing (slash-only gesture). .slashGroup left untouched so its /x… tap-menu is unchanged. Chose .contextMenu over a manual LongPressGesture/.simultaneousGesture so the horizontal ScrollView pan is never stolen (system context-menu recognizer yields to an in-progress scroll) — satisfies the no-scroll-degradation + gesture-conflict-precedent criterion. Primary single-tap unchanged (Button action). No wire-format / persistence change. Gate: xcodebuild QuipiOS (generic/platform=iOS Simulator, Swift-6) ** BUILD SUCCEEDED **. Manual on-device verify (long-press a lone /plan -> menu of all slash commands -> tap /compact fires it; single tap still fires /plan; row still scrolls) is the user's pass per PRD."
-    },
-    {
-      "id": "US-004",
-      "title": "Expand PTT dictation vocabulary",
-      "description": "As a user, I want the local on-device recognizer biased toward Quip vocabulary so common dev terms stop mangling.",
-      "acceptanceCriteria": [
-        "QuipiOS/Resources/dictation-vocab.txt expanded with the demonstrably-mangled + working vocabulary: slash-command stems (compact, plan, clear, prd, caveman, ultrareview), agent names (Codex, Grok, Cursor, Kokoro), Simulator, keystroke, Xcodegen, entitlements, APNs, keychain, devicectl, Tailscale (confirm present), monospace (confirm present)",
-        "File stays one-term-per-line plain text (loaded by DictationVocab.loadBundled(), applied as request.contextualStrings at SpeechService:620 and :774)",
-        "No code change required beyond the resource (verify it is in the QuipiOS bundle/Resources build phase)",
-        "xcodebuild (QuipiOS) succeeds",
-        "Manual (user verify, local path = disconnected): on-device dictation of the new terms improves"
-      ],
-      "priority": 4,
-      "passes": true,
-      "notes": "Appended 17 new bias terms to QuipiOS/Resources/dictation-vocab.txt (20->37 lines, well under DictationVocab.maxTerms=100): slash stems compact/plan/clear/prd/caveman/ultrareview, agents Codex/Grok/Cursor/Kokoro, plus Simulator/keystroke/Xcodegen/entitlements/APNs/keychain/devicectl. Tailscale (line 17) + monospace (line 6) confirmed already present, NOT duplicated. File stays one-term-per-line plain text. NOTE: DictationVocab.load (SpeechService.swift:9) trims+drops-blank lines but has NO comment syntax, so every non-blank line ships as a contextualStrings bias string — kept it pure vocab (no '#' headers). No code change: Resources/ is a folder-ref that globs into the QuipiOS Copy-Bundle-Resources phase, so the edited file auto-ships (verified: the freshly built Quip.app/dictation-vocab.txt has all 37 terms incl. devicectl/Codex/ultrareview/Tailscale/monospace). loadBundled() -> request.contextualStrings at SpeechService:620 (live) + :774 (remote-handoff request). Gate: xcodebuild QuipiOS (generic/platform=iOS Simulator, Swift-6) ** BUILD SUCCEEDED **. Manual on-device dictation verify (local/disconnected path) is the user's pass per PRD."
-    },
-    {
-      "id": "US-005",
-      "title": "TranscriptCorrector for both PTT paths",
-      "description": "As a user, I want Quip terms corrected even on the remote Whisper path that has no biasing, since that's the path I hit when connected.",
-      "acceptanceCriteria": [
-        "New QuipiOS/Services/TranscriptCorrector.swift: a value type holding a curated map of high-confidence mishearings -> canonical Quip terms (e.g. 'tail scale'->'Tailscale', 'mono type'->'monospace', 'x code'->'Xcode', 'web socket'->'WebSocket', 'co-dex'->'Codex')",
-        "Matching is case-insensitive, whole-word/phrase (word-boundary) only, preserves surrounding text AND the leading/trailing whitespace the send pipeline relies on",
-        "Applied to the FINAL transcript only (not partials) at the convergence point in SpeechService (the onUpdateCallback(..., isFinal:true) delivery at :711)",
-        "FIRST confirm the remote path (client.onTranscriptResult at SpeechService:98) flows through that same final sink; if it has a separate exit, apply the corrector there too so the remote Whisper output is corrected",
-        "Conservative: only entries unambiguous in a Quip/dev context; never remap a token that is a common English word in normal use",
-        "New QuipiOS/Tests/TranscriptCorrectorTests.swift: assert the captured mangling examples map to canonical terms AND that non-Quip prose passes through untouched",
-        "xcodebuild (QuipiOS) succeeds; tests compile/pass",
-        "Manual (user verify, connected = remote path): PTT a sentence with Tailscale/monospace/Codex -> transcript shows canonical spelling; ordinary dictation unchanged"
-      ],
-      "priority": 5,
-      "passes": true,
-      "notes": "New QuipiOS/Services/TranscriptCorrector.swift: a Foundation-only value type with a curated mishearing->canonical rule set, each a case-insensitive NSRegularExpression wrapped in \\b…\\b word boundaries so matching is whole-word/phrase only and only the matched span is replaced (surrounding text + leading/trailing whitespace preserved). Rules (ordered, longer phrase first): 'x code gen'->Xcodegen, 'tail scale'->Tailscale, 'mono type'/'monotype'->monospace, 'web socket'->WebSocket, 'co-dex'/'co dex'->Codex, 'x code'->Xcode. Conservative: the only real-English-word remap (monotype->monospace) is the user's own documented dictation artifact; bare 'codex' is NOT remapped (real word) — only the hyphen/space two-token forms. Applied at the FINAL transcript ONLY (never partials). CONFIRMED the remote path has a SEPARATE final exit: SpeechService.stopRecording local final flows worker.start's `finished` branch -> pending?(corrected); the remote Whisper final flows session.stop's completion -> self.transcribedText=corrected; cb?(corrected). Both corrected (remote especially, since it has NO contextualStrings biasing). New QuipiOS/Tests/TranscriptCorrectorTests.swift: 12 cases asserting the captured manglings map to canonical, longer-phrase-wins, case-insensitivity, whole-word-only (xcoder/retail untouched), whitespace preserved, and ordinary prose/empty/whitespace pass through. New files needed `xcodegen generate` (QuipiOS uses a checked-in pbxproj listing files explicitly, NOT synchronized folder groups — but project.yml globs Services/ via path:. and Tests/ via path:Tests, so regen produced a clean +8-line incremental add, no churn). Gate: xcodebuild QuipiOS `** BUILD SUCCEEDED **` + `xcodebuild build-for-testing` `** TEST BUILD SUCCEEDED **` (TranscriptCorrectorTests compiles into QuipiOSTests). Corrector logic verified 18/18 PASS via standalone `swiftc TranscriptCorrector.swift main.swift` run (headless XCTest run hangs: TEST_HOST is the full Quip.app). Manual on-device verify (connected=remote path: PTT Tailscale/monospace/Codex -> canonical spelling; ordinary dictation unchanged) is the user's pass per PRD."
+      "passes": false,
+      "notes": ""
     }
   ]
 }
