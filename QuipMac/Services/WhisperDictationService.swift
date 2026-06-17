@@ -14,7 +14,23 @@ final class WhisperKitTranscriber: WhisperTranscriber, @unchecked Sendable {
     private let kit: WhisperKit
     init(kit: WhisperKit) { self.kit = kit }
     func transcribe(audioArray: [Float]) async throws -> String {
-        let results: [TranscriptionResult] = try await kit.transcribe(audioArray: audioArray)
+        // Bias the decode toward Quip vocabulary at generation time. This is
+        // the REMOTE PTT path's only source of biasing — the iOS corrector only
+        // rewrites the final transcript after the fact, and WhisperKit (unlike
+        // the local SFSpeech request) has no contextualStrings hook. Guarded by
+        // the optional tokenizer (nil until the model loads): no tokenizer ⇒
+        // `decodeOptions: nil` ⇒ the exact prior unbiased behavior, no regression.
+        let decodeOptions: DecodingOptions?
+        if let tokenizer = kit.tokenizer,
+           let prompt = QuipDictationVocabulary.promptTokens(
+               encode: tokenizer.encode(text:),
+               specialTokenBegin: tokenizer.specialTokens.specialTokenBegin) {
+            decodeOptions = DecodingOptions(promptTokens: prompt)
+        } else {
+            decodeOptions = nil
+        }
+        let results: [TranscriptionResult] = try await kit.transcribe(
+            audioArray: audioArray, decodeOptions: decodeOptions)
         return results.map(\.text).joined(separator: " ")
     }
 }

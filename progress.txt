@@ -669,3 +669,61 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - This gate is the same one captured in memory `reference_devicectl_launch_dev_app_gate` — devicectl process launch Security-errors on EVERY dev-signed iOS app by design; the install isn't broken.
   - Remaining: only US-003 (passes:false) left — it NEEDS a Mac rebuild + manual reinstall/TCC re-grant per reference_quip_install_recipe; per the prd its install+on-device verify is the USER's pass.
 ---
+
+## 2026-06-16 — US-003 (Bias Mac WhisperKit decode with Quip vocabulary) [Kaizen PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- LAST story in the Kaizen batch → ALL stories now pass:true.
+- NEW QuipMac/Services/QuipDictationVocabulary.swift (Foundation-only, NO `import
+  WhisperKit`): `terms` mirrors QuipiOS/Resources/dictation-vocab.txt (small
+  hardcoded v1 list — PRD endorsed), `promptText` comma-joins them (the Whisper
+  initial_prompt convention), and PURE `promptTokens(encode:specialTokenBegin:)`
+  mirrors the WhisperKit CLI recipe (Sources/WhisperKitCLI/TranscribeCLI.swift:135):
+  `encode(" " + trim(promptText)).filter { $0 < specialTokenBegin }`, returns nil
+  when nothing usable. Keeping the file WhisperKit-free is deliberate so the
+  standalone `swiftc` logic oracle compiles it without the WhisperKit module.
+- WIRED in WhisperKitTranscriber.transcribe (QuipMac/Services/WhisperDictationService.swift):
+  build `DecodingOptions(promptTokens:)` from `kit.tokenizer` (WhisperTokenizer? —
+  nil until the model loads) + tokenizer.specialTokens.specialTokenBegin, then
+  `kit.transcribe(audioArray:decodeOptions:)`. GUARD: no tokenizer OR nil prompt
+  ⇒ `decodeOptions = nil` ⇒ the exact prior unbiased call (no crash, no regression).
+  This is the REMOTE PTT path's only generation-time biasing (local SFSpeech has
+  contextualStrings; remote Whisper had nothing but US-005's post-hoc corrector).
+- NO protocol/wire change (Mac biases its own decode); NO Shared field added.
+- NEW QuipMac/Tests/QuipDictationVocabularyTests.swift: 4 pure cases (promptText
+  content/comma-join; leading-space + full-vocab string handed to encode;
+  special-token filtering; nil fallbacks for empty + all-special encode).
+- Files: QuipMac/Services/QuipDictationVocabulary.swift (new),
+  QuipMac/Services/WhisperDictationService.swift,
+  QuipMac/Tests/QuipDictationVocabularyTests.swift (new),
+  QuipMac/QuipMac.xcodeproj/project.pbxproj (xcodegen regen, +2 files × 2 targets),
+  prd.json, progress.txt.
+- Gate: xcodebuild QuipMac (platform=macOS) ** BUILD SUCCEEDED ** (no new warnings
+  in changed files) + build-for-testing ** TEST BUILD SUCCEEDED ** (new test
+  compiles into QuipMacTests). Standalone `swiftc QuipDictationVocabulary.swift
+  main.swift` logic oracle 10/10 PASS. Headless `xcodebuild test` still hangs
+  (TEST_HOST=full Quip.app) — the standalone run is the logic oracle.
+- This story NEEDS a Mac rebuild + manual reinstall (TCC re-grant). Per the PRD +
+  reference_quip_install_recipe, install + on-device connected/remote-path verify
+  ('Tailscale monospace Codex' → canonical spelling more reliably) is the USER's
+  pass; the story is NOT blocked on hardware verify.
+- **Learnings for future iterations:**
+  - WhisperKit promptTokens recipe: `tokenizer.encode(text: " " + prompt)` then
+    `.filter { $0 < tokenizer.specialTokens.specialTokenBegin }`. `kit.tokenizer`
+    is OPTIONAL (nil pre-load) — use it as the natural degrade gate; pass
+    `decodeOptions: nil` when absent to keep the unbiased path byte-identical.
+    `DecodingOptions(promptTokens: x)` == defaults + prompt, so other decode
+    params are untouched (no behavior drift on temperature/threshold/etc.).
+  - A method-value reference `tokenizer.encode(text:)` supplies the
+    `(String) -> [Int]` the pure builder wants — no wrapper closure needed, and
+    it keeps QuipDictationVocabulary free of any WhisperKit dependency.
+  - kit.transcribe has many overloads; the one taking `audioArray:decodeOptions:`
+    is the live one (callback defaults nil). The deprecated `@_disfavoredOverload`
+    returns `TranscriptionResult?` — we use the `[TranscriptionResult]` form and
+    join `.text`, same as before, only adding decodeOptions.
+  - promptTokens are CONDITIONING (soft bias prepended to prefill via
+    usePrefillPrompt:true), not forced output — so listing terms can't corrupt a
+    genuinely different utterance, it only wins ties. Safe to keep the list broad.
+  - ALL 3 Kaizen stories pass. iOS got map growth (US-001) + the install/trust
+    doc (US-002); the Mac now biases the remote decode at the source (US-003),
+    closing the loop the iOS-only US-005 corrector left open.
+---

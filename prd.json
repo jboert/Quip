@@ -48,8 +48,8 @@
         "Manual (user verify, connected/remote path): PTT 'Tailscale monospace Codex' shows canonical spelling more reliably than output-correction alone"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Biased the Mac WhisperKit decode with Quip vocabulary at generation time (remote PTT path). NEW QuipMac/Services/QuipDictationVocabulary.swift (Foundation-only, no WhisperKit import): `terms` mirrors QuipiOS/Resources/dictation-vocab.txt (small hardcoded v1 list), `promptText` comma-joins them (Whisper initial_prompt convention), and pure `promptTokens(encode:specialTokenBegin:)` mirrors the WhisperKit CLI recipe (TranscribeCLI.swift:135) — prepend a leading space, encode via injected closure, drop special tokens (>= specialTokenBegin), return nil when nothing usable. WIRED in WhisperKitTranscriber.transcribe (WhisperDictationService.swift): build `DecodingOptions(promptTokens:)` from `kit.tokenizer` (optional — nil until model loads) and pass it to kit.transcribe(audioArray:decodeOptions:); no tokenizer or empty prompt => decodeOptions nil => exact prior unbiased behavior (no crash/regression). No protocol/wire change (Mac biases its own decode); no Shared field added. NEW QuipMac/Tests/QuipDictationVocabularyTests.swift: 4 pure cases (promptText content/comma-join, leading-space + full-vocab passed to encode, special-token filtering, nil fallbacks). Gate: xcodebuild QuipMac (macOS) ** BUILD SUCCEEDED ** + build-for-testing ** TEST BUILD SUCCEEDED **, no new warnings in changed files; standalone `swiftc` logic oracle 10/10 PASS (headless XCTest hangs, TEST_HOST=Quip.app). NEEDS A MAC REBUILD + manual reinstall (TCC re-grant) — install + on-device connected/remote-path verify ('Tailscale monospace Codex' shows canonical spelling more reliably) is the USER's pass per reference_quip_install_recipe; story not blocked on hardware verify."
     }
   ]
 }
