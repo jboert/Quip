@@ -655,3 +655,17 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     no build). US-003 (last) is the Mac WhisperKit decode bias — needs a Mac REBUILD
     + manual reinstall/TCC re-grant, so it's correctly sequenced last.
 ---
+
+## 2026-06-16 - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Documented the dev-app install + first-trust gate in README.md so the next install skips the false-debugging rabbit hole.
+- Added two `**Note:**` blocks right after the "Install iPhone app over the air" code block (README.md:62-64):
+  1. First-trust gate: `devicectl device install app` lands the app on the home screen but it won't launch until the signing cert is trusted once; `devicectl device process launch` returns "invalid code signature, inadequate entitlements or its profile has not been explicitly trusted" until then — NOT a build defect. Fix = Xcode ▶ Run on device OR Settings → General → VPN & Device Management → trust developer (one-time).
+  2. `id=<device>` Debug builds emit debugger-coupled Quip.debug.dylib/__preview.dylib; use `-destination 'generic/platform=iOS'`.
+- Files changed: README.md, prd.json, progress.txt.
+- **Learnings for future iterations:**
+  - Doc-only stories have NO build gate and NO browser test (README is not a web frontend) — the prd's native gate ("xcodebuild succeeds") explicitly does not apply; acceptance was "Doc-only change — no code, no Mac rebuild".
+  - README "Note" voice = bold lead-in `**Note:**` then prose; inline code in backticks, em-dash asides. Matched it (see existing line ~75 about gitignored Info.plist).
+  - This gate is the same one captured in memory `reference_devicectl_launch_dev_app_gate` — devicectl process launch Security-errors on EVERY dev-signed iOS app by design; the install isn't broken.
+  - Remaining: only US-003 (passes:false) left — it NEEDS a Mac rebuild + manual reinstall/TCC re-grant per reference_quip_install_recipe; per the prd its install+on-device verify is the USER's pass.
+---

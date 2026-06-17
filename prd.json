@@ -31,8 +31,8 @@
         "Markdown renders (no broken fences); wording matches the project's existing README voice"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added two **Note:** blocks to README.md after the 'Install iPhone app over the air' code block (README.md:62-64). Block 1 = first-trust gate: dev-signed app installed via `devicectl device install app` lands on home screen but won't launch until cert trusted once; `devicectl device process launch` returns the 'invalid code signature, inadequate entitlements or its profile has not been explicitly trusted' Security error until then (NOT a build defect); fix = Xcode ▶ Run on device OR Settings → General → VPN & Device Management → trust developer; subsequent installs don't repeat. Block 2 = one sentence on `id=<device>` Debug builds emitting debugger-coupled Quip.debug.dylib/__preview.dylib, so use the `-destination 'generic/platform=iOS'` recipe. Doc-only (no code, no Mac rebuild, no browser test — README). Fences balanced, matches existing `**Note:**` voice."
     },
     {
       "id": "US-003",

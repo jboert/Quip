@@ -59,6 +59,10 @@ xcrun devicectl device install app --device "<your-iphone>" \
   QuipiOS/build/Build/Products/Debug-iphoneos/Quip.app
 ```
 
+**Note — first-trust gate (this is NOT a build defect):** A development-signed app installed with `xcrun devicectl device install app` will land on the home screen but will **not** launch until its signing certificate is trusted once on the device. Until then `xcrun devicectl device process launch ...` returns a Security error — `invalid code signature, inadequate entitlements or its profile has not been explicitly trusted` — and tapping the icon shows an "Untrusted Developer" prompt. To clear it once: either run the app on the connected device from Xcode (▶ Run, which establishes trust), or on the phone tap the app then go to **Settings → General → VPN & Device Management** and trust the developer. After that, `devicectl device install app` plus a home-screen tap work normally — you don't need to repeat the trust step on later installs.
+
+**Note:** Build with `-destination 'generic/platform=iOS'` (the recipe above). An `id=<device>` Debug build instead emits a debugger-coupled `Quip.debug.dylib` / `__preview.dylib` pair that the app expects the debugger to inject, so it won't launch standalone from a home-screen tap.
+
 **Build Mac app:**
 
 ```bash
