@@ -1054,3 +1054,34 @@ iPhone: `WebSocketClient.sendSelfIdentity()` fires `DeviceIdentityMessage` after
 ## Tabled (parked, revisit on demand)
 
 _Empty — entries previously parked here (§52 iPad, §55 Clipboard sync) were dropped 2026-05-06 by user request. Add new tabled items below as needed._
+
+---
+
+## Session log — 2026-06-17 (Settings/Keyboard/Voice + Kaizen, 8 stories)
+
+**Shipped + pushed + installed both devices (eb-branch → `2467402`, in sync).** Full detail in
+`docs/superpowers/handoffs/2026-06-17-session-handoff.md` + spec
+`docs/superpowers/specs/2026-06-16-settings-modernize-keyboard-ux-design.md`.
+
+- ✅ Settings row visual consistency (chip style for Latency/Version).
+- ✅ Custom-button add-key clarity (live preview, auto-label, help footers).
+- ✅ Hold-any-slash-key palette (long-press → all slash commands).
+- ✅ Dictation vocab expansion + `TranscriptCorrector` (both PTT paths) + Kaizen corrector terms.
+- ✅ Mac WhisperKit decode biasing (`QuipDictationVocabulary` → `DecodingOptions(promptTokens:)`, guarded).
+- ✅ README dev-app install/first-trust-gate note.
+
+**Open — acceptance flows to run on hardware (USER's pass):**
+- Settings → Diagnostics: Latency + Version render as tinted-chip rows; Version still copies.
+- Settings → Input → Quick Buttons → `+` → Custom Button: live preview + auto-label + footers; Save → pill fires.
+- Quick-button row: long-press a lone `/plan` pill → full slash palette → tap fires; single tap unchanged; row scrolls.
+- **Connected PTT "Tailscale monospace Codex" → canonical spelling** (Mac generation-bias + iOS output-correct). Primary payoff.
+
+**Blocked / needs user action:**
+- Dual-backend flap: delete the LAN backend entry on the phone (keep Tailscale) to collapse the two
+  pre-existing same-Mac backends — `f632cb9` only prevents NEW dups. Never confirmed done.
+- Headless XCTest hangs (TEST_HOST=Quip.app) — run new test suites from Xcode/CI to confirm execution
+  (all pass via standalone `swiftc` oracle).
+
+**Future asks / next 1% (Kaizen):**
+- Grow `TranscriptCorrector` + `QuipDictationVocabulary` 1–2 terms per session from real mishearings.
+- Keep Mac + iOS vocab lists in sync (today: iOS `dictation-vocab.txt` + a hardcoded Mac mirror).
