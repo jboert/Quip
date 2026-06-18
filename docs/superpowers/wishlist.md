@@ -1079,9 +1079,19 @@ _Empty — entries previously parked here (§52 iPad, §55 Clipboard sync) were 
 **Blocked / needs user action:**
 - Dual-backend flap: delete the LAN backend entry on the phone (keep Tailscale) to collapse the two
   pre-existing same-Mac backends — `f632cb9` only prevents NEW dups. Never confirmed done.
+- **APNs broke after the 2026-06-17 Mac reinstall** ("APNs not configured", push.log skipping). The
+  stable-resign orphaned the login-keychain APNs items (ACL bound to old code identity); restart didn't
+  fix. **Immediate:** re-enter Team ID `D2PM6R797Q` + Key ID + `.p8` in Settings → Notifications. See
+  memory `project_apns_keychain_orphan_on_resign`.
 - Headless XCTest hangs (TEST_HOST=Quip.app) — run new test suites from Xcode/CI to confirm execution
   (all pass via standalone `swiftc` oracle).
 
 **Future asks / next 1% (Kaizen):**
+- **Future-proof APNs/PIN keychain against Mac re-signs** (so push doesn't break every reinstall): add a
+  `keychain-access-groups` entitlement to QuipMac + `kSecAttrAccessGroup` (team-scoped, e.g.
+  `$(AppIdentifierPrefix)com.quip.mac.keys`) to `APNsMetadataStore` + the `.p8` store
+  (`com.quip.mac.apns`) + PIN store (`com.quip.mac.pin`). One-time re-entry seeds the group; survives all
+  future re-signs. **Deliberate change — touches signing entitlements; build+verify carefully, not a blind
+  ralph run.** Memory `project_apns_keychain_orphan_on_resign`.
 - Grow `TranscriptCorrector` + `QuipDictationVocabulary` 1–2 terms per session from real mishearings.
 - Keep Mac + iOS vocab lists in sync (today: iOS `dictation-vocab.txt` + a hardcoded Mac mirror).
