@@ -94,6 +94,7 @@ private struct NotificationsTab: View {
     @State private var importStatus: String?
     @State private var testStatus: [String] = []
     @State private var isSending: Bool = false
+    @State private var showForgetAllConfirm: Bool = false
 
     var body: some View {
         Form {
@@ -135,6 +136,23 @@ private struct NotificationsTab: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                    Button(role: .destructive) {
+                        showForgetAllConfirm = true
+                    } label: {
+                        Label("Forget All Devices", systemImage: "trash")
+                    }
+                    .confirmationDialog(
+                        "Forget all \(pushService.devices.count) registered devices?",
+                        isPresented: $showForgetAllConfirm,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Forget All", role: .destructive) {
+                            pushService.removeAllDevices()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Clears stale tokens left by app reinstalls. Each phone re-registers a fresh token the next time it connects.")
                     }
                 }
             }

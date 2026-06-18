@@ -293,6 +293,21 @@ final class PushNotificationService {
         }
     }
 
+    /// Forget ALL registered devices + their preferences. Backs the Settings
+    /// "Forget All" button. APNs tokens rotate per app reinstall/restore and
+    /// the registry dedupes by token (not device), so stale tokens for the
+    /// same physical phone accumulate. Clearing lets each phone re-register a
+    /// single fresh token on its next authenticated connect — the clean way to
+    /// shrink the list down to actually-active devices.
+    func removeAllDevices() {
+        guard !devices.isEmpty else { return }
+        quipPushLog("cleared all \(devices.count) registered devices")
+        devices.removeAll()
+        preferences.removeAll()
+        persist()
+        persistPreferences()
+    }
+
     /// Fire a "waiting for input" push to every registered device. Call
     /// this from the Mac's terminal-state transition hook when the window
     /// the phone has selected flips to waiting_for_input.
