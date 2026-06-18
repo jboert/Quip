@@ -5,13 +5,13 @@ Talk to your Claude instances. All of them. From your couch. No keyboard needed.
 Quip turns your phone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code) sessions running on your Mac or Linux machine. Just speak your prompt and it lands in the right terminal.
 
 
-### Desktop:
+### Desktop
 ![Quip Mac App — windows before arranging](docs/screenshot-mac.png)
 
-### Mobile (Standard Desktop View):
+### Mobile (standard desktop view)
 ![Quip on Android — windows mirrored from desktop](docs/screenshot-android.png)
 
-### Mobile (Arranged View):
+### Mobile (arranged view)
 ![Quip on iOS — windows after arranging](docs/screenshot-ios.png)
 
 ## The idea
@@ -23,9 +23,13 @@ That's Quip. Push-to-talk prompting from your phone.
 - **Volume down** to start talking, **any volume button** to stop
 - **Tap a window** on your phone to pick which Claude gets your prompt
 - **See all your sessions** mirrored live on your phone's screen
-- **Quick actions** — hit Return, Ctrl+C, restart Claude, clear context, all from context menus
+- **Push notifications** — get pinged on your phone when a session needs your input or finishes
+- **Quick actions & custom buttons** — Return, Ctrl+C, Esc, restart Claude, clear context, `/plan`, plus your own custom buttons
+- **Accurate dictation** — on-device transcription, biased with your project's vocabulary and auto-correcting common mishearings
+- **Prompt & button packs** — share and import reusable setups as `.quippack` files
 - **View terminal output** — read the last 200 lines of any terminal from your phone
 - **Arrange windows** on your Mac or Linux desktop with one tap
+- **QA Mode** — pair a Simulator with a terminal for side-by-side iteration
 - **QR code sharing** — scan a QR code from the desktop app to connect instantly
 - **Works with iPhone and Android**
 
@@ -46,37 +50,31 @@ cd QuipMac && xcodegen generate && cd ..
 cd QuipiOS && xcodegen generate && cd ..
 ```
 
-**Install iPhone app over the air on your paired device (recommended):**
-
-```bash
-# Build
-xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
-  -destination 'generic/platform=iOS' -derivedDataPath QuipiOS/build build
-
-# Install wirelessly on your paired iPhone — list paired devices with
-# `xcrun devicectl list devices`, then substitute the name below.
-xcrun devicectl device install app --device "<your-iphone>" \
-  QuipiOS/build/Build/Products/Debug-iphoneos/Quip.app
-```
-
-**Note — first-trust gate (this is NOT a build defect):** A development-signed app installed with `xcrun devicectl device install app` will land on the home screen but will **not** launch until its signing certificate is trusted once on the device. Until then `xcrun devicectl device process launch ...` returns a Security error — `invalid code signature, inadequate entitlements or its profile has not been explicitly trusted` — and tapping the icon shows an "Untrusted Developer" prompt. To clear it once: either run the app on the connected device from Xcode (▶ Run, which establishes trust), or on the phone tap the app then go to **Settings → General → VPN & Device Management** and trust the developer. After that, `devicectl device install app` plus a home-screen tap work normally — you don't need to repeat the trust step on later installs.
-
-**Note:** Build with `-destination 'generic/platform=iOS'` (the recipe above). An `id=<device>` Debug build instead emits a debugger-coupled `Quip.debug.dylib` / `__preview.dylib` pair that the app expects the debugger to inject, so it won't launch standalone from a home-screen tap.
-
-**Build Mac app:**
+**Build the Mac app:**
 
 ```bash
 xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac build
 ```
 
-**Alternative — iOS generic build without install (for CI or generic device targets):**
+**Build and install the iPhone app over the air** on your paired device:
 
 ```bash
+# Build (use the generic destination — see the notes on why, not id=<device>)
 xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS \
-  -destination 'generic/platform=iOS' build
+  -destination 'generic/platform=iOS' -derivedDataPath QuipiOS/build build
+
+# List paired devices with `xcrun devicectl list devices`, then install:
+xcrun devicectl device install app --device "<your-iphone>" \
+  QuipiOS/build/Build/Products/Debug-iphoneos/Quip.app
 ```
 
-**Note:** `QuipMac/Info.plist` and `QuipiOS/Info.plist` are gitignored — they're regenerated from `project.yml` by `xcodegen generate`. Edit `project.yml`, not the `Info.plist`. (`.xcodeproj` files stay tracked so fresh clones open in Xcode without `xcodegen` first, but `Info.plist` is small enough to fall into "I'll just edit it directly" traps — hence the asymmetry.)
+For CI or a build-only run, just drop the install step (and `-derivedDataPath`).
+
+**Notes**
+
+- **First-trust gate (not a build defect):** a development-signed app installs to the home screen but won't launch until its certificate is trusted once. Until then the icon shows an "Untrusted Developer" prompt and `devicectl ... process launch` returns `invalid code signature ... not been explicitly trusted`. Clear it once by running the app from Xcode (▶ Run) or trusting the developer under **Settings → General → VPN & Device Management**; later installs don't need this repeated.
+- **Use `generic/platform=iOS`, not `id=<device>`:** an `id=` Debug build emits a debugger-coupled `Quip.debug.dylib` / `__preview.dylib` pair that the app expects the debugger to inject, so it won't launch standalone from a home-screen tap.
+- **Don't edit `Info.plist` directly:** `QuipMac/Info.plist` and `QuipiOS/Info.plist` are gitignored and regenerated from `project.yml` by `xcodegen generate`. (`.xcodeproj` files stay tracked so fresh clones open in Xcode without running `xcodegen` first.)
 
 ### Android
 
