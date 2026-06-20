@@ -183,6 +183,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .onAppear { startServicesOnce() }
                 .onChange(of: networkModeRaw) { _, _ in
                     applyNetworkMode()
+                    // Keep LAN Bonjour OFF in Tailscale mode (prevents the phone
+                    // re-creating a redundant LAN backend → dual-socket flap);
+                    // restore it when switching to a mode that wants local
+                    // discovery. startAdvertising() is idempotent.
+                    if networkMode == .tailscale {
+                        bonjourAdvertiser.stopAdvertising()
+                    } else {
+                        bonjourAdvertiser.startAdvertising()
+                    }
                 }
         }
         .windowStyle(.titleBar)
@@ -344,9 +353,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // Apply current network mode (starts tunnel or Tailscale as needed).
         applyNetworkMode()
 
-        // Small delay to let WebSocket listener reach .ready before advertising
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            bonjourAdvertiser.startAdvertising()
+        // Small delay to let WebSocket listener reach .ready before advertising.
+        // In Tailscale mode we deliberately DON'T advertise on the LAN: the phone
+        // reaches us over Tailscale (which itself takes the direct LAN path when
+        // on the same network), so a separate raw-LAN `_quip._tcp` service is
+        // redundant — and it makes the phone auto-create a SECOND backend client,
+        // which produces the LAN+Tailscale dual-socket flap (both routes reset
+        // each other every ~30-60s). Local/cloudflare modes still advertise.
+        if networkMode != .tailscale {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                bonjourAdvertiser.startAdvertising()
+            }
         }
 
         // Re-detect Tailscale whenever another app activates — cheap way to
