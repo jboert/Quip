@@ -56,6 +56,8 @@ cd QuipiOS && xcodegen generate && cd ..
 xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac build
 ```
 
+The bundled `cloudflared` (for the remote tunnel) is **not** committed to the repo — a pre-build step (`tools/fetch-cloudflared.sh`) downloads the pinned Cloudflare release and verifies its SHA-256 the first time you build. It needs network on a clean build; run `tools/fetch-cloudflared.sh` by hand to pre-fetch (e.g. for offline builds). To update cloudflared, bump `VERSION` and both hashes in that script.
+
 **Build and install the iPhone app over the air** on your paired device:
 
 ```bash

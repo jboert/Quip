@@ -13,6 +13,7 @@
 		10651D74B2A895F33F9D4F2B /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F512A11137B9D4537AB6361B /* MessageProtocolTests.swift */; };
 		107399D353901EBFF5FB310B /* NetworkMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BE934418962AAB550CF87F /* NetworkMode.swift */; };
 		116314BEF65175C6546B7FD6 /* PushRegisteredDeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E4F97BA0BB789B8E2A1D6 /* PushRegisteredDeviceStoreTests.swift */; };
+		1176BC681C5517A636E2C352 /* PairingPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCAA16D15E597B3EA3FAA891 /* PairingPayloadTests.swift */; };
 		13D5412FA1D65684388478B6 /* MirrorDesktopFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 589E484D563BAA76B0634F61 /* MirrorDesktopFilterTests.swift */; };
 		14DAC6065803A0A60587E902 /* AuthThrottleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12DF63C5377F483607D75CFB /* AuthThrottleTests.swift */; };
 		15E7F693296D17701B7805E9 /* KeystrokeInjectorWriteExpressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37933B6AB818F38B0D7418F /* KeystrokeInjectorWriteExpressionTests.swift */; };
@@ -29,7 +30,7 @@
 		2C88CD14E78DA68F24602EA1 /* SwrmStoryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC46F80EAC2F2C36F3F69C50 /* SwrmStoryCoordinator.swift */; };
 		2D3A9D787C29669647538F78 /* TerminalStateDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */; };
 		2D7834B508F6F1CE9F84B906 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 98F4DBD3AC4FF6A28304DD5E /* WhisperKit */; };
-		33867DD1AB83E1D5391E0633 /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_CFFA4FB3-42C9-4AA6-86EA-A6F5ECD6EF9F" /* QuipMacApp.swift */; };
+		3260C4355A3D1231A0C7B333 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_7ED1BE56-B754-4CF7-9AD8-3E724C217C47" /* Assets.xcassets */; };
 		3A4AA39F4C89AA307F54001D /* MonitorSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4807DB7DFE825999F9E15D66 /* MonitorSelector.swift */; };
 		3E80AB53764777CE3E79A463 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFB206BDF80C59B557B5561A /* MessageProtocol.swift */; };
 		425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */ = {isa = PBXBuildFile; fileRef = CD526E4C21F232FACDCD3F3F /* DefaultLayouts.json */; };
@@ -46,6 +47,7 @@
 		59088EE38013B3450B199345 /* SwrmEventTailer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86F64E75C339D12BE8A6DB9B /* SwrmEventTailer.swift */; };
 		6206170D640DFCB204C0CD84 /* ClaudeModeDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E45D24608373377E2D46D3 /* ClaudeModeDetector.swift */; };
 		62E47E54D4C7B23CA0EE2737 /* CrashRecoveryAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C870D635AF297B21DA5049D /* CrashRecoveryAgentTests.swift */; };
+		637674E7BBFBC940E4D7A3E7 /* default.profraw in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_89CB4CF7-73F3-4193-A55A-5120AE7F22EF" /* default.profraw */; };
 		63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDA71A2750027A58181E528 /* SettingsView.swift */; };
 		67EF2F4B7CF95D8ACAF923A3 /* PairingPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 064C83DC47F324BC1E061896 /* PairingPayload.swift */; };
 		6925B6D4A4F5388EF3BA18EC /* PromptLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = D14B67650DF297DF85FD4146 /* PromptLibrary.swift */; };
@@ -54,6 +56,7 @@
 		6FF9FBA8F15F5B3448809A8D /* APNsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5D9089FAA12F8CDF0710813 /* APNsClient.swift */; };
 		70E511EEA28AB36FBFF7A6BC /* PasteTextScriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A969DFB5628EAB4435848D /* PasteTextScriptTests.swift */; };
 		7226902DBE30CCD6065A5EB1 /* CLIKindClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FAB4D8A67A5450195D528D5 /* CLIKindClassifierTests.swift */; };
+		7452FBFA6EDFDB0D287D9398 /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_4CE9395A-9F93-42A4-9762-2EBD02F794C9" /* QuipMacApp.swift */; };
 		776B6808FFB2C42DE93FF535 /* TerminalURLExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792D57DC8FC3B11646E7AA24 /* TerminalURLExtractorTests.swift */; };
 		7893732742065279CC924FCF /* ImageUploadMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BDEBA5C1FF3ADA484633B4B /* ImageUploadMessageTests.swift */; };
 		7B94B59F9697BE1988758013 /* MessageDedupeTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE17A2BB0A2B82DA9D5FBA68 /* MessageDedupeTableTests.swift */; };
@@ -102,12 +105,12 @@
 		D21667FDA5D8CA05EFCFCEA1 /* DevicePushPreferencesDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F00A6EB53B0800FF484CC1E /* DevicePushPreferencesDecodingTests.swift */; };
 		D7510A191B9F0BD7B01E4102 /* CrashRecoveryAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EFE2BF974A88EAE20764610 /* CrashRecoveryAgent.swift */; };
 		D771CA86FD23E660375CC1AC /* WindowListSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAFA76040229EEE779AC055 /* WindowListSidebar.swift */; };
+		DAADB25B04338FA6F2A5DCD0 /* kokoro_tts.cpython-314.pyc in Resources */ = {isa = PBXBuildFile; fileRef = 970F71EC6372BC5075494E87 /* kokoro_tts.cpython-314.pyc */; };
 		DB25E0C4E38ECC8B9A42D04D /* PermissionProbeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4A88C19C3BFF8C38C0B2E4 /* PermissionProbeService.swift */; };
 		E1671AA42F6C302F2E176941 /* ClaudeModeScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E1DC52BCF5C78516007D8A /* ClaudeModeScannerTests.swift */; };
 		E16F140F49A779C15EAA0862 /* SecretRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F854257F09ED55190DA9754 /* SecretRedactor.swift */; };
 		E3D52168C6ED0D7E035F86C8 /* WhisperStatusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CCA0A3EEB84C493F8E430E /* WhisperStatusStore.swift */; };
 		E6C72BF95EFA9EF17762BC00 /* SwrmEventTailerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F68D7908B96549966EEEAF68 /* SwrmEventTailerTests.swift */; };
-		E8799814F5609323D2D4C861 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_1BAEE33E-B83C-475F-B036-0EDA800D6B83" /* Assets.xcassets */; };
 		E88DD982CED11309FEB0230C /* LogRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFB0E282FA84C107048F5F7 /* LogRedactor.swift */; };
 		EB8C0145B42599AFC038A801 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */; };
 		ECE118209040D808347596C6 /* DiagnosticsBundleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D99848E737127F4E3738EBA1 /* DiagnosticsBundleTests.swift */; };
@@ -195,6 +198,7 @@
 		8C0FC68B16BA609736457A4E /* WhisperOutputCleanerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperOutputCleanerTests.swift; sourceTree = "<group>"; };
 		8F2FC54EF7BE5384458CC160 /* WindowManagerSessionIdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManagerSessionIdTests.swift; sourceTree = "<group>"; };
 		9432A677E617A6B09DA7DD0B /* ImageUploadHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageUploadHandlerTests.swift; sourceTree = "<group>"; };
+		970F71EC6372BC5075494E87 /* kokoro_tts.cpython-314.pyc */ = {isa = PBXFileReference; path = "kokoro_tts.cpython-314.pyc"; sourceTree = "<group>"; };
 		9AA17CF7CA108F4A0F57B3ED /* WebSocketServerRequireAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServerRequireAuthTests.swift; sourceTree = "<group>"; };
 		9B53B909CD918FD29E0E39F1 /* SpawnedWindowPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnedWindowPicker.swift; sourceTree = "<group>"; };
 		9D466A2353D8B80E1B437F21 /* QuipDictationVocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipDictationVocabularyTests.swift; sourceTree = "<group>"; };
@@ -225,6 +229,7 @@
 		CFFB0E282FA84C107048F5F7 /* LogRedactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogRedactor.swift; sourceTree = "<group>"; };
 		D14B67650DF297DF85FD4146 /* PromptLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptLibrary.swift; sourceTree = "<group>"; };
 		D99848E737127F4E3738EBA1 /* DiagnosticsBundleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsBundleTests.swift; sourceTree = "<group>"; };
+		DCAA16D15E597B3EA3FAA891 /* PairingPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPayloadTests.swift; sourceTree = "<group>"; };
 		DD3A5580D9A78CE17AA0AE1E /* MacPermissionsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPermissionsStoreTests.swift; sourceTree = "<group>"; };
 		DE17A2BB0A2B82DA9D5FBA68 /* MessageDedupeTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageDedupeTableTests.swift; sourceTree = "<group>"; };
 		E0F4FE93E019300E534AE830 /* DiagnosticsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsBundle.swift; sourceTree = "<group>"; };
@@ -241,9 +246,10 @@
 		FBBECC11724C6B7430E8A8DA /* APNsJWTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNsJWTTests.swift; sourceTree = "<group>"; };
 		FCED427FE66EE6DA2A41FDF7 /* SpawnedWindowPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnedWindowPickerTests.swift; sourceTree = "<group>"; };
 		FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalColorManager.swift; sourceTree = "<group>"; };
-		"TEMP_1BAEE33E-B83C-475F-B036-0EDA800D6B83" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		"TEMP_CFFA4FB3-42C9-4AA6-86EA-A6F5ECD6EF9F" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
-		"TEMP_D12D143D-BFEF-4953-BD42-7D644F504F7A" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_4CE9395A-9F93-42A4-9762-2EBD02F794C9" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
+		"TEMP_61625985-B8D5-47AE-BECB-BAC9B67B3744" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		"TEMP_7ED1BE56-B754-4CF7-9AD8-3E724C217C47" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		"TEMP_89CB4CF7-73F3-4193-A55A-5120AE7F22EF" /* default.profraw */ = {isa = PBXFileReference; path = default.profraw; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -388,6 +394,14 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		D686F3BEEC935AE5B55EB2DE /* __pycache__ */ = {
+			isa = PBXGroup;
+			children = (
+				970F71EC6372BC5075494E87 /* kokoro_tts.cpython-314.pyc */,
+			);
+			path = __pycache__;
+			sourceTree = "<group>";
+		};
 		D87702261819716197ADF4C3 /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -421,6 +435,7 @@
 				45F9BC10D98A7C867B02D5A1 /* KeystrokeFocusDelayTests.swift */,
 				F512A11137B9D4537AB6361B /* MessageProtocolTests.swift */,
 				589E484D563BAA76B0634F61 /* MirrorDesktopFilterTests.swift */,
+				DCAA16D15E597B3EA3FAA891 /* PairingPayloadTests.swift */,
 				B2165769DE1070C93A139C24 /* PCMChunkerTests.swift */,
 				F3C0CFE09F08EFDD17BA8533 /* PromptFingerprintTests.swift */,
 				82C669FF7E15B0F791E6B00E /* PTTWindowTrackerTests.swift */,
@@ -451,21 +466,23 @@
 			children = (
 				CD526E4C21F232FACDCD3F3F /* DefaultLayouts.json */,
 				68BD4937C2DB6DD04A719C32 /* kokoro_tts.py */,
+				D686F3BEEC935AE5B55EB2DE /* __pycache__ */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		"TEMP_CD7A1733-E88C-4DAB-B059-9422D834A29C" /* QuipMac */ = {
+		"TEMP_B1522890-9813-409C-8DDA-E72317B796D5" /* QuipMac */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_CFFA4FB3-42C9-4AA6-86EA-A6F5ECD6EF9F" /* QuipMacApp.swift */,
-				"TEMP_1BAEE33E-B83C-475F-B036-0EDA800D6B83" /* Assets.xcassets */,
-				"TEMP_D12D143D-BFEF-4953-BD42-7D644F504F7A" /* Info.plist */,
-				01F35C2822B34832E53B989E /* Tools */,
+				"TEMP_4CE9395A-9F93-42A4-9762-2EBD02F794C9" /* QuipMacApp.swift */,
+				"TEMP_61625985-B8D5-47AE-BECB-BAC9B67B3744" /* Info.plist */,
+				"TEMP_7ED1BE56-B754-4CF7-9AD8-3E724C217C47" /* Assets.xcassets */,
+				"TEMP_89CB4CF7-73F3-4193-A55A-5120AE7F22EF" /* default.profraw */,
 				F621177D73579FB347509BD2 /* Resources */,
 				D32FA749E86D0C4ECD728F1E /* Models */,
 				D87702261819716197ADF4C3 /* Views */,
 				7F6C02F2E9E2A8E7C337FC26 /* Services */,
+				01F35C2822B34832E53B989E /* Tools */,
 			);
 			path = QuipMac;
 			sourceTree = "<group>";
@@ -495,6 +512,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = F6331D9A89DC399F1C1C7455 /* Build configuration list for PBXNativeTarget "QuipMac" */;
 			buildPhases = (
+				EEEA4592A8D11CEAA2FFEF30 /* Fetch cloudflared */,
 				5502C86518C93053957FC281 /* Sources */,
 				F5CACDB47476D62FA81CC0ED /* Resources */,
 				F43AEC0A18C7F02260564851 /* Frameworks */,
@@ -555,9 +573,11 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E8799814F5609323D2D4C861 /* Assets.xcassets in Resources */,
+				3260C4355A3D1231A0C7B333 /* Assets.xcassets in Resources */,
 				425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */,
+				637674E7BBFBC940E4D7A3E7 /* default.profraw in Resources */,
 				26DDE2C09EA9C7C18FB8903D /* import-streamdeck-prompts.sh in Resources */,
+				DAADB25B04338FA6F2A5DCD0 /* kokoro_tts.cpython-314.pyc in Resources */,
 				CA061A5EA5E9FFFED7B88CA6 /* kokoro_tts.py in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -565,6 +585,24 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		EEEA4592A8D11CEAA2FFEF30 /* Fetch cloudflared */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Fetch cloudflared";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# cloudflared is not committed (issue #16) — fetch + checksum-verify\n# the pinned upstream release into Resources/ before it gets bundled.\n\"${SRCROOT}/../tools/fetch-cloudflared.sh\"\n";
+		};
 		F69B6BA8D0716A04CFD436D3 /* Bundle cloudflared */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -630,7 +668,7 @@
 				6925B6D4A4F5388EF3BA18EC /* PromptLibrary.swift in Sources */,
 				9084D0AD136CA9E40A96DE7E /* PushNotificationService.swift in Sources */,
 				B959DF7BBDA6E3532BF610D9 /* QuipDictationVocabulary.swift in Sources */,
-				33867DD1AB83E1D5391E0633 /* QuipMacApp.swift in Sources */,
+				7452FBFA6EDFDB0D287D9398 /* QuipMacApp.swift in Sources */,
 				879115E516EAFBE69CFC6E51 /* SeamStitcher.swift in Sources */,
 				E16F140F49A779C15EAA0862 /* SecretRedactor.swift in Sources */,
 				63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */,
@@ -685,6 +723,7 @@
 				F052F06C47112A9B96B81D1F /* PCMChunkerTests.swift in Sources */,
 				7EE495A915DBE51FCF341B82 /* PINStoreTests.swift in Sources */,
 				2204E721778AD2067D7822DF /* PTTWindowTrackerTests.swift in Sources */,
+				1176BC681C5517A636E2C352 /* PairingPayloadTests.swift in Sources */,
 				70E511EEA28AB36FBFF7A6BC /* PasteTextScriptTests.swift in Sources */,
 				91B496CB2B04169F2B61774A /* PromptFingerprintTests.swift in Sources */,
 				56A494000A7D1F759F6F3A01 /* PromptFrontMatterTests.swift in Sources */,
