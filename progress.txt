@@ -4,6 +4,27 @@ PRD: prd.json (source: tasks/prd-swrm-board-integration.md)
 Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
 
 ## Codebase Patterns
+### GH #33 Mac TCC re-prompt PRD (eb-branch, CURRENT prd.json)
+- GOAL: stop macOS re-prompting for Accessibility/Screen Recording/Automation on
+  every Mac rebuild. Layer-1 (US-001/002/003) is pure-Swift compile-gated; layer-2
+  (US-004/005 signing overhaul) is MANUAL + EXCLUDED (needs Apple portal + a macOS
+  provisioning profile, would fail the compile-gate).
+- BUILD GATE: `cd QuipMac && xcodegen generate` (only when adding/removing files)
+  then `xcodebuild build -project QuipMac.xcodeproj -scheme QuipMac -destination
+  'platform=macOS'` → ** BUILD SUCCEEDED **. Prove a new test compiles with
+  `build-for-testing` (headless `xcodebuild test` hangs: TEST_HOST = full Quip.app).
+  Verify pure logic with a standalone `swiftc Foo.swift main.swift` run.
+- cdhash self-identity: `CodeIdentity.didCodeIdentityChangeSinceLastLaunch()`
+  (QuipMac/Services/CodeIdentity.swift) is the "did I just get rebuilt?" oracle.
+  Has a STORE SIDE EFFECT — call once per launch, cache the Bool. US-002 wires it.
+- Launch perm code lives in QuipMacApp.swift: the unconditional pane auto-open is
+  at ~589-591 (US-002 deletes it), the 5s permsTimer at ~545-555 + wake-probe at
+  ~562-570, broadcastPermissions ~597, openSettingsPane ~606+, menubar glyph
+  ~560 comment. permissionProbe = PermissionProbeService; permissionsStore =
+  MacPermissionsStore (@Observable, deniedCount/anyDenied).
+- ALL 3 layer-1 stories NEED a Mac rebuild to land (wipes TCC once = the user's
+  manual install/re-grant pass). Do NOT block a story on hardware verify; bundle
+  US-001+002+003 (+ manual US-004) into ONE rebuild so the user re-grants once.
 ### iOS PRD (Settings/keyboard/voice UX — eb-branch, current prd.json)
 - BUILD GATE (iOS): `cd QuipiOS && xcodebuild build -project QuipiOS.xcodeproj
   -scheme QuipiOS -destination 'generic/platform=iOS Simulator'`. The named QA
@@ -726,4 +747,64 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - ALL 3 Kaizen stories pass. iOS got map growth (US-001) + the install/trust
     doc (US-002); the Mac now biases the remote decode at the source (US-003),
     closing the loop the iOS-only US-005 corrector left open.
+---
+
+## 2026-06-20 — US-001 (Detect cdhash change across launches) [GH #33 Mac TCC batch]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- FIRST story of a NEW prd.json (GH #33 layer-1 TCC re-prompt polish; prior
+  progress entries above are the swrm + Kaizen PRDs — unrelated).
+- NEW QuipMac/Services/CodeIdentity.swift (Foundation + Security only):
+  - `protocol CodeIdentityStore` (string(forKey:) + setString(_:forKey:)) — the
+    test-injection seam. `extension UserDefaults: CodeIdentityStore` conforms via
+    a one-line setString shim (string(forKey:) is already on UserDefaults). Kept
+    String-typed (not Any?) so the protocol surface stays Sendable-clean under
+    Swift 6.
+  - `currentCDHash() -> String?`: SecCodeCopySelf → SecCodeCopyStaticCode →
+    SecCodeCopySigningInformation(SecCSFlags()) → info[kSecCodeInfoUnique] as Data
+    → lowercase hex. Returns nil (degrade-safe) at every failure guard.
+  - `didCodeIdentityChangeSinceLastLaunch(store:=UserDefaults.standard,
+    currentHash:=currentCDHash) -> Bool` (@discardableResult): true on first run
+    (nil stored) OR current != stored; persists current as a side effect only
+    when changed (unchanged launch does NOT rewrite). nil read ⇒ return true
+    (err toward "changed", signal-not-silence) AND leaves the stored value
+    untouched so a transient read failure can't clobber a good value / mask a
+    later real change. UserDefaults key "lastLaunchCDHash".
+- NEW QuipMac/Tests/CodeIdentityTests.swift: 6 pure cases over an in-memory
+  FakeStore + injected hash provider (first-run persist, unchanged no-rewrite,
+  rebuild update, nil-read steady no-clobber, nil-read first-run no-write,
+  side-effect→next-launch-unchanged). NO live SecCode read in the test.
+- Files: QuipMac/Services/CodeIdentity.swift (new),
+  QuipMac/Tests/CodeIdentityTests.swift (new),
+  QuipMac/QuipMac.xcodeproj/project.pbxproj (xcodegen regen, +2 files × 2 targets,
+  +19/-11), prd.json, progress.txt.
+- Gate: xcodebuild QuipMac (platform=macOS, SWIFT_VERSION 6.0) ** BUILD SUCCEEDED **
+  (no new warnings in changed files) + build-for-testing ** TEST BUILD SUCCEEDED **.
+  Standalone `swiftc CodeIdentity.swift main.swift` logic oracle 14/14 PASS.
+  Headless `xcodebuild test` still hangs (TEST_HOST = full Quip.app) — standalone
+  run is the logic oracle, per Codebase Patterns.
+- NOT wired into launch yet — that is US-002 (consume
+  didCodeIdentityChangeSinceLastLaunch() to gate permissionsNeedAttention and
+  delete the unconditional openSettingsPane at QuipMacApp.swift:589-591).
+- This story NEEDS a Mac rebuild to land (wipes TCC once = the user's manual
+  install/re-grant pass). Per the PRD, do NOT block the story on hardware verify;
+  ideally US-001+002+003 + manual US-004 land in ONE rebuild so the user
+  re-grants exactly once.
+- **Learnings for future iterations:**
+  - cdhash recipe that compiles + reads correctly under Swift 6: pass `SecCSFlags()`
+    (== kSecCSDefaultFlags, rawValue 0) to all three Sec* calls; kSecCodeInfoUnique
+    is in the DEFAULT signing-info set (no kSecCSSigningInformation flag needed).
+    `info[kSecCodeInfoUnique as String] as? Data` bridges CFData → Data cleanly.
+  - UserDefaults-injection seam for a pure unit test: a tiny `AnyObject` protocol
+    with String-typed accessors + a conformance extension on UserDefaults. Avoid
+    putting `Any?` in the protocol (Swift-6 Sendable noise) — wrap the Any? setter
+    in a String-typed shim. This is lighter than the file-based
+    directoryOverrideForTests pattern when you only need a couple of keys.
+  - `CodeIdentity` is a plain (non-@MainActor) enum: only `static let` constants +
+    static funcs, no mutable static state, so no Swift-6 concurrency error. A
+    `() -> String?` default-argument closure is fine (not crossing an actor hop).
+  - US-002 consumes this: call once at launch; if changed AND a probe preflights
+    false ⇒ set published permissionsNeedAttention (no pane auto-open). Calling
+    didCodeIdentityChangeSinceLastLaunch() has a side effect (updates stored hash)
+    — call it EXACTLY ONCE per launch and cache the Bool; a second call same
+    launch returns false.
 ---

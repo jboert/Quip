@@ -16,8 +16,8 @@
         "Gate: xcodebuild QuipMac (-swift-version 6) BUILD SUCCEEDED, no new warnings in changed files; NEEDS a Mac rebuild to land — install/TCC re-grant is the user's manual pass, do not block the story on it"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Done 2026-06-20. QuipMac/Services/CodeIdentity.swift: CodeIdentityStore seam (UserDefaults conforms via setString shim) + currentCDHash() (SecCodeCopySelf→StaticCode→SigningInformation[kSecCodeInfoUnique]→hex, nil on any failure) + didCodeIdentityChangeSinceLastLaunch(store:currentHash:) — first-run/changed persists side-effect, unchanged no-rewrite, nil read errs toward changed without clobbering stored. Tests: QuipMac/Tests/CodeIdentityTests.swift (injected FakeStore + injected hash, 6 cases). Gate: xcodebuild macOS BUILD SUCCEEDED + build-for-testing TEST BUILD SUCCEEDED, no new warnings; standalone swiftc logic oracle 14/14. NEEDS Mac rebuild to land (bundle into US-002/003 + manual US-004 for one re-grant pass)."
     },
     {
       "id": "US-002",
