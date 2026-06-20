@@ -44,9 +44,14 @@ targets:
         PRODUCT_NAME: Quip
         INFOPLIST_FILE: Info.plist
         CODE_SIGN_ENTITLEMENTS: QuipMac.entitlements
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGN_STYLE: Automatic
-        ENABLE_HARDENED_RUNTIME: false
+        # GH #33/#13: Developer ID Application gives a stable, team-keyed
+        # Designated Requirement (TCC grants survive a rebuild) and needs NO
+        # provisioning profile — unlike "Apple Development", which dodges the
+        # restricted-entitlement wall that blocked the keychain future-proof.
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: D2PM6R797Q
+        ENABLE_HARDENED_RUNTIME: true
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Info.plist

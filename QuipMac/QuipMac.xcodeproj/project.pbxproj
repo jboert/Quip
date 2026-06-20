@@ -10,7 +10,6 @@
 		037F6BF0E1EA86A00CAABE95 /* SpawnedWindowPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B53B909CD918FD29E0E39F1 /* SpawnedWindowPicker.swift */; };
 		0553EF1A21F0C774DAA2F0D6 /* LayoutPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5EFE906905D43F124D49A7A /* LayoutPreview.swift */; };
 		07F9FF417B10AF1AD0BCE12D /* CodeIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAA958F4D02CA3C8B02B35D /* CodeIdentityTests.swift */; };
-		0D4C8282DA92C873EFF0B851 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_EC0620E5-BA15-45A3-AD57-9AE940A7C98E" /* Assets.xcassets */; };
 		10651D74B2A895F33F9D4F2B /* MessageProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F512A11137B9D4537AB6361B /* MessageProtocolTests.swift */; };
 		107399D353901EBFF5FB310B /* NetworkMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BE934418962AAB550CF87F /* NetworkMode.swift */; };
 		116314BEF65175C6546B7FD6 /* PushRegisteredDeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E4F97BA0BB789B8E2A1D6 /* PushRegisteredDeviceStoreTests.swift */; };
@@ -30,6 +29,7 @@
 		2C88CD14E78DA68F24602EA1 /* SwrmStoryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC46F80EAC2F2C36F3F69C50 /* SwrmStoryCoordinator.swift */; };
 		2D3A9D787C29669647538F78 /* TerminalStateDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4B67C6602EBEE7D97BCE304 /* TerminalStateDetector.swift */; };
 		2D7834B508F6F1CE9F84B906 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 98F4DBD3AC4FF6A28304DD5E /* WhisperKit */; };
+		33867DD1AB83E1D5391E0633 /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_CFFA4FB3-42C9-4AA6-86EA-A6F5ECD6EF9F" /* QuipMacApp.swift */; };
 		3A4AA39F4C89AA307F54001D /* MonitorSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4807DB7DFE825999F9E15D66 /* MonitorSelector.swift */; };
 		3E80AB53764777CE3E79A463 /* MessageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFB206BDF80C59B557B5561A /* MessageProtocol.swift */; };
 		425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */ = {isa = PBXBuildFile; fileRef = CD526E4C21F232FACDCD3F3F /* DefaultLayouts.json */; };
@@ -44,7 +44,6 @@
 		552A4383E6B2744C59AA5C71 /* ITermVerbSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED13D06CC8DB45905EC90AD2 /* ITermVerbSmokeTests.swift */; };
 		56A494000A7D1F759F6F3A01 /* PromptFrontMatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3CE1F502A89BD8C73083E6 /* PromptFrontMatterTests.swift */; };
 		59088EE38013B3450B199345 /* SwrmEventTailer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86F64E75C339D12BE8A6DB9B /* SwrmEventTailer.swift */; };
-		5E255CBDA3E84D3E77DA0ABF /* QuipMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_A31D31C5-2CC4-43AD-B6F3-6C06FD12FEFA" /* QuipMacApp.swift */; };
 		6206170D640DFCB204C0CD84 /* ClaudeModeDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E45D24608373377E2D46D3 /* ClaudeModeDetector.swift */; };
 		62E47E54D4C7B23CA0EE2737 /* CrashRecoveryAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C870D635AF297B21DA5049D /* CrashRecoveryAgentTests.swift */; };
 		63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDA71A2750027A58181E528 /* SettingsView.swift */; };
@@ -108,6 +107,7 @@
 		E16F140F49A779C15EAA0862 /* SecretRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F854257F09ED55190DA9754 /* SecretRedactor.swift */; };
 		E3D52168C6ED0D7E035F86C8 /* WhisperStatusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CCA0A3EEB84C493F8E430E /* WhisperStatusStore.swift */; };
 		E6C72BF95EFA9EF17762BC00 /* SwrmEventTailerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F68D7908B96549966EEEAF68 /* SwrmEventTailerTests.swift */; };
+		E8799814F5609323D2D4C861 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_1BAEE33E-B83C-475F-B036-0EDA800D6B83" /* Assets.xcassets */; };
 		E88DD982CED11309FEB0230C /* LogRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFB0E282FA84C107048F5F7 /* LogRedactor.swift */; };
 		EB8C0145B42599AFC038A801 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A1FEC6C97F916BC3E12CC91 /* WindowManager.swift */; };
 		ECE118209040D808347596C6 /* DiagnosticsBundleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D99848E737127F4E3738EBA1 /* DiagnosticsBundleTests.swift */; };
@@ -241,9 +241,9 @@
 		FBBECC11724C6B7430E8A8DA /* APNsJWTTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNsJWTTests.swift; sourceTree = "<group>"; };
 		FCED427FE66EE6DA2A41FDF7 /* SpawnedWindowPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpawnedWindowPickerTests.swift; sourceTree = "<group>"; };
 		FE4C92DB2B69AF079BEC6369 /* TerminalColorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalColorManager.swift; sourceTree = "<group>"; };
-		"TEMP_518B5592-FC8E-4654-9DEC-649AE65A0F98" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		"TEMP_A31D31C5-2CC4-43AD-B6F3-6C06FD12FEFA" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
-		"TEMP_EC0620E5-BA15-45A3-AD57-9AE940A7C98E" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		"TEMP_1BAEE33E-B83C-475F-B036-0EDA800D6B83" /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		"TEMP_CFFA4FB3-42C9-4AA6-86EA-A6F5ECD6EF9F" /* QuipMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuipMacApp.swift; sourceTree = "<group>"; };
+		"TEMP_D12D143D-BFEF-4953-BD42-7D644F504F7A" /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -455,12 +455,12 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		"TEMP_631F9578-4B9B-461A-A084-3A48E812B268" /* QuipMac */ = {
+		"TEMP_CD7A1733-E88C-4DAB-B059-9422D834A29C" /* QuipMac */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_A31D31C5-2CC4-43AD-B6F3-6C06FD12FEFA" /* QuipMacApp.swift */,
-				"TEMP_EC0620E5-BA15-45A3-AD57-9AE940A7C98E" /* Assets.xcassets */,
-				"TEMP_518B5592-FC8E-4654-9DEC-649AE65A0F98" /* Info.plist */,
+				"TEMP_CFFA4FB3-42C9-4AA6-86EA-A6F5ECD6EF9F" /* QuipMacApp.swift */,
+				"TEMP_1BAEE33E-B83C-475F-B036-0EDA800D6B83" /* Assets.xcassets */,
+				"TEMP_D12D143D-BFEF-4953-BD42-7D644F504F7A" /* Info.plist */,
 				01F35C2822B34832E53B989E /* Tools */,
 				F621177D73579FB347509BD2 /* Resources */,
 				D32FA749E86D0C4ECD728F1E /* Models */,
@@ -522,7 +522,8 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					91DF7F051DA6E858CC021414 = {
-						ProvisioningStyle = Automatic;
+						DevelopmentTeam = D2PM6R797Q;
+						ProvisioningStyle = Manual;
 					};
 				};
 			};
@@ -554,7 +555,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0D4C8282DA92C873EFF0B851 /* Assets.xcassets in Resources */,
+				E8799814F5609323D2D4C861 /* Assets.xcassets in Resources */,
 				425DCC822BD1C987A508873B /* DefaultLayouts.json in Resources */,
 				26DDE2C09EA9C7C18FB8903D /* import-streamdeck-prompts.sh in Resources */,
 				CA061A5EA5E9FFFED7B88CA6 /* kokoro_tts.py in Resources */,
@@ -629,7 +630,7 @@
 				6925B6D4A4F5388EF3BA18EC /* PromptLibrary.swift in Sources */,
 				9084D0AD136CA9E40A96DE7E /* PushNotificationService.swift in Sources */,
 				B959DF7BBDA6E3532BF610D9 /* QuipDictationVocabulary.swift in Sources */,
-				5E255CBDA3E84D3E77DA0ABF /* QuipMacApp.swift in Sources */,
+				33867DD1AB83E1D5391E0633 /* QuipMacApp.swift in Sources */,
 				879115E516EAFBE69CFC6E51 /* SeamStitcher.swift in Sources */,
 				E16F140F49A779C15EAA0862 /* SecretRedactor.swift in Sources */,
 				63FE4D9F58CCE850B4F8D7FE /* SettingsView.swift in Sources */,
@@ -806,10 +807,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = QuipMac.entitlements;
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_HARDENED_RUNTIME = NO;
+				DEVELOPMENT_TEAM = D2PM6R797Q;
+				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -826,10 +828,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = QuipMac.entitlements;
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_HARDENED_RUNTIME = NO;
+				DEVELOPMENT_TEAM = D2PM6R797Q;
+				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
