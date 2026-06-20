@@ -2,6 +2,11 @@
 ._*
 .DS_Store
 
+# cloudflared is downloaded + checksum-verified at build time by
+# tools/fetch-cloudflared.sh (wired into the QuipMac build), not committed.
+# See issue #16 (removed the 37 MB binary from git).
+QuipMac/Resources/cloudflared
+
 QuipLinux/target/
 QuipAndroid/.gradle/
 QuipAndroid/app/build/
