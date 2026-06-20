@@ -90,3 +90,6 @@ logs/
 # Machine-local / planning scripts — not for the public repo
 scripts/
 tasks/
+
+# swrm board-integration runtime/event dir — local state, not for the repo
+.swrm/
