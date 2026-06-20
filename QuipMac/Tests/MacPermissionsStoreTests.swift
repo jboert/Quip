@@ -65,4 +65,27 @@ final class MacPermissionsStoreTests: XCTestCase {
         XCTAssertEqual(store.deniedCount, 0)
         XCTAssertFalse(store.anyDenied)
     }
+
+    // MARK: - permissionsNeedAttention (US-002)
+
+    /// The quiet re-grant signal must default OFF so a steady-state launch stays
+    /// silent — it's raised only by the rebuild-aware launch gate / a dropped
+    /// grant (both wired in QuipMacApp), never just by an `anyDenied` snapshot.
+    func test_store_permissionsNeedAttention_defaultsFalse() {
+        let store = MacPermissionsStore()
+        XCTAssertFalse(store.permissionsNeedAttention)
+    }
+
+    /// It's an independent signal from `anyDenied`: setting a denied snapshot
+    /// does NOT auto-raise it (that's the launch path's gated decision), and it
+    /// toggles on its own.
+    func test_store_permissionsNeedAttention_independentOfAnyDenied() {
+        let store = MacPermissionsStore()
+        store.snapshot = MacPermissionsMessage(accessibility: false, appleEvents: true, screenRecording: true)
+        XCTAssertTrue(store.anyDenied)
+        XCTAssertFalse(store.permissionsNeedAttention)
+
+        store.permissionsNeedAttention = true
+        XCTAssertTrue(store.permissionsNeedAttention)
+    }
 }

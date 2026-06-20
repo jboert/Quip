@@ -808,3 +808,50 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     — call it EXACTLY ONCE per launch and cache the Bool; a second call same
     launch returns false.
 ---
+
+## 2026-06-20 09:48 MST - US-002
+Thread: (ralph/local — no AMP thread id)
+- Replaced the unconditional Screen-Recording-pane auto-open on launch with a
+  gated, non-intrusive `permissionsNeedAttention` signal (GH #33 layer-1 polish).
+- Files changed:
+  - QuipMac/Services/MacPermissionsStore.swift — new @Observable property
+    `permissionsNeedAttention: Bool = false` (quiet "re-grant on your terms"
+    signal, distinct from live `anyDenied`).
+  - QuipMac/QuipMacApp.swift — (1) deleted the `if !CGPreflightScreenCaptureAccess
+    { openSettingsPane(.screenRecording) }` block in the 1.0s initial-broadcast
+    closure; replaced with `if CodeIdentity.didCodeIdentityChangeSinceLastLaunch(),
+    permissionsStore.deniedCount > 0 { permissionsStore.permissionsNeedAttention =
+    true }` (no pane open). (2) `broadcastPermissions(force:)` now keeps the signal
+    truthful without ever opening a pane: deniedCount==0 clears it, a rise vs
+    `lastPermissionsSnapshot` raises it, constant denial leaves as-is.
+  - QuipMac/Tests/MacPermissionsStoreTests.swift — +2 tests (default false;
+    independent of anyDenied).
+  - prd.json — US-002 passes:true + notes.
+- Gate: `xcodebuild build` (platform=macOS) ** BUILD SUCCEEDED **;
+  `xcodebuild build-for-testing` ** TEST BUILD SUCCEEDED **. No new warnings in
+  changed files (only the pre-existing 'Bundle cloudflared' run-script warning).
+  NEEDS a Mac rebuild to land — user's one manual install/re-grant pass; bundle
+  with US-003 (+ manual US-004) so the user re-grants exactly once. Native story,
+  no browser test.
+- **Learnings for future iterations:**
+  - The launch re-grant gate reads `permissionsStore.deniedCount` rather than a
+    standalone `CGPreflightScreenCaptureAccess()`: the `force:true` broadcast runs
+    synchronously just above on the main queue, so `permissionsStore.snapshot` is
+    already fresh and its deniedCount covers all THREE probed perms (accessibility
+    via AXIsProcessTrusted, appleEvents via the iTerm AE probe, screenRecording via
+    CGPreflight) — one source of truth, same probe the glyph reads.
+  - Steady-state silence (AC#3) falls out of the nil-`lastPermissionsSnapshot`
+    baseline: on the first force:true probe the rise-check is skipped, so a launch
+    that's merely missing a grant but has an UNCHANGED cdhash never raises the
+    signal and never opens a pane. Only a genuine rebuild (cdhash change) or a
+    mid-session drop flips it.
+  - openSettingsPane survivors after US-002 = the phone `open_mac_settings_pane`
+    handler (~1689) + SettingsView's "Grant" button (~534). Both are user actions.
+    US-003 ADDS a third user-triggered caller (menubar 'Fix Permissions…') and
+    should light the glyph (QuipMacApp.swift:191-194) on
+    `permissionsNeedAttention || anyDenied`.
+  - US-003 can clear `permissionsNeedAttention` on its user action too, but note
+    broadcastPermissions already auto-clears it once everything is re-granted, so
+    the glyph won't get stuck after a successful re-grant even without an explicit
+    dismiss.
+---

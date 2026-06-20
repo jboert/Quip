@@ -574,20 +574,25 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // from suppressing the very first send.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.broadcastPermissions(force: true)
-            // Screen Recording self-check. Every `QuipMac/` rebuild bumps the
-            // binary's cdhash, and macOS TCC revokes Screen Recording on any
-            // cdhash change even with our stable signing — so a fresh install
-            // frequently lands with screencapture silently denied and the
-            // iPhone falling back to text mode. Without this check, the user
-            // only notices minutes later when they look at the phone. Probe
-            // directly and pop the Screen Recording pane immediately so the
-            // re-grant step is in their face on the next launch after a
-            // rebuild. Skipped when iTerm automation or Accessibility are
-            // the only issues (those tend to survive cdhash changes and
-            // bothering the user with the wrong pane is noisier than the
-            // problem).
-            if !CGPreflightScreenCaptureAccess() {
-                self.openSettingsPane(.screenRecording)
+            // Rebuild-aware re-grant nudge (US-002, GH #33). Every `QuipMac/`
+            // rebuild bumps the binary's cdhash, and macOS TCC revokes
+            // Accessibility / Screen Recording / Automation on the change even
+            // with our stable signing — so a fresh install frequently lands with
+            // a grant silently denied. The OLD code reacted by FORCE-OPENING the
+            // Screen Recording pane on EVERY launch a probe came back false,
+            // including steady-state launches that merely lost a grant to a
+            // beta-OS hiccup — yanking the user into System Settings unbidden.
+            // Instead: only when we can tell we were just rebuilt (cdhash changed
+            // since last launch) AND a permission actually preflights false, raise
+            // the quiet `permissionsNeedAttention` signal that lights the menubar
+            // glyph + 'Fix Permissions…' (US-003). We NEVER open a pane on launch
+            // — the user re-grants on their own terms. The probe just ran
+            // (force:true above), so `permissionsStore` holds the fresh snapshot.
+            // `didCodeIdentityChangeSinceLastLaunch` has a store side effect, so
+            // call it exactly once per launch.
+            if CodeIdentity.didCodeIdentityChangeSinceLastLaunch(),
+               self.permissionsStore.deniedCount > 0 {
+                self.permissionsStore.permissionsNeedAttention = true
             }
         }
     }
@@ -597,6 +602,20 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     @MainActor
     private func broadcastPermissions(force: Bool) {
         let snapshot = permissionProbe.probe()
+        // Keep the quiet attention signal (US-002) truthful as grants change
+        // mid-session, WITHOUT ever opening a pane: a grant dropped (denied count
+        // rose vs the last snapshot) lights it; everything re-granted clears it so
+        // the menubar glyph can't get stuck. A constant denial leaves it as-is —
+        // a steady-state launch with an already-missing grant but an unchanged
+        // cdhash stays silent (the launch path gates the first raise on a rebuild;
+        // `lastPermissionsSnapshot` is nil on that first force:true probe, so the
+        // rise check below is skipped for the baseline).
+        if snapshot.deniedCount == 0 {
+            permissionsStore.permissionsNeedAttention = false
+        } else if let previous = lastPermissionsSnapshot,
+                  snapshot.deniedCount > previous.deniedCount {
+            permissionsStore.permissionsNeedAttention = true
+        }
         permissionsStore.snapshot = snapshot
         if !force, snapshot == lastPermissionsSnapshot { return }
         lastPermissionsSnapshot = snapshot

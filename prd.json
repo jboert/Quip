@@ -31,8 +31,8 @@
         "Gate: xcodebuild QuipMac (-swift-version 6) BUILD SUCCEEDED; verify NO launch code path calls openSettingsPane without an explicit user action; NEEDS a Mac rebuild to land (user's manual install/re-grant pass)"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Done 2026-06-20. Removed the unconditional openSettingsPane(.screenRecording) launch block (QuipMacApp.swift ~589). Replaced with a gated raise: in the 1.0s initial broadcast, CodeIdentity.didCodeIdentityChangeSinceLastLaunch() (called once/launch for its store side effect) AND permissionsStore.deniedCount > 0 → set permissionsStore.permissionsNeedAttention = true; never opens a pane. New @Observable property MacPermissionsStore.permissionsNeedAttention (Services/MacPermissionsStore.swift) — quiet signal, distinct from anyDenied. broadcastPermissions(force:) now keeps it truthful WITHOUT opening a pane: a dropped grant (deniedCount rises vs lastPermissionsSnapshot) raises it; all-granted (deniedCount==0) clears it; constant denial leaves as-is. First force:true probe has nil lastPermissionsSnapshot so the rise-check is skipped → steady-state launch with an already-missing grant + unchanged cdhash stays silent (AC#3). openSettingsPane now reachable ONLY via user action: phone open_mac_settings_pane handler (QuipMacApp.swift ~1689) + SettingsView Grant button — verified by grep, no launch path. Tests: +2 in Tests/MacPermissionsStoreTests.swift (default false, independent of anyDenied). Gate: xcodebuild macOS BUILD SUCCEEDED + TEST BUILD SUCCEEDED, no new warnings in changed files (pre-existing 'Bundle cloudflared' run-script warning only). NEEDS Mac rebuild to land — bundle with US-003 + manual US-004 for one re-grant pass; do not block on hardware verify."
     },
     {
       "id": "US-003",
