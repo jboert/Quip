@@ -313,6 +313,35 @@ struct MenuBarView: View {
         NSWorkspace.shared.open(url)
     }
 
+    // MARK: - Fix Permissions (US-003, GH #33)
+
+    private var fixPermissionsButton: some View {
+        Button {
+            fixPermissions()
+        } label: {
+            Label("Fix Permissions…", systemImage: "exclamationmark.shield")
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+
+    /// Open the System Settings pane(s) for whatever's currently denied, reusing
+    /// the live probe snapshot (kept fresh by the 5s broadcast) and the same
+    /// `MacSettingsPane` URLs as the per-row buttons. This is a user action — the
+    /// only launch-safe way a pane opens after US-002 removed the auto-open.
+    private func fixPermissions() {
+        for pane in permissionsStore.snapshot?.deniedPanes ?? [] {
+            openPane(pane)
+        }
+        // The user acted on the nudge — clear the quiet attention signal so the
+        // glyph reflects acknowledgment now. A still-denied perm keeps the glyph
+        // lit via `anyDenied`; broadcastPermissions clears it all on re-grant.
+        permissionsStore.permissionsNeedAttention = false
+    }
+
     // MARK: - Actions Section
 
     private var apnsWarningSection: some View {
@@ -338,6 +367,15 @@ struct MenuBarView: View {
 
     private var actionsSection: some View {
         VStack(spacing: 2) {
+            // 'Fix Permissions…' (US-003, GH #33) — pairs with the menubar
+            // warning glyph. Shown only when a perm is denied or the quiet
+            // `permissionsNeedAttention` signal is up, so the steady state stays
+            // clean. One click opens the System Settings pane(s) for whatever's
+            // currently missing; a pane never opens automatically on launch.
+            if permissionsStore.permissionsNeedAttention || permissionsStore.anyDenied {
+                fixPermissionsButton
+            }
+
             Button {
                 arrangeWindows()
             } label: {

@@ -1226,6 +1226,20 @@ struct MacPermissionsMessage: Codable, Sendable, Equatable {
     var deniedCount: Int {
         (accessibility ? 0 : 1) + (appleEvents ? 0 : 1) + (screenRecording ? 0 : 1)
     }
+
+    /// The System Settings panes for whatever's currently denied, in a stable
+    /// priority order (Accessibility → Automation → Screen Recording); empty
+    /// when everything is granted. Backs the menubar 'Fix Permissions…' action
+    /// (US-003, GH #33): one click opens the pane(s) for whatever's missing,
+    /// reusing the same `MacSettingsPane` URLs as the per-row buttons and the
+    /// phone's red-❌ taps. Apple Events maps to the `.automation` pane.
+    var deniedPanes: [MacSettingsPane] {
+        var panes: [MacSettingsPane] = []
+        if !accessibility { panes.append(.accessibility) }
+        if !appleEvents { panes.append(.automation) }
+        if !screenRecording { panes.append(.screenRecording) }
+        return panes
+    }
 }
 
 /// iPhone → Mac. Tap-to-open shortcut: Mac calls `NSWorkspace.shared.open(...)`

@@ -32,6 +32,43 @@ final class MacPermissionsStoreTests: XCTestCase {
         XCTAssertEqual(MacPermissionsMessage(accessibility: true, appleEvents: false, screenRecording: false).deniedCount, 2)
     }
 
+    // MARK: - MacPermissionsMessage.deniedPanes (US-003)
+
+    /// Backs the menubar 'Fix Permissions…' click — must stay in lockstep with
+    /// `deniedCount` (same source perms) and map each denial to the right pane.
+
+    func test_deniedPanes_allGranted_isEmpty() {
+        let m = MacPermissionsMessage(accessibility: true, appleEvents: true, screenRecording: true)
+        XCTAssertEqual(m.deniedPanes, [])
+    }
+
+    func test_deniedPanes_allDenied_isAllThreeInPriorityOrder() {
+        let m = MacPermissionsMessage(accessibility: false, appleEvents: false, screenRecording: false)
+        XCTAssertEqual(m.deniedPanes, [.accessibility, .automation, .screenRecording])
+    }
+
+    func test_deniedPanes_mapsEachPermToItsPane() {
+        XCTAssertEqual(MacPermissionsMessage(accessibility: false, appleEvents: true, screenRecording: true).deniedPanes, [.accessibility])
+        // appleEvents denied → the .automation pane (not an .appleEvents case).
+        XCTAssertEqual(MacPermissionsMessage(accessibility: true, appleEvents: false, screenRecording: true).deniedPanes, [.automation])
+        XCTAssertEqual(MacPermissionsMessage(accessibility: true, appleEvents: true, screenRecording: false).deniedPanes, [.screenRecording])
+    }
+
+    func test_deniedPanes_pairKeepsPriorityOrder() {
+        XCTAssertEqual(MacPermissionsMessage(accessibility: false, appleEvents: true, screenRecording: false).deniedPanes, [.accessibility, .screenRecording])
+    }
+
+    func test_deniedPanes_countMatchesDeniedCount() {
+        for a in [true, false] {
+            for e in [true, false] {
+                for s in [true, false] {
+                    let m = MacPermissionsMessage(accessibility: a, appleEvents: e, screenRecording: s)
+                    XCTAssertEqual(m.deniedPanes.count, m.deniedCount)
+                }
+            }
+        }
+    }
+
     // MARK: - MacPermissionsStore
 
     func test_store_nilSnapshot_reportsZeroAndFalse() {

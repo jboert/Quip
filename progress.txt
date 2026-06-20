@@ -855,3 +855,77 @@ Thread: (ralph/local — no AMP thread id)
     the glyph won't get stuck after a successful re-grant even without an explicit
     dismiss.
 ---
+
+## 2026-06-20 — US-003 (Menubar 'Fix Permissions…' affordance) [GH #33 Mac TCC batch]
+Thread: (ralph/local — no AMP thread id)
+- LAST layer-1 story of the GH #33 prd.json → ALL 3 now pass:true (US-004/005
+  signing overhaul stays MANUAL + EXCLUDED per the PRD).
+- Menubar warning glyph (QuipMacApp.swift ~191): systemImage condition widened from
+  `permissionsStore.anyDenied` to `(permissionsStore.anyDenied ||
+  permissionsStore.permissionsNeedAttention)` → the quiet US-002 re-grant signal
+  (raised on a rebuild-detected launch with a denied perm) now lights the triangle,
+  not just a live probe-false. (anyDenied already == any probed perm false.)
+- New 'Fix Permissions…' item in MenuBarView.actionsSection (QuipMac/Views/
+  MenuBarView.swift), placed FIRST in the actions VStack and gated on
+  `permissionsNeedAttention || anyDenied` so the steady-state menu stays clean.
+  `fixPermissions()` loops `permissionsStore.snapshot?.deniedPanes` (the live probe
+  snapshot, kept fresh by the 5s broadcast) and calls the existing `openPane(_:)`
+  for each — same `MacSettingsPane.systemSettingsURL → NSWorkspace.shared.open`
+  mechanism as the per-row buttons, the phone red-❌ taps, and SettingsView Grant.
+  Then sets `permissionsStore.permissionsNeedAttention = false` as the user's
+  acknowledgment of the nudge (a still-denied perm keeps the glyph lit via
+  anyDenied; broadcastPermissions clears everything on a successful re-grant, so
+  the glyph never sticks).
+- New pure `MacPermissionsMessage.deniedPanes: [MacSettingsPane]` in
+  Shared/MessageProtocol.swift (mirrors `deniedCount`): maps each denied perm to
+  its pane in a stable priority order — Accessibility → Automation → ScreenRecording;
+  appleEvents denial maps to `.automation` (there is no `.appleEvents` pane case).
+  This is the testable seam the menu consumes (a private computed var on a SwiftUI
+  View isn't unit-testable, but the message extension is).
+- AC#3 (pane-open is user-action-only) verified by grep over every call site:
+  phone `open_mac_settings_pane` handler (~1709), SettingsView Grant (~534),
+  MenuBarView permissionRow + the new Fix Permissions, and the failed-arrange
+  Accessibility nudge (~2031, fires only on a user/phone arrange that fails) —
+  NONE on a launch path. The US-002 launch gate (~593) only sets
+  permissionsNeedAttention; it never opens a pane.
+- Tests: +5 in QuipMac/Tests/MacPermissionsStoreTests.swift (allGranted→empty;
+  allDenied→[.accessibility,.automation,.screenRecording]; each perm→its pane incl.
+  appleEvents→.automation; pair keeps priority order; deniedPanes.count == deniedCount
+  across all 8 combos).
+- Files: Shared/MessageProtocol.swift, QuipMac/QuipMacApp.swift,
+  QuipMac/Views/MenuBarView.swift, QuipMac/Tests/MacPermissionsStoreTests.swift,
+  prd.json, progress.txt. NO new files → NO xcodegen/pbxproj change.
+- Gate: `xcodebuild build -project QuipMac.xcodeproj -scheme QuipMac -destination
+  'platform=macOS'` → ** BUILD SUCCEEDED **; `xcodebuild build-for-testing …` →
+  ** TEST BUILD SUCCEEDED ** (new cases compile into QuipMacTests). No new warnings
+  in changed files (only pre-existing appintents-metadata + cloudflared run-script
+  notes). Standalone `swift denied_panes_oracle.swift` logic check 14/14 PASS
+  (headless `xcodebuild test` still hangs: TEST_HOST = full Quip.app). Native
+  SwiftUI → the Ralph browser-testing step does NOT apply.
+- This story NEEDS a Mac rebuild to land (wipes TCC once = the user's one manual
+  install/re-grant pass). Per the PRD + reference_quip_install_recipe, install +
+  on-device verify (glyph lights after a rebuild that drops a grant; 'Fix
+  Permissions…' opens the right pane(s); steady-state launch stays silent) is the
+  USER's pass — NOT blocked here. Ideally lands in ONE rebuild with US-001/002
+  (+ manual US-004) so the user re-grants exactly once.
+- **Learnings for future iterations:**
+  - The menubar glyph is the MenuBarExtra `systemImage:` arg in QuipMacApp.swift
+    (~191), NOT a view inside MenuBarView — so AC#1 (glyph condition) is a
+    QuipMacApp edit, while AC#2 (menu item) is a MenuBarView edit. Two files for
+    one "menubar" story.
+  - MenuBarView can't call QuipMacApp's `private func openSettingsPane` (separate
+    struct), but it already has its own identical `openPane(_:)` (same
+    `pane.systemSettingsURL → NSWorkspace.open`). "Reuse openSettingsPane" in the
+    AC means reuse the MECHANISM/URLs (the shared `MacSettingsPane`), not the exact
+    symbol — `openPane` is the in-view twin.
+  - Put the per-perm→pane mapping on `MacPermissionsMessage` (deniedPanes), not in
+    the View: it parallels deniedCount, is pure/Sendable, and is the only
+    unit-testable home (the menu's gating/loop lives in a private View member that
+    XCTest can't reach). Add the count-parity test so deniedPanes and deniedCount
+    can't silently drift if a 4th TCC perm is ever added.
+  - Opening multiple `x-apple.systempreferences:` URLs in one tap: macOS System
+    Settings surfaces the LAST pane (single-window app), but all three Privacy
+    panes are adjacent under Privacy & Security so the others are one click away;
+    the per-row buttons remain for granular single-pane opens. Acceptable per the
+    AC's "pane(s)" wording.
+---

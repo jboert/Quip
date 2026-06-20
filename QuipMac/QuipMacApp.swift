@@ -189,7 +189,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         .defaultSize(width: 960, height: 640)
 
         MenuBarExtra("Quip",
-                     systemImage: permissionsStore.anyDenied
+                     systemImage: (permissionsStore.anyDenied
+                                   || permissionsStore.permissionsNeedAttention)
                         ? "exclamationmark.triangle.fill"
                         : "waveform.circle.fill") {
             MenuBarView()
