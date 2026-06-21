@@ -362,6 +362,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // each other every ~30-60s). Local/cloudflare modes still advertise.
         if networkMode != .tailscale {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                // Re-check at fire time: the user could have switched to Tailscale
+                // within the 0.5s, whose onChange already called stopAdvertising().
+                // Without this guard the stale start would fire after the stop and
+                // re-enable LAN advertising in Tailscale mode (the flap we prevent).
+                guard self.networkMode != .tailscale else { return }
                 bonjourAdvertiser.startAdvertising()
             }
         }
