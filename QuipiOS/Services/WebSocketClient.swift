@@ -269,11 +269,22 @@ final class WebSocketClient {
     /// Force-restarts the connection after the stall threshold.
     private var stuckWatchdogTask: Task<Void, Never>?
     private var connectingStartedAt: Date?
+    /// Fires if the server never returns an `auth_result` after the transport
+    /// connected. The stuck watchdog only guards the `isConnecting` window,
+    /// which ends on ping-success — so without this a transport-up but
+    /// auth-dead path (e.g. a Tailscale socket that opens but never speaks)
+    /// would hang forever with no multi-URL failover.
+    private var authTimeoutTask: Task<Void, Never>?
 
     /// Stall threshold for the watchdog — once `isConnecting` has been true
     /// this long without progress, the watchdog rips the socket down and
     /// re-runs `establishConnection` so the user isn't stuck on "Connecting…".
     private static let stuckThresholdSec: TimeInterval = 25
+
+    /// Budget for the server's first `auth_result` after the transport
+    /// connects. No reply within this → the path is app-layer-dead; tear it
+    /// down so `connect(toURLs:)` advances to the next candidate URL.
+    private static let authTimeoutSeconds: TimeInterval = 6
 
     /// Diagnostic ring buffer — last 30 connection events with timestamps.
     /// Surfaced via `recentConnectionEvents` for the in-app diag panel.
@@ -506,6 +517,26 @@ final class WebSocketClient {
         }
     }
 
+    /// Fail over when the transport connected but the server never returned an
+    /// `auth_result`. Once ping-success flips `isConnecting` false, the stuck
+    /// watchdog goes dormant and nothing else times out the "awaiting
+    /// authentication" state — so a half-open path (observed: a Tailscale
+    /// socket that opens but never speaks) would hang indefinitely. Cancelled
+    /// the moment ANY auth_result arrives (success / failure / auth_required),
+    /// which proves the app layer is alive on this URL.
+    private func startAuthTimeout() {
+        authTimeoutTask?.cancel()
+        authTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.authTimeoutSeconds * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            if !self.isAuthenticated, !self.intentionalDisconnect {
+                self.logEvent("auth timeout after \(Int(Self.authTimeoutSeconds))s — no auth_result; failing over")
+                self.lastDisconnectReason = .stalled(seconds: Int(Self.authTimeoutSeconds))
+                self.handleDisconnect()
+            }
+        }
+    }
+
     /// Append a timestamped line to the diagnostic ring buffer (cap 30) and
     /// echo to NSLog. Cheap; called from connection lifecycle transitions so
     /// the in-app diag panel can show what actually happened without the user
@@ -578,6 +609,8 @@ final class WebSocketClient {
         reconnectTask = nil
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = nil
+        authTimeoutTask?.cancel()
+        authTimeoutTask = nil
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         session?.invalidateAndCancel()
@@ -914,8 +947,14 @@ final class WebSocketClient {
                     self.lastError = nil
                     self.lastDisconnectReason = nil
                     self.reconnectDelay = 1.0
-                    self.hasEverConnectedOnCurrentURL = true
+                    // Do NOT mark hasEverConnectedOnCurrentURL here: the
+                    // transport is up but UNauthenticated. Marking it now would
+                    // suppress the multi-URL failover (see connect(toURLs:) /
+                    // the `!hasEverConnectedOnCurrentURL` guard) and strand us
+                    // on a path that opens but never returns auth_result. It is
+                    // set on auth_result success instead.
                     self.startKeepalive()
+                    self.startAuthTimeout()
                     // Don't send auth eagerly — wait for the server's first
                     // auth_result message which carries the auth_required
                     // signal. On a Mac with `requireAuth=false` the server
@@ -1022,6 +1061,11 @@ final class WebSocketClient {
         case "auth_result":
             if let msg = Self.decodeMessage(AuthResultMessage.self, from: data, msgType: peek.type) {
                 NSLog("[WebSocketClient] auth_result: success=%d error=%@", msg.success ? 1 : 0, msg.error ?? "none")
+                // App layer is alive on this URL (any auth_result — success,
+                // failure, or auth_required — proves the server is speaking),
+                // so the transport-up/auth-dead failover no longer applies.
+                authTimeoutTask?.cancel()
+                authTimeoutTask = nil
                 // "auth_required" is the server's connection-ready signal —
                 // server wants a PIN. Send the cached one if we have it,
                 // else surface the prompt to the UI.
@@ -1035,6 +1079,10 @@ final class WebSocketClient {
                 }
                 if msg.success {
                     isAuthenticated = true
+                    // Only now is this URL proven fully usable — mark it so the
+                    // multi-URL failover stops treating it as a candidate to
+                    // abandon. (Set here, NOT on ping-success — see startAuthTimeout.)
+                    hasEverConnectedOnCurrentURL = true
                     authError = nil
                     // §B5: tell the Mac who we are so its MenuBarExtra and
                     // Settings → Connection list can show "iPhone 17 Pro Max"
