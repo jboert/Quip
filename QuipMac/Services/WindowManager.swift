@@ -555,6 +555,10 @@ final class WindowManager {
     /// iTerm2 window titles are frequently duplicated across windows — same
     /// process, same cwd → same title → collision.
     struct Iterm2SessionInfo: Sendable {
+        /// iTerm2's `id of w`, which equals the CGWindowID — lets us join a
+        /// session to its tracked window EXACTLY instead of fuzzy-matching by
+        /// bounds. 0 if an older iTerm build didn't report it.
+        let windowNumber: CGWindowID
         let bounds: CGRect
         let uuid: String
         /// Tty device name (e.g. "ttys009") for this session. Used to find
@@ -744,10 +748,13 @@ final class WindowManager {
         // with top-left origin — same as CGWindowList. We join the four with
         // commas and use TAB to separate from the UUID so titles (or UUIDs
         // containing punctuation) can't confuse the parser.
+        // Leading `id of w` (== CGWindowID) is the exact join key; bounds stay
+        // as a fallback for older iTerm builds. TAB-separated: wid, coords, uid, tty.
         let script = """
         set output to ""
         tell application "iTerm2"
             repeat with w in windows
+                set wid to id of w
                 set {l, t, r, b} to bounds of w
                 tell current session of w
                     set uid to unique id
@@ -757,7 +764,7 @@ final class WindowManager {
                         set ttyPath to ""
                     end try
                 end tell
-                set output to output & l & "," & t & "," & r & "," & b & "\\t" & uid & "\\t" & ttyPath & linefeed
+                set output to output & wid & "\\t" & l & "," & t & "," & r & "," & b & "\\t" & uid & "\\t" & ttyPath & linefeed
             end repeat
         end tell
         return output
@@ -770,19 +777,19 @@ final class WindowManager {
 
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")
-            // Accept 2 fields (no tty, older iTerm) or 3 (with tty).
-            guard parts.count >= 2 else { continue }
-            let coords = parts[0].components(separatedBy: ",")
+            // wid, coords, uid required; tty optional (older iTerm).
+            guard parts.count >= 3, let wid = Int(parts[0]) else { continue }
+            let coords = parts[1].components(separatedBy: ",")
             guard coords.count == 4,
                   let l = Double(coords[0]), let t = Double(coords[1]),
                   let r = Double(coords[2]), let b = Double(coords[3]) else { continue }
             let bounds = CGRect(x: l, y: t, width: r - l, height: b - t)
-            let uuid = parts[1]
+            let uuid = parts[2]
             // iTerm returns full device path like "/dev/ttys009". Strip to just
             // "ttys009" so it matches ps's `tt` column.
-            let rawTty = parts.count >= 3 ? parts[2] : ""
+            let rawTty = parts.count >= 4 ? parts[3] : ""
             let tty = rawTty.hasPrefix("/dev/") ? String(rawTty.dropFirst(5)) : rawTty
-            result.append(Iterm2SessionInfo(bounds: bounds, uuid: uuid, tty: tty))
+            result.append(Iterm2SessionInfo(windowNumber: CGWindowID(wid), bounds: bounds, uuid: uuid, tty: tty))
         }
         return result
     }
@@ -870,13 +877,41 @@ final class WindowManager {
 
         var claimedUUIDs: Set<String> = []
 
-        // Build (CG-window-index, best-session-index, dist²) triples, then
-        // assign in ascending-distance order so the *most confident* matches
-        // claim their UUIDs first. Shakier matches either fall back to the
-        // next-best unclaimed session or end up nil.
+        // Clear stale assignments before re-matching this pass.
+        for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+            windows[i].iterm2SessionId = nil
+            windows[i].iterm2Tty = nil
+        }
+
+        // PASS 1 — exact window-id join. iTerm2's `id of w` equals the CGWindowID
+        // we track as `windowNumber`, so this is a precise, bounds-independent
+        // match. It's robust against the failure that left windows permanently
+        // "iTerm2 session not yet mapped": a window whose AppleScript bounds drift
+        // >40px from its CG bounds (moved/resized between snapshots, title-bar
+        // offset, or multi-monitor coordinate skew) would never clear the bounds
+        // tolerance under the old matcher. Skip sessions with windowNumber == 0
+        // (older iTerm builds that didn't report an id) — those fall to Pass 2.
+        let sessionByWindow: [CGWindowID: Iterm2SessionInfo] = Dictionary(
+            sessions.filter { $0.windowNumber != 0 }.map { ($0.windowNumber, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+            guard let s = sessionByWindow[windows[i].windowNumber],
+                  !claimedUUIDs.contains(s.uuid) else { continue }
+            windows[i].iterm2SessionId = s.uuid
+            windows[i].iterm2Tty = s.tty.isEmpty ? nil : s.tty
+            claimedUUIDs.insert(s.uuid)
+        }
+
+        // PASS 2 — bounds fallback for any iTerm window the id-join didn't cover.
+        // Build (CG-window-index, best-session-index, dist²) triples, then assign
+        // in ascending-distance order so the *most confident* matches claim their
+        // UUIDs first. Shakier matches fall back to the next-best unclaimed
+        // session or end up nil.
         struct Candidate { let windowIndex: Int; let sessionIndex: Int; let distSq: CGFloat }
         var candidates: [Candidate] = []
-        for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+        for i in windows.indices
+        where windows[i].bundleId == iterm2BundleId && windows[i].iterm2SessionId == nil {
             let target = windows[i].bounds
             for (sIdx, session) in sessions.enumerated() {
                 let dx = session.bounds.midX - target.midX
@@ -886,9 +921,6 @@ final class WindowManager {
                 let distSq = dx * dx + dy * dy + dw * dw + dh * dh
                 candidates.append(Candidate(windowIndex: i, sessionIndex: sIdx, distSq: distSq))
             }
-            // Clear any stale assignment before re-matching on this pass.
-            windows[i].iterm2SessionId = nil
-            windows[i].iterm2Tty = nil
         }
         candidates.sort { $0.distSq < $1.distSq }
 
