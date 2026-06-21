@@ -415,7 +415,13 @@ final class BackendConnectionManager {
         KeychainBackendPINs.write(backendID: backendID, pin: pin)
         var allURLs = paired[i].urlsInOrder
         if !allURLs.contains(url) { allURLs.append(url) }
-        allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+        // Use the shared Tailscale-first ordering so the re-pair path agrees
+        // with load/dedup (mergeSameIDRows/mergeRows). Previously this sorted
+        // purely by urlPriority (LAN-first), so re-pairing a known Mac flipped
+        // the primary vs a restart — silent URL-order churn. Safe to prefer
+        // Tailscale now that a stalled TS primary auto-fails-over to LAN
+        // (see WebSocketClient.startAuthTimeout).
+        allURLs = Self.mergedURLOrder(allURLs)
         paired[i].url = allURLs.first ?? paired[i].url
         paired[i].fallbackURLs = Array(allURLs.dropFirst())
         paired[i].lastUsed = Date()
