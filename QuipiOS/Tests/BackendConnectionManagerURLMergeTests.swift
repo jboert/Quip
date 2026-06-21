@@ -134,4 +134,54 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged[0].urlsInOrder, [lan, ts])
     }
+
+    // MARK: - consolidateByMonitorName (dual-backend flap one-shot)
+
+    func testConsolidateByMonitorNameFoldsDisjointURLsSameName() {
+        let rows = [
+            PairedBackend(id: "legacy-x", url: lan, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "UUID-A",   url: ts,  name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+        ]
+        let out = BackendConnectionManager.consolidateByMonitorName(rows)
+        XCTAssertEqual(out.count, 1, "Same-Mac rows fold even with disjoint URLs + different ids")
+        XCTAssertEqual(out[0].id, "UUID-A", "Real-UUID row survives, not the legacy one")
+        XCTAssertEqual(out[0].urlsInOrder, [ts, lan], "URLs unioned Tailscale-first")
+    }
+
+    func testConsolidateByMonitorNameKeepsNilName() {
+        let rows = [
+            PairedBackend(id: "a", url: lan, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "b", url: ts,  name: "Mac", lastSeenLayoutMonitorName: nil),
+        ]
+        XCTAssertEqual(BackendConnectionManager.consolidateByMonitorName(rows).count, 2,
+                       "nil monitor name is not evidence of sameness — never merge")
+    }
+
+    func testConsolidateByMonitorNameKeepsBothNil() {
+        let rows = [
+            PairedBackend(id: "a", url: lan, name: "Mac", lastSeenLayoutMonitorName: nil),
+            PairedBackend(id: "b", url: ts,  name: "Mac", lastSeenLayoutMonitorName: nil),
+        ]
+        XCTAssertEqual(BackendConnectionManager.consolidateByMonitorName(rows).count, 2)
+    }
+
+    func testConsolidateByMonitorNameKeepsDifferentNames() {
+        let rows = [
+            PairedBackend(id: "a", url: lan, name: "Mac A", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "b", url: ts,  name: "Mac B", lastSeenLayoutMonitorName: "LG UltraFine"),
+        ]
+        XCTAssertEqual(BackendConnectionManager.consolidateByMonitorName(rows).count, 2,
+                       "Different monitor names = different Macs — never merge")
+    }
+
+    func testConsolidateByMonitorNameIdempotent() {
+        let rows = [
+            PairedBackend(id: "legacy-x", url: lan, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "UUID-A",   url: ts,  name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+        ]
+        let once = BackendConnectionManager.consolidateByMonitorName(rows)
+        let twice = BackendConnectionManager.consolidateByMonitorName(once)
+        XCTAssertEqual(once.map(\.urlsInOrder), twice.map(\.urlsInOrder))
+        XCTAssertEqual(twice.count, 1)
+    }
 }

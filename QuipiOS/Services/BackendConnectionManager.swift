@@ -660,6 +660,24 @@ final class BackendConnectionManager {
                 }
                 savePaired()
             }
+            // V3 one-shot: fold PRE-EXISTING duplicate rows the id/URL passes
+            // above can't catch — different ids, disjoint URL sets, same Mac (a
+            // LAN row + a Tailscale row whose second path never authed, so its
+            // id never rekeyed). Matches on the Mac's monitor display name with
+            // a strict both-non-nil-and-equal guard, so two differently-named
+            // Macs never merge. One-shot so a false positive can't recur.
+            if !defaults.bool(forKey: "pairedDupMonitorMigrationV3Done") {
+                let beforeMon = paired.count
+                paired = Self.consolidateByMonitorName(paired)
+                defaults.set(true, forKey: "pairedDupMonitorMigrationV3Done")
+                if paired.count != beforeMon {
+                    NSLog("[Quip][Backends] Monitor-name dedup: %d → %d rows", beforeMon, paired.count)
+                    if !paired.contains(where: { $0.id == activeBackendID }) {
+                        activeBackendID = paired.first?.id ?? ""
+                    }
+                    savePaired()
+                }
+            }
             return
         }
         // Migrate from the legacy single-backend layout: `lastURL` holds one
@@ -726,6 +744,33 @@ final class BackendConnectionManager {
             } else {
                 kept.append(row)
             }
+        }
+        return kept
+    }
+
+    /// One-shot dedup for PRE-EXISTING duplicates that `mergeSameIDRows` cannot
+    /// fold — rows with DIFFERENT ids AND disjoint URL sets that are actually
+    /// the same Mac (a LAN row + a Tailscale row whose second path never
+    /// completed auth, so its synthetic `legacy-` id was never rekeyed). The
+    /// only persisted same-Mac signal left is the Mac's monitor display name.
+    /// Folds ONLY when both rows have a non-nil, non-empty, EQUAL
+    /// `lastSeenLayoutMonitorName` and different ids — nil is not evidence of
+    /// sameness, so a never-connected row is never merged. The real-UUID row
+    /// (non-`legacy-` id) is kept as the survivor. Run once (migration-gated)
+    /// so a false positive on two same-named Macs can't recur every launch.
+    static func consolidateByMonitorName(_ entries: [PairedBackend]) -> [PairedBackend] {
+        var kept: [PairedBackend] = []
+        for row in entries {
+            guard let name = row.lastSeenLayoutMonitorName, !name.isEmpty,
+                  let i = kept.firstIndex(where: {
+                      $0.lastSeenLayoutMonitorName == name && $0.id != row.id
+                  }) else {
+                kept.append(row)
+                continue
+            }
+            // Keep the real-UUID row as survivor (mergeRows takes group[0]'s id).
+            let pair = row.id.hasPrefix("legacy-") ? [kept[i], row] : [row, kept[i]]
+            kept[i] = Self.mergeRows(pair)
         }
         return kept
     }
