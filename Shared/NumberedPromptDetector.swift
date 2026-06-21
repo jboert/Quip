@@ -44,7 +44,7 @@ enum NumberedPromptDetector {
         bestRun(in: content)?.map(\.number)
     }
 
-    private struct Match { let number: Int; let hasMarker: Bool; let normalized: String }
+    private struct Match { let number: Int; let hasMarker: Bool; let normalized: String; let letter: Character? }
 
     /// Find the longest contiguous run of numbered-option lines that contains
     /// at least one `❯`/`>` marker (Claude's prompt block). Shared by `detect`
@@ -66,13 +66,19 @@ enum NumberedPromptDetector {
         var current: [Match] = []
         var best: [Match] = []
         func flush() {
-            if current.contains(where: \.hasMarker), current.count > best.count {
+            // Accept a run when EITHER an agent cursor marker proves it's a
+            // live prompt, OR the block is a sequential-lettered choice menu
+            // (`1. A — …`, `2. B — …`) — that number+letter lockstep is
+            // unmistakably a choice set, never prose, so buttons render even
+            // when the agent typed the options without a `❯` selector. (§18.1)
+            if current.contains(where: \.hasMarker) || isLetteredChoiceRun(current),
+               current.count > best.count {
                 best = current
             }
         }
         for line in tail {
             if let (n, marker) = parseNumberedLine(line) {
-                let m = Match(number: n, hasMarker: marker, normalized: normalizedOptionLine(line))
+                let m = Match(number: n, hasMarker: marker, normalized: normalizedOptionLine(line), letter: choiceLetter(in: line))
                 if let last = current.last, n == last.number + 1 {
                     current.append(m)
                 } else if n == 1 {
@@ -187,6 +193,45 @@ enum NumberedPromptDetector {
         // appears in some compact TUI prompt renderers.
         guard rest.hasPrefix(". ") || rest.hasPrefix(") ") || rest.hasPrefix(": ") else { return nil }
         return (n, hasMarker)
+    }
+
+    /// Extract the single-letter choice label a line carries after its
+    /// numbered separator, e.g. `1. A — …` → `A`, or nil when the body
+    /// isn't a bare `<Letter><boundary>` label. The letter must be a lone
+    /// A–Z immediately followed by a non-alphanumeric boundary so prose
+    /// like `1. Add the file` (body starts `Ad…`) is rejected — only a true
+    /// label such as `A —` / `A)` / `A.` / `A ` matches. (§18.1)
+    static func choiceLetter(in line: String) -> Character? {
+        var rest = Substring(stripANSI(line).trimmingCharacters(in: .whitespaces))
+        if let marker = promptMarkerPrefix(in: String(rest)) {
+            rest = rest.dropFirst(marker.count)
+        }
+        while let c = rest.first, c.isNumber { rest = rest.dropFirst() }
+        guard rest.hasPrefix(". ") || rest.hasPrefix(") ") || rest.hasPrefix(": ") else { return nil }
+        rest = rest.dropFirst(2)
+        while rest.first == " " { rest = rest.dropFirst() }
+        guard let letter = rest.first, ("A"..."Z").contains(letter) else { return nil }
+        rest = rest.dropFirst()
+        // Next char must be a boundary (space / punctuation / end), not a
+        // continuation — this is what separates the label `A —` from the
+        // word `Add`.
+        if let next = rest.first, next.isLetter || next.isNumber { return nil }
+        return letter
+    }
+
+    /// True when a run is a sequential-lettered choice menu: every line
+    /// carries a lone label letter in lockstep with its position (line 1 →
+    /// `A`, line 2 → `B`, …). Lets a marker-less block still register as a
+    /// real prompt without re-opening the prose false-positive the `❯`
+    /// marker requirement otherwise guards against. (§18.1)
+    private static func isLetteredChoiceRun(_ run: [Match]) -> Bool {
+        guard run.count >= 2 else { return false }
+        for (i, m) in run.enumerated() {
+            guard let letter = m.letter,
+                  let expected = UnicodeScalar(65 + i).map(Character.init),
+                  letter == expected else { return false }
+        }
+        return true
     }
 
     private static let promptMarkers = ["❯ ", "› ", "> "]

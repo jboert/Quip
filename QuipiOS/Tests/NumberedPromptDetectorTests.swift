@@ -155,6 +155,54 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
     }
 
+    // MARK: - Lettered choice menus (§18.1)
+
+    func test_letteredChoiceMenu_noCursorMarker_detected() {
+        // Claude often prints a labeled choice menu as prose with NO cursor
+        // marker — each line dual-enumerated `<n>. <Letter> — …`. The
+        // sequential number+letter lockstep (1→A, 2→B, 3→C) is an
+        // unmistakable choice block, so buttons must render even without `❯`.
+        let content = """
+        …parseTextNote already shipped; pick the surface:
+        1. A — inline dossier field
+        2. B — "+ Note" compose sheet
+        3. C — unified Voice|Type toggle
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2, 3])
+    }
+
+    func test_letteredChoiceMenu_otherLabelSeparators_detected() {
+        // `A)` and `A.` label forms count too, not only `A —`.
+        let content = """
+        Pick one:
+        1. A) keep
+        2. B. drop
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
+    }
+
+    func test_letteredLookalike_capitalWords_notDetected() {
+        // Bodies start with capital letters but are WORDS, not lone labels —
+        // must stay prose (no buttons), preserving the marker-gate precision.
+        let content = """
+        Steps:
+        1. Add the file.
+        2. Build the target.
+        3. Commit the change.
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+    }
+
+    func test_letteredRun_notStartingAtA_notDetected() {
+        // A lettered run must start at A and increment in lockstep; a block
+        // that opens at B is suspect → treat as prose.
+        let content = """
+        1. B — foo
+        2. C — bar
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+    }
+
     // MARK: - Helper coverage
 
     func test_parseNumberedLine_pickup() {
@@ -167,5 +215,14 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertEqual(NumberedPromptDetector.parseNumberedLine("  10. Later")?.0, 10)
         XCTAssertNil(NumberedPromptDetector.parseNumberedLine("plain prose"))
         XCTAssertNil(NumberedPromptDetector.parseNumberedLine("1- bad separator"))
+    }
+
+    func test_choiceLetter_extraction() {
+        XCTAssertEqual(NumberedPromptDetector.choiceLetter(in: "1. A — inline dossier field"), "A")
+        XCTAssertEqual(NumberedPromptDetector.choiceLetter(in: "  2. B \"+ Note\""), "B")
+        XCTAssertEqual(NumberedPromptDetector.choiceLetter(in: "3. C) toggle"), "C")
+        XCTAssertNil(NumberedPromptDetector.choiceLetter(in: "1. Add the file"))   // word, not a label
+        XCTAssertNil(NumberedPromptDetector.choiceLetter(in: "1. add lowercase")) // lowercase, not a label
+        XCTAssertNil(NumberedPromptDetector.choiceLetter(in: "plain prose"))
     }
 }
