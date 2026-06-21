@@ -286,6 +286,11 @@ final class WebSocketClient {
     /// down so `connect(toURLs:)` advances to the next candidate URL.
     private static let authTimeoutSeconds: TimeInterval = 6
 
+    /// Pure, in-memory connection metrics for the diagnostics view / export.
+    private(set) var connectionMetrics = ConnectionMetrics()
+    /// Socket-start time for the in-flight attempt (drives time-to-auth).
+    private var connectStartedAt: Date?
+
     /// Diagnostic ring buffer — last 30 connection events with timestamps.
     /// Surfaced via `recentConnectionEvents` for the in-app diag panel.
     private var connectionEvents: [String] = []
@@ -549,6 +554,14 @@ final class WebSocketClient {
         NSLog("[WebSocketClient] %@", msg)
     }
 
+    /// Combined diagnostics text (metrics + recent events) for the in-app
+    /// diagnostics sheet and a future support export.
+    func diagnosticsReport() -> String {
+        connectionMetrics.formattedReport()
+            + "\n\nRecent events (\(connectionEvents.count)):\n"
+            + connectionEvents.joined(separator: "\n")
+    }
+
     func connect(to url: URL) {
         connect(toURLs: [url])
     }
@@ -597,6 +610,7 @@ final class WebSocketClient {
         currentURLIndex = nextIndex
         hasEverConnectedOnCurrentURL = false
         serverURL = connectURLs[nextIndex]
+        connectionMetrics.recordFailover()
         logEvent("advanceToNextURL: trying [\(nextIndex)] \(connectURLs[nextIndex].absoluteString)")
         return true
     }
@@ -881,6 +895,8 @@ final class WebSocketClient {
         // attempt so a ghost 6s task can't fire against this new connection.
         authTimeoutTask?.cancel()
         authTimeoutTask = nil
+        connectionMetrics.recordConnectAttempt()
+        connectStartedAt = Date()
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10
@@ -1088,6 +1104,10 @@ final class WebSocketClient {
                     // multi-URL failover stops treating it as a candidate to
                     // abandon. (Set here, NOT on ping-success — see startAuthTimeout.)
                     hasEverConnectedOnCurrentURL = true
+                    if let started = connectStartedAt {
+                        connectionMetrics.recordAuthSuccess(
+                            timeToAuthMs: Int(Date().timeIntervalSince(started) * 1000))
+                    }
                     authError = nil
                     // §B5: tell the Mac who we are so its MenuBarExtra and
                     // Settings → Connection list can show "iPhone 17 Pro Max"
@@ -1332,6 +1352,7 @@ final class WebSocketClient {
         keepaliveTask = nil
         authTimeoutTask?.cancel()
         authTimeoutTask = nil
+        connectionMetrics.recordDisconnect(reason: lastDisconnectReason?.label ?? "unknown")
         isConnected = false
         isConnecting = true
         if connectingStartedAt == nil { connectingStartedAt = Date() }
