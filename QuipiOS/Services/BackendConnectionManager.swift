@@ -244,6 +244,11 @@ final class BackendConnectionManager {
     /// at "Authenticating…" with no actual PIN entry field.
     func bootstrap() {
         for backend in paired {
+            // Guard against two paired rows sharing an id (a rekey/merge
+            // race): overwriting sessions[id] would orphan a still-wired,
+            // still-live client and produce the dual-socket flap. Keep the
+            // first; mergeSameIDRows should have collapsed these already.
+            if sessions[backend.id] != nil { continue }
             let session = BackendSession(backendID: backend.id, client: WebSocketClient())
             wire(session: session)
             sessions[backend.id] = session
@@ -1038,7 +1043,19 @@ final class BackendConnectionManager {
 
             // Rekey the synthetic legacy id to the daemon's real UUID.
             let oldID = session.backendID
-            if oldID == identity.deviceID { return }
+            if oldID == identity.deviceID {
+                // Defensive dedup: if another live session already owns this
+                // deviceID, THIS closure's session is a duplicate path to the
+                // same Mac (a bootstrap orphan, or a route that authenticated
+                // after this id was already rekeyed). Two live clients to one
+                // Mac are the dual-socket "flap" — tear this duplicate down so
+                // a single connection survives. The canonical session in
+                // `sessions` keeps its connection, PIN, and paired row.
+                if let canonical = self.sessions[oldID], canonical !== session {
+                    c.disconnect()
+                }
+                return
+            }
 
             // Same-Mac consolidation. If another backend row already holds
             // this deviceID, THIS session is a second path to the same Mac
