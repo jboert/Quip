@@ -585,15 +585,17 @@ final class WindowManager {
         set output to ""
         tell application "iTerm2"
             repeat with w in windows
-                set wid to id of w
-                tell current session of w
-                    try
-                        set p to variable named "path"
-                    on error
-                        set p to ""
-                    end try
-                end tell
-                set output to output & wid & ":" & p & linefeed
+                try
+                    set wid to id of w
+                    tell current session of w
+                        try
+                            set p to variable named "path"
+                        on error
+                            set p to ""
+                        end try
+                    end tell
+                    set output to output & wid & ":" & p & linefeed
+                end try
             end repeat
         end tell
         return output
@@ -656,18 +658,20 @@ final class WindowManager {
         set output to ""
         tell application "iTerm2"
             repeat with w in windows
-                set wid to id of w
-                set mini to miniaturized of w
-                tell current session of w
-                    set uid to unique id
-                    set t to name
-                    try
-                        set p to variable named "path"
-                    on error
-                        set p to ""
-                    end try
-                end tell
-                set output to output & wid & "\\t" & uid & "\\t" & t & "\\t" & p & "\\t" & mini & linefeed
+                try
+                    set wid to id of w
+                    set mini to miniaturized of w
+                    tell current session of w
+                        set uid to unique id
+                        set t to name
+                        try
+                            set p to variable named "path"
+                        on error
+                            set p to ""
+                        end try
+                    end tell
+                    set output to output & wid & "\\t" & uid & "\\t" & t & "\\t" & p & "\\t" & mini & linefeed
+                end try
             end repeat
         end tell
         return output
@@ -750,21 +754,29 @@ final class WindowManager {
         // containing punctuation) can't confuse the parser.
         // Leading `id of w` (== CGWindowID) is the exact join key; bounds stay
         // as a fallback for older iTerm builds. TAB-separated: wid, coords, uid, tty.
+        // Per-window `try`: a single window that throws (e.g. a hotkey/utility
+        // window with no `current session`, which raises -1728 "Can't get current
+        // session of item N") must NOT abort the whole repeat. Without this, ONE
+        // bad window makes executeAndReturnError fail → the function returns an
+        // EMPTY session list → EVERY iTerm window stays unmapped and all sends
+        // fail "iTerm2 session not yet mapped". Swallow + skip the bad window.
         let script = """
         set output to ""
         tell application "iTerm2"
             repeat with w in windows
-                set wid to id of w
-                set {l, t, r, b} to bounds of w
-                tell current session of w
-                    set uid to unique id
-                    try
-                        set ttyPath to tty
-                    on error
-                        set ttyPath to ""
-                    end try
-                end tell
-                set output to output & wid & "\\t" & l & "," & t & "," & r & "," & b & "\\t" & uid & "\\t" & ttyPath & linefeed
+                try
+                    set wid to id of w
+                    set {l, t, r, b} to bounds of w
+                    tell current session of w
+                        set uid to unique id
+                        try
+                            set ttyPath to tty
+                        on error
+                            set ttyPath to ""
+                        end try
+                    end tell
+                    set output to output & wid & "\\t" & l & "," & t & "," & r & "," & b & "\\t" & uid & "\\t" & ttyPath & linefeed
+                end try
             end repeat
         end tell
         return output

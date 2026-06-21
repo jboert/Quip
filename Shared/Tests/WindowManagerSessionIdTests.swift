@@ -42,8 +42,8 @@ final class WindowManagerSessionIdTests: XCTestCase {
         ]
 
         wm.applyIterm2SessionIds([
-            WindowManager.Iterm2SessionInfo(bounds: boundsA, uuid: "UUID-A", tty: "ttys001"),
-            WindowManager.Iterm2SessionInfo(bounds: boundsB, uuid: "UUID-B", tty: "ttys002")
+            WindowManager.Iterm2SessionInfo(windowNumber: 0, bounds:boundsA, uuid: "UUID-A", tty: "ttys001"),
+            WindowManager.Iterm2SessionInfo(windowNumber: 0, bounds:boundsB, uuid: "UUID-B", tty: "ttys002")
         ])
 
         XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-A",
@@ -64,7 +64,7 @@ final class WindowManagerSessionIdTests: XCTestCase {
         ]
 
         wm.applyIterm2SessionIds([
-            WindowManager.Iterm2SessionInfo(bounds: boundsInList, uuid: "UUID-X", tty: "ttys003")
+            WindowManager.Iterm2SessionInfo(windowNumber: 0, bounds:boundsInList, uuid: "UUID-X", tty: "ttys003")
         ])
 
         XCTAssertNil(wm.windows[0].iterm2SessionId,
@@ -131,11 +131,37 @@ final class WindowManagerSessionIdTests: XCTestCase {
         ]
 
         wm.applyIterm2SessionIds([
-            WindowManager.Iterm2SessionInfo(bounds: applescriptBounds, uuid: "UUID-CLOSE", tty: "ttys004")
+            WindowManager.Iterm2SessionInfo(windowNumber: 0, bounds:applescriptBounds, uuid: "UUID-CLOSE", tty: "ttys004")
         ])
 
         XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-CLOSE",
                        "Bounds within a few pixels should still match")
+    }
+
+    func testApplySessionIdsJoinsByExactWindowId() {
+        // Pass 1: a session reporting a windowNumber that matches a tracked window
+        // is assigned by exact id — regardless of bounds. This is the fix for
+        // windows whose AppleScript bounds drift past the match tolerance
+        // (moved/resized/multi-monitor) yet still need their session resolved.
+        let wm = WindowManager()
+        let cgBounds = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let farBounds = CGRect(x: 50_000, y: 50_000, width: 100, height: 100)
+
+        wm.windows = [
+            makeIterm2Window(id: "com.googlecode.iterm2.27318",
+                             name: "claude", windowNumber: 27318, bounds: cgBounds)
+        ]
+
+        // Session bounds are nowhere near the window's — only the windowNumber
+        // matches. Pass 1 must still resolve it (bounds match would never fire).
+        wm.applyIterm2SessionIds([
+            WindowManager.Iterm2SessionInfo(windowNumber: 27318, bounds: farBounds,
+                                            uuid: "UUID-EXACT", tty: "ttys005")
+        ])
+
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-EXACT",
+                       "Exact window-id join must win even when bounds are far apart")
+        XCTAssertEqual(wm.windows[0].iterm2Tty, "ttys005")
     }
 }
 #endif
