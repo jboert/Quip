@@ -101,4 +101,33 @@ enum DisconnectReason: Equatable, Sendable {
         case .unknown:          return "unknown"
         }
     }
+
+    /// User-facing one-liner for the §K pill / connection banner. Distinct from
+    /// `label` (diagnostic) — phrased for a person, and signals whether we're
+    /// auto-recovering ("…") or need them to act.
+    var userMessage: String {
+        switch self {
+        case .userInitiated:    return "Disconnected."
+        case .timedOut:         return "Couldn't reach your Mac — retrying…"
+        case .stalled:          return "Connection stalled — reconnecting…"
+        case .authFailed(let msg):
+            if let msg, !msg.isEmpty { return "Couldn't authenticate: \(msg)" }
+            return "Couldn't authenticate — check your PIN."
+        case .networkError:     return "Network changed — reconnecting…"
+        case .serverClosed:     return "Your Mac closed the connection — reconnecting…"
+        case .unknown:          return "Connection lost — reconnecting…"
+        }
+    }
+
+    /// True when the client auto-reconnects from this state (transient); false
+    /// when it needs the user (auth) or was user-initiated. Drives whether the
+    /// UI shows a "reconnecting" spinner vs an actionable prompt.
+    var isRetryable: Bool {
+        switch self {
+        case .timedOut, .stalled, .networkError, .serverClosed, .unknown:
+            return true
+        case .authFailed, .userInitiated:
+            return false
+        }
+    }
 }

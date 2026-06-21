@@ -1352,7 +1352,7 @@ final class WebSocketClient {
         keepaliveTask = nil
         authTimeoutTask?.cancel()
         authTimeoutTask = nil
-        connectionMetrics.recordDisconnect(reason: lastDisconnectReason?.label ?? "unknown")
+        connectionMetrics.recordDisconnect(reason: lastDisconnectReason?.tag ?? "unknown")
         isConnected = false
         isConnecting = true
         if connectingStartedAt == nil { connectingStartedAt = Date() }
