@@ -748,6 +748,20 @@ final class WebSocketServer {
         clients[idx].deviceID = msg.deviceID
         clients[idx].deviceName = msg.displayName
         clients[idx].deviceKind = msg.deviceKind
+
+        // Dedup the same phone reaching the Mac on two paths (LAN + Tailscale
+        // racing, or a socket the phone abandoned on reconnect). Drop any OTHER
+        // connection already claiming this deviceID and keep THIS (freshest)
+        // one: a genuine reconnect's new socket wins over a not-yet-reaped dead
+        // one, and the Mac stops fanning layout/TTS broadcasts out to two
+        // sockets that reset each other — the dual-socket "flap". The phone's
+        // own dedup converges to a single client; this just closes the Mac's
+        // half of the overlap window.
+        let stale = clients.filter { $0.connection !== connection && $0.deviceID == msg.deviceID }
+        for s in stale {
+            Self.wslog("dedup: dropping older connection for deviceID \(msg.deviceID) (\(s.remoteDescription ?? "?"))")
+            removeConnection(s.connection)
+        }
         refreshConnectedClients()
     }
 
