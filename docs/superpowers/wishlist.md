@@ -6,6 +6,20 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Wishlist — Alternate app icons (user-selectable in Settings)  [2026-06-20, requested]
+
+User ask: "add a couple new icons and in settings make the icon change in preferences, up to the user — creative icons that keep the [brand] integrity intact."
+
+iOS **alternate app icons**, user-picked in QuipiOS Settings:
+- 2-3 on-brand variants — keep the waveform/Quip identity (color/treatment variants, NOT new marks).
+- Settings → Appearance: an icon-picker grid calling `UIApplication.shared.setAlternateIconName(_:)`.
+- Info.plist `CFBundleIcons.CFBundleAlternateIcons` — on iOS, alt icons are top-level bundle PNGs (NOT asset-catalog); the primary icon stays in the catalog.
+- Each alt needs 120px (@2x) + 180px (@3x) minimum.
+- Honor the compact-UI rule (fits existing Settings style; no bloat).
+- Blocker = icon ART. I can scaffold the picker + Info.plist + simple recolor variants; polished art needs a design pass. **/prd candidate.**
+
+---
+
 ## Session log — 2026-06-15 (prompt-save crash + connection triage)
 
 HEAD `997a196` (local, unpushed). User reported "Erroring" (screenshot: "Connect to the Mac before
