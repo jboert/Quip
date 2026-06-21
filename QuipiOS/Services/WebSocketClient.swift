@@ -876,6 +876,11 @@ final class WebSocketClient {
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         session?.invalidateAndCancel()
         connectionTimeoutTask?.cancel()
+        // Single choke point for every (re)connect path (connect / reconnect /
+        // resumeFromBackground): kill any pending auth-timeout from the prior
+        // attempt so a ghost 6s task can't fire against this new connection.
+        authTimeoutTask?.cancel()
+        authTimeoutTask = nil
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10
@@ -1325,6 +1330,8 @@ final class WebSocketClient {
         guard !intentionalDisconnect else { return }
         keepaliveTask?.cancel()
         keepaliveTask = nil
+        authTimeoutTask?.cancel()
+        authTimeoutTask = nil
         isConnected = false
         isConnecting = true
         if connectingStartedAt == nil { connectingStartedAt = Date() }

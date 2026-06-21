@@ -203,6 +203,75 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertNil(NumberedPromptDetector.detect(in: content))
     }
 
+    func test_letteredMenu_trailingWithQuestionCue_detected() {
+        // A bottom-of-viewport lettered block preceded by a question is a real
+        // ask → buttons render even without a cursor marker.
+        let content = """
+        Which surface should it use?
+        1. A — inline field
+        2. B — compose sheet
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
+    }
+
+    func test_letteredRubric_noCue_notDetected() {
+        // Same `1. A — …` shape as a real menu, but the heading is not a
+        // question/cue — a grading rubric, not a prompt. Must stay button-less.
+        let content = """
+        Grading scale:
+        1. A — Excellent
+        2. B — Good
+        3. C — Acceptable
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+    }
+
+    func test_letteredOutline_midReply_notDetected() {
+        // Lettered outline with prose AFTER it is not trailing → not the
+        // current prompt, even though a question appears above it.
+        let content = """
+        Which section first?
+        1. A — Introduction
+        2. B — Body
+        Now I'll draft the introduction in full.
+        Then expand the body.
+        Finally a conclusion.
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+    }
+
+    func test_letteredBlock_trailingNoCue_notDetected() {
+        // Trailing lettered block with a plain heading (no question / cue word)
+        // is ambiguous prose → no buttons.
+        let content = """
+        Release notes:
+        1. A — faster sync
+        2. B — dark mode
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+    }
+
+    func test_letteredMenu_goWithCue_detected() {
+        // "go with" is a valid choice cue even without a question mark.
+        let content = """
+        Go with one of these:
+        1. A — path one
+        2. B — path two
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
+    }
+
+    func test_letteredBlock_optionalSubstring_notDetected() {
+        // "optional" must NOT satisfy the cue (the word is "options", plural);
+        // a lettered block under it stays prose, not a menu.
+        let content = """
+        The optional field was set carefully.
+        1. A — first
+        2. B — second
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+    }
+
     // MARK: - Helper coverage
 
     func test_parseNumberedLine_pickup() {

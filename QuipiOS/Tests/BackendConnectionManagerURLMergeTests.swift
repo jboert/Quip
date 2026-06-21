@@ -105,4 +105,33 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
     func testMergeSameIDRowsEmptyIsSafe() {
         XCTAssertEqual(BackendConnectionManager.mergeSameIDRows([]).count, 0)
     }
+
+    // MARK: - determinism + dedup (review follow-ups)
+
+    func testMergedURLOrderTwoTailscaleDeterministic() {
+        // CGNAT + MagicDNS are both priority 2; the tiebreaker must make the
+        // order independent of input order (no nondeterministic primary).
+        XCTAssertEqual(BackendConnectionManager.mergedURLOrder([tsDNS, ts]),
+                       BackendConnectionManager.mergedURLOrder([ts, tsDNS]))
+    }
+
+    func testMergeSameIDRowsDeduplicatesExactURLs() {
+        let rows = [
+            PairedBackend(id: "mac-1", url: ts, name: "Mac", fallbackURLs: [lan]),
+            PairedBackend(id: "mac-1", url: ts, name: "Mac"),   // ts appears in both
+        ]
+        let merged = BackendConnectionManager.mergeSameIDRows(rows)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].urlsInOrder.filter { $0 == ts }.count, 1, "No duplicate URLs after merge")
+        XCTAssertEqual(merged[0].urlsInOrder, [ts, lan])
+    }
+
+    func testMergeSameIDRowsSingleRowNotReordered() {
+        // A lone row is passed through untouched — single-path backends keep
+        // their persisted order (nothing to merge).
+        let row = PairedBackend(id: "mac-1", url: lan, name: "Mac", fallbackURLs: [ts])
+        let merged = BackendConnectionManager.mergeSameIDRows([row])
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].urlsInOrder, [lan, ts])
+    }
 }

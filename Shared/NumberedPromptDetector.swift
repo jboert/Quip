@@ -44,7 +44,7 @@ enum NumberedPromptDetector {
         bestRun(in: content)?.map(\.number)
     }
 
-    private struct Match { let number: Int; let hasMarker: Bool; let normalized: String; let letter: Character? }
+    private struct Match { let number: Int; let hasMarker: Bool; let normalized: String; let letter: Character?; let lineIndex: Int }
 
     /// Find the longest contiguous run of numbered-option lines that contains
     /// at least one `❯`/`>` marker (Claude's prompt block). Shared by `detect`
@@ -66,19 +66,24 @@ enum NumberedPromptDetector {
         var current: [Match] = []
         var best: [Match] = []
         func flush() {
-            // Accept a run when EITHER an agent cursor marker proves it's a
-            // live prompt, OR the block is a sequential-lettered choice menu
-            // (`1. A — …`, `2. B — …`) — that number+letter lockstep is
-            // unmistakably a choice set, never prose, so buttons render even
-            // when the agent typed the options without a `❯` selector. (§18.1)
-            if current.contains(where: \.hasMarker) || isLetteredChoiceRun(current),
-               current.count > best.count {
-                best = current
-            }
+            guard current.count > best.count else { return }
+            // A cursor marker (`❯`/`›`/`>`) alone proves a live prompt — accept
+            // anywhere in the window. A marker-LESS run is inherently ambiguous
+            // with prose (outlines, rubrics share the `1. A — …` shape), so it
+            // only qualifies when ALL of: it's a sequential-lettered block, it
+            // sits at the bottom of the viewport (where an agent's question
+            // waits), AND a choice cue (`?` / pick / choose / …) precedes it.
+            // (§18.1)
+            let accepted = current.contains(where: \.hasMarker)
+                || (isLetteredChoiceRun(current)
+                    && isTrailingRun(current, in: tail)
+                    && hasChoiceCue(current, in: tail))
+            if accepted { best = current }
         }
-        for line in tail {
+        for (idx, line) in tail.enumerated() {
             if let (n, marker) = parseNumberedLine(line) {
-                let m = Match(number: n, hasMarker: marker, normalized: normalizedOptionLine(line), letter: choiceLetter(in: line))
+                let m = Match(number: n, hasMarker: marker, normalized: normalizedOptionLine(line),
+                              letter: choiceLetter(in: line), lineIndex: idx)
                 if let last = current.last, n == last.number + 1 {
                     current.append(m)
                 } else if n == 1 {
@@ -232,6 +237,56 @@ enum NumberedPromptDetector {
                   letter == expected else { return false }
         }
         return true
+    }
+
+    /// At most this many non-empty lines may follow a marker-less run for it to
+    /// count as "trailing" (an agent's question sits at the bottom of the
+    /// viewport). An outline embedded mid-reply has prose after it → rejected.
+    private static let maxTrailingNonEmptyLines = 2
+    /// How many lines above a marker-less run to scan for a choice cue.
+    private static let choiceCueLookback = 5
+    /// Lowercased substrings that signal the preceding line is *asking* the user
+    /// to choose, as opposed to a heading like `Outline:` / `Grading scale:`.
+    /// `options` (plural) rather than `option` avoids matching `optional`.
+    private static let choiceCueWords = ["pick", "choose", "select", "which",
+                                         "prefer", "want to", "would you",
+                                         "go with", "consider", "options"]
+
+    /// True when `run` sits at the bottom of the scanned tail — at most
+    /// `maxTrailingNonEmptyLines` non-empty lines follow its last option. This
+    /// is the strongest discriminator between a real trailing choice prompt and
+    /// a lettered outline/rubric embedded earlier in the output. (§18.1)
+    private static func isTrailingRun(_ run: [Match], in tail: [String]) -> Bool {
+        guard let last = run.last else { return false }
+        var nonEmptyAfter = 0
+        var i = last.lineIndex + 1
+        while i < tail.count {
+            if !stripANSI(tail[i]).trimmingCharacters(in: .whitespaces).isEmpty {
+                nonEmptyAfter += 1
+                if nonEmptyAfter > maxTrailingNonEmptyLines { return false }
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// True when a line within `choiceCueLookback` lines above the run *asks*
+    /// for a choice — ends with `?` or contains a cue word. Headings like
+    /// `Outline:` / `Grading scale:` carry no cue, so lettered prose blocks
+    /// that merely look like menus stay out. (§18.1)
+    private static func hasChoiceCue(_ run: [Match], in tail: [String]) -> Bool {
+        guard let first = run.first else { return false }
+        let lo = max(0, first.lineIndex - choiceCueLookback)
+        var i = lo
+        while i < first.lineIndex {
+            let s = stripANSI(tail[i]).trimmingCharacters(in: .whitespaces).lowercased()
+            if !s.isEmpty {
+                if s.hasSuffix("?") { return true }
+                for cue in choiceCueWords where s.contains(cue) { return true }
+            }
+            i += 1
+        }
+        return false
     }
 
     private static let promptMarkers = ["❯ ", "› ", "> "]

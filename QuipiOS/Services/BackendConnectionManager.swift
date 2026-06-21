@@ -192,7 +192,9 @@ final class BackendConnectionManager {
                 for u in paired[i].urlsInOrder where !allURLs.contains(u) {
                     allURLs.append(u)
                 }
-                allURLs.sort(by: { Self.urlPriority($0) < Self.urlPriority($1) })
+                // Tailscale-first, consistent with every other merge path
+                // (mergeNewURLInto / mergeRows / mergedURLOrder).
+                allURLs = Self.mergedURLOrder(allURLs)
                 paired[existingIdx].url = allURLs.first ?? paired[existingIdx].url
                 paired[existingIdx].fallbackURLs = Array(allURLs.dropFirst())
                 paired[existingIdx].lastUsed = Date()
@@ -743,7 +745,9 @@ final class BackendConnectionManager {
         urls.sorted { a, b in
             let ta = urlPriority(a) == 2, tb = urlPriority(b) == 2
             if ta != tb { return ta }                  // Tailscale first
-            return urlPriority(a) < urlPriority(b)      // else existing priority
+            let pa = urlPriority(a), pb = urlPriority(b)
+            if pa != pb { return pa < pb }             // else existing priority
+            return a < b                               // deterministic tiebreaker for equal-priority URLs
         }
     }
 
