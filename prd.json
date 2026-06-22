@@ -74,8 +74,8 @@
         "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Copy-only clarification in SecurityTab (QuipMac/Views/SettingsView.swift), no functional change to QR rendering. (1) pairingQRBlock now wraps the QR HStack in a VStack with a leading caption \"Scan in the Quip app — the Camera app can’t open it\" so the warning sits directly above the QR. (2) Section footer rewritten to lead with the explicit Camera warning: \"The iPhone Camera app can’t open this QR (it shows \\\"No usable data found\\\"). Scan it inside the Quip app — qrcode.viewfinder button in the URL bar … Or tap \\\"Send to iPhone\\\" …\". The US-004 'Send to iPhone…' AnchoredButton already sits immediately under pairingQRBlock = the easy/remote alternative surfaced near the QR (AC#2). No new files -> no xcodegen/pbxproj change. Gate: xcodebuild build (platform=macOS) ** BUILD SUCCEEDED **. SourceKit 'cannot find X in scope'/'Generic parameter T' diags are spurious (no module context); xcodebuild is the oracle. Native SwiftUI -> no browser test; visual copy verify on the Mac pairing screen = user's pass."
     }
   ]
 }

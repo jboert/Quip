@@ -1089,3 +1089,33 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     cannot open it" wording — the share button it references is already shipped
     here, so US-005 is now copy-only.
 ---
+
+## 2026-06-22 - US-005
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Clarified the Mac pairing screen so users stop pointing the native iOS Camera
+  at the QR (which yields "No usable data found"). Copy-only — zero functional
+  change to QR rendering.
+- Files changed: QuipMac/Views/SettingsView.swift (pairingQRBlock + Pair iPhone
+  section footer), prd.json (US-005 passes:true), progress.txt.
+- What changed:
+  - pairingQRBlock: wrapped the QR HStack in a VStack and added a leading caption
+    "Scan in the Quip app — the Camera app can’t open it" right above the QR.
+  - Section footer rewritten to LEAD with the warning: "The iPhone Camera app
+    can’t open this QR (it shows “No usable data found”). Scan it inside the Quip
+    app — qrcode.viewfinder button in the URL bar … Or tap “Send to iPhone” …".
+  - AC#2 (Send to iPhone surfaced near QR) already satisfied by US-004's
+    AnchoredButton sitting immediately under pairingQRBlock — no move needed.
+- Gate: xcodebuild build -project QuipMac.xcodeproj -scheme QuipMac
+  -destination 'platform=macOS' → ** BUILD SUCCEEDED **.
+- **Learnings for future iterations:**
+  - US-005 was the LAST story in the qr-pairing-share-link PRD; all 5 now pass.
+  - Copy-only SwiftUI edits still trip the same SourceKit "cannot find X in
+    scope" / "Generic parameter 'T' could not be inferred" phantom diags on
+    SettingsView.swift (no module context). They are NOT real — xcodebuild is the
+    only isolation/compile oracle. Don't chase them.
+  - Re-indenting a wrapped view block (HStack → VStack{ Text; HStack }) is the
+    clean way to add a caption; Swift ignores the whitespace but the reviewer
+    won't, so re-indent the moved body rather than leaving mixed indentation.
+  - No AGENTS.md exists anywhere in the repo; QuipMac learnings live in CLAUDE.md
+    + this progress.txt. Nothing reusable enough here to seed a new AGENTS.md.
+---

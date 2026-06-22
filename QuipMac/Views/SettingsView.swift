@@ -1168,7 +1168,7 @@ private struct SecurityTab: View {
             } header: {
                 Text("Pair iPhone")
             } footer: {
-                Text("Scan from the iPhone Quip app's URL bar (qrcode.viewfinder button) — auto-fills the URL and PIN, no typing. Or tap “Send to iPhone” to AirDrop / Message / Mail a quip://pair link the phone taps to pair — no Camera or QR needed.")
+                Text("The iPhone Camera app can’t open this QR (it shows “No usable data found”). Scan it inside the Quip app — qrcode.viewfinder button in the URL bar — to auto-fill the URL and PIN, no typing. Or tap “Send to iPhone” to AirDrop / Message / Mail a quip://pair link the phone taps to pair, no scan needed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1303,40 +1303,46 @@ private struct SecurityTab: View {
                 .foregroundStyle(.secondary)
         } else {
             let payload = PairingPayload(url: currentURL, pin: pinManager.pin)
-            HStack(alignment: .top, spacing: 16) {
-                if let encoded = payload.encodedURL(),
-                   let qr = Self.qrImage(for: encoded) {
-                    Image(nsImage: qr)
-                        .interpolation(.none)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 160, height: 160)
-                        .background(Color.white)
-                        .cornerRadius(6)
-                } else {
-                    Color.secondary.frame(width: 160, height: 160).cornerRadius(6)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Scan in the Quip app — the Camera app can’t open it")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack(alignment: .top, spacing: 16) {
+                    if let encoded = payload.encodedURL(),
+                       let qr = Self.qrImage(for: encoded) {
+                        Image(nsImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 160, height: 160)
+                            .background(Color.white)
+                            .cornerRadius(6)
+                    } else {
+                        Color.secondary.frame(width: 160, height: 160).cornerRadius(6)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("URL")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Text(currentURL)
+                            .font(.caption.monospaced())
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+
+                        Text("PIN")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        Text(pinManager.pin)
+                            .font(.system(size: 18, weight: .semibold, design: .monospaced))
+
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("URL")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Text(currentURL)
-                        .font(.caption.monospaced())
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-
-                    Text("PIN")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 4)
-                    Text(pinManager.pin)
-                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
-
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
