@@ -6,58 +6,134 @@ import Darwin
 import CoreImage
 import AppKit
 
+/// The six Settings panes. Single source of truth for the customizable
+/// NSToolbar (id / title / SF Symbol) and the content switch below.
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case general, layouts, projects, connection, security, notifications
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general:       return "General"
+        case .layouts:       return "Layouts"
+        case .projects:      return "Projects"
+        case .connection:    return "Connection"
+        case .security:      return "Security"
+        case .notifications: return "Notifications"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general:       return "gearshape.fill"
+        case .layouts:       return "rectangle.3.group.fill"
+        case .projects:      return "folder.fill"
+        case .connection:    return "wifi"
+        case .security:      return "lock.fill"
+        case .notifications: return "bell.badge.fill"
+        }
+    }
+
+    /// Sidebar icon-tile tint. Restrained, System-Settings-style mapping — one
+    /// flat color per pane, semantically chosen (green = connectivity, orange =
+    /// security, red = alerts) rather than decorative.
+    var tint: Color {
+        switch self {
+        case .general:       return .gray
+        case .layouts:       return .indigo
+        case .projects:      return .blue
+        case .connection:    return .green
+        case .security:      return .orange
+        case .notifications: return .red
+        }
+    }
+}
+
 struct SettingsView: View {
     @Environment(WindowManager.self) private var windowManager
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(PINManager.self) private var pinManager
 
+    // Persisted sidebar selection so reopening Settings lands on the last pane.
+    @AppStorage("settingsSelectedTab") private var selectionRaw: String = SettingsTab.general.id
+
+    private var current: SettingsTab { SettingsTab(rawValue: selectionRaw) ?? .general }
+
+    /// List(selection:) wants an optional binding; bridge it to the persisted
+    /// raw string. Ignores nil (clicking empty space) so a pane is always shown.
+    private var selection: Binding<SettingsTab?> {
+        Binding(
+            get: { current },
+            set: { if let new = $0 { selectionRaw = new.id } }
+        )
+    }
+
     var body: some View {
-        TabView {
-            GeneralTab()
-                .tabItem {
-                    Label("General", systemImage: "gearshape")
+        // Sidebar layout — the modern macOS System Settings idiom. A
+        // NavigationSplitView fills a resizable window far better than a
+        // top-anchored TabView/form (no oceans of dead space when the window
+        // grows), and reads as a native Apple app. Every .environment injected
+        // on this scene in QuipMacApp reaches each pane unchanged.
+        NavigationSplitView {
+            List(SettingsTab.allCases, selection: selection) { tab in
+                Label {
+                    Text(tab.title)
+                } icon: {
+                    SettingsIconTile(symbol: tab.systemImage, tint: tab.tint)
                 }
-
-            LayoutsTab()
-                .tabItem {
-                    Label("Layouts", systemImage: "rectangle.3.group")
-                }
-
-            // Consolidated: the former Directories, swrm, and Prompts tabs —
-            // all three answer "which project folders / prompt files does Quip
-            // know about?" so they live together now (3 tabs → 1).
-            ProjectsTab()
-                .tabItem {
-                    Label("Projects", systemImage: "folder")
-                }
-
-            ConnectionTab()
-                .tabItem {
-                    Label("Connection", systemImage: "wifi")
-                }
-
-            SecurityTab()
-                .tabItem {
-                    Label("Security", systemImage: "lock.fill")
-                }
-
-            NotificationsTab()
-                .tabItem {
-                    Label("Notifications", systemImage: "bell.badge")
-                }
+                .tag(tab)
+                .padding(.vertical, 2)
+            }
+            .navigationSplitViewColumnWidth(min: 198, ideal: 214, max: 264)
+        } detail: {
+            paneContent
+                // Cap the content column so panes never sprawl edge-to-edge
+                // when the window is widened — the System Settings move. Rows
+                // stay readable (no label-far-left / value-far-right chasm);
+                // extra width becomes quiet margin. The second frame re-centers
+                // that capped column in the detail pane.
+                .frame(maxWidth: 600, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationTitle(current.title)
         }
-        // Content size floor for the (regular Window) Settings scene. minWidth
-        // 600 keeps the toolbar tabs from collapsing into a `>>` chevron (ideal
-        // 720 fits all 6 comfortably); minHeight 460 is the short floor.
-        // maxHeight .infinity + `.top` alignment lets the window grow taller
-        // (long tabs like Notifications/Connection) with extra space falling
-        // below the content. The window is freely resizable because it's a
-        // Window scene, not the Settings scene (whose window can't grow
-        // vertically) — see QuipMacApp.
-        .frame(minHeight: 460, idealHeight: 460, maxHeight: .infinity,
-               alignment: .top)
-        .frame(minWidth: 600, idealWidth: 720, maxWidth: .infinity)
+        // min = floor; ideal = the size the window opens at when there's no
+        // saved frame. Without an ideal, the NavigationSplitView + grouped
+        // forms drove the window to a sprawling ~1200×1100; 780×600 is a tidy
+        // default that still resizes freely (the original vertical-resize fix).
+        .frame(minWidth: 720, idealWidth: 780, maxWidth: .infinity,
+               minHeight: 480, idealHeight: 600, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var paneContent: some View {
+        switch current {
+        case .general:       GeneralTab()
+        case .layouts:       LayoutsTab()
+        case .projects:      ProjectsTab()
+        case .connection:    ConnectionTab()
+        case .security:      SecurityTab()
+        case .notifications: NotificationsTab()
+        }
+    }
+}
+
+// MARK: - Sidebar icon tile
+//
+// SF Symbol in white on a small tinted rounded square — the System Settings
+// sidebar idiom. Deliberately restrained (one flat tint, no gradient, no
+// shadow) so it reads as native macOS rather than decorative AI filler.
+private struct SettingsIconTile: View {
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 20, height: 20)
+            .background(tint.gradient, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 
