@@ -1068,21 +1068,59 @@ private struct ConnectionTab: View {
         }
     }
 
+    /// Focal point of the Connection pane — the one thing it answers: can my
+    /// phone reach this Mac? A status glyph + headline + a live subline (mode +
+    /// connected count). Replaces the buried "Status: ● Running" label row.
+    @ViewBuilder
+    private var connectionHero: some View {
+        let running = webSocketServer.isRunning
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill((running ? Color.green : Color.red).opacity(0.15))
+                    .frame(width: 46, height: 46)
+                Image(systemName: running
+                      ? "antenna.radiowaves.left.and.right"
+                      : "antenna.radiowaves.left.and.right.slash")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(running ? .green : .red)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(running ? "Server running" : "Server stopped")
+                    .font(.title3.weight(.semibold))
+                Text(statusSubline)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var statusSubline: String {
+        guard webSocketServer.isRunning else {
+            return "Start to accept connections from your iPhone"
+        }
+        let n = webSocketServer.connectedClientCount
+        let mode = networkMode.displayName
+        if n == 0 { return "Listening · \(mode) · no phones connected yet" }
+        return "\(n) phone\(n == 1 ? "" : "s") connected · \(mode)"
+    }
+
     var body: some View {
         Form {
-            Section("WebSocket Server") {
-                LabeledContent("Status") {
-                    StatusDot(kind: webSocketServer.isRunning ? .ok : .bad,
-                              text: webSocketServer.isRunning ? "Running" : "Stopped")
-                }
+            Section {
+                connectionHero
+            }
 
-                LabeledContent("Connected Clients") {
-                    Text("\(webSocketServer.connectedClientCount)")
-                        .monospacedDigit()
-                }
-
+            Section("Server") {
                 TextField("Port", value: $port, format: .number)
                     .frame(width: 100)
+                TextField("Bonjour service name", text: $serviceName)
+                LabeledContent("Bonjour discovery") {
+                    StatusDot(kind: bonjourAdvertiser.isAdvertising ? .ok : .bad,
+                              text: bonjourAdvertiser.isAdvertising ? "Advertising" : "Stopped")
+                }
             }
 
             // §B5 per-client visibility — full table of every active socket so
@@ -1128,15 +1166,6 @@ private struct ConnectionTab: View {
                         .padding(.vertical, 2)
                     }
                 }
-            }
-
-            Section("Bonjour Discovery") {
-                LabeledContent("Status") {
-                    StatusDot(kind: bonjourAdvertiser.isAdvertising ? .ok : .bad,
-                              text: bonjourAdvertiser.isAdvertising ? "Advertising" : "Stopped")
-                }
-
-                TextField("Service Name", text: $serviceName)
             }
 
             Section("Network Mode") {
