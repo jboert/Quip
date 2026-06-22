@@ -24,9 +24,12 @@ struct SettingsView: View {
                     Label("Layouts", systemImage: "rectangle.3.group")
                 }
 
-            DirectoriesTab()
+            // Consolidated: the former Directories, swrm, and Prompts tabs —
+            // all three answer "which project folders / prompt files does Quip
+            // know about?" so they live together now (3 tabs → 1).
+            ProjectsTab()
                 .tabItem {
-                    Label("Directories", systemImage: "folder")
+                    Label("Projects", systemImage: "folder")
                 }
 
             ConnectionTab()
@@ -39,37 +42,67 @@ struct SettingsView: View {
                     Label("Security", systemImage: "lock.fill")
                 }
 
-            ColorsTab()
-                .tabItem {
-                    Label("Colors", systemImage: "paintpalette")
-                }
-
-            PromptsTab()
-                .tabItem {
-                    Label("Prompts", systemImage: "doc.text")
-                }
-
             NotificationsTab()
                 .tabItem {
                     Label("Notifications", systemImage: "bell.badge")
                 }
-
-            SwrmTab()
-                .tabItem {
-                    Label("swrm", systemImage: "square.stack.3d.up")
-                }
         }
         // Content size floor for the (regular Window) Settings scene. minWidth
-        // 600 keeps the 8 toolbar tabs from colliding into a `>>` chevron
-        // (ideal 720 fits all 8); minHeight 460 is the short floor. maxHeight
-        // .infinity + `.top` alignment lets the window grow taller (long tabs
-        // like Notifications/Connection) with extra space falling below the
-        // content. The window is freely resizable because it's a Window scene,
-        // not the Settings scene (whose window can't grow vertically) — see
-        // QuipMacApp.
+        // 600 keeps the toolbar tabs from collapsing into a `>>` chevron (ideal
+        // 720 fits all 6 comfortably); minHeight 460 is the short floor.
+        // maxHeight .infinity + `.top` alignment lets the window grow taller
+        // (long tabs like Notifications/Connection) with extra space falling
+        // below the content. The window is freely resizable because it's a
+        // Window scene, not the Settings scene (whose window can't grow
+        // vertically) — see QuipMacApp.
         .frame(minHeight: 460, idealHeight: 460, maxHeight: .infinity,
                alignment: .top)
         .frame(minWidth: 600, idealWidth: 720, maxWidth: .infinity)
+    }
+}
+
+// MARK: - Shared status vocabulary
+//
+// One consistent way to render "is it on / granted / set?" across every
+// tab. Before this, the same idea showed up three different ways: a Circle
+// dot (Connection), a bare SF checkmark (Permissions), or plain colored
+// text (Notifications). StatusDot unifies them into a single tinted glyph +
+// label so the whole window speaks one language.
+private struct StatusDot: View {
+    enum Kind { case ok, bad, warn, neutral, busy }
+
+    let kind: Kind
+    let text: String
+    var mono: Bool = false
+
+    private var glyph: String {
+        switch kind {
+        case .ok:      return "checkmark.circle.fill"
+        case .bad:     return "xmark.circle.fill"
+        case .warn:    return "exclamationmark.triangle.fill"
+        case .neutral: return "circle.fill"
+        case .busy:    return "hourglass"
+        }
+    }
+
+    private var tint: Color {
+        switch kind {
+        case .ok:      return .green
+        case .bad:     return .red
+        case .warn:    return .orange
+        case .neutral: return .secondary
+        case .busy:    return .secondary
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: glyph)
+                .foregroundStyle(tint)
+                .imageScale(.medium)
+            Text(text)
+                .font(mono ? .body.monospaced() : .body)
+        }
     }
 }
 
@@ -77,9 +110,10 @@ struct SettingsView: View {
 
 /// Collects the APNs auth-key configuration (.p8 file, Key ID, Team ID,
 /// Bundle ID) + a Test Push button. The .p8 goes into the Keychain via
-/// APNsKeyStore; the three ID fields sit in UserDefaults. No pushes fire
-/// from here — the only send is Test Push, which loops registered
-/// devices and reports per-device success/failure inline.
+/// APNsKeyStore; the three ID fields sit in the Keychain via
+/// APNsMetadataStore. No pushes fire from here — the only send is Test
+/// Push, which loops registered devices and reports per-device
+/// success/failure inline.
 private struct NotificationsTab: View {
     @Environment(PushNotificationService.self) private var pushService
 
@@ -103,13 +137,15 @@ private struct NotificationsTab: View {
     var body: some View {
         Form {
             Section("APNs Auth Key") {
-                HStack {
-                    Text(hasKey ? "Key: stored in Keychain" : "Key: (not set)")
-                        .foregroundStyle(hasKey ? .primary : .secondary)
-                    Spacer()
-                    Button(hasKey ? "Replace .p8…" : "Import .p8…") { importKey() }
-                    if hasKey {
-                        Button("Clear") { clearKey() }
+                LabeledContent("Auth key") {
+                    HStack(spacing: 8) {
+                        StatusDot(kind: hasKey ? .ok : .bad,
+                                  text: hasKey ? "Stored in Keychain" : "Not set")
+                        Spacer()
+                        Button(hasKey ? "Replace .p8…" : "Import .p8…") { importKey() }
+                        if hasKey {
+                            Button("Clear") { clearKey() }
+                        }
                     }
                 }
                 if let importStatus {
@@ -132,7 +168,9 @@ private struct NotificationsTab: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(pushService.devices, id: \.token) { device in
-                        HStack {
+                        HStack(spacing: 8) {
+                            Image(systemName: "iphone")
+                                .foregroundStyle(.secondary)
                             Text(device.token.prefix(12) + "…")
                                 .font(.system(.caption, design: .monospaced))
                             Spacer()
@@ -178,7 +216,7 @@ private struct NotificationsTab: View {
                 }
             }
         }
-        .padding()
+        .formStyle(.grouped)
     }
 
     private func importKey() {
@@ -282,84 +320,169 @@ private struct NotificationsTab: View {
     }
 }
 
-// MARK: - swrm Tab
+// MARK: - Projects Tab
 //
-// Configures which swrm project roots Quip watches. Each root persists in
-// UserDefaults (key "swrmProjectRoots") via SwrmProjectStore and runs one
-// SwrmEventTailer. Add (folder picker) starts a tailer live; remove stops
-// it — no app restart. Invalid paths (not an existing folder, or a dupe)
-// surface inline.
+// Consolidates the former Directories, swrm, and Prompts tabs into one
+// grouped Form with three sections. Each retains its own backing store and
+// add/remove flow — only the chrome merged:
+//   • Spawn Directories — UserDefaults "projectDirectories"
+//   • swrm Watched Roots — SwrmProjectStore (UserDefaults "swrmProjectRoots")
+//   • Prompt Library — PromptLibrary (FS-backed, broadcasts to phones on change)
 
-private struct SwrmTab: View {
-    @Environment(SwrmProjectStore.self) private var store
-    @State private var addError: String?
+private struct ProjectsTab: View {
+    // Spawn directories
+    @AppStorage("projectDirectories") private var directoriesData: Data = Data()
+    @State private var directories: [String] = []
+
+    // swrm roots
+    @Environment(SwrmProjectStore.self) private var swrm
+    @State private var swrmAddError: String?
+
+    // Prompt library
+    @Environment(PromptLibrary.self) private var library
+    @State private var editingPrompt: PromptEntry?
+    @State private var creatingPrompt = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            if store.roots.isEmpty {
-                ContentUnavailableView(
-                    "No swrm Projects",
-                    systemImage: "square.stack.3d.up",
-                    description: Text("Add a swrm project root to get a phone card, push, and a terminal notice when one of its stories is moved to In Progress.")
-                )
-            } else {
-                List {
-                    ForEach(store.roots, id: \.self) { root in
-                        HStack {
-                            Image(systemName: "folder.fill")
-                                .foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text((root as NSString).lastPathComponent)
-                                    .font(.body)
-                                Text(root)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-
-                            Spacer()
-
-                            Button(role: .destructive) {
-                                store.remove(path: root)
-                            } label: {
-                                Image(systemName: "xmark.circle")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
+        Form {
+            spawnDirectoriesSection
+            swrmSection
+            promptsSection
+        }
+        .formStyle(.grouped)
+        .onAppear { loadDirectories() }
+        .sheet(isPresented: $creatingPrompt) {
+            PromptEditorSheet(initial: nil) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
             }
-
-            if let addError {
-                Text(addError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 4)
-            }
-
-            Divider()
-
-            HStack {
-                Text("Watching \(store.roots.count) project\(store.roots.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    addProject()
-                } label: {
-                    Label("Add Project…", systemImage: "plus")
-                }
-                .padding(8)
+        }
+        .sheet(item: $editingPrompt) { entry in
+            PromptEditorSheet(initial: entry) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
             }
         }
     }
 
-    private func addProject() {
-        addError = nil
+    // MARK: Spawn directories
+
+    @ViewBuilder
+    private var spawnDirectoriesSection: some View {
+        Section {
+            if directories.isEmpty {
+                Text("No directories yet. Add folders to quickly spawn new terminal sessions from the phone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(directories, id: \.self) { dir in
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder.fill")
+                            .foregroundStyle(.secondary)
+                        Text(dir)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button(role: .destructive) {
+                            directories.removeAll { $0 == dir }
+                            saveDirectories()
+                        } label: {
+                            Image(systemName: "xmark.circle")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+            Button { addDirectory() } label: {
+                Label("Add Directory…", systemImage: "plus")
+            }
+        } header: {
+            Text("Spawn Directories (\(directories.count))")
+        } footer: {
+            Text("Roots offered when the phone spawns a new terminal session.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func loadDirectories() {
+        if let decoded = try? JSONDecoder().decode([String].self, from: directoriesData) {
+            directories = decoded
+        }
+    }
+
+    private func saveDirectories() {
+        if let encoded = try? JSONEncoder().encode(directories) {
+            directoriesData = encoded
+        }
+    }
+
+    private func addDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a project directory"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            let path = url.path
+            if !directories.contains(path) {
+                directories.append(path)
+                saveDirectories()
+            }
+        }
+    }
+
+    // MARK: swrm roots
+
+    @ViewBuilder
+    private var swrmSection: some View {
+        Section {
+            if swrm.roots.isEmpty {
+                Text("Add a swrm project root to get a phone card, push, and a terminal notice when one of its stories moves to In Progress.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(swrm.roots, id: \.self) { root in
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.stack.3d.up.fill")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text((root as NSString).lastPathComponent)
+                                .font(.body)
+                            Text(root)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            swrm.remove(path: root)
+                        } label: {
+                            Image(systemName: "xmark.circle")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+            if let swrmAddError {
+                Text(swrmAddError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            Button { addSwrmRoot() } label: {
+                Label("Add Project…", systemImage: "plus")
+            }
+        } header: {
+            Text("swrm Watched Roots (\(swrm.roots.count))")
+        } footer: {
+            Text("Each root is tailed live — add or remove without restarting Quip.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func addSwrmRoot() {
+        swrmAddError = nil
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -367,9 +490,47 @@ private struct SwrmTab: View {
         panel.message = "Choose a swrm project root (the folder that contains, or will contain, .swrm/)"
 
         if panel.runModal() == .OK, let url = panel.url {
-            if let error = store.add(path: url.path) {
-                addError = error.localizedDescription
+            if let error = swrm.add(path: url.path) {
+                swrmAddError = error.localizedDescription
             }
+        }
+    }
+
+    // MARK: Prompt library
+
+    @ViewBuilder
+    private var promptsSection: some View {
+        Section {
+            if library.entries.isEmpty {
+                Text("No prompts yet. Click + to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(library.entries) { entry in
+                    PromptRow(
+                        entry: entry,
+                        onEdit: { editingPrompt = entry },
+                        onDelete: { library.delete(id: entry.id) }
+                    )
+                }
+            }
+            HStack(spacing: 12) {
+                Button { creatingPrompt = true } label: {
+                    Label("New Prompt…", systemImage: "plus")
+                }
+                Spacer()
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([PromptLibrary.directory])
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+        } header: {
+            Text("Prompt Library (\(library.entries.count))")
+        } footer: {
+            Text("Tapped on the phone, the body is sent verbatim to the active terminal. Edits broadcast to every connected phone.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -440,6 +601,11 @@ private struct GeneralTab: View {
                 }
             }
 
+            // Folded in from the former Colors tab — terminal background tints
+            // keyed to Claude Code's state. Lives in its own struct so its
+            // @AppStorage + @State color bindings stay self-contained.
+            TerminalColorsSection()
+
             Section("Startup") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                 Toggle("Show in menu bar", isOn: $showInMenuBar)
@@ -506,7 +672,7 @@ private struct GeneralTab: View {
 
     @ViewBuilder
     private func whisperStatusRow() -> some View {
-        // Mirror the macPermRow look: status glyph + label + tail detail. No
+        // Mirror the StatusDot look: tinted glyph + label + tail detail. No
         // action buttons — retrying model load is a relaunch-level concern,
         // wiring a manual retry is follow-up work.
         let state = whisperStatus.state
@@ -555,7 +721,8 @@ private struct GeneralTab: View {
 
     /// One TCC perm row. Granted = green check. Denied = red ✗ + a "Grant"
     /// button that drops the user straight into the matching System Settings
-    /// pane via an x-apple.systempreferences URL — no nav required.
+    /// pane via an x-apple.systempreferences URL — no nav required. The
+    /// leading glyph matches StatusDot's vocabulary (green check / red x).
     @ViewBuilder
     private func macPermRow(name: String, granted: Bool, pane: MacSettingsPane) -> some View {
         HStack(spacing: 8) {
@@ -573,6 +740,56 @@ private struct GeneralTab: View {
     private func openSettingsPane(_ pane: MacSettingsPane) {
         guard let url = pane.systemSettingsURL else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// Terminal background tints keyed to Claude Code's state. A self-contained
+/// `Section` (folded in from the former Colors tab) so it drops straight into
+/// the General Form. Keeps its own @AppStorage hex + @State Color bindings.
+private struct TerminalColorsSection: View {
+    @AppStorage("colorNeutral") private var neutralHex: String = "#1E1E1E"
+    @AppStorage("colorWaiting") private var waitingHex: String = "#001430"
+    @AppStorage("colorSTTActive") private var sttActiveHex: String = "#240040"
+
+    @State private var neutralColor: Color = Color(hex: "#1E1E1E")
+    @State private var waitingColor: Color = Color(hex: "#001430")
+    @State private var sttActiveColor: Color = Color(hex: "#240040")
+
+    var body: some View {
+        Section {
+            ColorPicker(selection: $neutralColor, supportsOpacity: false) {
+                colorLabel("Neutral", "Claude is actively processing")
+            }
+            ColorPicker(selection: $waitingColor, supportsOpacity: false) {
+                colorLabel("Waiting for Input", "Claude is idle, ready for a prompt")
+            }
+            ColorPicker(selection: $sttActiveColor, supportsOpacity: false) {
+                colorLabel("Speech-to-Text Active", "Dictation is in progress")
+            }
+            Button("Reset to Defaults") {
+                neutralColor = Color(hex: "#1E1E1E")
+                waitingColor = Color(hex: "#001430")
+                sttActiveColor = Color(hex: "#240040")
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        } header: {
+            Text("Terminal Colors")
+        } footer: {
+            Text("Applied to terminal windows based on Claude Code's current state.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func colorLabel(_ title: String, _ subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.body.weight(.medium))
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -706,89 +923,6 @@ private struct RenamePresetSheet: View {
     }
 }
 
-// MARK: - Directories Tab
-
-private struct DirectoriesTab: View {
-    @AppStorage("projectDirectories") private var directoriesData: Data = Data()
-    @State private var directories: [String] = []
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if directories.isEmpty {
-                ContentUnavailableView(
-                    "No Project Directories",
-                    systemImage: "folder.badge.plus",
-                    description: Text("Add directories to quickly spawn new terminal sessions.")
-                )
-            } else {
-                List {
-                    ForEach(directories, id: \.self) { dir in
-                        HStack {
-                            Image(systemName: "folder.fill")
-                                .foregroundStyle(.secondary)
-                            Text(dir)
-                                .font(.body)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-
-                            Spacer()
-
-                            Button(role: .destructive) {
-                                directories.removeAll { $0 == dir }
-                                saveDirectories()
-                            } label: {
-                                Image(systemName: "xmark.circle")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button {
-                    addDirectory()
-                } label: {
-                    Label("Add Directory", systemImage: "plus")
-                }
-                .padding(8)
-            }
-        }
-        .onAppear { loadDirectories() }
-    }
-
-    private func loadDirectories() {
-        if let decoded = try? JSONDecoder().decode([String].self, from: directoriesData) {
-            directories = decoded
-        }
-    }
-
-    private func saveDirectories() {
-        if let encoded = try? JSONEncoder().encode(directories) {
-            directoriesData = encoded
-        }
-    }
-
-    private func addDirectory() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose a project directory"
-
-        if panel.runModal() == .OK, let url = panel.url {
-            let path = url.path
-            if !directories.contains(path) {
-                directories.append(path)
-                saveDirectories()
-            }
-        }
-    }
-}
-
 // MARK: - Connection Tab
 
 private struct ConnectionTab: View {
@@ -824,12 +958,8 @@ private struct ConnectionTab: View {
         Form {
             Section("WebSocket Server") {
                 LabeledContent("Status") {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(webSocketServer.isRunning ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
-                        Text(webSocketServer.isRunning ? "Running" : "Stopped")
-                    }
+                    StatusDot(kind: webSocketServer.isRunning ? .ok : .bad,
+                              text: webSocketServer.isRunning ? "Running" : "Stopped")
                 }
 
                 LabeledContent("Connected Clients") {
@@ -888,12 +1018,8 @@ private struct ConnectionTab: View {
 
             Section("Bonjour Discovery") {
                 LabeledContent("Status") {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(bonjourAdvertiser.isAdvertising ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
-                        Text(bonjourAdvertiser.isAdvertising ? "Advertising" : "Stopped")
-                    }
+                    StatusDot(kind: bonjourAdvertiser.isAdvertising ? .ok : .bad,
+                              text: bonjourAdvertiser.isAdvertising ? "Advertising" : "Stopped")
                 }
 
                 TextField("Service Name", text: $serviceName)
@@ -1420,70 +1546,6 @@ private struct SecurityTab: View {
     }
 }
 
-// MARK: - Colors Tab
-
-private struct ColorsTab: View {
-    @AppStorage("colorNeutral") private var neutralHex: String = "#1E1E1E"
-    @AppStorage("colorWaiting") private var waitingHex: String = "#001430"
-    @AppStorage("colorSTTActive") private var sttActiveHex: String = "#240040"
-
-    @State private var neutralColor: Color = Color(hex: "#1E1E1E")
-    @State private var waitingColor: Color = Color(hex: "#001430")
-    @State private var sttActiveColor: Color = Color(hex: "#240040")
-
-    var body: some View {
-        Form {
-            Section("Terminal Background Colors") {
-                Text("These colors are applied to terminal windows based on Claude Code's current state.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                ColorPicker(selection: $neutralColor, supportsOpacity: false) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Neutral")
-                            .font(.body.weight(.medium))
-                        Text("Claude is actively processing")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                ColorPicker(selection: $waitingColor, supportsOpacity: false) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Waiting for Input")
-                            .font(.body.weight(.medium))
-                        Text("Claude is idle, ready for a prompt")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                ColorPicker(selection: $sttActiveColor, supportsOpacity: false) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Speech-to-Text Active")
-                            .font(.body.weight(.medium))
-                        Text("Dictation is in progress")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            Section {
-                Button("Reset to Defaults") {
-                    neutralColor = Color(hex: "#1E1E1E")
-                    waitingColor = Color(hex: "#001430")
-                    sttActiveColor = Color(hex: "#240040")
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
 /// SwiftUI Button wrapper that captures the underlying NSView via
 /// NSViewRepresentable, so callers can pin an NSSharingServicePicker
 /// to the button's frame instead of the whole window.
@@ -1508,120 +1570,13 @@ private struct AnchoredButton<Label: View>: View {
     }
 }
 
-// MARK: - Prompts Tab
+// MARK: - Prompt Row
 //
-// Mac-side editor for the prompt library — mirrors the iOS
-// PromptLibrarySheet (wishlist §57). Both clients write through the
-// same FS-backed PromptLibrary: `put` writes <id>.txt, the directory
-// watcher rescans, `onChange` broadcasts a PromptLibraryMessage to
-// every connected phone. So this tab needs zero "broadcast" wiring —
-// the existing FS-watcher path handles cross-client sync for free.
-
-private struct PromptsTab: View {
-    @Environment(PromptLibrary.self) private var library
-
-    @State private var selectedID: String?
-    @State private var editing: PromptEntry?
-    @State private var creatingNew = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Prompt library")
-                    .font(.headline)
-                Spacer()
-                Text("\(library.entries.count)")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 8)
-
-            List(selection: $selectedID) {
-                if library.entries.isEmpty {
-                    Text("No prompts yet. Click + below to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 8)
-                } else {
-                    ForEach(library.entries) { entry in
-                        PromptRow(
-                            entry: entry,
-                            onEdit: { editing = entry },
-                            onDelete: {
-                                library.delete(id: entry.id)
-                                if selectedID == entry.id { selectedID = nil }
-                            }
-                        )
-                        .tag(entry.id)
-                    }
-                }
-            }
-            .listStyle(.inset)
-
-            Divider()
-
-            HStack(spacing: 8) {
-                Button {
-                    creatingNew = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .help("New prompt")
-
-                Button {
-                    guard let id = selectedID,
-                          let entry = library.entries.first(where: { $0.id == id }) else { return }
-                    editing = entry
-                } label: {
-                    Image(systemName: "pencil")
-                }
-                .disabled(selectedID == nil)
-                .help("Edit selected")
-
-                Button {
-                    guard let id = selectedID else { return }
-                    library.delete(id: id)
-                    selectedID = nil
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .disabled(selectedID == nil)
-                .help("Delete selected")
-
-                Spacer()
-
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([PromptLibrary.directory])
-                } label: {
-                    Text("Reveal in Finder")
-                }
-                .help("Open the prompts directory")
-            }
-            .padding(8)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $creatingNew) {
-            PromptEditorSheet(initial: nil) { id, label, body in
-                _ = library.put(id: id, label: label, body: body)
-            }
-        }
-        .sheet(item: $editing) { entry in
-            PromptEditorSheet(initial: entry) { id, label, body in
-                _ = library.put(id: id, label: label, body: body)
-            }
-        }
-    }
-
-}
-
-/// Single row in the Prompts tab. Hover reveals inline pencil + trash
-/// buttons (so you can edit / delete without first selecting + clicking
-/// a toolbar button). Right-click anywhere on the row opens a context
-/// menu with Edit / Delete / Reveal in Finder. Double-click also still
-/// edits — three discoverability paths, pick the one that fits muscle
-/// memory.
+// Single row in the Prompt Library section. Hover reveals inline pencil +
+// trash buttons (so you can edit / delete without first selecting a row).
+// Right-click anywhere opens a context menu with Edit / Delete / Reveal in
+// Finder. Double-click also edits — three discoverability paths, pick the
+// one that fits muscle memory.
 private struct PromptRow: View {
     let entry: PromptEntry
     let onEdit: () -> Void
@@ -1631,6 +1586,8 @@ private struct PromptRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(entry.label)
@@ -1670,6 +1627,7 @@ private struct PromptRow: View {
             Text("\(entry.bodyBytes) B")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
+                .monospacedDigit()
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
