@@ -190,7 +190,21 @@ private struct NotificationsTab: View {
                 let data = try Data(contentsOf: url)
                 if APNsKeyStore.set(data) {
                     hasKey = true
-                    importStatus = "Imported \(url.lastPathComponent)"
+                    var status = "Imported \(url.lastPathComponent)"
+                    // The Key ID can't be derived from the key bytes, so a
+                    // mismatched kid silently passes import and only fails at
+                    // send time with `InvalidProviderToken`. Apple's filename
+                    // (`AuthKey_<KEYID>.p8`) carries the kid — sync the field
+                    // to it so the stored key and the kid can't drift apart.
+                    if let fileKeyId = APNsMetadataStore.keyId(fromFilename: url.lastPathComponent),
+                       fileKeyId != keyId {
+                        let old = keyId
+                        keyId = fileKeyId  // persists via the Key ID TextField's .onChange
+                        status += old.isEmpty
+                            ? " · Key ID set to \(fileKeyId)"
+                            : " · Key ID \(old)→\(fileKeyId) to match the file"
+                    }
+                    importStatus = status
                     // New key → cached APNsClient's parsed private key
                     // is stale. Drop it so the next send re-reads.
                     pushService.invalidateClient()

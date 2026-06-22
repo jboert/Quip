@@ -52,6 +52,30 @@ enum APNsMetadataStore {
         set { write(account: bundleIdAccount, value: newValue) }
     }
 
+    // MARK: - Filename → Key ID
+
+    /// Apple names a downloaded APNs auth key `AuthKey_<KEYID>.p8`, where the
+    /// Key ID is exactly 10 uppercase-alphanumeric characters. The Key ID
+    /// cannot be derived from the key material itself, so the filename is the
+    /// only in-band link between a .p8 and its JWT `kid`. The import flow uses
+    /// this to keep the Key ID field in sync with the key actually being
+    /// stored — preventing the (key, kid) desync that APNs rejects at send
+    /// time with `InvalidProviderToken` (keychain holds key A while the Key ID
+    /// field names key B).
+    ///
+    /// Returns the embedded Key ID, or nil if `filename` doesn't match the
+    /// `AuthKey_XXXXXXXXXX(.p8)` shape — callers then leave the field untouched
+    /// (e.g. the user renamed the file).
+    static func keyId(fromFilename filename: String) -> String? {
+        var stem = filename
+        if stem.lowercased().hasSuffix(".p8") { stem = String(stem.dropLast(3)) }
+        guard stem.hasPrefix("AuthKey_") else { return nil }
+        let id = String(stem.dropFirst("AuthKey_".count))
+        let allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        guard id.count == 10, id.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return id
+    }
+
     // MARK: - Migration
 
     /// Read once: on the first call, if Keychain is empty AND legacy
