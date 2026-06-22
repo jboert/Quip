@@ -30,8 +30,8 @@
         "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added notificationsHero focal signal at top of NotificationsTab (headerless Section, matching connectionHero: tinted 46pt circle glyph + title3 headline + callout subline). isConfigured = hasKey && non-empty keyId/teamId/bundleId (mirrors Send Test Push enable condition); readinessSubline names exactly what's missing or shows registered-device count when ready. Sections already ordered APNs Auth Key → Registered Devices → Send Test Push; added the missing header to the headerless Send Test Push section. .formStyle(.grouped) already present. importKey (incl. AuthKey_<KEYID>.p8 key-id auto-sync + non-canonical-filename warning) and sendTestPush preserved verbatim — only added layout/hero. BUILD SUCCEEDED."
     },
     {
       "id": "US-003",

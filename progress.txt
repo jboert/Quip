@@ -24,3 +24,17 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - SecurityTab already had `header:`/`footer:` on Pair + both Diagnostics sections, so the only structural gap was the headerless PIN section.
   - StatusDot's `text` is `.body` font — for a status + monospaced-path pair, put the path in a separate caption Text under the dot (don't pass the path as `text:`).
 ---
+
+## 2026-06-22 — US-002 Organize the Notifications pane
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added `notificationsHero` focal signal in a headerless top Section, cloned from the Connection pane's `connectionHero` style: tinted 46pt circle (green/red opacity .15) + SF glyph (`bell.badge.fill`/`bell.slash.fill`) + `.title3.weight(.semibold)` headline ("Push configured" / "Push not configured") + `.callout` secondary subline.
+- `isConfigured = hasKey && !keyId.isEmpty && !teamId.isEmpty && !bundleId.isEmpty` — mirrors the Send Test Push button's `.disabled` condition so the hero never says "configured" while the send button is disabled. `readinessSubline` lists exactly which of {auth key, Key ID, Team ID, Bundle ID} is missing, or "Ready · N device(s) registered" when configured.
+- Section order was ALREADY APNs Auth Key → Registered Devices → Send Test Push; the only structural gap was the headerless final Section — gave it `Section("Send Test Push")`.
+- `.formStyle(.grouped)` was already present. importKey (key-id auto-sync + non-canonical-filename warning) and sendTestPush untouched — pure layout/hero addition.
+- Files changed: QuipMac/Views/SettingsView.swift, prd.json, progress.txt.
+- **Learnings for future iterations:**
+  - The connectionHero recipe is the house style for a pane's focal element and trivially reusable: `HStack(spacing:14){ ZStack{ Circle().fill(tint.opacity(0.15)).frame(46×46); Image(systemName:).font(.system(size:19,weight:.semibold)).foregroundStyle(tint) } ; VStack(alignment:.leading,spacing:2){ Text(headline).font(.title3.weight(.semibold)); Text(subline).font(.callout/.callout).foregroundStyle(.secondary) } ; Spacer(minLength:0) }.padding(.vertical,6)`. Drop it in a headerless `Section { }` at the top of the Form. (connectionHero uses `.callout` subline; reuse that, not `.caption`.)
+  - When adding a readiness summary, derive its boolean from the SAME expression that gates the primary action button (here Send Test Push's `.disabled`) so the hero and the button can't disagree.
+  - Same 10 SourceKit "Cannot find … in scope" / "Generic parameter 'T' could not be inferred" diagnostics (lines 57-60, 250) fired on every edit — documented spurious cross-file noise. `xcodebuild` → `** BUILD SUCCEEDED **`. The build's `RegisterWithLaunchServices`/`lsregister` line on the derivedData build output is xcodebuild's normal step, not an install — don't treat it as a /Applications install.
+  - Remaining for US-003 sweep: NotificationsTab still has two raw colored-Text status displays not yet on StatusDot vocab — the `importStatus` row (red/secondary by "Error" prefix, line ~330) and the per-device `testStatus` lines (✓ secondary / else red, line ~390). Left verbatim here to avoid touching importKey/sendTestPush behavior; convert in the consistency sweep if desired.
+---

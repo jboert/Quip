@@ -266,8 +266,62 @@ private struct NotificationsTab: View {
     @State private var isSending: Bool = false
     @State private var showForgetAllConfirm: Bool = false
 
+    /// All four pieces APNs needs before any push (test or production) can
+    /// fire: the .p8 key in the Keychain plus non-empty Key ID, Team ID, and
+    /// Bundle ID. Mirrors the Send Test Push button's enable condition.
+    private var isConfigured: Bool {
+        hasKey && !keyId.isEmpty && !teamId.isEmpty && !bundleId.isEmpty
+    }
+
+    private var readinessSubline: String {
+        if isConfigured {
+            let n = pushService.devices.count
+            return n == 0
+                ? "Ready · no iPhones registered yet"
+                : "Ready · \(n) device\(n == 1 ? "" : "s") registered"
+        }
+        var missing: [String] = []
+        if !hasKey { missing.append("auth key") }
+        if keyId.isEmpty { missing.append("Key ID") }
+        if teamId.isEmpty { missing.append("Team ID") }
+        if bundleId.isEmpty { missing.append("Bundle ID") }
+        return "Missing " + missing.joined(separator: ", ")
+    }
+
+    /// Focal point of the Notifications pane — the one thing it answers: will
+    /// a push actually fire? A status glyph + headline + a subline that names
+    /// what's still missing. Consistent with the Connection pane's
+    /// connectionHero (tinted circle glyph + title3 headline + callout subline).
+    @ViewBuilder
+    private var notificationsHero: some View {
+        let configured = isConfigured
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill((configured ? Color.green : Color.red).opacity(0.15))
+                    .frame(width: 46, height: 46)
+                Image(systemName: configured ? "bell.badge.fill" : "bell.slash.fill")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(configured ? .green : .red)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(configured ? "Push configured" : "Push not configured")
+                    .font(.title3.weight(.semibold))
+                Text(readinessSubline)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+    }
+
     var body: some View {
         Form {
+            Section {
+                notificationsHero
+            }
+
             Section("APNs Auth Key") {
                 LabeledContent("Auth key") {
                     HStack(spacing: 8) {
@@ -331,7 +385,7 @@ private struct NotificationsTab: View {
                 }
             }
 
-            Section {
+            Section("Send Test Push") {
                 HStack {
                     Button {
                         Task { await sendTestPush() }
