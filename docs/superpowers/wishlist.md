@@ -1109,3 +1109,38 @@ _Empty — entries previously parked here (§52 iPad, §55 Clipboard sync) were 
   ralph run.** Memory `project_apns_keychain_orphan_on_resign`.
 - Grow `TranscriptCorrector` + `QuipDictationVocabulary` 1–2 terms per session from real mishearings.
 - Keep Mac + iOS vocab lists in sync (today: iOS `dictation-vocab.txt` + a hardcoded Mac mirror).
+
+---
+
+## PRD — Windows-list "Magic Wand" auto-sort (SHIPPED 2026-06-22)
+
+**Ask (user):** a magic-wand button in the Windows-list header that one-tap
+auto-sorts: iTerm2/Terminal windows on top, simulators next, the rest below.
+"Smart and dev-focused."
+
+**Design (locked with user):**
+- **Where:** `WindowListSidebar` header, `wand.and.stars` button left of the `+`.
+- **Tiers:** ① terminals (`isTerminal` = iTerm2 + Terminal.app) → ② simulators
+  (`targetKind == "simulator"`) → ③ everything else (`windowTier()`).
+- **Smart sub-sort (terminals):** attention-first — windows where Claude is
+  WAITING FOR INPUT (`TerminalStateDetector.windowStates[id] == .waitingForInput`)
+  bubble to the very top; secondary key the project `subtitle`, then prior order
+  for stability.
+- **Behavior:** ONE-SHOT (not sticky). Tap snapshots current states into
+  `windowOrder` with a 0.22s ease-out; you can drag to tweak after and it stays
+  put; tap again to re-snap. (Sticky/live-resort was explicitly declined.)
+
+**Core behavior change it required:** `orderedWindows()` no longer re-ranks the
+list every frame (the old always-on `sidebarRank`). `windowOrder` is now
+authoritative — manual drag AND wand sorts stick; only brand-new windows not yet
+in `windowOrder` get tier-appended. The old 8-level rank collapsed into the
+3-tier `windowTier()` (terminals / simulators / other), which also drives the
+row-group dividers.
+
+**Verified:** builds clean; wand button live in `/Applications` (AX help =
+"Auto-sort — terminals on top (attention-needed first), simulators next, the
+rest below"). Functional tap-behavior not yet hardware-exercised by USER.
+
+**Possible v2 (open to input):** a thinking/active middle sub-tier (today it's
+waiting → everything-else); a sticky toggle as an opt-in; remember per-display
+arrangements.

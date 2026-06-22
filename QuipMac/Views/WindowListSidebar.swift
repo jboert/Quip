@@ -5,6 +5,7 @@ import SwiftUI
 
 struct WindowListSidebar: View {
     @Environment(WindowManager.self) private var windowManager
+    @Environment(TerminalStateDetector.self) private var stateDetector
     @Binding var selectedWindowId: String?
     @Binding var windowOrder: [String]
 
@@ -37,6 +38,15 @@ struct WindowListSidebar: View {
                 .foregroundStyle(.secondary)
 
             Spacer()
+
+            Button {
+                magicSort()
+            } label: {
+                Image(systemName: "wand.and.stars")
+                    .font(.title3)
+            }
+            .buttonStyle(.borderless)
+            .help("Auto-sort — terminals on top (attention-needed first), simulators next, the rest below")
 
             Button {
                 showingAddPopover.toggle()
@@ -72,12 +82,12 @@ struct WindowListSidebar: View {
     private func sidebarSnapshot() -> SidebarSnapshot {
         let ordered = orderedWindows()
         let rows = ordered.enumerated().map { index, window in
-            let rank = sidebarRank(window)
+            let rank = windowTier(window)
             let nextIndex = ordered.index(after: index)
-            let previousID = index > ordered.startIndex && sidebarRank(ordered[index - 1]) == rank
+            let previousID = index > ordered.startIndex && windowTier(ordered[index - 1]) == rank
                 ? ordered[index - 1].id
                 : nil
-            let nextID = ordered.indices.contains(nextIndex) && sidebarRank(ordered[nextIndex]) == rank
+            let nextID = ordered.indices.contains(nextIndex) && windowTier(ordered[nextIndex]) == rank
                 ? ordered[nextIndex].id
                 : nil
 
@@ -99,7 +109,10 @@ struct WindowListSidebar: View {
             windowsByID[window.id] = window
         }
 
-        // First, add windows in the saved order
+        // windowOrder is authoritative — it carries whatever the user last
+        // arranged, by dragging rows or tapping the magic-wand sort. Render
+        // strictly in that order so a manual/magic arrangement sticks instead
+        // of being re-shuffled every frame.
         var ordered: [ManagedWindow] = []
         var orderedIDs = Set<String>()
         ordered.reserveCapacity(allWindows.count)
@@ -110,33 +123,57 @@ struct WindowListSidebar: View {
             }
         }
 
-        // Then append any new windows not yet in the order
-        for window in allWindows {
-            if !orderedIDs.contains(window.id) {
-                ordered.append(window)
-            }
-        }
-
-        // Rank the useful rows first without losing the user's manual order
-        // inside each bucket. Disabled terminal shells should not sit above
-        // enabled app/target windows just because they are terminals.
-        return ordered.enumerated().sorted { lhs, rhs in
-            let lhsRank = sidebarRank(lhs.element)
-            let rhsRank = sidebarRank(rhs.element)
-            if lhsRank != rhsRank { return lhsRank < rhsRank }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
+        // Windows not yet recorded in windowOrder (just appeared, before
+        // syncWindowOrder catches them) get appended in tier order so a freshly
+        // spawned terminal lands among the terminals rather than at the bottom.
+        let fresh = allWindows
+            .filter { !orderedIDs.contains($0.id) }
+            .sorted { windowTier($0) < windowTier($1) }
+        ordered.append(contentsOf: fresh)
+        return ordered
     }
 
-    private func sidebarRank(_ window: ManagedWindow) -> Int {
-        if window.bundleId == TerminalApp.iterm2.bundleIdentifier, window.isEnabled { return 0 }
-        if window.isTerminal, window.isEnabled { return 1 }
-        if window.isTarget, window.isOnVisibleScreen, window.isEnabled { return 2 }
-        if window.isEnabled { return 3 }
-        if window.isTarget, window.isOnVisibleScreen { return 4 }
-        if window.bundleId == TerminalApp.iterm2.bundleIdentifier { return 5 }
-        if window.isTerminal { return 6 }
-        return 7
+    /// Three-tier grouping used for BOTH the magic-wand sort and the sidebar's
+    /// visual row-group dividers: terminals (iTerm2 + Terminal.app) first, then
+    /// simulators, then everything else. This is the user's dev-focused order.
+    private func windowTier(_ window: ManagedWindow) -> Int {
+        if window.isTerminal { return 0 }
+        if window.targetKind == "simulator" { return 1 }
+        return 2
+    }
+
+    private func isWaitingForInput(_ window: ManagedWindow) -> Bool {
+        stateDetector.windowStates[window.id] == .waitingForInput
+    }
+
+    /// Magic-wand one-tap sort. Snapshots the current arrangement into a
+    /// dev-focused order and writes it to `windowOrder` (which orderedWindows
+    /// renders verbatim, so it sticks and stays drag-tweakable afterward):
+    ///   1. Terminals — and within them, windows where Claude is WAITING FOR
+    ///      INPUT bubble to the very top (the one that needs you is #1).
+    ///   2. Simulators.
+    ///   3. Everything else.
+    /// Secondary key: the project subtitle, then the prior order for stability.
+    /// One-shot by design — it does NOT keep re-sorting as states change; tap
+    /// again to re-snap.
+    private func magicSort() {
+        let windows = windowManager.windows
+        let sorted = windows.enumerated().sorted { lhs, rhs in
+            let a = lhs.element, b = rhs.element
+            let ta = windowTier(a), tb = windowTier(b)
+            if ta != tb { return ta < tb }
+            if ta == 0 {  // terminals: attention-needed (waiting for input) first
+                let aw = isWaitingForInput(a) ? 0 : 1
+                let bw = isWaitingForInput(b) ? 0 : 1
+                if aw != bw { return aw < bw }
+            }
+            let sa = a.subtitle.lowercased(), sb = b.subtitle.lowercased()
+            if sa != sb { return sa < sb }
+            return lhs.offset < rhs.offset
+        }.map(\.element.id)
+        withAnimation(.easeOut(duration: 0.22)) {
+            windowOrder = sorted
+        }
     }
 
     /// Sync windowOrder binding with current window list — called outside of body evaluation
