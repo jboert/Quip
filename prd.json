@@ -1,81 +1,52 @@
 {
-  "project": "Quip",
-  "branchName": "ralph/qr-pairing-share-link",
-  "description": "Make Quip pairing work via a tappable quip://pair share link (AirDrop/Messages/Mail) and obtainable remotely, without depending on the native iOS Camera. Swift/Xcode; quality gate = xcodebuild build + XCTest (no lint/tsc/pytest in this repo).",
+  "project": "Quip — Mac Settings page-by-page organize",
+  "branchName": "eb-branch",
+  "description": "QuipMac is a NATIVE macOS SwiftUI app — NOT a web app. All Settings UI lives in QuipMac/Views/SettingsView.swift: a sidebar NavigationSplitView with panes General, Layouts, Projects, Prompts, Connection, Security, Notifications; each pane is a grouped Form (.formStyle(.grouped)). General and Connection already had a craft pass (focal hero where useful, logical section order, the shared StatusDot indicator, ~600pt content column, no dead control-less sections). This PRD finishes that 'organize each pane' pass for the Security and Notifications panes plus a final consistency sweep. HARD CONSTRAINTS (do not violate): (1) Edit ONLY QuipMac/Views/SettingsView.swift for code. (2) Verify each story ONLY by running `xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS,name=My Mac' -derivedDataPath build` and confirming the output contains '** BUILD SUCCEEDED **'. SourceKit / IDE 'Cannot find type X in scope' or 'Generic parameter T could not be inferred' errors are SPURIOUS cross-file noise — xcodebuild is the ONLY compile oracle; ignore IDE diagnostics. (3) Do NOT install to /Applications, do NOT run ditto / killall / codesign / open, do NOT touch TCC, do NOT use the dev-browser skill or any browser (this is not a web app). A human installs and visually verifies separately. (4) Preserve ALL existing logic verbatim — importKey + APNs Key-ID auto-sync, sendTestPush, QR/pairing share, diagnostics bundle, PIN save/regenerate. Reorganize layout/sections only; do NOT change behavior. (5) Match existing patterns already in the file: grouped Form, the private StatusDot view (kinds ok/bad/warn/neutral/busy), Section headers + footers, and the connectionHero style for any focal element. (6) Stay on eb-branch; never push; never git add -A — add only the changed file(s) plus prd.json and progress.txt.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Unit-test the PairingPayload encode/decode contract",
-      "description": "As a developer, I want PairingPayload round-trip + parse coverage so the shared pairing-link format cannot silently regress.",
+      "title": "Organize the Security pane",
+      "description": "As a Quip user, I want the Security pane organized so PIN, pairing, and diagnostics read in a clear, logical order matching the craft of the General and Connection panes.",
       "acceptanceCriteria": [
-        "Add Shared/Tests/PairingPayloadTests.swift using XCTest with @testable import Quip, wired into the QuipiOSTests target",
-        "Test: PairingPayload(url:pin:).encodedURL() then PairingPayload.decode(...) preserves url and pin exactly (round-trip)",
-        "Test: a quip://pair?url=<base64-no-pad>&pin=<digits> string decodes to the original ws/wss URL (base64 re-padding works)",
-        "Test: malformed input (wrong scheme, missing url, missing or empty pin, non-base64) returns nil",
-        "Test: a plain ws:// or wss:// non-quip string decodes to nil so callers fall back to the raw-URL path (matches current contract)",
-        "xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:QuipiOSTests/PairingPayloadTests passes"
+        "SecurityTab sections are ordered logically and grouped: PIN (with Generate New PIN) first; then Pair iPhone (QR block + Send to iPhone); then the two Diagnostics sections (log location + bundle/share) last.",
+        "Any status indicator uses the shared StatusDot view — no raw colored-text status strings.",
+        "No control-less FYI-only Section; pure-information text lives in Section footers, not standalone sections.",
+        "All existing Security logic preserved unchanged: PIN save/regenerate/copy, sharePairingLink, pairingQRBlock/qrImage, bundleAndShare, AnchoredButton anchors, pairingURL per network mode.",
+        "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 1,
       "passes": true,
-      "notes": "Shared/Tests/PairingPayloadTests.swift (13 tests). xcodegen regen wired it into QuipiOSTests; build-for-testing + test-without-building on booted iPhone 17 Pro (id=CFCE8360) both green — 13/13 pass. Headless test runs fine when the sim is already booted (use test-without-building)."
+      "notes": "Ordering already PIN→Pair→Diagnostics(log)→Diagnostics(share). Added PIN section header+footer for grouping consistency; converted diagnostics success (green doc.zipper) + error (red text) raw status indicators to StatusDot(.ok/.bad). All logic preserved. BUILD SUCCEEDED."
     },
     {
       "id": "US-002",
-      "title": "Pair by tapping a quip://pair link (iOS onOpenURL)",
-      "description": "As a remote user, I want to tap a shared quip://pair link and have the phone pair automatically, so I never need the on-screen QR or the native Camera.",
+      "title": "Organize the Notifications pane",
+      "description": "As a Quip user, I want the Notifications (APNs) pane organized with a clear readiness signal at the top and logically ordered sections.",
       "acceptanceCriteria": [
-        "Extract the QRScannerView sheet's decode-and-pair block (QuipiOS/QuipApp.swift around line 1637) into one helper applyPairingPayload(_ payload: PairingPayload) that calls manager.addPaired + KeychainBackendPINs.write + manager.setActive + connect",
-        "onOpenURL (QuipiOS/QuipApp.swift around line 310) handles url.host == \"pair\": decode via PairingPayload.decode(url.absoluteString), call applyPairingPayload, and return BEFORE the window/perms branch",
-        "The in-app QR scanner sheet calls the SAME helper (no duplicated pairing logic)",
-        "Existing quip://window/<id>, quip://perms, and .quippack deep links still work unchanged",
-        "xcodebuild build -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'generic/platform=iOS Simulator' succeeds"
+        "A clear configured / not-configured signal near the top of NotificationsTab summarizing APNs readiness (has key AND non-empty Key ID, Team ID, Bundle ID) — use the StatusDot vocabulary or a compact hero consistent with connectionHero.",
+        "Sections ordered: APNs Auth Key, Registered Devices, Send Test Push.",
+        "Pane uses .formStyle(.grouped) consistent with the other panes.",
+        "importKey (including the AuthKey_<KEYID>.p8 Key-ID auto-sync + non-canonical-filename warning) and sendTestPush logic preserved verbatim.",
+        "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "Extracted the QR-sheet decode-and-pair block into applyPairingPayload(_:) on MainiOSView (urlText + manager.addPaired + KeychainBackendPINs.write + manager.setActive + doConnect). QR sheet now calls it. onOpenURL is in the App SCENE struct (separate from MainiOSView, where doConnect/urlText live), so the quip://pair branch decodes then posts the payload via a new .quipApplyPairing Notification.Name (object: PairingPayload); MainiOSView .onReceive runs the SAME helper — mirrors the existing quip://perms → .quipShowSettings bridge. Pair branch returns before perms/window; .quippack/window/perms paths untouched. Gate: xcodebuild build (generic/platform=iOS Simulator) ** BUILD SUCCEEDED **. No new files → no xcodegen/pbxproj change. Native SwiftUI → no browser test; tap-a-shared-link on-device verify = user's pass."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-003",
-      "title": "Pairing URL reflects the active network mode",
-      "description": "As a remote user, I want the pairing link to embed a URL reachable from where I am, so Tailscale mode uses the ts.net/100.x URL instead of a useless .local address.",
+      "title": "Final craft consistency sweep across all Settings panes",
+      "description": "As a Quip user, I want every Settings pane to feel consistent — same section rhythm, the same status vocabulary, no dead sections, content in a readable column.",
       "acceptanceCriteria": [
-        "pairingURL() in QuipMac/Views/SettingsView.swift branches on networkMode: .tailscale -> TailscaleService.webSocketURL (ts.net / 100.x), .cloudflareTunnel -> tunnel.webSocketURL, .localOnly -> LAN/.local",
-        "SecurityTab gets TailscaleService and networkMode injected so the branch can read them",
-        "In .tailscale mode the embedded URL is the ts.net/100.x address, never ws://<host>.local",
-        "Reuse the per-mode URL logic already in ConnectionTab (SettingsView.swift around line 779) rather than inventing a new scheme",
-        "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
+        "Section headers, spacing, and the StatusDot indicator are used consistently across all panes (General, Layouts, Projects, Prompts, Connection, Security, Notifications).",
+        "No remaining control-less / FYI-only Section in any pane.",
+        "Content stays within the ~600pt detail column established in SettingsView (no edge-to-edge sprawl introduced).",
+        "No behavior changes to any pane's logic — layout/wording only.",
+        "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "pairingURL() in SecurityTab now switch(networkMode): .tailscale -> tailscale.webSocketURL (ts.net/100.x, never .local), .cloudflareTunnel -> tunnel.webSocketURL, .localOnly -> ws://<host>.local:8765 (guard isRunning). Injected TailscaleService via @Environment (already in the SettingsView env chain — ConnectionTab reads the same) + @AppStorage(\"networkMode\") networkModeRaw with a NetworkMode computed, mirroring ConnectionTab. Reuses the per-mode URL sources from ConnectionTab's Diagnostics rows (lanWSURL/tailscaleWSURL/tunnel.webSocketURL) rather than a new scheme. No new files -> no xcodegen/pbxproj change. Gate: xcodebuild build (platform=macOS) ** BUILD SUCCEEDED **. SourceKit 'cannot find X in scope' diags are spurious (no module context); xcodebuild is the oracle. Native SwiftUI -> no browser test; visual QR verify on a Tailscale-mode Mac = user's pass."
-    },
-    {
-      "id": "US-004",
-      "title": "Mac 'Send to iPhone' share button",
-      "description": "As a user away from my Mac, I want to share the pairing link from the Mac so I can AirDrop/Message/Mail it to the phone and tap to pair.",
-      "acceptanceCriteria": [
-        "SecurityTab (QuipMac/Views/SettingsView.swift around line 1254) adds a 'Send to iPhone' button",
-        "The button builds the quip://pair link via PairingPayload(url: pairingURL(), pin: <current PIN>).encodedURL() plus a human-readable \"<ws url>\\nPIN: <pin>\" text fallback",
-        "Tapping it presents NSSharingServicePicker over those items, reusing the existing diagnostics-share pattern (SettingsView.swift around line 1237) rather than a new mechanism",
-        "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
-      ],
-      "priority": 4,
-      "passes": true,
-      "notes": "Added a 'Send to iPhone…' AnchoredButton inside SecurityTab's 'Pair iPhone' Section, directly under pairingQRBlock (so US-005 already has it surfaced near the QR). New sharePairingLink() @MainActor helper builds items = [URL(quip://pair?url=<b64>&pin=<digits>) from PairingPayload(url: pairingURL(), pin: pinManager.pin).encodedURL(), \"<ws url>\\nPIN: <pin>\" text fallback] and shows an NSSharingServicePicker pinned to a new @State pairingAnchorView — same pattern as DiagnosticsBundle.presentSharePicker (inlined, not a new mechanism). Button .disabled when pairingURL().isEmpty (server stopped). Reused pairingURL() (US-003 per-mode branch) so the shared link carries the active-mode URL. No new files -> no xcodegen/pbxproj change. Gate: xcodebuild build (platform=macOS) ** BUILD SUCCEEDED **. SourceKit 'cannot find X in scope' diags spurious (no module context); xcodebuild is the oracle. Native SwiftUI -> no browser test; AirDrop/Message/Mail-then-tap on-device verify = user's pass."
-    },
-    {
-      "id": "US-005",
-      "title": "Clarify the pairing screen (native Camera cannot open the QR)",
-      "description": "As a user, I want the pairing screen to tell me the native Camera cannot scan it, so I use the in-app scanner or the share link instead of getting 'No usable data found'.",
-      "acceptanceCriteria": [
-        "The QR header copy in SecurityTab no longer implies the native Camera works (e.g. 'Scan with iPhone' becomes 'Scan in the Quip app - the Camera app cannot open it')",
-        "The 'Send to iPhone' share button (US-004) is surfaced as the easy/remote alternative near the QR",
-        "No functional regression to the QR rendering itself",
-        "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
-      ],
-      "priority": 5,
-      "passes": true,
-      "notes": "Copy-only clarification in SecurityTab (QuipMac/Views/SettingsView.swift), no functional change to QR rendering. (1) pairingQRBlock now wraps the QR HStack in a VStack with a leading caption \"Scan in the Quip app — the Camera app can’t open it\" so the warning sits directly above the QR. (2) Section footer rewritten to lead with the explicit Camera warning: \"The iPhone Camera app can’t open this QR (it shows \\\"No usable data found\\\"). Scan it inside the Quip app — qrcode.viewfinder button in the URL bar … Or tap \\\"Send to iPhone\\\" …\". The US-004 'Send to iPhone…' AnchoredButton already sits immediately under pairingQRBlock = the easy/remote alternative surfaced near the QR (AC#2). No new files -> no xcodegen/pbxproj change. Gate: xcodebuild build (platform=macOS) ** BUILD SUCCEEDED **. SourceKit 'cannot find X in scope'/'Generic parameter T' diags are spurious (no module context); xcodebuild is the oracle. Native SwiftUI -> no browser test; visual copy verify on the Mac pairing screen = user's pass."
+      "passes": false,
+      "notes": ""
     }
   ]
 }

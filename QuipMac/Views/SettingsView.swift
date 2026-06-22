@@ -1456,6 +1456,12 @@ private struct SecurityTab: View {
                 } label: {
                     Label("Generate New PIN", systemImage: "arrow.clockwise")
                 }
+            } header: {
+                Text("PIN")
+            } footer: {
+                Text("The iPhone enters this PIN when pairing. Generating a new PIN replaces the old one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -1510,30 +1516,26 @@ private struct SecurityTab: View {
                 .disabled(bundling)
 
                 if let path = lastBundlePath {
-                    HStack(spacing: 8) {
-                        Image(systemName: "doc.zipper")
-                            .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            StatusDot(kind: .ok, text: "Bundle ready")
+                            Spacer()
+                            Button("Reveal") {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                        }
                         Text(path)
                             .font(.caption.monospaced())
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Spacer()
-                        Button("Reveal") {
-                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
                 if let err = lastError {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        Text(err)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
+                    StatusDot(kind: .bad, text: err)
                 }
             } header: {
                 Text("Diagnostics — share")
