@@ -1054,3 +1054,38 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     now mode-aware, so the shared link is automatically correct per mode. Reuse the
     diagnostics-share NSSharingServicePicker pattern (bundleAndShare/AnchoredButton ~1228).
 ---
+
+## 2026-06-22 - US-004
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added a "Send to iPhone…" share button to SecurityTab so a user away from
+  their Mac can AirDrop / Message / Mail the pairing link and tap-to-pair.
+- Placed the AnchoredButton inside the existing "Pair iPhone" Section, directly
+  under pairingQRBlock — this also satisfies US-005's "surfaced near the QR" AC.
+- New sharePairingLink() @MainActor helper builds items =
+  [URL(quip://pair?url=<b64-no-pad>&pin=<digits>) from
+  PairingPayload(url: pairingURL(), pin: pinManager.pin).encodedURL(),
+  "<ws url>\nPIN: <pin>" plaintext fallback] and shows NSSharingServicePicker
+  pinned to a new @State pairingAnchorView. Inlined the diagnostics-share
+  pattern (DiagnosticsBundle.presentSharePicker) rather than a new mechanism.
+- Button .disabled(pairingURL().isEmpty) so it greys out when the server/tunnel
+  has no URL yet. Reuses pairingURL() (US-003 per-mode branch) so the shared
+  link carries the active network mode's URL.
+- Files changed: QuipMac/Views/SettingsView.swift (+1 @State, +button in section,
+  +sharePairingLink helper, footer copy), prd.json, progress.txt.
+- Gate: xcodebuild build -project QuipMac.xcodeproj -scheme QuipMac
+  -destination 'platform=macOS' => ** BUILD SUCCEEDED **.
+- **Learnings for future iterations:**
+  - NSSharingServicePicker takes [Any]; mixing a custom-scheme URL
+    (quip://pair…) with a String fallback is fine — services that ignore the
+    quip:// URL fall back to the plaintext "<ws url>\nPIN:" item.
+  - AnchoredButton (defined ~line 1417 in SettingsView.swift) + a per-button
+    @State NSView? anchor is the reuse pattern for any NSSharingServicePicker
+    in Settings — give each picker its OWN anchor var so it pins to its own
+    button (diagnostics uses anchorView, pairing now uses pairingAnchorView).
+  - pairingURL() is the single source of truth for "what URL does the phone
+    actually reach" — QR, share link, and any future pairing affordance should
+    all call it, never re-derive ws://<host>.local.
+  - US-005 remaining: only the QR header/footer COPY needs the "Camera app
+    cannot open it" wording — the share button it references is already shipped
+    here, so US-005 is now copy-only.
+---

@@ -60,8 +60,8 @@
         "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added a 'Send to iPhone…' AnchoredButton inside SecurityTab's 'Pair iPhone' Section, directly under pairingQRBlock (so US-005 already has it surfaced near the QR). New sharePairingLink() @MainActor helper builds items = [URL(quip://pair?url=<b64>&pin=<digits>) from PairingPayload(url: pairingURL(), pin: pinManager.pin).encodedURL(), \"<ws url>\\nPIN: <pin>\" text fallback] and shows an NSSharingServicePicker pinned to a new @State pairingAnchorView — same pattern as DiagnosticsBundle.presentSharePicker (inlined, not a new mechanism). Button .disabled when pairingURL().isEmpty (server stopped). Reused pairingURL() (US-003 per-mode branch) so the shared link carries the active-mode URL. No new files -> no xcodegen/pbxproj change. Gate: xcodebuild build (platform=macOS) ** BUILD SUCCEEDED **. SourceKit 'cannot find X in scope' diags spurious (no module context); xcodebuild is the oracle. Native SwiftUI -> no browser test; AirDrop/Message/Mail-then-tap on-device verify = user's pass."
     },
     {
       "id": "US-005",

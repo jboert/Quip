@@ -1121,6 +1121,9 @@ private struct SecurityTab: View {
     @State private var lastError: String?
     @State private var bundling: Bool = false
     @State private var anchorView: NSView?
+    // Separate anchor for the "Send to iPhone" pairing-link share picker so it
+    // pins to its own button, not the diagnostics "Bundle and share…" one.
+    @State private var pairingAnchorView: NSView?
 
     var body: some View {
         Form {
@@ -1155,10 +1158,17 @@ private struct SecurityTab: View {
 
             Section {
                 pairingQRBlock
+
+                AnchoredButton(anchor: $pairingAnchorView) {
+                    sharePairingLink()
+                } label: {
+                    Label("Send to iPhone…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(pairingURL().isEmpty)
             } header: {
                 Text("Pair iPhone")
             } footer: {
-                Text("Scan from the iPhone Quip app's URL bar (qrcode.viewfinder button) — auto-fills the URL and PIN, no typing.")
+                Text("Scan from the iPhone Quip app's URL bar (qrcode.viewfinder button) — auto-fills the URL and PIN, no typing. Or tap “Send to iPhone” to AirDrop / Message / Mail a quip://pair link the phone taps to pair — no Camera or QR needed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1251,6 +1261,30 @@ private struct SecurityTab: View {
                     self.bundling = false
                 }
             }
+        }
+    }
+
+    /// Share the pairing link so a remote phone can tap-to-pair without the
+    /// QR or the native Camera. Mirrors the diagnostics-share pattern
+    /// (NSSharingServicePicker pinned to an AnchoredButton): a tappable
+    /// quip://pair?url=…&pin=… link plus a plaintext "<ws url>\nPIN: <pin>"
+    /// fallback for share targets that ignore custom-scheme URLs.
+    @MainActor
+    private func sharePairingLink() {
+        let url = pairingURL()
+        guard !url.isEmpty else { return }
+        let payload = PairingPayload(url: url, pin: pinManager.pin)
+        var items: [Any] = []
+        if let encoded = payload.encodedURL(), let link = URL(string: encoded) {
+            items.append(link)
+        }
+        items.append("\(url)\nPIN: \(pinManager.pin)")
+        let picker = NSSharingServicePicker(items: items)
+        if let anchor = pairingAnchorView {
+            picker.show(relativeTo: .zero, of: anchor, preferredEdge: .minY)
+        } else if let window = NSApp.keyWindow,
+                  let contentView = window.contentView {
+            picker.show(relativeTo: .zero, of: contentView, preferredEdge: .minY)
         }
     }
 
