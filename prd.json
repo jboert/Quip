@@ -1,52 +1,81 @@
 {
   "project": "Quip",
-  "branchName": "eb-branch",
-  "description": "GH #33 batch (eb-branch) — stop macOS re-prompting for Accessibility / Screen Recording / Automation after every Mac rebuild. Full spec: tasks/prd-mac-tcc-cdhash-regrant.md. This queue is the LAYER-1 SECONDARY POLISH ONLY (ralph-safe, pure Swift, compile-gated): US-001 detect own-cdhash change across launches; US-002 remove the unconditional Screen-Recording-pane auto-open (QuipMacApp.swift:589-591) and replace with a gated non-intrusive `permissionsNeedAttention` signal; US-003 menubar 'Fix Permissions…' affordance so the user re-grants on their terms. LAYER-2 ROOT CAUSE is the GH #13 signing overhaul (project.yml DEVELOPMENT_TEAM D2PM6R797Q + real identity + hardened runtime + a macOS provisioning profile) — that is US-004/US-005 in the spec, MANUAL and LAST, EXCLUDED from this autonomous loop because it needs an Apple Developer portal action and will fail the compile-gate without a profile (same restricted-entitlement wall that blocked the keychain future-proof). Native gate = `xcodebuild` QuipMac (-swift-version 6, the only isolation oracle) BUILD SUCCEEDED + noted unit tests compile/pass; this is QuipMac code so it NEEDS a Mac rebuild to land (wipes TCC once — that is the user's manual install/re-grant pass, do NOT block a story on it). Ideally these 3 + the manual US-004 land in ONE rebuild so the user re-grants exactly once. NEVER push eb-branch without an explicit literal 'push'.",
+  "branchName": "ralph/qr-pairing-share-link",
+  "description": "Make Quip pairing work via a tappable quip://pair share link (AirDrop/Messages/Mail) and obtainable remotely, without depending on the native iOS Camera. Swift/Xcode; quality gate = xcodebuild build + XCTest (no lint/tsc/pytest in this repo).",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Detect cdhash change across launches",
-      "description": "As QuipMac, I need to know whether my own code signature changed since the last launch, so I can tell a 'you just rebuilt — re-grant' transition apart from a steady-state launch.",
+      "title": "Unit-test the PairingPayload encode/decode contract",
+      "description": "As a developer, I want PairingPayload round-trip + parse coverage so the shared pairing-link format cannot silently regress.",
       "acceptanceCriteria": [
-        "New helper (e.g. QuipMac/Services/CodeIdentity.swift) reads the running app's own cdhash: SecCodeCopySelf -> SecCodeCopyStaticCode -> SecCodeCopySigningInformation with kSecCodeInfoUnique, rendered to a hex string; returns nil (degrade-safe) if any step fails",
-        "Persist the last-seen cdhash in UserDefaults (e.g. key 'lastLaunchCDHash')",
-        "Expose didCodeIdentityChangeSinceLastLaunch() -> Bool: true on first run ever (no stored value) OR when current != stored; updates the stored value as a side effect so the next launch reads 'unchanged'",
-        "A pure unit test covers the compare/update logic with an INJECTED store + INJECTED cdhash provider (do NOT depend on the live SecCode read in the test)",
-        "On a nil cdhash read, err toward 'changed' (signal rather than go silent)",
-        "Gate: xcodebuild QuipMac (-swift-version 6) BUILD SUCCEEDED, no new warnings in changed files; NEEDS a Mac rebuild to land — install/TCC re-grant is the user's manual pass, do not block the story on it"
+        "Add Shared/Tests/PairingPayloadTests.swift using XCTest with @testable import Quip, wired into the QuipiOSTests target",
+        "Test: PairingPayload(url:pin:).encodedURL() then PairingPayload.decode(...) preserves url and pin exactly (round-trip)",
+        "Test: a quip://pair?url=<base64-no-pad>&pin=<digits> string decodes to the original ws/wss URL (base64 re-padding works)",
+        "Test: malformed input (wrong scheme, missing url, missing or empty pin, non-base64) returns nil",
+        "Test: a plain ws:// or wss:// non-quip string decodes to nil so callers fall back to the raw-URL path (matches current contract)",
+        "xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:QuipiOSTests/PairingPayloadTests passes"
       ],
       "priority": 1,
-      "passes": true,
-      "notes": "Done 2026-06-20. QuipMac/Services/CodeIdentity.swift: CodeIdentityStore seam (UserDefaults conforms via setString shim) + currentCDHash() (SecCodeCopySelf→StaticCode→SigningInformation[kSecCodeInfoUnique]→hex, nil on any failure) + didCodeIdentityChangeSinceLastLaunch(store:currentHash:) — first-run/changed persists side-effect, unchanged no-rewrite, nil read errs toward changed without clobbering stored. Tests: QuipMac/Tests/CodeIdentityTests.swift (injected FakeStore + injected hash, 6 cases). Gate: xcodebuild macOS BUILD SUCCEEDED + build-for-testing TEST BUILD SUCCEEDED, no new warnings; standalone swiftc logic oracle 14/14. NEEDS Mac rebuild to land (bundle into US-002/003 + manual US-004 for one re-grant pass)."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-002",
-      "title": "Replace unconditional pane auto-open with a gated non-intrusive signal",
-      "description": "As a user, I don't want to be yanked into System Settings on every launch that preflights a permission false; I want a quiet signal only when something actually changed.",
+      "title": "Pair by tapping a quip://pair link (iOS onOpenURL)",
+      "description": "As a remote user, I want to tap a shared quip://pair link and have the phone pair automatically, so I never need the on-screen QR or the native Camera.",
       "acceptanceCriteria": [
-        "Remove the unconditional openSettingsPane(.screenRecording) at QuipMac/QuipMacApp.swift:589-591",
-        "On launch: if didCodeIdentityChangeSinceLastLaunch() (US-001) is true AND a permission preflights false, set a published permissionsNeedAttention state — do NOT force-open any pane",
-        "If the cdhash is unchanged, never auto-open any pane (steady state stays silent)",
-        "The existing 5s permsTimer / wake-probe behaviour is unchanged except a dropped grant flips permissionsNeedAttention instead of opening a pane",
-        "Gate: xcodebuild QuipMac (-swift-version 6) BUILD SUCCEEDED; verify NO launch code path calls openSettingsPane without an explicit user action; NEEDS a Mac rebuild to land (user's manual install/re-grant pass)"
+        "Extract the QRScannerView sheet's decode-and-pair block (QuipiOS/QuipApp.swift around line 1637) into one helper applyPairingPayload(_ payload: PairingPayload) that calls manager.addPaired + KeychainBackendPINs.write + manager.setActive + connect",
+        "onOpenURL (QuipiOS/QuipApp.swift around line 310) handles url.host == \"pair\": decode via PairingPayload.decode(url.absoluteString), call applyPairingPayload, and return BEFORE the window/perms branch",
+        "The in-app QR scanner sheet calls the SAME helper (no duplicated pairing logic)",
+        "Existing quip://window/<id>, quip://perms, and .quippack deep links still work unchanged",
+        "xcodebuild build -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'generic/platform=iOS Simulator' succeeds"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "Done 2026-06-20. Removed the unconditional openSettingsPane(.screenRecording) launch block (QuipMacApp.swift ~589). Replaced with a gated raise: in the 1.0s initial broadcast, CodeIdentity.didCodeIdentityChangeSinceLastLaunch() (called once/launch for its store side effect) AND permissionsStore.deniedCount > 0 → set permissionsStore.permissionsNeedAttention = true; never opens a pane. New @Observable property MacPermissionsStore.permissionsNeedAttention (Services/MacPermissionsStore.swift) — quiet signal, distinct from anyDenied. broadcastPermissions(force:) now keeps it truthful WITHOUT opening a pane: a dropped grant (deniedCount rises vs lastPermissionsSnapshot) raises it; all-granted (deniedCount==0) clears it; constant denial leaves as-is. First force:true probe has nil lastPermissionsSnapshot so the rise-check is skipped → steady-state launch with an already-missing grant + unchanged cdhash stays silent (AC#3). openSettingsPane now reachable ONLY via user action: phone open_mac_settings_pane handler (QuipMacApp.swift ~1689) + SettingsView Grant button — verified by grep, no launch path. Tests: +2 in Tests/MacPermissionsStoreTests.swift (default false, independent of anyDenied). Gate: xcodebuild macOS BUILD SUCCEEDED + TEST BUILD SUCCEEDED, no new warnings in changed files (pre-existing 'Bundle cloudflared' run-script warning only). NEEDS Mac rebuild to land — bundle with US-003 + manual US-004 for one re-grant pass; do not block on hardware verify."
+      "passes": false,
+      "notes": ""
     },
     {
       "id": "US-003",
-      "title": "Menubar 'Fix Permissions…' affordance",
-      "description": "As a user, I want a persistent, non-intrusive way to fix dropped grants on my own terms — a menubar warning glyph plus a one-click 'fix' that opens the right pane.",
+      "title": "Pairing URL reflects the active network mode",
+      "description": "As a remote user, I want the pairing link to embed a URL reachable from where I am, so Tailscale mode uses the ts.net/100.x URL instead of a useless .local address.",
       "acceptanceCriteria": [
-        "The existing menubar warning glyph (referenced at QuipMacApp.swift:560 comment) lights when permissionsNeedAttention OR any probed permission is false",
-        "The menubar menu gains a 'Fix Permissions…' item; clicking it opens the System Settings pane(s) for whichever permission(s) are currently missing (Screen Recording / Accessibility / Automation), reusing openSettingsPane + the current permissionProbe snapshot",
-        "Opening a pane is now reachable ONLY via this user action (or the existing phone red-X-row tap), never automatically on launch",
-        "Gate: xcodebuild QuipMac (-swift-version 6) BUILD SUCCEEDED, no new warnings in changed files; NEEDS a Mac rebuild to land (user's manual install/re-grant pass)"
+        "pairingURL() in QuipMac/Views/SettingsView.swift branches on networkMode: .tailscale -> TailscaleService.webSocketURL (ts.net / 100.x), .cloudflareTunnel -> tunnel.webSocketURL, .localOnly -> LAN/.local",
+        "SecurityTab gets TailscaleService and networkMode injected so the branch can read them",
+        "In .tailscale mode the embedded URL is the ts.net/100.x address, never ws://<host>.local",
+        "Reuse the per-mode URL logic already in ConnectionTab (SettingsView.swift around line 779) rather than inventing a new scheme",
+        "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "Done 2026-06-20. (1) Menubar glyph (QuipMacApp.swift ~191) now lights on `permissionsStore.anyDenied || permissionsStore.permissionsNeedAttention` (was anyDenied only) — so the quiet US-002 attention signal, not just a live probe-false, raises the warning triangle. (2) New 'Fix Permissions…' item in MenuBarView.actionsSection (QuipMac/Views/MenuBarView.swift), shown only when `permissionsNeedAttention || anyDenied` (steady state stays clean); fixPermissions() opens the System Settings pane(s) for every currently-missing perm via the live probe snapshot + reuses openPane (same `MacSettingsPane.systemSettingsURL` → NSWorkspace.open as the per-row buttons / phone red-❌ taps / SettingsView Grant), then clears permissionsNeedAttention as the user's acknowledgment (a still-denied perm keeps the glyph lit via anyDenied; broadcastPermissions clears all on re-grant). (3) Pane-open is user-action-only: grepped every call site — phone open_mac_settings_pane handler (~1709), SettingsView Grant (~534), MenuBarView permissionRow + new Fix Permissions, and the failed-arrange Accessibility nudge (~2031) — none on a launch path; the US-002 launch gate only sets permissionsNeedAttention. New pure `MacPermissionsMessage.deniedPanes: [MacSettingsPane]` (Shared/MessageProtocol.swift, mirrors deniedCount; Accessibility→Automation→ScreenRecording order; appleEvents→.automation) is the testable mapping the menu consumes. Tests: +5 in Tests/MacPermissionsStoreTests.swift (empty/all-three-ordered/per-perm map/pair-order/count-parity over all 8 combos). Gate: xcodebuild QuipMac (platform=macOS) ** BUILD SUCCEEDED ** + build-for-testing ** TEST BUILD SUCCEEDED **, no new warnings in changed files (only pre-existing appintents/cloudflared notes); standalone swiftc deniedPanes oracle 14/14 PASS. NO new files → no xcodegen regen. NEEDS a Mac rebuild to land — bundle with US-001/002 (+ manual US-004) so the user re-grants exactly once; install + on-device verify is the user's manual pass, not blocked here."
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Mac 'Send to iPhone' share button",
+      "description": "As a user away from my Mac, I want to share the pairing link from the Mac so I can AirDrop/Message/Mail it to the phone and tap to pair.",
+      "acceptanceCriteria": [
+        "SecurityTab (QuipMac/Views/SettingsView.swift around line 1254) adds a 'Send to iPhone' button",
+        "The button builds the quip://pair link via PairingPayload(url: pairingURL(), pin: <current PIN>).encodedURL() plus a human-readable \"<ws url>\\nPIN: <pin>\" text fallback",
+        "Tapping it presents NSSharingServicePicker over those items, reusing the existing diagnostics-share pattern (SettingsView.swift around line 1237) rather than a new mechanism",
+        "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Clarify the pairing screen (native Camera cannot open the QR)",
+      "description": "As a user, I want the pairing screen to tell me the native Camera cannot scan it, so I use the in-app scanner or the share link instead of getting 'No usable data found'.",
+      "acceptanceCriteria": [
+        "The QR header copy in SecurityTab no longer implies the native Camera works (e.g. 'Scan with iPhone' becomes 'Scan in the Quip app - the Camera app cannot open it')",
+        "The 'Send to iPhone' share button (US-004) is surfaced as the easy/remote alternative near the QR",
+        "No functional regression to the QR rendering itself",
+        "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
     }
   ]
 }
