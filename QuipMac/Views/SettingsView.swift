@@ -889,14 +889,14 @@ private struct GeneralTab: View {
 
     /// One TCC perm row. Granted = green check. Denied = red ✗ + a "Grant"
     /// button that drops the user straight into the matching System Settings
-    /// pane via an x-apple.systempreferences URL — no nav required. The
-    /// leading glyph matches StatusDot's vocabulary (green check / red x).
+    /// pane via an x-apple.systempreferences URL — no nav required. Uses the
+    /// shared StatusDot (green check / red x) so the Permissions rows speak the
+    /// same status vocabulary as every other pane — the last ad-hoc status
+    /// glyph folded into StatusDot by the US-003 consistency sweep.
     @ViewBuilder
     private func macPermRow(name: String, granted: Bool, pane: MacSettingsPane) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(granted ? Color.green : Color.red)
-            Text(name)
+            StatusDot(kind: granted ? .ok : .bad, text: name)
             Spacer()
             if !granted {
                 Button("Grant") { openSettingsPane(pane) }

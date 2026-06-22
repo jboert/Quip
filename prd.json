@@ -45,8 +45,8 @@
         "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Audited all seven panes for status-vocabulary, header, dead-section, and width consistency. Found exactly one persistent status row still on an ad-hoc colored glyph: GeneralTab.macPermRow (Permissions) used raw Image(checkmark/xmark).foregroundStyle(.green/.red) — the very case the StatusDot doc comment names as legacy. Converted it to StatusDot(kind: granted ? .ok : .bad, text: name); Grant button + openSettingsPane behavior untouched. Deliberately LEFT as documented variants (converting each would drop state or violate verbatim-preserve): whisperStatusRow (distinct blue downloading-% state StatusDot can't express), Notifications testStatus/importStatus (transient log lines that already embed ✓/⚠/✗ — StatusDot would double-glyph, and the strings are built in the verbatim-preserved sendTestPush/importKey), and ConnectionTab Connected-Clients rows (leading glyph is device TYPE, not status). No control-less FYI sections remain (US-001/US-002 cleared them); every non-hero Section has a header; hero sections (Connection, Notifications) share the headerless .padding(.vertical,6) pattern; 600pt detail cap untouched — no width sprawl introduced. No behavior changes. BUILD SUCCEEDED."
     }
   ]
 }
