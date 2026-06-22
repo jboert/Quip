@@ -4,6 +4,22 @@ PRD: prd.json (source: tasks/prd-swrm-board-integration.md)
 Base branch: eb-branch (ralph branch cut from eb-branch, NOT main)
 
 ## Codebase Patterns
+### qr-pairing-share-link PRD (ralph/qr-pairing-share-link, CURRENT prd.json)
+- GOAL: pair via tappable `quip://pair?url=<b64-no-pad>&pin=<digits>` link (AirDrop/
+  Messages/Mail) + obtainable remotely, no native iOS Camera. Wire format lives in
+  Shared/PairingPayload.swift (public, Sendable, Equatable). decode() returns nil for
+  any non-quip-pair string (incl. plain ws/wss) → callers fall back to raw-URL path.
+- iOS BUILD GATE: `cd QuipiOS && xcodebuild build -project QuipiOS.xcodeproj -scheme
+  QuipiOS -destination 'generic/platform=iOS Simulator'`. Mac BUILD GATE: `cd QuipMac
+  && xcodegen generate` (only if files added) then `xcodebuild build -project
+  QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS'`.
+- iOS TESTS DO run headless IF a sim is booted: build-for-testing (generic dest) →
+  `xcodebuild test-without-building -destination 'platform=iOS Simulator,id=CFCE8360-508E-4A66-B0FD-615D8CD2A549'`
+  (iPhone 17 Pro, OS 26.5, currently booted). QuipiOSTests globs Tests/ AND ../Shared/Tests/.
+- KEY FILES for remaining stories: iOS onOpenURL + QRScannerView decode-and-pair block
+  in QuipiOS/QuipApp.swift (~310 / ~1637); Mac pairingURL() + SecurityTab + per-mode URL
+  logic in QuipMac/Views/SettingsView.swift (~779 ConnectionTab, ~1237 diagnostics-share,
+  ~1254 SecurityTab).
 ### GH #33 Mac TCC re-prompt PRD (eb-branch, CURRENT prd.json)
 - GOAL: stop macOS re-prompting for Accessibility/Screen Recording/Automation on
   every Mac rebuild. Layer-1 (US-001/002/003) is pure-Swift compile-gated; layer-2
@@ -928,4 +944,33 @@ Thread: (ralph/local — no AMP thread id)
     panes are adjacent under Privacy & Security so the others are one click away;
     the per-row buttons remain for granular single-pane opens. Acceptable per the
     AC's "pane(s)" wording.
+---
+
+## 2026-06-22 03:50 - US-001
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+NEW PRD: qr-pairing-share-link (quip://pair tap-to-pair + remote-obtainable).
+Implemented US-001 — unit-test the PairingPayload encode/decode contract.
+- Added Shared/Tests/PairingPayloadTests.swift — 13 XCTest cases (`@testable import Quip`):
+  round-trip (cloudflare wss + plain LAN ws), encoded-URL shape + stripped padding,
+  hand-crafted unpadded-base64 re-pad decode, malformed (wrong scheme/host, missing
+  url, missing/empty pin, non-base64), and plain ws/wss non-quip → nil fallback.
+- Files: Shared/Tests/PairingPayloadTests.swift (new), QuipiOS/QuipiOS.xcodeproj/project.pbxproj
+  (xcodegen regen wired the new file into QuipiOSTests). prd.json, progress.txt.
+- Verified: standalone `swiftc PairingPayload.swift main.swift` (14/14 logic asserts PASS) →
+  `xcodebuild build-for-testing … -destination generic/platform=iOS Simulator` → ** TEST BUILD
+  SUCCEEDED ** → `xcodebuild test-without-building … -destination 'platform=iOS Simulator,id=CFCE8360-508E-4A66-B0FD-615D8CD2A549' -only-testing:QuipiOSTests/PairingPayloadTests` → ** TEST EXECUTE SUCCEEDED **, 13/13, 0 failures.
+- **Learnings for future iterations:**
+  - PairingPayload already exists at Shared/PairingPayload.swift (public struct, Sendable,
+    Equatable). Wire format `quip://pair?url=<base64-url-no-pad>&pin=<digits>`. decode() returns
+    nil for any non-quip-pair string (incl. plain ws/wss) — callers fall back to raw-URL path.
+  - QuipiOSTests target globs BOTH `Tests` and `../Shared/Tests` (QuipiOS/project.yml lines
+    142-144). A new test in Shared/Tests/ auto-joins on `cd QuipiOS && xcodegen generate`. Commit
+    the regenerated project.pbxproj (only that one file churns).
+  - HEADLESS TEST DOES NOT ALWAYS HANG: prior progress said `xcodebuild test` hangs because
+    TEST_HOST=full Quip.app. That's only when no sim is booted. With iPhone 17 Pro already
+    BOOTED (CFCE8360-508E-4A66-B0FD-615D8CD2A549, OS 26.5) + `test-without-building`, the suite
+    runs in ~3.7s. Path that works: build-for-testing (generic dest) → test-without-building
+    (id=<booted udid>). Use `timeout 300` as a guard.
+  - Standalone swiftc fast-oracle gotcha: top-level expressions need the file named literally
+    `main.swift`, and you must `import Foundation` for Data/URLComponents.
 ---

@@ -16,8 +16,8 @@
         "xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:QuipiOSTests/PairingPayloadTests passes"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Shared/Tests/PairingPayloadTests.swift (13 tests). xcodegen regen wired it into QuipiOSTests; build-for-testing + test-without-building on booted iPhone 17 Pro (id=CFCE8360) both green — 13/13 pass. Headless test runs fine when the sim is already booted (use test-without-building)."
     },
     {
       "id": "US-002",
