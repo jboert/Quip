@@ -46,8 +46,8 @@
         "xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS' succeeds"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "pairingURL() in SecurityTab now switch(networkMode): .tailscale -> tailscale.webSocketURL (ts.net/100.x, never .local), .cloudflareTunnel -> tunnel.webSocketURL, .localOnly -> ws://<host>.local:8765 (guard isRunning). Injected TailscaleService via @Environment (already in the SettingsView env chain — ConnectionTab reads the same) + @AppStorage(\"networkMode\") networkModeRaw with a NetworkMode computed, mirroring ConnectionTab. Reuses the per-mode URL sources from ConnectionTab's Diagnostics rows (lanWSURL/tailscaleWSURL/tunnel.webSocketURL) rather than a new scheme. No new files -> no xcodegen/pbxproj change. Gate: xcodebuild build (platform=macOS) ** BUILD SUCCEEDED **. SourceKit 'cannot find X in scope' diags are spurious (no module context); xcodebuild is the oracle. Native SwiftUI -> no browser test; visual QR verify on a Tailscale-mode Mac = user's pass."
     },
     {
       "id": "US-004",

@@ -1102,6 +1102,15 @@ private struct SecurityTab: View {
     @Environment(PINManager.self) private var pinManager
     @Environment(WebSocketServer.self) private var webSocketServer
     @Environment(CloudflareTunnel.self) private var tunnel
+    @Environment(TailscaleService.self) private var tailscale
+
+    // The pairing URL must match wherever the phone actually connects, so
+    // we branch on the same mode the user picked in the Connection tab.
+    @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
+
+    private var networkMode: NetworkMode {
+        NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
+    }
 
     // Diagnostics-bundle state — folded in from the former Diagnostics
     // tab. Co-located with PIN + pairing here because both topics are
@@ -1298,16 +1307,27 @@ private struct SecurityTab: View {
         }
     }
 
-    /// Pick the URL the iPhone is most likely to reach — tunnel URL when
-    /// available (works on cellular too), else the local ws:// host:port.
-    /// Empty when the server isn't running.
+    /// Embed the URL the iPhone will actually reach, branching on the active
+    /// network mode so a Tailscale-mode link carries the stable ts.net / 100.x
+    /// address instead of a useless ws://<host>.local. Mirrors the per-mode URL
+    /// sources surfaced in ConnectionTab's "Diagnostics — Connection URLs" rows:
+    ///   .tailscale        → TailscaleService.webSocketURL (ts.net / 100.x)
+    ///   .cloudflareTunnel → tunnel.webSocketURL (works on cellular too)
+    ///   .localOnly        → LAN ws://<host>.local:port
+    /// Empty when the chosen mode has no URL yet (server stopped, or
+    /// tunnel/Tailscale not resolved) — the QR block shows a "start the server"
+    /// hint in that case.
     private func pairingURL() -> String {
-        if !tunnel.webSocketURL.isEmpty {
+        switch networkMode {
+        case .tailscale:
+            return tailscale.webSocketURL
+        case .cloudflareTunnel:
             return tunnel.webSocketURL
+        case .localOnly:
+            guard webSocketServer.isRunning else { return "" }
+            let host = Host.current().localizedName ?? "localhost"
+            return "ws://\(host).local:8765"
         }
-        guard webSocketServer.isRunning else { return "" }
-        let host = Host.current().localizedName ?? "localhost"
-        return "ws://\(host).local:8765"
     }
 
     /// Render the payload string into an NSImage via CIFilter (no third-

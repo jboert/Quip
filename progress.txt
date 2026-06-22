@@ -1020,3 +1020,37 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - quip://pair must return BEFORE the `quip://<host>` windowId fallback (~:342),
     else a "pair" host could be mis-read as a windowId. Same reason perms returns early.
 ---
+
+## 2026-06-22 - US-003
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Pairing URL now reflects the active network mode. Rewrote SecurityTab.pairingURL()
+  in QuipMac/Views/SettingsView.swift to switch(networkMode): .tailscale ->
+  tailscale.webSocketURL (ts.net/100.x, never ws://<host>.local), .cloudflareTunnel ->
+  tunnel.webSocketURL, .localOnly -> ws://<host>.local:8765 (guard isRunning).
+- Injected TailscaleService via @Environment + added @AppStorage("networkMode")
+  networkModeRaw with a NetworkMode computed prop, mirroring ConnectionTab.
+- Files changed: QuipMac/Views/SettingsView.swift (SecurityTab env/storage decls +
+  pairingURL rewrite), prd.json, progress.txt.
+- **Learnings for future iterations:**
+  - SecurityTab and ConnectionTab share the SAME SwiftUI environment chain (injected
+    by SettingsView's host, NOT SettingsView itself — SettingsView only @Environment-reads
+    WindowManager/WebSocketServer/BonjourAdvertiser/PINManager). So a tab can read any
+    service already consumed by a sibling tab (ConnectionTab reads TailscaleService) with
+    zero extra .environment() wiring. Confirmed: build succeeded after SecurityTab added
+    @Environment(TailscaleService.self).
+  - networkMode is an @AppStorage("networkMode") String (NetworkMode.rawValue, default
+    .cloudflareTunnel). Read the same key + the `NetworkMode(rawValue:) ?? .cloudflareTunnel`
+    computed in any tab that needs to branch on mode.
+  - Per-mode URL SOURCES (reuse, don't reinvent): tailscale.webSocketURL (ws://<tsHost>:port),
+    tunnel.webSocketURL (cloudflare), and the local ws://<host>.local:port. ConnectionTab's
+    "Diagnostics — Connection URLs" section (~927-940) is the canonical list; lanWSURL is a
+    private static there (getifaddrs en* loop) — SecurityTab keeps its own simpler .local form.
+  - SourceKit reports "Cannot find WebSocketServer/PINManager/etc in scope" + "Generic
+    parameter 'T' could not be inferred" on @Environment lines when the module isn't built
+    in its index — these are SPURIOUS. `xcodebuild build -destination platform=macOS` is the
+    only isolation/scope oracle (matches the swift6-compile-oracle memory). It succeeded.
+  - US-004 (Send to iPhone share button) is the natural next story: it should call
+    PairingPayload(url: pairingURL(), pin: pinManager.pin).encodedURL() — pairingURL() is
+    now mode-aware, so the shared link is automatically correct per mode. Reuse the
+    diagnostics-share NSSharingServicePicker pattern (bundleAndShare/AnchoredButton ~1228).
+---
