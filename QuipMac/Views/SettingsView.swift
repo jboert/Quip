@@ -82,10 +82,11 @@ private struct NotificationsTab: View {
 
     // GH #22 — moved from @AppStorage("apnsKeyId" / "apnsTeamId" / "apnsBundleId")
     // to APNsMetadataStore (Keychain). View holds @State copies for SwiftUI's
-    // two-way TextField binding; .onAppear hydrates from Keychain (which
-    // performs one-shot migration from UserDefaults if needed), and
-    // .onChange writes back. The bundleId default flows through the store
-    // (com.quip.QuipiOS).
+    // two-way TextField binding; each is seeded once at init from the store
+    // below (the first read performs the one-shot migration from UserDefaults
+    // if needed), and .onChange writes back. importKey() also writes the store
+    // directly when it auto-syncs the Key ID. The bundleId default flows
+    // through the store (com.quip.QuipiOS).
     @State private var keyId: String = APNsMetadataStore.keyId
     @State private var teamId: String = APNsMetadataStore.teamId
     @State private var bundleId: String = APNsMetadataStore.bundleId
@@ -194,15 +195,30 @@ private struct NotificationsTab: View {
                     // The Key ID can't be derived from the key bytes, so a
                     // mismatched kid silently passes import and only fails at
                     // send time with `InvalidProviderToken`. Apple's filename
-                    // (`AuthKey_<KEYID>.p8`) carries the kid — sync the field
-                    // to it so the stored key and the kid can't drift apart.
-                    if let fileKeyId = APNsMetadataStore.keyId(fromFilename: url.lastPathComponent),
-                       fileKeyId != keyId {
-                        let old = keyId
-                        keyId = fileKeyId  // persists via the Key ID TextField's .onChange
-                        status += old.isEmpty
-                            ? " · Key ID set to \(fileKeyId)"
-                            : " · Key ID \(old)→\(fileKeyId) to match the file"
+                    // (`AuthKey_<KEYID>.p8`) carries the kid — sync it to the
+                    // stored key so the two can't drift apart.
+                    if let fileKeyId = APNsMetadataStore.keyId(fromFilename: url.lastPathComponent) {
+                        if fileKeyId != keyId {
+                            let old = keyId
+                            // Write the store directly, not just @State: production
+                            // push paths (PushNotificationService) read
+                            // APNsMetadataStore.keyId from Keychain, so persistence
+                            // must not hinge on the Key ID TextField's deferred
+                            // .onChange firing on a later SwiftUI render.
+                            APNsMetadataStore.keyId = fileKeyId
+                            keyId = fileKeyId
+                            status += old.isEmpty
+                                ? " · Key ID set to \(fileKeyId)"
+                                : " · Key ID \(old)→\(fileKeyId) to match the file"
+                        }
+                    } else if !keyId.isEmpty {
+                        // Filename carries no Key ID (renamed/duplicated file,
+                        // e.g. "AuthKey_… 2.p8" or "prod-key.p8") and a kid is
+                        // already set — it may now name the WRONG key. The kid
+                        // isn't recoverable from the key bytes, so warn instead
+                        // of letting the stale kid reach APNs as a silent
+                        // InvalidProviderToken at send time.
+                        status += " · ⚠︎ couldn't read Key ID from filename — verify Key ID “\(keyId)” matches this key"
                     }
                     importStatus = status
                     // New key → cached APNsClient's parsed private key

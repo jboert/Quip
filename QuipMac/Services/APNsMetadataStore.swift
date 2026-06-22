@@ -67,12 +67,13 @@ enum APNsMetadataStore {
     /// `AuthKey_XXXXXXXXXX(.p8)` shape — callers then leave the field untouched
     /// (e.g. the user renamed the file).
     static func keyId(fromFilename filename: String) -> String? {
-        var stem = filename
-        if stem.lowercased().hasSuffix(".p8") { stem = String(stem.dropLast(3)) }
+        // `.p8`/`.P8` strip only — deliberately NOT deletingPathExtension,
+        // which would also accept files with any other trailing extension.
+        let stem = filename.lowercased().hasSuffix(".p8") ? String(filename.dropLast(3)) : filename
         guard stem.hasPrefix("AuthKey_") else { return nil }
         let id = String(stem.dropFirst("AuthKey_".count))
-        let allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        guard id.count == 10, id.allSatisfy({ allowed.contains($0) }) else { return nil }
+        guard id.count == 10,
+              id.allSatisfy({ ("A"..."Z").contains($0) || ("0"..."9").contains($0) }) else { return nil }
         return id
     }
 
