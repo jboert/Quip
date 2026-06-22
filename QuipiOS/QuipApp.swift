@@ -5992,11 +5992,12 @@ struct SettingsSheet: View {
                 let allGranted = perms.accessibility && perms.appleEvents && perms.screenRecording
                 if allGranted {
                     HStack(spacing: 10) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Color.green)
-                        Text("Mac permissions OK")
+                        settingsIcon("checkmark", tint: .green)
+                        Text("Mac permissions")
                         Spacer()
+                        Text("Granted")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                 } else {
                     macPermRow(name: "Accessibility",
@@ -6013,11 +6014,11 @@ struct SettingsSheet: View {
                                pane: .screenRecording)
                 }
             } else {
-                HStack {
-                    Image(systemName: "questionmark.circle")
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    settingsIcon("hourglass", tint: .gray)
                     Text("Waiting for Mac…")
                         .foregroundStyle(.secondary)
+                    Spacer()
                 }
             }
         } header: {
@@ -6040,18 +6041,22 @@ struct SettingsSheet: View {
     @ViewBuilder
     private func macPermRow(name: String, icon: String, granted: Bool, pane: MacSettingsPane) -> some View {
         let row = HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 14))
-                .frame(width: 20)
-                .foregroundStyle(.secondary)
+            // Status-tinted chip matches the icon-chip system used by every
+            // other row, and the green/red fill reads the grant state at a
+            // glance — the section's whole job.
+            settingsIcon(icon, tint: granted ? .green : .red)
             Text(name)
             Spacer()
-            Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .font(.system(size: 16))
-                .foregroundStyle(granted ? Color.green : Color.red)
-            if !granted {
+            if granted {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.green)
+            } else {
+                Text("Fix")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.red)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -6084,6 +6089,7 @@ struct SettingsSheet: View {
                 Text(trailing)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .monospacedDigit()
             }
         }
     }
