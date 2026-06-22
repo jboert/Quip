@@ -59,11 +59,14 @@ struct SettingsView: View {
                     Label("swrm", systemImage: "square.stack.3d.up")
                 }
         }
-        // Vertical resize is the common ask (long tabs like Connection
-        // overflow). Horizontal also resizable now — at 520 the 8 toolbar
-        // tabs collide and the last ones collapse behind a `>>` chevron;
-        // ideal 720 fits all 8 with breathing room. `.top` alignment so
-        // extra vertical space falls below content rather than centering.
+        // Content size floor for the (regular Window) Settings scene. minWidth
+        // 600 keeps the 8 toolbar tabs from colliding into a `>>` chevron
+        // (ideal 720 fits all 8); minHeight 460 is the short floor. maxHeight
+        // .infinity + `.top` alignment lets the window grow taller (long tabs
+        // like Notifications/Connection) with extra space falling below the
+        // content. The window is freely resizable because it's a Window scene,
+        // not the Settings scene (whose window can't grow vertically) — see
+        // QuipMacApp.
         .frame(minHeight: 460, idealHeight: 460, maxHeight: .infinity,
                alignment: .top)
         .frame(minWidth: 600, idealWidth: 720, maxWidth: .infinity)

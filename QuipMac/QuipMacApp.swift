@@ -69,6 +69,21 @@ fileprivate func imageUploadLogValue(_ value: String) -> String {
         .replacingOccurrences(of: "\r", with: "\\r")
 }
 
+/// Stable id for the resizable Settings window (a regular Window scene, not
+/// the stock Settings scene — see the scene definition for why).
+let quipSettingsWindowID = "quip-settings"
+
+/// Menu item that opens the Settings window and binds ⌘, to it. Replaces the
+/// stock `.appSettings` command group, which would target the removed Settings
+/// scene.
+private struct SettingsMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Settings…") { openWindow(id: quipSettingsWindowID) }
+            .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -196,6 +211,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 960, height: 640)
+        .commands {
+            // We moved Settings off the stock `Settings {}` scene (it can't
+            // resize vertically) to a regular Window. Rebind the standard
+            // Settings menu item + ⌘, to open that window instead.
+            CommandGroup(replacing: .appSettings) { SettingsMenuButton() }
+        }
 
         MenuBarExtra("Quip",
                      systemImage: (permissionsStore.anyDenied
@@ -215,7 +236,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
         .menuBarExtraStyle(.window)
 
-        Settings {
+        // A regular Window, NOT the `Settings {}` scene. The Settings scene's
+        // window hard-clamps its height to the content's fitting size — no
+        // amount of frame(maxHeight:.infinity) or NSWindow tweaking makes it
+        // resize vertically (verified: it pins at ~548pt while the main
+        // WindowGroup window resizes freely). A normal Window honors
+        // .contentMinSize, so long tabs (Notifications test-push results,
+        // Connection) can grow instead of overflowing off-screen. ⌘, is rebound
+        // to open it via the replaced .appSettings command below.
+        Window("Settings", id: quipSettingsWindowID) {
             SettingsView()
                 .environment(windowManager)
                 .environment(webSocketServer)
@@ -229,12 +258,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(promptLibrary)
                 .environment(swrmProjectStore)
         }
-        // .contentMinSize (not .contentSize): the SettingsView frame's
-        // minHeight 460 / minWidth 600 becomes the floor, but the user can
-        // drag the window larger. .contentSize pins the window to the content's
-        // fitting size, blocking any resize — long tabs (Notifications test-push
-        // results, Connection) then overflow off-screen with no way to grow.
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 720, height: 600)
     }
 
     @State private var servicesStarted = false
