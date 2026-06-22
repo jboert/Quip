@@ -31,8 +31,8 @@
         "xcodebuild build -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'generic/platform=iOS Simulator' succeeds"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Extracted the QR-sheet decode-and-pair block into applyPairingPayload(_:) on MainiOSView (urlText + manager.addPaired + KeychainBackendPINs.write + manager.setActive + doConnect). QR sheet now calls it. onOpenURL is in the App SCENE struct (separate from MainiOSView, where doConnect/urlText live), so the quip://pair branch decodes then posts the payload via a new .quipApplyPairing Notification.Name (object: PairingPayload); MainiOSView .onReceive runs the SAME helper — mirrors the existing quip://perms → .quipShowSettings bridge. Pair branch returns before perms/window; .quippack/window/perms paths untouched. Gate: xcodebuild build (generic/platform=iOS Simulator) ** BUILD SUCCEEDED **. No new files → no xcodegen/pbxproj change. Native SwiftUI → no browser test; tap-a-shared-link on-device verify = user's pass."
     },
     {
       "id": "US-003",

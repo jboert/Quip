@@ -319,6 +319,19 @@ struct QuipApp: App {
                 //   quip://perms            — pop the SettingsSheet open (Mac
                 //                             perms section is at the top)
                 guard url.scheme == "quip" else { return }
+                if url.host == "pair" {
+                    // §50 — tap-to-pair from a shared `quip://pair?url=…&pin=…`
+                    // link (AirDrop/Messages/Mail), so remote users never need
+                    // the on-screen QR or the native Camera. Decode here, then
+                    // hand off to MainiOSView's `applyPairingPayload` (which owns
+                    // the connect path) via `.quipApplyPairing`. Decode failure
+                    // is a no-op — a malformed link shouldn't fall through to the
+                    // window/perms branches below.
+                    if let payload = PairingPayload.decode(url.absoluteString) {
+                        NotificationCenter.default.post(name: .quipApplyPairing, object: payload)
+                    }
+                    return
+                }
                 if url.host == "perms" {
                     NotificationCenter.default.post(name: .quipShowSettings, object: nil)
                     return
@@ -1601,6 +1614,14 @@ struct MainiOSView: View {
             // Permissions section is at the top).
             showSettings = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .quipApplyPairing)) { note in
+            // Triggered by the `quip://pair` deep link (AirDrop/Messages/Mail).
+            // The App-scene `onOpenURL` decodes the payload and posts it here so
+            // pairing runs through the SAME `applyPairingPayload` the in-app QR
+            // scanner uses — `doConnect()` and `urlText` live on this view.
+            guard let payload = note.object as? PairingPayload else { return }
+            applyPairingPayload(payload)
+        }
         .onChange(of: client.isAuthenticated) { _, authenticated in
             withAnimation(.easeInOut(duration: 0.5)) {
                 if !authenticated {
@@ -1642,12 +1663,7 @@ struct MainiOSView: View {
                 // scan result as a plain ws(s) URL for backwards
                 // compatibility with the original "raw URL in QR" flow.
                 if let payload = PairingPayload.decode(code) {
-                    urlText = payload.url
-                    if let id = manager.addPaired(url: payload.url, name: "Backend") {
-                        KeychainBackendPINs.write(backendID: id, pin: payload.pin)
-                        manager.setActive(id)
-                    }
-                    doConnect()
+                    applyPairingPayload(payload)
                 } else {
                     urlText = code
                     doConnect()
@@ -3809,6 +3825,20 @@ struct MainiOSView: View {
 
     // MARK: - Actions
 
+    /// Apply a decoded pairing payload: stage the backend URL, upsert the
+    /// backend row, pre-stage its PIN in Keychain under the synthetic id,
+    /// make it active, then connect. The single pairing entry point — shared
+    /// by the in-app QR scanner sheet and the `quip://pair` deep link (via the
+    /// `.quipApplyPairing` notification) so the pairing logic isn't duplicated.
+    private func applyPairingPayload(_ payload: PairingPayload) {
+        urlText = payload.url
+        if let id = manager.addPaired(url: payload.url, name: "Backend") {
+            KeychainBackendPINs.write(backendID: id, pin: payload.pin)
+            manager.setActive(id)
+        }
+        doConnect()
+    }
+
     private func doConnect() {
         guard !urlText.isEmpty else { return }
         let urlStr: String
@@ -5715,6 +5745,11 @@ extension Notification.Name {
     /// the SettingsSheet. Carries no payload — the sheet always opens to the
     /// Mac Permissions section (it's at the top).
     static let quipShowSettings = Notification.Name("quip.showSettings")
+
+    /// Posted by the `quip://pair` deep-link handler with a `PairingPayload`
+    /// as its `object`, so MainiOSView can run `applyPairingPayload` (the same
+    /// pairing+connect path the in-app QR scanner uses).
+    static let quipApplyPairing = Notification.Name("quip.applyPairing")
 }
 
 struct SettingsSheet: View {

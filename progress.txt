@@ -974,3 +974,49 @@ Implemented US-001 — unit-test the PairingPayload encode/decode contract.
   - Standalone swiftc fast-oracle gotcha: top-level expressions need the file named literally
     `main.swift`, and you must `import Foundation` for Data/URLComponents.
 ---
+
+## 2026-06-22 — US-002 (Pair by tapping a quip://pair link) [qr-pairing-share-link PRD]
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Tap-to-pair from a shared quip://pair?url=<b64>&pin=<digits> link (AirDrop/
+  Messages/Mail) — no native Camera, no on-screen QR needed.
+- QuipiOS/QuipApp.swift, four edits:
+  - NEW private func applyPairingPayload(_ payload: PairingPayload) on MainiOSView
+    (right above doConnect): urlText = payload.url; manager.addPaired →
+    KeychainBackendPINs.write(pin) → manager.setActive(id); doConnect(). This is
+    the EXTRACTED QR-sheet decode-and-pair block — the single pairing entry point.
+  - QR scanner sheet (showQRScanner) now calls applyPairingPayload(payload) for a
+    decoded quip://pair scan; non-quip scans keep the raw-URL fallback (urlText =
+    code; doConnect()). Zero duplicated pairing logic.
+  - onOpenURL (App SCENE struct) gained a `url.host == "pair"` branch placed BEFORE
+    perms/window: PairingPayload.decode(url.absoluteString) → on success post
+    .quipApplyPairing (object: payload); always return. Malformed link = no-op
+    (doesn't fall through to window/perms).
+  - MainiOSView .onReceive(.quipApplyPairing) { applyPairingPayload($0.object) } —
+    next to the existing .quipShowSettings observer.
+  - NEW Notification.Name.quipApplyPairing ("quip.applyPairing").
+- Files: QuipiOS/QuipApp.swift, prd.json, progress.txt. NO new files → NO
+  xcodegen/pbxproj change (edits to existing target members only).
+- Gate: `xcodebuild build -project QuipiOS.xcodeproj -scheme QuipiOS -destination
+  'generic/platform=iOS Simulator'` → ** BUILD SUCCEEDED **. PairingPayloadTests
+  (US-001) untouched/still valid (PairingPayload.swift unchanged). Native SwiftUI →
+  Ralph browser-test step does NOT apply; tap-a-shared-link on-device = user's pass.
+- **Learnings for future iterations:**
+  - TWO structs, not one: onOpenURL lives in the @main App's `body: some Scene`
+    (~:310), but urlText (@AppStorage), doConnect(), connectToBackendURL, the QR
+    sheet, and manager all live in MainiOSView (~:1163, the WindowGroup root). A
+    deep link that needs MainiOSView-private state CANNOT call a MainiOSView method
+    directly from the App scene — bridge via NotificationCenter. The codebase's
+    established precedent is quip://perms → post(.quipShowSettings) →
+    MainiOSView .onReceive; quip://pair now follows the same shape with a typed
+    payload (object: PairingPayload, a Sendable value type — boxes cleanly).
+  - US-003 (priority 3) + US-004/005 are MAC stories (QuipMac/Views/SettingsView.swift):
+    US-003 = pairingURL() branches on networkMode (.tailscale → TailscaleService
+    .webSocketURL, reuse ConnectionTab per-mode logic ~:779); US-004 = 'Send to
+    iPhone' NSSharingServicePicker button in SecurityTab (~:1254, reuse diagnostics-
+    share pattern ~:1237); US-005 = QR header copy clarity + surface US-004. Mac gate =
+    `cd QuipMac && xcodegen generate` (only if files added) then xcodebuild
+    -destination 'platform=macOS'. US-003/004/005 will need a Mac REBUILD to land on
+    the user's machine (wipes TCC once) — bundle them so the user re-grants once.
+  - quip://pair must return BEFORE the `quip://<host>` windowId fallback (~:342),
+    else a "pair" host could be mis-read as a windowId. Same reason perms returns early.
+---
