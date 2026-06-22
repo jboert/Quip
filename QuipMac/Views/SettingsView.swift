@@ -9,7 +9,7 @@ import AppKit
 /// The six Settings panes. Single source of truth for the customizable
 /// NSToolbar (id / title / SF Symbol) and the content switch below.
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, layouts, projects, connection, security, notifications
+    case general, layouts, projects, prompts, connection, security, notifications
 
     var id: String { rawValue }
 
@@ -18,6 +18,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general:       return "General"
         case .layouts:       return "Layouts"
         case .projects:      return "Projects"
+        case .prompts:       return "Prompts"
         case .connection:    return "Connection"
         case .security:      return "Security"
         case .notifications: return "Notifications"
@@ -29,6 +30,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general:       return "gearshape.fill"
         case .layouts:       return "rectangle.3.group.fill"
         case .projects:      return "folder.fill"
+        case .prompts:       return "text.bubble.fill"
         case .connection:    return "wifi"
         case .security:      return "lock.fill"
         case .notifications: return "bell.badge.fill"
@@ -43,6 +45,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general:       return .gray
         case .layouts:       return .indigo
         case .projects:      return .blue
+        case .prompts:       return .purple
         case .connection:    return .green
         case .security:      return .orange
         case .notifications: return .red
@@ -112,6 +115,7 @@ struct SettingsView: View {
         case .general:       GeneralTab()
         case .layouts:       LayoutsTab()
         case .projects:      ProjectsTab()
+        case .prompts:       PromptsTab()
         case .connection:    ConnectionTab()
         case .security:      SecurityTab()
         case .notifications: NotificationsTab()
@@ -414,29 +418,13 @@ private struct ProjectsTab: View {
     @Environment(SwrmProjectStore.self) private var swrm
     @State private var swrmAddError: String?
 
-    // Prompt library
-    @Environment(PromptLibrary.self) private var library
-    @State private var editingPrompt: PromptEntry?
-    @State private var creatingPrompt = false
-
     var body: some View {
         Form {
             spawnDirectoriesSection
             swrmSection
-            promptsSection
         }
         .formStyle(.grouped)
         .onAppear { loadDirectories() }
-        .sheet(isPresented: $creatingPrompt) {
-            PromptEditorSheet(initial: nil) { id, label, body in
-                _ = library.put(id: id, label: label, body: body)
-            }
-        }
-        .sheet(item: $editingPrompt) { entry in
-            PromptEditorSheet(initial: entry) { id, label, body in
-                _ = library.put(id: id, label: label, body: body)
-            }
-        }
     }
 
     // MARK: Spawn directories
@@ -572,41 +560,66 @@ private struct ProjectsTab: View {
         }
     }
 
-    // MARK: Prompt library
+}
 
-    @ViewBuilder
-    private var promptsSection: some View {
-        Section {
-            if library.entries.isEmpty {
-                Text("No prompts yet. Click + to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
+// MARK: - Prompts Tab
+//
+// The prompt library gets its own pane (split out of Projects — prompts are
+// text snippets, not project folders). A grouped Form of PromptRows + New /
+// Reveal. Editing happens in PromptEditorSheet; writes flow through
+// PromptLibrary.put, which triggers the FS-watcher broadcast to every
+// connected phone.
+
+private struct PromptsTab: View {
+    @Environment(PromptLibrary.self) private var library
+    @State private var editingPrompt: PromptEntry?
+    @State private var creatingPrompt = false
+
+    var body: some View {
+        Form {
+            Section {
+                if library.entries.isEmpty {
+                    Text("No prompts yet. Click + to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(library.entries) { entry in
+                        PromptRow(
+                            entry: entry,
+                            onEdit: { editingPrompt = entry },
+                            onDelete: { library.delete(id: entry.id) }
+                        )
+                    }
+                }
+                HStack(spacing: 12) {
+                    Button { creatingPrompt = true } label: {
+                        Label("New Prompt…", systemImage: "plus")
+                    }
+                    Spacer()
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([PromptLibrary.directory])
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+            } header: {
+                Text("Prompt Library (\(library.entries.count))")
+            } footer: {
+                Text("Tapped on the phone, the body is sent verbatim to the active terminal. Edits broadcast to every connected phone.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
-                ForEach(library.entries) { entry in
-                    PromptRow(
-                        entry: entry,
-                        onEdit: { editingPrompt = entry },
-                        onDelete: { library.delete(id: entry.id) }
-                    )
-                }
             }
-            HStack(spacing: 12) {
-                Button { creatingPrompt = true } label: {
-                    Label("New Prompt…", systemImage: "plus")
-                }
-                Spacer()
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([PromptLibrary.directory])
-                }
-                .buttonStyle(.borderless)
-                .font(.caption)
+        }
+        .formStyle(.grouped)
+        .sheet(isPresented: $creatingPrompt) {
+            PromptEditorSheet(initial: nil) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
             }
-        } header: {
-            Text("Prompt Library (\(library.entries.count))")
-        } footer: {
-            Text("Tapped on the phone, the body is sent verbatim to the active terminal. Edits broadcast to every connected phone.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        }
+        .sheet(item: $editingPrompt) { entry in
+            PromptEditorSheet(initial: entry) { id, label, body in
+                _ = library.put(id: id, label: label, body: body)
+            }
         }
     }
 }
