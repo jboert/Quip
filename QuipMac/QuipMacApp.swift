@@ -229,7 +229,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(promptLibrary)
                 .environment(swrmProjectStore)
         }
-        .windowResizability(.contentSize)
+        // .contentMinSize (not .contentSize): the SettingsView frame's
+        // minHeight 460 / minWidth 600 becomes the floor, but the user can
+        // drag the window larger. .contentSize pins the window to the content's
+        // fitting size, blocking any resize — long tabs (Notifications test-push
+        // results, Connection) then overflow off-screen with no way to grow.
+        .windowResizability(.contentMinSize)
     }
 
     @State private var servicesStarted = false
