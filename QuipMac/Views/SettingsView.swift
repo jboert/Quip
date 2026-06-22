@@ -90,6 +90,9 @@ struct SettingsView: View {
                 .padding(.vertical, 2)
             }
             .navigationSplitViewColumnWidth(min: 198, ideal: 214, max: 264)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                SettingsIdentityHeader()
+            }
         } detail: {
             paneContent
                 // Cap the content column so panes never sprawl edge-to-edge
@@ -138,6 +141,55 @@ private struct SettingsIconTile: View {
             .foregroundStyle(.white)
             .frame(width: 20, height: 20)
             .background(tint.gradient, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+}
+
+// MARK: - Sidebar identity header
+//
+// Anchors the window: this is *Quip*, not a generic preferences shell. The
+// app icon + wordmark give the sidebar a focal point, and the version/build
+// line relocates the "did my reinstall land" diagnostic out of a buried
+// General → About row into the chrome where it's always visible.
+private struct SettingsIdentityHeader: View {
+    private var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build)) · \(buildTime)"
+    }
+
+    /// Mtime of the compiled binary — bumps every rebuild without a version
+    /// bump, so "is the running app my latest install?" reads at a glance.
+    private var buildTime: String {
+        guard let path = Bundle.main.executablePath,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let date = attrs[.modificationDate] as? Date else { return "?" }
+        let f = DateFormatter()
+        f.dateFormat = "MMM d, HH:mm"
+        return f.string(from: date)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 30, height: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Quip")
+                    .font(.headline)
+                Text(version)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
     }
 }
 
@@ -642,34 +694,13 @@ private struct GeneralTab: View {
     /// see it. TimelineView is the cheapest reactive timer in SwiftUI.
     private let permissionProbe = PermissionProbeService()
 
-    private var versionString: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(short) (\(build)) — built \(buildTimestamp)"
-    }
-
-    /// Mtime of the compiled binary. Bumps every rebuild without needing
-    /// a project-level version bump — useful for "did my reinstall land".
-    private var buildTimestamp: String {
-        guard let path = Bundle.main.executablePath,
-              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let date = attrs[.modificationDate] as? Date else { return "?" }
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm"
-        return f.string(from: date)
-    }
-
     var body: some View {
+        // Ordered by why you open General: permissions first (the actionable
+        // "something's broken" path), then terminal appearance, then the
+        // phone-facing behaviors, then set-once app lifecycle at the bottom.
+        // Version moved to the sidebar header; the old control-less "Window
+        // Refresh" FYI section was dropped.
         Form {
-            Section("About") {
-                LabeledContent("Version") {
-                    Text(versionString)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-            }
-
             Section("Permissions") {
                 TimelineView(.periodic(from: .now, by: 3.0)) { _ in
                     let perms = permissionProbe.probe()
@@ -683,7 +714,7 @@ private struct GeneralTab: View {
             }
 
             Section("Terminal") {
-                Picker("Default Terminal App", selection: $defaultTerminalApp) {
+                Picker("Default app", selection: $defaultTerminalApp) {
                     ForEach(TerminalApp.allCases) { app in
                         Text(app.rawValue).tag(app.rawValue)
                     }
@@ -694,6 +725,20 @@ private struct GeneralTab: View {
             // keyed to Claude Code's state. Lives in its own struct so its
             // @AppStorage + @State color bindings stay self-contained.
             TerminalColorsSection()
+
+            // Phone-facing behaviors grouped together: what the phone mirrors,
+            // and which recognizer the phone uses for dictation.
+            Section("Phone") {
+                Toggle("Mirror desktop terminals", isOn: $mirrorDesktop)
+                Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                whisperStatusRow()
+                Text("The phone uses Mac Whisper for dictation when the model is ready, otherwise falls back to on-device SFSpeech.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Section("Startup") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
@@ -715,26 +760,6 @@ private struct GeneralTab: View {
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                 }
-            }
-
-            Section("Phone Display") {
-                Toggle("Mirror desktop terminals", isOn: $mirrorDesktop)
-                Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Window Refresh") {
-                Text("Windows are automatically refreshed when the app activates and when displays change.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Dictation Recognizer") {
-                whisperStatusRow()
-                Text("Phone auto-selects Mac Whisper when the model is ready, otherwise falls back to on-device SFSpeech.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
