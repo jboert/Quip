@@ -1,59 +1,38 @@
-# Ralph Progress Log — Quip Mac Settings organize
----
+# Ralph progress — Magic-wand auto-enable terminals + simulators
 
-## Codebase Patterns
-- QuipMac is NATIVE macOS SwiftUI. ALL Settings UI is in QuipMac/Views/SettingsView.swift (sidebar NavigationSplitView; panes General/Layouts/Projects/Prompts/Connection/Security/Notifications, each a grouped Form).
-- COMPILE ORACLE: ONLY `xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS,name=My Mac' -derivedDataPath build`. IDE/SourceKit "Cannot find type X in scope" + "Generic parameter 'T' could not be inferred" are SPURIOUS cross-file noise — IGNORE them, trust xcodebuild.
-- DO NOT install (/Applications), ditto, killall, codesign, open, or touch TCC. DO NOT use dev-browser / any browser (native app). A human installs + verifies visually.
-- Reusable components already in SettingsView.swift: StatusDot (kinds ok/bad/warn/neutral/busy = tinted SF-symbol + label), connectionHero (focal status: tinted circle glyph + title3 headline + caption subline), grouped Form, SettingsIconTile, SettingsIdentityHeader, ~600pt detail content cap.
-- Preserve ALL logic verbatim (importKey + APNs key-id auto-sync, sendTestPush, QR/pairing share, diagnostics bundle, PIN save/regenerate). Reorganize layout/sections ONLY — no behavior change.
-- Stay on eb-branch; never push; git add only QuipMac/Views/SettingsView.swift + prd.json + progress.txt (never -A).
-- StatusDot usage: `StatusDot(kind: .ok/.bad/.warn/.neutral/.busy, text: "…", mono: false)`. Renders tinted SF glyph + `.body` text in an HStack(spacing:6). Use it for ANY status indicator — replaces ad-hoc `Image(...).foregroundStyle(.green/.red)` + colored Text. NOTE its text is `.body` font, so when a status row also needs a monospaced path/detail, keep that detail as a separate `.caption.monospaced()` Text below the StatusDot rather than cramming it into `text:`.
-- Section grouping convention: every Section gets a `header:` Text (even the first one if it isn't a hero) and pure-info prose goes in a `footer:` (`.font(.caption).foregroundStyle(.secondary)`), never a standalone control-less Section.
----
+## Codebase Patterns (read before each story)
 
-## 2026-06-22 — US-001 Organize the Security pane
+- COMPILE ORACLE: only `xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS,name=My Mac' -derivedDataPath build` → look for `** BUILD SUCCEEDED **`. SourceKit / IDE errors like "Cannot find WindowManager / ManagedWindow / TerminalApp / TerminalStateDetector in scope" and "Generic parameter 'T' could not be inferred" are SPURIOUS cross-file noise — IGNORE them, trust xcodebuild.
+- DO NOT: install to /Applications, ditto, killall, codesign, open, touch TCC, or use dev-browser / any browser. Native macOS app, no web surface. A human installs + visually verifies.
+- EDIT ONLY: QuipMac/Views/WindowListSidebar.swift.
+
+## Key file facts — WindowListSidebar.swift
+
+- `windowTier(_ window: ManagedWindow) -> Int`: tier 0 = `window.isTerminal` (iTerm2 + Terminal.app), tier 1 = `window.targetKind == "simulator"`, tier 2 = everything else. THIS is the target classifier — targets to toggle = `windowTier(w) <= 1`.
+- `magicSort()` is the wand button action (header()). It sorts windowManager.windows and writes `windowOrder` inside `withAnimation(.easeOut(duration: 0.22))`. Extend THIS tap to also toggle enable-state; keep the sort logic byte-for-byte.
+- Enable/disable path: `windowManager.toggleWindow(id, enabled: Bool)`. `WindowRow.enabledBinding` reads `window.isEnabled` live and writes through onToggle → toggleWindow, so a wand-driven enable shows up in the checkbox automatically. NEVER mirror enabled-state into a private @State.
+- Toggle-all predicate: `let targets = windowManager.windows.filter { windowTier($0) <= 1 }`; `let allOn = !targets.isEmpty && targets.allSatisfy { $0.isEnabled }`; `let enableAll = !allOn`; for each target call `windowManager.toggleWindow($0.id, enabled: enableAll)`. Empty targets → skip toggle, still sort, no crash.
+- DO NOT TOUCH: `dragReorder` (.onMove), `moveWindow` / `moveAction` (hover chevrons), `syncWindowOrder`, `orderedWindows`. Sort order, tiers, attention-first, drag, chevrons all stay as-is.
+
+## Rules
+- Stay on eb-branch. Never push. Never `git add -A` — add only WindowListSidebar.swift + prd.json + progress.txt.
+
+## Log
+(append per iteration)
+
+## 2026-06-22 - US-001
 Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Section order was ALREADY correct (PIN → Pair iPhone → Diagnostics log → Diagnostics share); no reorder needed.
-- Added a `PIN` Section header + footer ("The iPhone enters this PIN when pairing…") so the first section groups consistently with the rest (it was headerless).
-- Replaced the diagnostics-share success row (raw green `doc.zipper` Image + path) with `StatusDot(kind: .ok, text: "Bundle ready")` and moved the path to a separate `.caption.monospaced()` secondary Text; Reveal button preserved.
-- Replaced the error row (red triangle Image + red Text) with `StatusDot(kind: .bad, text: err)`.
-- Files changed: QuipMac/Views/SettingsView.swift, prd.json, progress.txt.
+- Made the magic-wand tap ALSO toggle enabled-state of dev windows (tier 0 terminals + tier 1 simulators) in the SAME tap, on top of the existing sort.
+- Files changed: QuipMac/Views/WindowListSidebar.swift (only magicSort() + its doc comment), prd.json, progress.txt.
+- Implementation: after the existing `sorted` id list, added:
+    let targets = windows.filter { windowTier($0) <= 1 }
+    let allOn = !targets.isEmpty && targets.allSatisfy { $0.isEnabled }
+    let enableAll = !allOn
+  then inside the SAME `withAnimation(.easeOut(duration: 0.22))` block, after `windowOrder = sorted`, looped `windowManager.toggleWindow(target.id, enabled: enableAll)`.
+- Sort logic (tier order, attention-first, subtitle tiebreak, offset stability) left byte-for-byte. dragReorder / moveWindow / syncWindowOrder / orderedWindows untouched.
+- Verified: xcodebuild build ... → `** BUILD SUCCEEDED **`. (SourceKit "Cannot find WindowManager/ManagedWindow/TerminalApp/TerminalStateDetector in scope" + "Generic parameter T could not be inferred" appeared as expected spurious cross-file noise — ignored per oracle rule.)
 - **Learnings for future iterations:**
-  - The 10 SourceKit "Cannot find WindowManager/WebSocketServer/PINManager in scope" + "Generic parameter 'T' could not be inferred" diagnostics on lines 57-60/250 are the documented SPURIOUS cross-file noise. They fire on EVERY edit to this file regardless of correctness. `xcodebuild` returned `** BUILD SUCCEEDED **`. Trust xcodebuild, ignore the inline diagnostics panel entirely.
-  - SecurityTab already had `header:`/`footer:` on Pair + both Diagnostics sections, so the only structural gap was the headerless PIN section.
-  - StatusDot's `text` is `.body` font — for a status + monospaced-path pair, put the path in a separate caption Text under the dot (don't pass the path as `text:`).
----
-
-## 2026-06-22 — US-002 Organize the Notifications pane
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Added `notificationsHero` focal signal in a headerless top Section, cloned from the Connection pane's `connectionHero` style: tinted 46pt circle (green/red opacity .15) + SF glyph (`bell.badge.fill`/`bell.slash.fill`) + `.title3.weight(.semibold)` headline ("Push configured" / "Push not configured") + `.callout` secondary subline.
-- `isConfigured = hasKey && !keyId.isEmpty && !teamId.isEmpty && !bundleId.isEmpty` — mirrors the Send Test Push button's `.disabled` condition so the hero never says "configured" while the send button is disabled. `readinessSubline` lists exactly which of {auth key, Key ID, Team ID, Bundle ID} is missing, or "Ready · N device(s) registered" when configured.
-- Section order was ALREADY APNs Auth Key → Registered Devices → Send Test Push; the only structural gap was the headerless final Section — gave it `Section("Send Test Push")`.
-- `.formStyle(.grouped)` was already present. importKey (key-id auto-sync + non-canonical-filename warning) and sendTestPush untouched — pure layout/hero addition.
-- Files changed: QuipMac/Views/SettingsView.swift, prd.json, progress.txt.
-- **Learnings for future iterations:**
-  - The connectionHero recipe is the house style for a pane's focal element and trivially reusable: `HStack(spacing:14){ ZStack{ Circle().fill(tint.opacity(0.15)).frame(46×46); Image(systemName:).font(.system(size:19,weight:.semibold)).foregroundStyle(tint) } ; VStack(alignment:.leading,spacing:2){ Text(headline).font(.title3.weight(.semibold)); Text(subline).font(.callout/.callout).foregroundStyle(.secondary) } ; Spacer(minLength:0) }.padding(.vertical,6)`. Drop it in a headerless `Section { }` at the top of the Form. (connectionHero uses `.callout` subline; reuse that, not `.caption`.)
-  - When adding a readiness summary, derive its boolean from the SAME expression that gates the primary action button (here Send Test Push's `.disabled`) so the hero and the button can't disagree.
-  - Same 10 SourceKit "Cannot find … in scope" / "Generic parameter 'T' could not be inferred" diagnostics (lines 57-60, 250) fired on every edit — documented spurious cross-file noise. `xcodebuild` → `** BUILD SUCCEEDED **`. The build's `RegisterWithLaunchServices`/`lsregister` line on the derivedData build output is xcodebuild's normal step, not an install — don't treat it as a /Applications install.
-  - Remaining for US-003 sweep: NotificationsTab still has two raw colored-Text status displays not yet on StatusDot vocab — the `importStatus` row (red/secondary by "Error" prefix, line ~330) and the per-device `testStatus` lines (✓ secondary / else red, line ~390). Left verbatim here to avoid touching importKey/sendTestPush behavior; convert in the consistency sweep if desired.
----
-
-## 2026-06-22 — US-003 Final craft consistency sweep across all Settings panes
-Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
-- Swept all seven panes for: StatusDot vocabulary, Section header presence, control-less/FYI-only sections, and the ~600pt width cap. The sweep found exactly ONE persistent status row still on an ad-hoc colored glyph.
-- CHANGED: `GeneralTab.macPermRow` (Permissions rows) — was raw `Image(checkmark.circle.fill / xmark.circle.fill).foregroundStyle(.green/.red)` + `Text(name)`. Replaced with `StatusDot(kind: granted ? .ok : .bad, text: name)`. This is the exact case StatusDot's own doc comment names as legacy ("a bare SF checkmark (Permissions)"). The `Spacer()` + conditional "Grant" button (openSettingsPane) are unchanged → zero behavior change. StatusDot's `.ok`/`.bad` glyphs (checkmark.circle.fill / xmark.circle.fill) + green/red tint are byte-identical to what was hand-rolled; only the inner HStack spacing (8→6) and imageScale(.medium) differ, both visually negligible.
-- DELIBERATELY LEFT (each conversion would either drop a state or violate the verbatim-preserve constraint):
-  - `whisperStatusRow` — has a `.downloading` state rendered in BLUE with an `arrow.down.circle` glyph + live "%". StatusDot has no blue/download kind (ok/bad/warn/neutral/busy only), so forcing it to `.busy` would erase the download-progress signal. Its doc comment already says it intentionally "mirrors the StatusDot look" rather than using it.
-  - Notifications `testStatus` lines — strings already begin with their own ✓/⚠/✗ glyph and are built inside `sendTestPush` (HARD-CONSTRAINT: preserve verbatim). A StatusDot would double-glyph (its checkmark.circle + the embedded ✓), and stripping the prefix would alter the verbatim strings. Left as colored caption log output (same idiom as ConnectionTab's connectionLogRow).
-  - Notifications `importStatus` — single transient feedback caption built in `importKey` (verbatim-preserve); its success variant can embed a ⚠︎ warning, which would clash with a green StatusDot. Left as caption.
-  - ConnectionTab Connected-Clients rows — the leading glyph is the DEVICE TYPE (iphone/applewatch/laptopcomputer via clientIcon), not a status indicator; auth state is the trailing "authed/awaiting auth" text. Not a StatusDot candidate.
-- VERIFIED no control-less FYI-only Section remains in any pane (US-001 + US-002 already moved pure prose into footers); every non-hero Section carries a `header:`; the two hero sections (Connection `connectionHero`, Notifications `notificationsHero`) share the same headerless `Section { … }` + `.padding(.vertical, 6)` pattern; the 600pt detail-column cap in SettingsView.body is untouched (no edge-to-edge view added).
-- LayoutsTab intentionally not Form-ified: it is a List + ContentUnavailableView (native empty-state idiom), has no status indicators and no dead section, so the sweep leaves its structure alone — converting List→Form would change interaction (swipe/selection), a behavior change out of scope.
-- Files changed: QuipMac/Views/SettingsView.swift, prd.json, progress.txt.
-- **Learnings for future iterations:**
-  - A "consistency sweep" story is mostly an AUDIT: read every pane, list the status indicators, and only convert the ones that are genuinely the SAME concept (persistent ok/bad/granted/set state). Resist converting transient log/feedback captions or rows whose leading glyph encodes something OTHER than status (device type, download progress) — those look superficially similar but converting them loses information or doubles glyphs.
-  - StatusDot's fixed palette is ok=green / bad=red / warn=orange / neutral+busy=secondary. There is NO blue and NO progress affordance — any row that needs blue (e.g. an active download) or a percentage must stay a custom row, so don't force it into StatusDot for the sake of uniformity.
-  - When a status string is produced by a function under a "preserve verbatim" constraint (sendTestPush, importKey), you cannot restyle it via StatusDot without either reparsing/stripping its embedded glyph (alters display) — so leave it. The constraint on the LOGIC effectively pins the PRESENTATION of its output strings too.
-  - Same 10 SourceKit "Cannot find … in scope" / "Generic parameter 'T' could not be inferred" diagnostics (lines 57-60, 250) fired again on this edit — documented spurious cross-file noise. `xcodebuild` → `** BUILD SUCCEEDED **`.
+  - Toggle-all semantics confirmed: enable-all unless EVERY target already on → then disable-all. `!targets.isEmpty` guard makes the empty-target case fall through to `enableAll = true` but the for-loop has nothing to iterate, so it just sorts (no crash). Matches AC.
+  - Putting the toggleWindow loop INSIDE the withAnimation envelope (not after it) is what makes the checkbox flips animate as one motion with the sort. The checkbox reads window.isEnabled live via enabledBinding, so no view-state plumbing needed.
+  - US-002 (tooltip) is the only remaining story: just update the wand Button's `.help(...)` string at line ~49 to name both actions. Single line, same file.
 ---

@@ -146,16 +146,25 @@ struct WindowListSidebar: View {
         stateDetector.windowStates[window.id] == .waitingForInput
     }
 
-    /// Magic-wand one-tap sort. Snapshots the current arrangement into a
-    /// dev-focused order and writes it to `windowOrder` (which orderedWindows
-    /// renders verbatim, so it sticks and stays drag-tweakable afterward):
+    /// Magic-wand one-tap sort + enable-toggle. Snapshots the current
+    /// arrangement into a dev-focused order and writes it to `windowOrder`
+    /// (which orderedWindows renders verbatim, so it sticks and stays
+    /// drag-tweakable afterward):
     ///   1. Terminals — and within them, windows where Claude is WAITING FOR
     ///      INPUT bubble to the very top (the one that needs you is #1).
     ///   2. Simulators.
     ///   3. Everything else.
     /// Secondary key: the project subtitle, then the prior order for stability.
+    ///
+    /// In the SAME tap it also toggles the enabled-state of every dev window
+    /// (tier 0 terminals + tier 1 simulators): if every target is already on it
+    /// turns them all off, otherwise it turns them all on. Tier-2 ("everything
+    /// else") windows are never touched. The flip goes through the same
+    /// windowManager.toggleWindow path the row checkbox and the phone use, so
+    /// the checkboxes follow automatically — no private @State mirror.
+    ///
     /// One-shot by design — it does NOT keep re-sorting as states change; tap
-    /// again to re-snap.
+    /// again to re-snap (and to flip the targets back off).
     private func magicSort() {
         let windows = windowManager.windows
         let sorted = windows.enumerated().sorted { lhs, rhs in
@@ -171,8 +180,17 @@ struct WindowListSidebar: View {
             if sa != sb { return sa < sb }
             return lhs.offset < rhs.offset
         }.map(\.element.id)
+
+        // Dev windows the wand enables/disables: terminals + simulators only.
+        let targets = windows.filter { windowTier($0) <= 1 }
+        let allOn = !targets.isEmpty && targets.allSatisfy { $0.isEnabled }
+        let enableAll = !allOn
+
         withAnimation(.easeOut(duration: 0.22)) {
             windowOrder = sorted
+            for target in targets {
+                windowManager.toggleWindow(target.id, enabled: enableAll)
+            }
         }
     }
 

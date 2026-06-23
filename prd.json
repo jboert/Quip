@@ -1,52 +1,37 @@
 {
-  "project": "Quip — Mac Settings page-by-page organize",
+  "project": "Quip — Magic-wand auto-enable terminals + simulators",
   "branchName": "eb-branch",
-  "description": "QuipMac is a NATIVE macOS SwiftUI app — NOT a web app. All Settings UI lives in QuipMac/Views/SettingsView.swift: a sidebar NavigationSplitView with panes General, Layouts, Projects, Prompts, Connection, Security, Notifications; each pane is a grouped Form (.formStyle(.grouped)). General and Connection already had a craft pass (focal hero where useful, logical section order, the shared StatusDot indicator, ~600pt content column, no dead control-less sections). This PRD finishes that 'organize each pane' pass for the Security and Notifications panes plus a final consistency sweep. HARD CONSTRAINTS (do not violate): (1) Edit ONLY QuipMac/Views/SettingsView.swift for code. (2) Verify each story ONLY by running `xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS,name=My Mac' -derivedDataPath build` and confirming the output contains '** BUILD SUCCEEDED **'. SourceKit / IDE 'Cannot find type X in scope' or 'Generic parameter T could not be inferred' errors are SPURIOUS cross-file noise — xcodebuild is the ONLY compile oracle; ignore IDE diagnostics. (3) Do NOT install to /Applications, do NOT run ditto / killall / codesign / open, do NOT touch TCC, do NOT use the dev-browser skill or any browser (this is not a web app). A human installs and visually verifies separately. (4) Preserve ALL existing logic verbatim — importKey + APNs Key-ID auto-sync, sendTestPush, QR/pairing share, diagnostics bundle, PIN save/regenerate. Reorganize layout/sections only; do NOT change behavior. (5) Match existing patterns already in the file: grouped Form, the private StatusDot view (kinds ok/bad/warn/neutral/busy), Section headers + footers, and the connectionHero style for any focal element. (6) Stay on eb-branch; never push; never git add -A — add only the changed file(s) plus prd.json and progress.txt.",
+  "description": "QuipMac is a NATIVE macOS SwiftUI app — NOT a web app. This PRD extends the Windows-list sidebar's magic-wand button in QuipMac/Views/WindowListSidebar.swift. Today a wand tap ONLY sorts the windows (terminals on top, attention-needed first; simulators next; everything else below) by writing a new order to the `windowOrder` binding via magicSort(). This PRD makes the SAME single tap ALSO toggle the enabled-state (the row checkbox) of the dev windows — terminals (tier 0) and simulators (tier 1) — so one tap sorts them to the top AND turns them on, and the next tap turns them off. HARD CONSTRAINTS (do not violate): (1) Edit ONLY QuipMac/Views/WindowListSidebar.swift for code. (2) Verify each story ONLY by running `xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS,name=My Mac' -derivedDataPath build` and confirming the output contains '** BUILD SUCCEEDED **'. SourceKit / IDE 'Cannot find type X in scope' (WindowManager, ManagedWindow, TerminalApp, TerminalStateDetector) or 'Generic parameter T could not be inferred' errors are SPURIOUS cross-file noise — xcodebuild is the ONLY compile oracle; ignore IDE diagnostics. (3) Do NOT install to /Applications, do NOT run ditto / killall / codesign / open, do NOT touch TCC, do NOT use the dev-browser skill or any browser (this is a native macOS app, there is no web surface). A human installs and visually verifies separately. (4) Preserve ALL existing behavior verbatim: the sort logic in magicSort() (tier order, attention-first for terminals, subtitle tiebreak, offset stability), the native .onMove drag-reorder (dragReorder), the per-row hover chevrons (moveWindow/moveAction), syncWindowOrder, and orderedWindows. ADD the enable-toggle and tooltip text only — do NOT change the sort order, the drag, or the chevrons. (5) Match existing patterns in the file: classify targets with the existing windowTier(_:) helper (tier 0 = terminals, tier 1 = simulators); change enabled-state ONLY through windowManager.toggleWindow(id, enabled:) (the same path the row checkbox and the phone use — never a private/local @State mirror); keep the wand action wrapped in the existing withAnimation(.easeOut(duration: 0.22)) envelope so sort + checkbox flips read as one motion. (6) Stay on eb-branch; never push; never git add -A — add only the changed file(s) plus prd.json and progress.txt.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Organize the Security pane",
-      "description": "As a Quip user, I want the Security pane organized so PIN, pairing, and diagnostics read in a clear, logical order matching the craft of the General and Connection panes.",
+      "title": "Wand tap toggles enable-state of terminals + simulators",
+      "description": "As a developer, I want one tap of the magic wand to both sort my dev windows to the top AND turn them on (checked), so I don't have to sort and then tick each checkbox by hand. A second tap turns them off.",
       "acceptanceCriteria": [
-        "SecurityTab sections are ordered logically and grouped: PIN (with Generate New PIN) first; then Pair iPhone (QR block + Send to iPhone); then the two Diagnostics sections (log location + bundle/share) last.",
-        "Any status indicator uses the shared StatusDot view — no raw colored-text status strings.",
-        "No control-less FYI-only Section; pure-information text lives in Section footers, not standalone sections.",
-        "All existing Security logic preserved unchanged: PIN save/regenerate/copy, sharePairingLink, pairingQRBlock/qrImage, bundleAndShare, AnchoredButton anchors, pairingURL per network mode.",
+        "A wand tap still sorts the list exactly as today (terminals -> attention-first -> simulators -> rest). The existing sort logic in magicSort() is unchanged.",
+        "In the SAME tap, the enabled-state of all TARGET windows (windowTier(window) <= 1, i.e. tier 0 terminals + tier 1 simulators) is toggled: if EVERY target is currently enabled -> set all targets disabled; if ANY target is currently disabled -> set ALL targets enabled.",
+        "Tier-2 ('everything else') windows are NEVER enabled or disabled by the wand.",
+        "Enable/disable goes through windowManager.toggleWindow(id, enabled:) — not a private/local @State mirror.",
+        "When there are NO target windows, the tap still sorts and does not crash or toggle anything.",
+        "Sort + checkbox flips are wrapped in the existing withAnimation envelope so they read as one motion.",
         "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 1,
       "passes": true,
-      "notes": "Ordering already PIN→Pair→Diagnostics(log)→Diagnostics(share). Added PIN section header+footer for grouping consistency; converted diagnostics success (green doc.zipper) + error (red text) raw status indicators to StatusDot(.ok/.bad). All logic preserved. BUILD SUCCEEDED."
+      "notes": "Extended magicSort() in WindowListSidebar.swift: after building the sorted id list, compute targets = windows.filter { windowTier($0) <= 1 }, allOn = !targets.isEmpty && allSatisfy isEnabled, enableAll = !allOn, then inside the existing withAnimation(.easeOut(0.22)) loop windowManager.toggleWindow(target.id, enabled: enableAll) for each target. Sort logic byte-for-byte unchanged; empty targets skip the loop (no crash, still sorts). xcodebuild BUILD SUCCEEDED."
     },
     {
       "id": "US-002",
-      "title": "Organize the Notifications pane",
-      "description": "As a Quip user, I want the Notifications (APNs) pane organized with a clear readiness signal at the top and logically ordered sections.",
+      "title": "Wand tooltip reflects the new enable behavior",
+      "description": "As a user, I want the wand's tooltip to tell me it also enables/disables my dev windows so the toggle isn't a surprise.",
       "acceptanceCriteria": [
-        "A clear configured / not-configured signal near the top of NotificationsTab summarizing APNs readiness (has key AND non-empty Key ID, Team ID, Bundle ID) — use the StatusDot vocabulary or a compact hero consistent with connectionHero.",
-        "Sections ordered: APNs Auth Key, Registered Devices, Send Test Push.",
-        "Pane uses .formStyle(.grouped) consistent with the other panes.",
-        "importKey (including the AuthKey_<KEYID>.p8 Key-ID auto-sync + non-canonical-filename warning) and sendTestPush logic preserved verbatim.",
+        "The wand button .help(...) tooltip names BOTH actions — auto-sort AND toggle-enable terminals + simulators (e.g. 'Auto-sort + toggle your dev windows — terminals and simulators to the top and enabled; tap again to turn them off').",
+        "No other behavior changes: drag-reorder, chevrons, and the add/refresh buttons are untouched.",
         "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "Added notificationsHero focal signal at top of NotificationsTab (headerless Section, matching connectionHero: tinted 46pt circle glyph + title3 headline + callout subline). isConfigured = hasKey && non-empty keyId/teamId/bundleId (mirrors Send Test Push enable condition); readinessSubline names exactly what's missing or shows registered-device count when ready. Sections already ordered APNs Auth Key → Registered Devices → Send Test Push; added the missing header to the headerless Send Test Push section. .formStyle(.grouped) already present. importKey (incl. AuthKey_<KEYID>.p8 key-id auto-sync + non-canonical-filename warning) and sendTestPush preserved verbatim — only added layout/hero. BUILD SUCCEEDED."
-    },
-    {
-      "id": "US-003",
-      "title": "Final craft consistency sweep across all Settings panes",
-      "description": "As a Quip user, I want every Settings pane to feel consistent — same section rhythm, the same status vocabulary, no dead sections, content in a readable column.",
-      "acceptanceCriteria": [
-        "Section headers, spacing, and the StatusDot indicator are used consistently across all panes (General, Layouts, Projects, Prompts, Connection, Security, Notifications).",
-        "No remaining control-less / FYI-only Section in any pane.",
-        "Content stays within the ~600pt detail column established in SettingsView (no edge-to-edge sprawl introduced).",
-        "No behavior changes to any pane's logic — layout/wording only.",
-        "xcodebuild build prints '** BUILD SUCCEEDED **'."
-      ],
-      "priority": 3,
-      "passes": true,
-      "notes": "Audited all seven panes for status-vocabulary, header, dead-section, and width consistency. Found exactly one persistent status row still on an ad-hoc colored glyph: GeneralTab.macPermRow (Permissions) used raw Image(checkmark/xmark).foregroundStyle(.green/.red) — the very case the StatusDot doc comment names as legacy. Converted it to StatusDot(kind: granted ? .ok : .bad, text: name); Grant button + openSettingsPane behavior untouched. Deliberately LEFT as documented variants (converting each would drop state or violate verbatim-preserve): whisperStatusRow (distinct blue downloading-% state StatusDot can't express), Notifications testStatus/importStatus (transient log lines that already embed ✓/⚠/✗ — StatusDot would double-glyph, and the strings are built in the verbatim-preserved sendTestPush/importKey), and ConnectionTab Connected-Clients rows (leading glyph is device TYPE, not status). No control-less FYI sections remain (US-001/US-002 cleared them); every non-hero Section has a header; hero sections (Connection, Notifications) share the headerless .padding(.vertical,6) pattern; 600pt detail cap untouched — no width sprawl introduced. No behavior changes. BUILD SUCCEEDED."
+      "passes": false,
+      "notes": ""
     }
   ]
 }
