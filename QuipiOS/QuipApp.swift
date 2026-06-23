@@ -1301,6 +1301,13 @@ struct MainiOSView: View {
     /// written back to JSON on every mutation. Avoids a JSON round-trip per
     /// `phoneLayoutFrame` call inside the layout `ForEach`.
     @State private var phoneFrameOverrides: [String: WindowFrame] = [:]
+    /// Persisted phone-side window ORDER. JSON `[String]` of windowIds written
+    /// by drag-reorder. The layout renders `windows` sorted by this so a user's
+    /// arrangement survives every Mac layout-update (each update replaces the
+    /// `windows` binding wholesale). New windows append; closed ones prune.
+    @AppStorage("phoneWindowOrderJSON") private var phoneWindowOrderJSON: String = "[]"
+    /// In-memory decoded order — same JSON-cache pattern as phoneFrameOverrides.
+    @State private var phoneWindowOrder: [String] = []
     /// Active drag state: which window is being dragged + accumulated
     /// translation. Nil when no drag is in flight.
     @State private var draggingWindowId: String? = nil
@@ -1314,6 +1321,27 @@ struct MainiOSView: View {
     /// the @AppStorage encoding artifact.
     private var phoneLayoutOverride: String? {
         phoneLayoutOverrideRaw.isEmpty ? nil : phoneLayoutOverrideRaw
+    }
+
+    /// `windows` reordered by the user's persisted phone order. Known ids come
+    /// first in saved order; anything new (not yet in `phoneWindowOrder`) keeps
+    /// its incoming position at the end. PURE — never mutates state — so it's
+    /// safe to read from `body`. Reconciling the saved order to the live id set
+    /// happens in `.onChange(of: windows)` via `reconcileWindowOrder`.
+    private var displayWindows: [WindowState] {
+        guard !phoneWindowOrder.isEmpty else { return windows }
+        let rank = Dictionary(
+            phoneWindowOrder.enumerated().map { ($0.element, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        // Stable: known ids sort by saved position; unknown ids fall to the end
+        // (rank .max) keeping their incoming relative order via the offset tiebreak.
+        return windows.enumerated().sorted { a, b in
+            let ra = rank[a.element.id] ?? Int.max
+            let rb = rank[b.element.id] ?? Int.max
+            if ra != rb { return ra < rb }
+            return a.offset < b.offset
+        }.map(\.element)
     }
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.
@@ -1546,11 +1574,15 @@ struct MainiOSView: View {
             // user sees their drag layout before the first windows-list
             // arrives. No-op on first launch (empty JSON → empty dict).
             loadOverrides()
+            // Restore the persisted drag-reorder sequence too, so a returning
+            // user's order is in place before the first windows-list arrives.
+            loadWindowOrder()
             // Initial chooser pass for the case where windows already
             // populated before this view appeared (rare but possible on
             // reconnect). Real subsequent fires happen via .onChange below.
             if !windows.isEmpty {
                 pruneOverrides(activeWindowIds: Set(windows.map(\.id)))
+                reconcileWindowOrder(activeWindows: windows)
                 runAutoChooser(count: windows.count)
             }
         }
@@ -1559,6 +1591,9 @@ struct MainiOSView: View {
             // (skipped when manualLayoutSticky is set) and prunes stale
             // override entries for closed windows.
             pruneOverrides(activeWindowIds: Set(newValue.map(\.id)))
+            // Keep the drag-reorder sequence in step: append new windows,
+            // drop closed ones, so displayWindows stays well-defined.
+            reconcileWindowOrder(activeWindows: newValue)
             runAutoChooser(count: newValue.count)
         }
         .onAppear {
@@ -3395,8 +3430,8 @@ struct MainiOSView: View {
                             }
                         }
                     } else {
-                        ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
-                            let effectiveFrame = phoneLayoutFrame(for: window, index: index, total: windows.count) ?? window.frame
+                        ForEach(Array(displayWindows.enumerated()), id: \.element.id) { index, window in
+                            let effectiveFrame = phoneLayoutFrame(for: window, index: index, total: displayWindows.count) ?? window.frame
                             let rect = windowRect(frame: effectiveFrame, in: mac.size, inset: 3)
                             let isDragging = draggingWindowId == window.id
 
@@ -3661,49 +3696,76 @@ struct MainiOSView: View {
     }
 
     /// Drag-end handler. `dropCenter` is the dropped card's center in
-    /// normalized 0–1 coordinates within the host-screen rect. Decides
-    /// between swap-on-overlap (FR-15) and snap-to-grid (FR-14), writes
-    /// the result to `phoneFrameOverrides`, and flips the user out of
-    /// auto-arrange so the manual frame actually takes effect (FR-13).
+    /// normalized 0–1 coordinates within the host-screen rect. REORDER model:
+    /// the dragged card lands in the grid slot nearest the drop point and every
+    /// other card reflows around it, with the new sequence persisted to
+    /// `phoneWindowOrder` so it survives Mac layout-updates. Any legacy
+    /// free-position frame overrides are cleared so all cards follow the grid
+    /// in the new order.
     private func handleDrop(windowId: String, dropCenter: CGPoint) {
-        let total = windows.count
-        guard total > 0,
-              let droppedIdx = windows.firstIndex(where: { $0.id == windowId }) else { return }
-
-        // Find a candidate swap target: any other window whose effective
-        // center is within 0.05 of dropped center (~30pt on a typical phone
-        // host-screen rect of 600pt wide).
-        let swapThreshold: CGFloat = 0.05
-        let target = windows.enumerated().first { (idx, w) -> Bool in
-            guard w.id != windowId else { return false }
-            let frame = phoneLayoutFrame(for: w, index: idx, total: total) ?? w.frame
-            let cx = frame.x + frame.width / 2
-            let cy = frame.y + frame.height / 2
-            let dx = CGFloat(cx) - dropCenter.x
-            let dy = CGFloat(cy) - dropCenter.y
-            return abs(dx) < swapThreshold && abs(dy) < swapThreshold
-        }
+        let total = displayWindows.count
+        guard total > 0 else { return }
+        let mode = phoneLayoutOverride ?? Self.chooseAutoLayout(count: total)
+        let slot = Self.nearestGridIndex(mode: mode, total: total, dropCenter: dropCenter)
 
         withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
-            if let (targetIdx, targetWin) = target {
-                // Swap: both windows' effective frames trade places.
-                let droppedFrame = phoneLayoutFrame(for: windows[droppedIdx], index: droppedIdx, total: total) ?? windows[droppedIdx].frame
-                let targetFrame = phoneLayoutFrame(for: targetWin, index: targetIdx, total: total) ?? targetWin.frame
-                phoneFrameOverrides[windowId] = targetFrame
-                phoneFrameOverrides[targetWin.id] = droppedFrame
-            } else {
-                // Snap-to-grid: pick the auto-mode's nearest cell.
-                let mode = phoneLayoutOverride ?? Self.chooseAutoLayout(count: total)
-                let nearestIdx = Self.nearestGridIndex(mode: mode, total: total, dropCenter: dropCenter)
-                if let cell = Self.gridFrame(mode: mode, index: nearestIdx, total: total) {
-                    phoneFrameOverrides[windowId] = cell
-                }
+            // Reorder uses the index-based auto-grid; drop any per-window frame
+            // overrides so cards aren't pinned to stale free positions, and let
+            // the chooser keep picking the right mode for the count.
+            if !phoneFrameOverrides.isEmpty {
+                phoneFrameOverrides = [:]
+                persistOverrides()
             }
-            // First completed drag of a session disengages auto-arrange so
-            // the manual frame actually wins. Subsequent drags don't need to
-            // re-set the flag (idempotent).
-            manualLayoutSticky = true
-            persistOverrides()
+            manualLayoutSticky = false
+            reorderWindow(windowId, toSlot: slot)
+        }
+    }
+
+    /// Move `windowId` to `targetSlot` in the persisted phone order so the grid
+    /// reflows the dragged card into that position. Works against the CURRENT
+    /// display order (what the user sees) so the slot math lines up with the
+    /// rendered grid; remove-then-insert lands the card at the visual slot.
+    private func reorderWindow(_ windowId: String, toSlot targetSlot: Int) {
+        var order = displayWindows.map(\.id)
+        guard let from = order.firstIndex(of: windowId) else { return }
+        let clamped = max(0, min(order.count - 1, targetSlot))
+        guard clamped != from else { return }
+        let moved = order.remove(at: from)
+        order.insert(moved, at: clamped)
+        phoneWindowOrder = order
+        persistWindowOrder()
+    }
+
+    /// Decode the persisted phone window order on appear so a returning user's
+    /// arrangement is in place before the first layout-update arrives.
+    private func loadWindowOrder() {
+        guard let data = phoneWindowOrderJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else { return }
+        phoneWindowOrder = decoded
+    }
+
+    /// Re-encode `phoneWindowOrder` to @AppStorage after every mutation.
+    private func persistWindowOrder() {
+        if let data = try? JSONEncoder().encode(phoneWindowOrder),
+           let json = String(data: data, encoding: .utf8) {
+            phoneWindowOrderJSON = json
+        }
+    }
+
+    /// Keep the saved order in step with the live window set: append new ids
+    /// (preserving incoming order) and drop closed ones. Called from
+    /// `.onChange(of: windows)`. Only writes when the order actually changes,
+    /// so it doesn't thrash @AppStorage on every layout-update.
+    private func reconcileWindowOrder(activeWindows: [WindowState]) {
+        let activeIds = activeWindows.map(\.id)
+        let activeSet = Set(activeIds)
+        var next = phoneWindowOrder.filter { activeSet.contains($0) }
+        let known = Set(next)
+        for id in activeIds where !known.contains(id) { next.append(id) }
+        if next != phoneWindowOrder {
+            phoneWindowOrder = next
+            persistWindowOrder()
         }
     }
 
