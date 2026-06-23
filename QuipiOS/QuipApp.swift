@@ -3502,10 +3502,18 @@ struct MainiOSView: View {
                             // attention dot wins (existing behavior).
                             .zIndex(isDragging ? 100
                                     : attentionCenter.windowsNeedingAttention.contains(window.id) ? 10 : 0)
-                            // Drag-to-move (US-005). minimumDistance keeps
-                            // single taps reaching `onSelect` — only sustained
-                            // 10pt+ travel activates the drag.
-                            .gesture(
+                            // Drag-to-move (US-005). highPriorityGesture, not
+                            // .gesture: WindowRectangle owns an inner
+                            // .onTapGesture + .contextMenu, and SwiftUI gives
+                            // those DESCENDANT gestures priority over an
+                            // ANCESTOR .gesture — so a plain .gesture(DragGesture)
+                            // here never claims the touch and the card won't
+                            // drag. highPriorityGesture evaluates the drag first;
+                            // minimumDistance:10 means a pure tap (no travel)
+                            // fails the drag and falls through to onSelect, and a
+                            // motionless long-press still opens the context menu.
+                            // Also beats a ScrollView pan ancestor, if present.
+                            .highPriorityGesture(
                                 DragGesture(minimumDistance: 10)
                                     .onChanged { value in
                                         if draggingWindowId != window.id {
