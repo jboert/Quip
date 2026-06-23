@@ -165,4 +165,85 @@ final class PhoneLayoutChooserTests: XCTestCase {
         let drop = CGPoint(x: 0.85, y: 0.8)
         XCTAssertEqual(MainiOSView.nearestGridIndex(mode: "grid", total: 6, dropCenter: drop), 5)
     }
+
+    // MARK: reorderedSequence — drag-reorder remove-then-insert clamp
+
+    func testReorderMoveForwardLandsAtSlot() {
+        XCTAssertEqual(
+            MainiOSView.reorderedSequence(["A", "B", "C", "D"], moving: "A", toSlot: 2),
+            ["B", "C", "A", "D"]
+        )
+    }
+
+    func testReorderMoveBackwardLandsAtSlot() {
+        XCTAssertEqual(
+            MainiOSView.reorderedSequence(["A", "B", "C", "D"], moving: "D", toSlot: 1),
+            ["A", "D", "B", "C"]
+        )
+    }
+
+    func testReorderToSameSlotIsNoOp() {
+        let input = ["A", "B", "C"]
+        XCTAssertEqual(MainiOSView.reorderedSequence(input, moving: "B", toSlot: 1), input)
+    }
+
+    func testReorderAbsentIdIsNoOp() {
+        let input = ["A", "B", "C"]
+        XCTAssertEqual(MainiOSView.reorderedSequence(input, moving: "Z", toSlot: 0), input)
+    }
+
+    func testReorderSlotClampsAboveRange() {
+        // Slot 99 clamps to last index → card lands at the end.
+        XCTAssertEqual(
+            MainiOSView.reorderedSequence(["A", "B", "C"], moving: "A", toSlot: 99),
+            ["B", "C", "A"]
+        )
+    }
+
+    func testReorderSlotClampsBelowRange() {
+        // Negative slot clamps to 0 → card lands at the front.
+        XCTAssertEqual(
+            MainiOSView.reorderedSequence(["A", "B", "C"], moving: "C", toSlot: -5),
+            ["C", "A", "B"]
+        )
+    }
+
+    // MARK: reconciledWindowOrder — prune closed + append new
+
+    func testReconcileAppendsNewWindowsAtEnd() {
+        XCTAssertEqual(
+            MainiOSView.reconciledWindowOrder(saved: ["A", "B"], active: ["A", "B", "C"]),
+            ["A", "B", "C"]
+        )
+    }
+
+    func testReconcilePrunesClosedWindows() {
+        XCTAssertEqual(
+            MainiOSView.reconciledWindowOrder(saved: ["A", "B", "C"], active: ["A", "C"]),
+            ["A", "C"]
+        )
+    }
+
+    func testReconcilePreservesSavedOrderAndAppendsNew() {
+        // Survivors keep their saved (user-dragged) order; brand-new "D"
+        // appends after, in incoming order — not interleaved.
+        XCTAssertEqual(
+            MainiOSView.reconciledWindowOrder(saved: ["C", "A", "B"], active: ["A", "B", "C", "D"]),
+            ["C", "A", "B", "D"]
+        )
+    }
+
+    func testReconcileEmptySavedReturnsActiveOrder() {
+        XCTAssertEqual(
+            MainiOSView.reconciledWindowOrder(saved: [], active: ["X", "Y"]),
+            ["X", "Y"]
+        )
+    }
+
+    func testReconcileAllClosedReturnsEmpty() {
+        XCTAssertEqual(
+            MainiOSView.reconciledWindowOrder(saved: ["A", "B"], active: []),
+            []
+        )
+    }
 }

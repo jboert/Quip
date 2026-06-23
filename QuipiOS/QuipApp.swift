@@ -2905,10 +2905,14 @@ struct MainiOSView: View {
 
     private func cycleWindow(direction: Int) {
         guard !isQAModeActive else { return }
-        guard windows.count > 1 else { return }
-        let currentIndex = windows.firstIndex(where: { $0.id == selectedWindowId }) ?? 0
-        let nextIndex = (currentIndex + direction + windows.count) % windows.count
-        let newId = windows[nextIndex].id
+        // Cycle through windows in the order the user SEES them — the persisted
+        // drag-reorder grid (displayWindows), not the Mac's raw window order —
+        // so prev/next steps to the visually-adjacent card.
+        let ordered = displayWindows
+        guard ordered.count > 1 else { return }
+        let currentIndex = ordered.firstIndex(where: { $0.id == selectedWindowId }) ?? 0
+        let nextIndex = (currentIndex + direction + ordered.count) % ordered.count
+        let newId = ordered[nextIndex].id
         withAnimation(.spring(duration: 0.2)) {
             selectedWindowId = newId
         }
@@ -3726,14 +3730,26 @@ struct MainiOSView: View {
     /// display order (what the user sees) so the slot math lines up with the
     /// rendered grid; remove-then-insert lands the card at the visual slot.
     private func reorderWindow(_ windowId: String, toSlot targetSlot: Int) {
-        var order = displayWindows.map(\.id)
-        guard let from = order.firstIndex(of: windowId) else { return }
-        let clamped = max(0, min(order.count - 1, targetSlot))
-        guard clamped != from else { return }
-        let moved = order.remove(at: from)
-        order.insert(moved, at: clamped)
-        phoneWindowOrder = order
+        let current = displayWindows.map(\.id)
+        let next = Self.reorderedSequence(current, moving: windowId, toSlot: targetSlot)
+        guard next != current else { return }
+        phoneWindowOrder = next
         persistWindowOrder()
+    }
+
+    /// Pure move: `order` with `id` pulled from its current position and
+    /// reinserted at `slot` (clamped to a valid index). Returns the input
+    /// unchanged when `id` is absent or already at `slot`. Extracted as a pure
+    /// fn so the remove-then-insert clamp is unit-testable without a SwiftUI
+    /// view (PhoneLayoutChooserTests).
+    static func reorderedSequence(_ order: [String], moving id: String, toSlot slot: Int) -> [String] {
+        guard let from = order.firstIndex(of: id) else { return order }
+        let clamped = max(0, min(order.count - 1, slot))
+        guard clamped != from else { return order }
+        var next = order
+        let moved = next.remove(at: from)
+        next.insert(moved, at: clamped)
+        return next
     }
 
     /// Decode the persisted phone window order on appear so a returning user's
@@ -3743,6 +3759,17 @@ struct MainiOSView: View {
               let decoded = try? JSONDecoder().decode([String].self, from: data)
         else { return }
         phoneWindowOrder = decoded
+        // Migration: a user upgrading from the old free-position drag model has
+        // per-window frame overrides saved. Those win in phoneLayoutFrame and
+        // would shadow the reorder grid until the first drop clears them. If a
+        // saved reorder order already exists, the grid is authoritative now —
+        // drop the legacy overrides up front so cards render in order from
+        // launch instead of at stale free positions. (loadOverrides() runs
+        // just before this in onAppear, so phoneFrameOverrides is populated.)
+        if !decoded.isEmpty && !phoneFrameOverrides.isEmpty {
+            phoneFrameOverrides = [:]
+            persistOverrides()
+        }
     }
 
     /// Re-encode `phoneWindowOrder` to @AppStorage after every mutation.
@@ -3758,15 +3785,24 @@ struct MainiOSView: View {
     /// `.onChange(of: windows)`. Only writes when the order actually changes,
     /// so it doesn't thrash @AppStorage on every layout-update.
     private func reconcileWindowOrder(activeWindows: [WindowState]) {
-        let activeIds = activeWindows.map(\.id)
-        let activeSet = Set(activeIds)
-        var next = phoneWindowOrder.filter { activeSet.contains($0) }
-        let known = Set(next)
-        for id in activeIds where !known.contains(id) { next.append(id) }
+        let next = Self.reconciledWindowOrder(saved: phoneWindowOrder,
+                                              active: activeWindows.map(\.id))
         if next != phoneWindowOrder {
             phoneWindowOrder = next
             persistWindowOrder()
         }
+    }
+
+    /// Pure reconcile: keep saved ids that are still active (in saved order),
+    /// then append active ids not yet present (in incoming order). Drops closed
+    /// windows; each id appears at most once. Extracted as a pure fn so the
+    /// append/prune logic is unit-testable without a view.
+    static func reconciledWindowOrder(saved: [String], active: [String]) -> [String] {
+        let activeSet = Set(active)
+        var next = saved.filter { activeSet.contains($0) }
+        var seen = Set(next)
+        for id in active where seen.insert(id).inserted { next.append(id) }
+        return next
     }
 
     /// Pure-fn nearest-cell finder for snap-to-grid. Returns the index whose
