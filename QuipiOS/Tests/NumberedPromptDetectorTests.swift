@@ -294,4 +294,89 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertNil(NumberedPromptDetector.choiceLetter(in: "1. add lowercase")) // lowercase, not a label
         XCTAssertNil(NumberedPromptDetector.choiceLetter(in: "plain prose"))
     }
+
+    // MARK: - Multi-line option bodies (real Claude verbose menu — IMG_0383)
+
+    /// Claude renders a numbered menu where each option carries several
+    /// description lines underneath. Those body lines used to reset the run, so
+    /// only option 1 survived and no usable button row appeared on the phone.
+    /// The cursor marker on option 1 is enough to accept the block.
+    func test_numberedMenu_withMultiLineBodies_marker_detected() {
+        let content = """
+        Which cleanup groups should I delete?
+        (read-only scan done; I delete only
+        what you pick, one group at a time)
+        ❯ 1. G1 Xcode caches (~335M)
+        rm -rf the regenerable
+        ModuleCache.noindex +
+        SDKStatCaches.noindex in
+        DerivedData. Safe — Xcode rebuilds
+        them on next compile. Biggest safe
+        win.
+          2. G2 superseded .swrm backups (~1.4M)
+        Delete only
+        swrm.db.bak-corrupted-import-* and
+        swrm.db.bak-before-prune-*.
+          3. G3 remote merged ralph branch
+        git push origin --delete
+        ralph/c2-cost-governance — merged
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2, 3])
+    }
+
+    /// Same shape but with `[ ]` checkbox markers and NO cursor marker — a
+    /// multi-select menu. The `[ ]`/`[x]` token is itself an unambiguous
+    /// interactive-prompt signal (prose doesn't write `N. [ ]`), so the block
+    /// should be accepted as a real prompt.
+    func test_numberedMenu_checkboxMultiSelect_noCursor_detected() {
+        let content = """
+        Which cleanup groups should I delete?
+        (I delete only what you pick)
+        1. [ ] G1 Xcode caches (~335M)
+        rm -rf the regenerable ModuleCache.
+          2. [ ] G2 superseded .swrm backups (~1.4M)
+        Delete only the corrupted imports.
+          3. [ ] G3 remote merged ralph branch
+        git push origin --delete the branch.
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2, 3])
+    }
+
+    func test_isMultiSelect_checkboxMenu_true() {
+        let content = """
+        Which to delete?
+        1. [ ] G1 caches
+        2. [ ] G2 backups
+        """
+        XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: content))
+    }
+
+    func test_isMultiSelect_singleSelectMarkerMenu_false() {
+        let content = """
+        Apply this change?
+        ❯ 1. Yes
+          2. No
+        """
+        XCTAssertFalse(NumberedPromptDetector.isMultiSelect(in: content))
+    }
+
+    func test_isMultiSelect_noPrompt_false() {
+        XCTAssertFalse(NumberedPromptDetector.isMultiSelect(in: "just some prose output"))
+    }
+
+    /// A genuine prose ordered list with multi-line bodies and NO marker / no
+    /// checkbox / no choice cue must still be rejected — the gap tolerance must
+    /// not re-open the prose false-positive.
+    func test_proseOrderedList_withBodies_stillRejected() {
+        let content = """
+        Here is how the build works:
+        1. First the compiler parses every
+        source file in the target.
+        2. Then it type-checks the modules
+        and resolves imports.
+        3. Finally it links the binary and
+        signs it for distribution.
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+    }
 }

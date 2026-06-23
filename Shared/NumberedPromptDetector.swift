@@ -44,7 +44,31 @@ enum NumberedPromptDetector {
         bestRun(in: content)?.map(\.number)
     }
 
-    private struct Match { let number: Int; let hasMarker: Bool; let normalized: String; let letter: Character?; let lineIndex: Int }
+    /// True when the detected prompt is a MULTI-SELECT (checkbox) menu — any
+    /// option carries a `[ ]`/`[x]` token. The phone renders accumulating
+    /// toggles + a Submit button for these instead of one-tap-and-submit, and
+    /// the Mac toggles each pick then presses Return once. nil/single-select
+    /// prompts return false. (§18.2)
+    static func isMultiSelect(in content: String) -> Bool {
+        bestRun(in: content)?.contains(where: \.hasCheckbox) ?? false
+    }
+
+    /// A `[ ]` / `[x]` / `[X]` / `[✓]` checkbox token anywhere on the line —
+    /// the signature of an interactive multi-select option.
+    static func lineHasCheckbox(_ line: String) -> Bool {
+        let s = stripANSI(line)
+        return s.contains("[ ]") || s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
+    }
+
+    private struct Match { let number: Int; let hasMarker: Bool; let hasCheckbox: Bool; let normalized: String; let letter: Character?; let lineIndex: Int }
+
+    /// At most this many non-numbered lines may sit BETWEEN two numbered
+    /// options before the run is considered ended. Claude's verbose menus put
+    /// several description lines under each option (`rm -rf …`, `Delete only …`),
+    /// so a hard "any non-numbered line breaks the run" rule collapsed real
+    /// menus down to their first option. Tolerate option bodies up to this many
+    /// lines; longer gaps mean the prompt ended (or it was prose).
+    private static let maxBodyLinesBetweenOptions = 12
 
     /// Find the longest contiguous run of numbered-option lines that contains
     /// at least one `❯`/`>` marker (Claude's prompt block). Shared by `detect`
@@ -65,16 +89,22 @@ enum NumberedPromptDetector {
         // prompt vs prose.
         var current: [Match] = []
         var best: [Match] = []
+        // Non-numbered lines seen since the last option in `current`. An option
+        // can carry a multi-line body; only a long run of non-option lines ends
+        // the block (see maxBodyLinesBetweenOptions).
+        var gap = 0
         func flush() {
             guard current.count > best.count else { return }
             // A cursor marker (`❯`/`›`/`>`) alone proves a live prompt — accept
-            // anywhere in the window. A marker-LESS run is inherently ambiguous
-            // with prose (outlines, rubrics share the `1. A — …` shape), so it
-            // only qualifies when ALL of: it's a sequential-lettered block, it
-            // sits at the bottom of the viewport (where an agent's question
-            // waits), AND a choice cue (`?` / pick / choose / …) precedes it.
-            // (§18.1)
+            // anywhere in the window. A `[ ]`/`[x]` checkbox is just as
+            // unambiguous: prose never writes `N. [ ] …`, so a checkbox run is a
+            // real (multi-select) prompt. A marker-LESS, checkbox-less run is
+            // ambiguous with prose (outlines, rubrics share the `1. A — …`
+            // shape), so it only qualifies when ALL of: it's a
+            // sequential-lettered block, it sits at the bottom of the viewport,
+            // AND a choice cue (`?` / pick / choose / …) precedes it. (§18.1)
             let accepted = current.contains(where: \.hasMarker)
+                || current.contains(where: \.hasCheckbox)
                 || (isLetteredChoiceRun(current)
                     && isTrailingRun(current, in: tail)
                     && hasChoiceCue(current, in: tail))
@@ -82,22 +112,34 @@ enum NumberedPromptDetector {
         }
         for (idx, line) in tail.enumerated() {
             if let (n, marker) = parseNumberedLine(line) {
-                let m = Match(number: n, hasMarker: marker, normalized: normalizedOptionLine(line),
+                let m = Match(number: n, hasMarker: marker, hasCheckbox: lineHasCheckbox(line),
+                              normalized: normalizedOptionLine(line),
                               letter: choiceLetter(in: line), lineIndex: idx)
                 if let last = current.last, n == last.number + 1 {
                     current.append(m)
+                    gap = 0
                 } else if n == 1 {
-                    // Start of a new candidate block.
+                    // Start of a new candidate block — bank the prior run first
+                    // (gap tolerance means body lines no longer flushed it).
+                    flush()
                     current = [m]
+                    gap = 0
                 } else {
-                    // Out-of-order numbering — discard.
+                    // Out-of-order numbering — end the prior run, drop this line.
+                    flush()
                     current = []
+                    gap = 0
                 }
             } else if !current.isEmpty {
-                // Non-matching line breaks the run; remember it if it
-                // beats the previous best, then reset.
-                flush()
-                current = []
+                // Body line under the current option. Tolerate up to
+                // maxBodyLinesBetweenOptions; only a longer gap ends the run
+                // (the prompt finished, or this was prose all along).
+                gap += 1
+                if gap > maxBodyLinesBetweenOptions {
+                    flush()
+                    current = []
+                    gap = 0
+                }
             }
         }
         flush()  // trailing run

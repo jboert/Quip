@@ -69,4 +69,49 @@ final class AnswerRevalidationTests: XCTestCase {
         XCTAssertFalse(QuipMacApp.answerStillValid(action: "select_1",
                                                    expectedFingerprint: fp, liveContent: "Working...\nDone."))
     }
+
+    // MARK: - Multi-select (§18.2)
+
+    private let checkboxMenu = """
+    Which cleanup groups should I delete?
+    1. [ ] G1 Xcode caches
+    rm -rf the regenerable cache.
+    2. [ ] G2 superseded backups
+    delete the corrupted imports.
+    3. [ ] G3 remote merged branch
+    git push origin --delete it.
+    """
+
+    func test_selectedOptionNumbers_parsesMultiSubmit() {
+        XCTAssertEqual(QuipMacApp.selectedOptionNumbers(from: "select_multi:1,3"), [1, 3])
+        XCTAssertEqual(QuipMacApp.selectedOptionNumbers(from: "select_multi:2"), [2])
+        XCTAssertNil(QuipMacApp.selectedOptionNumbers(from: "select_multi:"))
+        XCTAssertNil(QuipMacApp.selectedOptionNumbers(from: "select_multi:1,x"))
+        XCTAssertNil(QuipMacApp.selectedOptionNumbers(from: "select_multi:0,2")) // 0 invalid
+        XCTAssertNil(QuipMacApp.selectedOptionNumbers(from: "select_2"))         // single, not multi
+    }
+
+    func test_multiSelect_isAnswerAction() {
+        XCTAssertTrue(QuipMacApp.isAnswerAction("select_multi:1,3"))
+    }
+
+    func test_multiSelect_allOptionsOffered_matchingFingerprint_injects() {
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: checkboxMenu))
+        XCTAssertTrue(QuipMacApp.answerStillValid(action: "select_multi:1,3",
+                                                  expectedFingerprint: fp, liveContent: checkboxMenu))
+    }
+
+    func test_multiSelect_optionOutOfRange_dropped() {
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: checkboxMenu))
+        // Live menu offers 1-3; option 5 isn't there.
+        XCTAssertFalse(QuipMacApp.answerStillValid(action: "select_multi:1,5",
+                                                   expectedFingerprint: fp, liveContent: checkboxMenu))
+    }
+
+    func test_multiSelect_staleFingerprint_dropped() {
+        let stale = "Which to delete?\n1. [ ] A\n2. [ ] B"
+        let staleFp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: stale))
+        XCTAssertFalse(QuipMacApp.answerStillValid(action: "select_multi:1,2",
+                                                   expectedFingerprint: staleFp, liveContent: checkboxMenu))
+    }
 }

@@ -4962,6 +4962,69 @@ enum ContentRenderMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// §18.2 — Multi-select answer bar for Claude's `[ ]` checkbox menus. Each chip
+/// toggles a pick locally (no keystroke sent), and Submit fires ONE action
+/// `select_multi:<n,n,…>` with the prompt fingerprint. Sending all picks at once
+/// is what fixes the old per-tap drop: the terminal screen doesn't mutate until
+/// submit, so the Mac's single fingerprint re-validation still matches.
+private struct MultiSelectAnswerBar: View {
+    let options: [Int]
+    let fingerprint: String?
+    /// (action, fingerprint) — action is `select_multi:1,3`.
+    let onSubmit: (String, String?) -> Void
+    @State private var picks: Set<Int> = []
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(options, id: \.self) { n in
+                    let on = picks.contains(n)
+                    Button {
+                        if on { picks.remove(n) } else { picks.insert(n) }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: on ? "checkmark.square.fill" : "square")
+                            Text("\(n)")
+                        }
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 12)
+                        .frame(height: 40)
+                        .background(on ? Color.accentColor : Color.white.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .accessibilityLabel("Option \(n)")
+                    .accessibilityValue(on ? "Selected" : "Not selected")
+                    .accessibilityAddTraits(.isButton)
+                }
+
+                Button {
+                    let chosen = options.filter { picks.contains($0) }
+                    guard !chosen.isEmpty else { return }
+                    onSubmit("select_multi:" + chosen.map(String.init).joined(separator: ","), fingerprint)
+                    picks = []
+                } label: {
+                    Text(picks.isEmpty ? "Submit" : "Submit \(picks.count)")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(picks.isEmpty ? Color.white.opacity(0.4) : Color.white)
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .background(picks.isEmpty ? Color.white.opacity(0.08) : Color.green.opacity(0.85))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(picks.isEmpty)
+                .accessibilityLabel("Submit selected options")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        // Clear picks when the prompt changes out from under us so stale ticks
+        // never submit against a different menu.
+        .onChange(of: fingerprint) { _, _ in picks = [] }
+    }
+}
+
 struct InlineTerminalContent: View {
     let content: String
     let screenshot: String?
@@ -5214,10 +5277,18 @@ struct InlineTerminalContent: View {
             // in-app button per detected option so Codex/Claude prompts with
             // 1...N choices are answerable without typing.
             if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
-                if labsOneTapAnswer {
+                let fingerprint = NumberedPromptDetector.fingerprint(in: content)
+                if NumberedPromptDetector.isMultiSelect(in: content) {
+                    // §18.2 — checkbox (multi-select) menu: accumulate picks on
+                    // the phone, then submit them together so the terminal
+                    // screen only mutates once. The Mac re-validates that single
+                    // submit against `fingerprint` (no per-tap drop), toggles
+                    // each pick, and presses Return once.
+                    MultiSelectAnswerBar(options: options, fingerprint: fingerprint,
+                                         onSubmit: onSendAction)
+                } else if labsOneTapAnswer {
                     // §3.2 Labs — prominent, equal-width answer buttons with the
                     // prompt fingerprint so the Mac re-validates before injecting.
-                    let fingerprint = NumberedPromptDetector.fingerprint(in: content)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(options, id: \.self) { n in

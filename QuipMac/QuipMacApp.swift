@@ -84,6 +84,17 @@ private struct SettingsMenuButton: View {
     }
 }
 
+/// Main-actor box that threads mutable state across the sequential steps of a
+/// one-tap / multi-select answer injection: the live iTerm2 session id (which a
+/// step-0 self-heal may refresh) and an abort flag set when a step fails. A
+/// reference type so the pre-scheduled per-step closures share one instance;
+/// `@MainActor` keeps every access on the main thread (the steps run there). (§18.2)
+@MainActor private final class AnswerInjectState {
+    var sid: String?
+    var aborted = false
+    init(sid: String?) { self.sid = sid }
+}
+
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -2177,7 +2188,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
     /// One-tap answer actions eligible for §3.2 prompt re-validation.
     nonisolated static func isAnswerAction(_ action: String) -> Bool {
-        action == "press_y" || action == "press_n" || selectedOptionNumber(from: action) != nil
+        action == "press_y" || action == "press_n"
+            || selectedOptionNumber(from: action) != nil
+            || selectedOptionNumbers(from: action) != nil
     }
 
     /// Parse the shared dynamic in-app prompt action format. The wire string
@@ -2197,6 +2210,22 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         return n
     }
 
+    /// Parse a MULTI-SELECT submit: `select_multi:1,3` → `[1, 3]`. The phone
+    /// accumulates checkbox picks locally and sends them as one comma-separated
+    /// submit. Returns nil for any other action or malformed payload. (§18.2)
+    nonisolated static func selectedOptionNumbers(from action: String) -> [Int]? {
+        let prefix = "select_multi:"
+        guard action.hasPrefix(prefix) else { return nil }
+        let raw = action.dropFirst(prefix.count)
+        guard !raw.isEmpty else { return nil }
+        var nums: [Int] = []
+        for part in raw.split(separator: ",") {
+            guard let n = Int(part), n >= 1, n <= NumberedPromptDetector.maxOptionNumber else { return nil }
+            nums.append(n)
+        }
+        return nums.isEmpty ? nil : nums
+    }
+
     /// Pure decision: may we inject `action` given the prompt the phone saw
     /// (`expectedFingerprint`) versus what's on screen now (`liveContent`)?
     /// True only if the live prompt still hashes to the same value (and, for
@@ -2207,6 +2236,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         guard let live = NumberedPromptDetector.fingerprint(in: liveContent),
               live == expectedFingerprint else {
             return false
+        }
+        // For a multi-select submit, every picked option must still be offered.
+        if let ns = selectedOptionNumbers(from: action) {
+            guard let offered = NumberedPromptDetector.detect(in: liveContent) else { return false }
+            return ns.allSatisfy { offered.contains($0) }
         }
         // For a numbered answer, also confirm N is still an offered option.
         if let n = selectedOptionNumber(from: action) {
@@ -2227,15 +2261,25 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let wid = window.id
         let sessionId = window.iterm2SessionId
         let isTerminal = window.isTerminal
-        guard let text: String = {
+        // The keystroke steps this answer injects. A single answer is one step
+        // that presses Return. A multi-select submit toggles each picked number
+        // WITHOUT Return, then presses Return once at the end — so the agent's
+        // checkbox menu gets every pick before it submits. (§18.2)
+        let steps: [(text: String, pressReturn: Bool)] = {
             switch action {
-            case "press_y": return "y"
-            case "press_n": return "n"
+            case "press_y": return [("y", true)]
+            case "press_n": return [("n", true)]
             default:
-                guard let n = Self.selectedOptionNumber(from: action) else { return nil }
-                return String(n)
+                if let ns = Self.selectedOptionNumbers(from: action), !ns.isEmpty {
+                    return ns.map { (String($0), false) } + [("", true)]
+                }
+                if let n = Self.selectedOptionNumber(from: action) {
+                    return [(String(n), true)]
+                }
+                return []
             }
-        }() else { return }
+        }()
+        guard !steps.isEmpty else { return }
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer, windowManager] in
             let content = isTerminal
                 ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
@@ -2266,29 +2310,43 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 windowManager.focusWindow(wid)
                 let delay = KeystrokeInjector.focusDelay(path: .quickAction, terminalApp: termApp,
                                                          iterm2SessionId: sessionId)
-                let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sid in
-                    keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
-                                               windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
-                }
-                let injectWithSelfHeal: () -> Void = {
-                    var r = doInject(sessionId)
-                    // (#1) Self-heal: stale iTerm2 session id → refresh + retry once.
-                    if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: termApp) {
-                        let sessions = WindowManager.fetchIterm2SessionIds()
-                        windowManager.applyIterm2SessionIds(sessions)
-                        if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
-                           let newId = refreshed.iterm2SessionId, newId != sessionId {
-                            NSLog("[Quip] revalidateAnswer self-heal: refreshed iTerm2 session id for %@", wid)
-                            r = doInject(newId)
+                // Inter-step gap so a multi-select TUI registers each digit as
+                // its own checkbox toggle before the next digit / final Return.
+                let stepGap = 0.12
+                // Main-actor box threading the live session id (self-heal may
+                // refresh it on step 0) and an abort flag across the steps.
+                let st = AnswerInjectState(sid: sessionId)
+                for (i, step) in steps.enumerated() {
+                    let isFirst = (i == 0)
+                    let runStep: @MainActor () -> Void = {
+                        guard !st.aborted else { return }
+                        var r = keystrokeInjector.sendText(step.text, to: wid, pressReturn: step.pressReturn,
+                                                           terminalApp: termApp, windowName: wname,
+                                                           cgWindowNumber: wn, iterm2SessionId: st.sid)
+                        // (#1) Self-heal: stale iTerm2 session id → refresh + retry
+                        // the first step once, reuse the refreshed id for the rest.
+                        if isFirst, QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: termApp) {
+                            let sessions = WindowManager.fetchIterm2SessionIds()
+                            windowManager.applyIterm2SessionIds(sessions)
+                            if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
+                               let newId = refreshed.iterm2SessionId, newId != st.sid {
+                                NSLog("[Quip] revalidateAnswer self-heal: refreshed iTerm2 session id for %@", wid)
+                                st.sid = newId
+                                r = keystrokeInjector.sendText(step.text, to: wid, pressReturn: step.pressReturn,
+                                                               terminalApp: termApp, windowName: wname,
+                                                               cgWindowNumber: wn, iterm2SessionId: st.sid)
+                            }
+                        }
+                        if !r.success {
+                            st.aborted = true
+                            let reason = r.error ?? "unknown injection failure"
+                            webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
                         }
                     }
-                    if !r.success {
-                        let reason = r.error ?? "unknown injection failure"
-                        webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
-                    }
+                    let when = delay + Double(i) * stepGap
+                    if when == 0 { runStep() }
+                    else { DispatchQueue.main.asyncAfter(deadline: .now() + when, execute: runStep) }
                 }
-                if delay == 0 { injectWithSelfHeal() }
-                else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: injectWithSelfHeal) }
             }
         }
     }
