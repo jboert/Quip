@@ -205,9 +205,26 @@ struct WindowListSidebar: View {
                 )
                 .tag(row.window.id)
             }
+            .onMove(perform: dragReorder)
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+    }
+
+    /// Native drag-to-reorder. The rows render in `orderedWindows()` order
+    /// (which is `windowOrder` verbatim), so a visible-index move maps directly
+    /// onto that rendered id list — apply it and write the result straight back
+    /// to the authoritative `windowOrder`. Free across tiers on purpose: a
+    /// hand-drag is the user explicitly overriding the tier grouping, and
+    /// because windowOrder is authoritative the arrangement sticks until the
+    /// next magic-wand tap. Complements the per-row chevrons (same-tier nudge)
+    /// and the wand (whole-list snap).
+    private func dragReorder(from source: IndexSet, to destination: Int) {
+        var rendered = orderedWindows().map(\.id)
+        rendered.move(fromOffsets: source, toOffset: destination)
+        withAnimation(.easeOut(duration: 0.18)) {
+            windowOrder = rendered
+        }
     }
 
     private func moveAction(for id: String, neighborID: String?) -> (() -> Void)? {
