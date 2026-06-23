@@ -93,3 +93,9 @@ tasks/
 
 # swrm board-integration runtime/event dir — local state, not for the repo
 .swrm/
+
+# Ralph autonomous-loop scratch — the PRD it's executing (prd.json) and its
+# running progress log (progress.txt) are local runtime state, regenerated
+# per task. Not product code; keep them out of commits (same class as .swrm/).
+/prd.json
+/progress.txt
