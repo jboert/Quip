@@ -46,7 +46,7 @@ struct WindowListSidebar: View {
                     .font(.title3)
             }
             .buttonStyle(.borderless)
-            .help("Auto-sort — terminals on top (attention-needed first), simulators next, the rest below")
+            .help("Auto-sort + toggle your dev windows — terminals (attention-needed first) and simulators sort to the top and turn on; tap again to turn them off. Other windows just get sorted.")
 
             Button {
                 showingAddPopover.toggle()

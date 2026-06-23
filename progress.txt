@@ -36,3 +36,15 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - Putting the toggleWindow loop INSIDE the withAnimation envelope (not after it) is what makes the checkbox flips animate as one motion with the sort. The checkbox reads window.isEnabled live via enabledBinding, so no view-state plumbing needed.
   - US-002 (tooltip) is the only remaining story: just update the wand Button's `.help(...)` string at line ~49 to name both actions. Single line, same file.
 ---
+
+## 2026-06-22 - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Updated the magic-wand Button's `.help(...)` tooltip so it names BOTH actions (auto-sort AND toggle-enable terminals + simulators), per US-002.
+- Files changed: QuipMac/Views/WindowListSidebar.swift (one line — the wand `.help(...)` string in header()), prd.json, progress.txt.
+- New tooltip: "Auto-sort + toggle your dev windows — terminals (attention-needed first) and simulators sort to the top and turn on; tap again to turn them off. Other windows just get sorted."
+- No behavior change: drag-reorder (.onMove), hover chevrons, add/refresh buttons all untouched. Only the help string changed.
+- Verified: xcodebuild build ... → `** BUILD SUCCEEDED **`. SourceKit "Cannot find WindowManager/ManagedWindow/TerminalApp/TerminalStateDetector in scope" + "Generic parameter T could not be inferred" appeared as the expected spurious cross-file noise — ignored per oracle rule.
+- **Learnings for future iterations:**
+  - All PRD stories now pass. Both edits were confined to WindowListSidebar.swift exactly as the hard constraints required.
+  - The wand button is at header() in WindowListSidebar.swift; its `.help()` sits right after `.buttonStyle(.borderless)`. The "+" (add terminal) button below has its own separate `.help("Spawn a new terminal window")` — don't confuse the two when editing tooltips.
+---

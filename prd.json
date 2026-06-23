@@ -30,8 +30,8 @@
         "xcodebuild build prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Updated the wand Button's .help(...) at header() (was line 49) to name BOTH actions: 'Auto-sort + toggle your dev windows — terminals (attention-needed first) and simulators sort to the top and turn on; tap again to turn them off. Other windows just get sorted.' Single-line change, only WindowListSidebar.swift touched. drag-reorder, chevrons, add/refresh buttons untouched. xcodebuild BUILD SUCCEEDED (SourceKit cross-file 'Cannot find WindowManager/ManagedWindow/TerminalApp/TerminalStateDetector in scope' + 'Generic parameter T' noise ignored per oracle)."
     }
   ]
 }
