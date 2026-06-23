@@ -144,6 +144,38 @@ private struct SettingsIconTile: View {
     }
 }
 
+// MARK: - Copy button with acknowledgment
+//
+// A copy control that confirms itself. Tap copies the value, then the glyph
+// flips to a green checkmark (and the tooltip to "Copied") for ~1.4s before
+// reverting. The standard Apple "did that click land?" affordance — no toast,
+// no modal, just a quiet self-clearing acknowledgment. Reused everywhere
+// Settings offers a one-click copy (connection URLs, PIN) so they all confirm
+// the same way.
+private struct CopyButton: View {
+    let value: String
+    var help: String = "Copy"
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+            withAnimation(.snappy(duration: 0.2)) { copied = true }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.4))
+                withAnimation(.easeIn(duration: 0.25)) { copied = false }
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .foregroundStyle(copied ? Color.green : Color.accentColor)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.borderless)
+        .help(copied ? "Copied" : help)
+    }
+}
+
 // MARK: - Sidebar identity header
 //
 // Anchors the window: this is *Quip*, not a generic preferences shell. The
@@ -151,11 +183,11 @@ private struct SettingsIconTile: View {
 // line relocates the "did my reinstall land" diagnostic out of a buried
 // General → About row into the chrome where it's always visible.
 private struct SettingsIdentityHeader: View {
-    private var version: String {
+    private var versionLabel: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(short) (\(build)) · \(buildTime)"
+        return "\(short) (\(build))"
     }
 
     /// Mtime of the compiled binary — bumps every rebuild without a version
@@ -170,26 +202,36 @@ private struct SettingsIdentityHeader: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 11) {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
-                .frame(width: 30, height: 30)
-            VStack(alignment: .leading, spacing: 1) {
+                .interpolation(.high)
+                .frame(width: 40, height: 40)
+                // App-Store-style lift — the icon reads as a physical tile
+                // sitting above the sidebar, not a flat sticker.
+                .shadow(color: .black.opacity(0.18), radius: 2.5, y: 1)
+
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Quip")
-                    .font(.headline)
-                Text(version)
+                    .font(.title3.weight(.semibold))
+
+                // Two opacity tiers in one line: the human version reads
+                // stronger (secondary) than the build timestamp (tertiary),
+                // which is a "did my reinstall land" diagnostic — present but
+                // quiet. Weight/opacity carry the hierarchy, not a second row.
+                (Text(versionLabel).foregroundStyle(.secondary)
+                 + Text("  ·  \(buildTime)").foregroundStyle(.tertiary))
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .textSelection(.enabled)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.8)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 12)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
     }
 }
 
@@ -1335,14 +1377,7 @@ private struct ConnectionTab: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(url, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .help("Copy \(url)")
+                CopyButton(value: url, help: "Copy \(url)")
             }
         }
     }
@@ -1494,14 +1529,7 @@ private struct SecurityTab: View {
                                 pinManager.savePIN()
                             }
 
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(pinManager.pin, forType: .string)
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Copy PIN")
+                        CopyButton(value: pinManager.pin, help: "Copy PIN")
                     }
                 }
 
