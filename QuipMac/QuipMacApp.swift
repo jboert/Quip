@@ -84,17 +84,6 @@ private struct SettingsMenuButton: View {
     }
 }
 
-/// Main-actor box that threads mutable state across the sequential steps of a
-/// one-tap / multi-select answer injection: the live iTerm2 session id (which a
-/// step-0 self-heal may refresh) and an abort flag set when a step fails. A
-/// reference type so the pre-scheduled per-step closures share one instance;
-/// `@MainActor` keeps every access on the main thread (the steps run there). (§18.2)
-@MainActor private final class AnswerInjectState {
-    var sid: String?
-    var aborted = false
-    init(sid: String?) { self.sid = sid }
-}
-
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -2261,25 +2250,26 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let wid = window.id
         let sessionId = window.iterm2SessionId
         let isTerminal = window.isTerminal
-        // The keystroke steps this answer injects. A single answer is one step
-        // that presses Return. A multi-select submit toggles each picked number
-        // WITHOUT Return, then presses Return once at the end — so the agent's
-        // checkbox menu gets every pick before it submits. (§18.2)
-        let steps: [(text: String, pressReturn: Bool)] = {
+        guard let text: String = {
             switch action {
-            case "press_y": return [("y", true)]
-            case "press_n": return [("n", true)]
+            case "press_y": return "y"
+            case "press_n": return "n"
             default:
                 if let ns = Self.selectedOptionNumbers(from: action), !ns.isEmpty {
-                    return ns.map { (String($0), false) } + [("", true)]
+                    // Multi-select: Claude's checkbox menu is model-emitted TEXT
+                    // (verified on a live prompt — the user answers by typing
+                    // their picks, e.g. "1, 3"). Type the picks as ONE
+                    // comma-separated reply + one Return. NOT separate digit
+                    // keystrokes — the input buffer would read "1"+"3" as the
+                    // single number "13". (§18.2)
+                    return ns.map(String.init).joined(separator: ", ")
                 }
                 if let n = Self.selectedOptionNumber(from: action) {
-                    return [(String(n), true)]
+                    return String(n)
                 }
-                return []
+                return nil
             }
-        }()
-        guard !steps.isEmpty else { return }
+        }() else { return }
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer, windowManager] in
             let content = isTerminal
                 ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
@@ -2310,43 +2300,29 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 windowManager.focusWindow(wid)
                 let delay = KeystrokeInjector.focusDelay(path: .quickAction, terminalApp: termApp,
                                                          iterm2SessionId: sessionId)
-                // Inter-step gap so a multi-select TUI registers each digit as
-                // its own checkbox toggle before the next digit / final Return.
-                let stepGap = 0.12
-                // Main-actor box threading the live session id (self-heal may
-                // refresh it on step 0) and an abort flag across the steps.
-                let st = AnswerInjectState(sid: sessionId)
-                for (i, step) in steps.enumerated() {
-                    let isFirst = (i == 0)
-                    let runStep: @MainActor () -> Void = {
-                        guard !st.aborted else { return }
-                        var r = keystrokeInjector.sendText(step.text, to: wid, pressReturn: step.pressReturn,
-                                                           terminalApp: termApp, windowName: wname,
-                                                           cgWindowNumber: wn, iterm2SessionId: st.sid)
-                        // (#1) Self-heal: stale iTerm2 session id → refresh + retry
-                        // the first step once, reuse the refreshed id for the rest.
-                        if isFirst, QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: termApp) {
-                            let sessions = WindowManager.fetchIterm2SessionIds()
-                            windowManager.applyIterm2SessionIds(sessions)
-                            if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
-                               let newId = refreshed.iterm2SessionId, newId != st.sid {
-                                NSLog("[Quip] revalidateAnswer self-heal: refreshed iTerm2 session id for %@", wid)
-                                st.sid = newId
-                                r = keystrokeInjector.sendText(step.text, to: wid, pressReturn: step.pressReturn,
-                                                               terminalApp: termApp, windowName: wname,
-                                                               cgWindowNumber: wn, iterm2SessionId: st.sid)
-                            }
-                        }
-                        if !r.success {
-                            st.aborted = true
-                            let reason = r.error ?? "unknown injection failure"
-                            webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
+                let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sid in
+                    keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
+                                               windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
+                }
+                let injectWithSelfHeal: () -> Void = {
+                    var r = doInject(sessionId)
+                    // (#1) Self-heal: stale iTerm2 session id → refresh + retry once.
+                    if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: termApp) {
+                        let sessions = WindowManager.fetchIterm2SessionIds()
+                        windowManager.applyIterm2SessionIds(sessions)
+                        if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
+                           let newId = refreshed.iterm2SessionId, newId != sessionId {
+                            NSLog("[Quip] revalidateAnswer self-heal: refreshed iTerm2 session id for %@", wid)
+                            r = doInject(newId)
                         }
                     }
-                    let when = delay + Double(i) * stepGap
-                    if when == 0 { runStep() }
-                    else { DispatchQueue.main.asyncAfter(deadline: .now() + when, execute: runStep) }
+                    if !r.success {
+                        let reason = r.error ?? "unknown injection failure"
+                        webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
+                    }
                 }
+                if delay == 0 { injectWithSelfHeal() }
+                else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: injectWithSelfHeal) }
             }
         }
     }

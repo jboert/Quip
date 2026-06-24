@@ -104,7 +104,12 @@ enum NumberedPromptDetector {
             // sequential-lettered block, it sits at the bottom of the viewport,
             // AND a choice cue (`?` / pick / choose / …) precedes it. (§18.1)
             let accepted = current.contains(where: \.hasMarker)
-                || current.contains(where: \.hasCheckbox)
+                // A checkbox run is a real prompt, but a markdown task list
+                // (`1. [x] done / 2. [ ] todo`) scrolled in the buffer shares the
+                // shape — require a choice cue (`?` / which / pick / …) above it,
+                // which a real "which to delete?" prompt has and a task list
+                // under a heading does not.
+                || (current.contains(where: \.hasCheckbox) && hasChoiceCue(current, in: tail))
                 || (isLetteredChoiceRun(current)
                     && isTrailingRun(current, in: tail)
                     && hasChoiceCue(current, in: tail))
@@ -115,21 +120,34 @@ enum NumberedPromptDetector {
                 let m = Match(number: n, hasMarker: marker, hasCheckbox: lineHasCheckbox(line),
                               normalized: normalizedOptionLine(line),
                               letter: choiceLetter(in: line), lineIndex: idx)
-                if let last = current.last, n == last.number + 1 {
+                // In a checkbox menu every real option carries `[ ]`; a
+                // numbered-looking BODY line (e.g. a command `1) git reset …`
+                // under an option) does not. Requiring the run's kind to match
+                // stops such body lines from being mistaken for the next option
+                // (which corrupted or truncated the detected option set).
+                let runIsCheckbox = current.first?.hasCheckbox ?? false
+                if let last = current.last, n == last.number + 1, !runIsCheckbox || m.hasCheckbox {
                     current.append(m)
                     gap = 0
-                } else if n == 1 {
-                    // Start of a new candidate block — bank the prior run first
-                    // (gap tolerance means body lines no longer flushed it).
-                    flush()
+                } else if current.isEmpty, n == 1 {
+                    // Start of a candidate block.
                     current = [m]
                     gap = 0
-                } else {
-                    // Out-of-order numbering — end the prior run, drop this line.
-                    flush()
-                    current = []
-                    gap = 0
+                } else if !current.isEmpty {
+                    // Numbered-looking but NOT the sequential next option (and, in
+                    // a checkbox run, missing its `[ ]`): it's body text — a
+                    // wrapped command like `1) git reset …` under an option, or a
+                    // re-`1.` that isn't a new menu. Count it as a body line; never
+                    // restart/truncate the run on a digit-leading prose line. The
+                    // gap limit still ends the block when bodies run long.
+                    gap += 1
+                    if gap > maxBodyLinesBetweenOptions {
+                        flush()
+                        current = []
+                        gap = 0
+                    }
                 }
+                // else: numbered line, no run yet, n != 1 → out-of-order start, ignore.
             } else if !current.isEmpty {
                 // Body line under the current option. Tolerate up to
                 // maxBodyLinesBetweenOptions; only a longer gap ends the run

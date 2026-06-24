@@ -342,6 +342,36 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2, 3])
     }
 
+    /// A checkbox option's body carries a wrapped command that itself parses as
+    /// a numbered line (`1) git …`, `2) rm …`). Those must be treated as body,
+    /// not mistaken for the next option — the detected set stays [1,2,3]. (T3 #1)
+    func test_checkboxMenu_numberedCommandInBody_notCorrupted() {
+        let content = """
+        Which to delete?
+        1. [ ] G1 caches
+        1) git gc reclaims space
+        2. [ ] G2 backups
+        2) rm the old logs
+        3. [ ] G3 branches
+        git push origin --delete it
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2, 3])
+    }
+
+    /// A markdown task list (`1. [x] done / 2. [ ] todo`) scrolled in the buffer
+    /// shares the checkbox shape but has NO choice cue above it — must be
+    /// rejected so we don't render a Submit bar over non-interactive text. (T3 #2)
+    func test_markdownTaskList_noCue_rejected() {
+        let content = """
+        ## Progress
+        1. [x] wrote the parser
+        2. [ ] wire up the UI
+        3. [ ] ship it
+        """
+        XCTAssertNil(NumberedPromptDetector.detect(in: content))
+        XCTAssertFalse(NumberedPromptDetector.isMultiSelect(in: content))
+    }
+
     func test_isMultiSelect_checkboxMenu_true() {
         let content = """
         Which to delete?
