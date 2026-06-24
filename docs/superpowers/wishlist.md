@@ -20,6 +20,32 @@ iOS **alternate app icons**, user-picked in QuipiOS Settings:
 
 ---
 
+## Session log — 2026-06-23 (drag-reorder fixes + multi-select answers)
+
+Shipped on eb-branch (unpushed):
+- `389957b` drag-reorder review follow-ups — selection cycle follows the visual
+  `displayWindows` order; legacy free-position overrides cleared on load; reorder
+  math extracted to pure statics + 11 tests.
+- `0e8db47` **phone-grid drag never engaged** — the card's `.gesture(DragGesture)`
+  lost to `WindowRectangle`'s inner `.onTapGesture`+`.contextMenu` (descendant
+  gestures win over ancestor). Fix: `.highPriorityGesture`. See
+  [[project_windowrectangle_gesture_priority]].
+- `73ce783` **multi-select answers for Claude `[ ]` checkbox menus** (§18.2) —
+  detector tolerates body-lines-between-options + accepts checkbox runs +
+  `isMultiSelect`; iOS `MultiSelectAnswerBar` accumulates picks → one
+  `select_multi:1,3` submit; Mac toggles each digit + one Return. Both peers
+  rebuilt + installed (Mac Release Developer-ID, TCC survived; iOS to device).
+  See [[project_smart_answer_multiselect_gap]].
+
+### OPEN — acceptance test (needs a live Claude checkbox prompt + user hands)
+- **Multi-select keystroke assumption is UNVERIFIED.** The Mac injects each
+  picked option *number* (no Return) to toggle its checkbox, then one Return to
+  submit — assuming Claude's TUI toggles on the number key. If it actually needs
+  ↑/↓ + Space, the chips appear but toggle the wrong rows. Fix point if so: the
+  `select_multi` branch of the `steps` builder in `revalidateAnswer`
+  (`QuipMac/QuipMacApp.swift`). Acceptance: on the cleanup-groups menu, tick
+  G1+G3 → Submit → exactly G1 and G3 checked, then submitted.
+
 ## Session log — 2026-06-15 (prompt-save crash + connection triage)
 
 HEAD `997a196` (local, unpushed). User reported "Erroring" (screenshot: "Connect to the Mac before
