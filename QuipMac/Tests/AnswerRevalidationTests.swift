@@ -114,4 +114,48 @@ final class AnswerRevalidationTests: XCTestCase {
         XCTAssertFalse(QuipMacApp.answerStillValid(action: "select_multi:1,2",
                                                    expectedFingerprint: staleFp, liveContent: checkboxMenu))
     }
+
+    // MARK: - Inline bracketed prompts (§18.3)
+
+    private let inlineMenu = "Approve which to delete? [all / 1 / 2 / 3 / none / pick]"
+
+    func test_answerTextToken_parses() {
+        XCTAssertEqual(QuipMacApp.answerTextToken(from: "answer_text:all"), "all")
+        XCTAssertEqual(QuipMacApp.answerTextToken(from: "answer_text:cancel"), "cancel")
+        XCTAssertNil(QuipMacApp.answerTextToken(from: "answer_text:"))
+        XCTAssertNil(QuipMacApp.answerTextToken(from: "answer_text:bad token")) // interior space
+        XCTAssertNil(QuipMacApp.answerTextToken(from: "select_2"))
+    }
+
+    func test_inline_isAnswerAction() {
+        XCTAssertTrue(QuipMacApp.isAnswerAction("answer_text:all"))
+    }
+
+    func test_inline_wordAnswer_offered_injects() {
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: inlineMenu))
+        XCTAssertTrue(QuipMacApp.answerStillValid(action: "answer_text:all",
+                                                  expectedFingerprint: fp, liveContent: inlineMenu))
+    }
+
+    func test_inline_wordAnswer_notOffered_dropped() {
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: inlineMenu))
+        // "yes" isn't offered by this menu.
+        XCTAssertFalse(QuipMacApp.answerStillValid(action: "answer_text:yes",
+                                                   expectedFingerprint: fp, liveContent: inlineMenu))
+    }
+
+    func test_inline_digitAnswer_routesViaSelectN_injects() {
+        // A digit option in an inline prompt uses select_N and must validate even
+        // though detect() (the numbered-run) is nil for an inline prompt.
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: inlineMenu))
+        XCTAssertTrue(QuipMacApp.answerStillValid(action: "select_2",
+                                                  expectedFingerprint: fp, liveContent: inlineMenu))
+    }
+
+    func test_inline_staleFingerprint_dropped() {
+        let stale = "Continue? [yes/no]"
+        let staleFp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: stale))
+        XCTAssertFalse(QuipMacApp.answerStillValid(action: "answer_text:all",
+                                                   expectedFingerprint: staleFp, liveContent: inlineMenu))
+    }
 }

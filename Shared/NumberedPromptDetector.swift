@@ -60,6 +60,80 @@ enum NumberedPromptDetector {
         return s.contains("[ ]") || s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
     }
 
+    /// Tokens that anchor an inline bracketed choice as a real prompt (vs prose
+    /// that merely contains a `[ … / … ]` group). A group qualifies only when at
+    /// least one token is a digit OR one of these known choice words. (§18.3)
+    private static let inlineAnchorWords: Set<String> =
+        ["all", "none", "yes", "no", "pick", "skip", "cancel", "y", "n", "a", "done", "quit"]
+
+    /// Max length of a single inline option token — real options are short words
+    /// (`all`, `none`, a branch name). Caps the text we'd type into a terminal.
+    static let inlineTokenMaxLength = 32
+
+    /// Detect a single-line INLINE bracketed choice prompt and return its
+    /// verbatim option tokens, e.g.
+    ///   `Continue? [yes/no]`                                  → ["yes","no"]
+    ///   `Approve which to delete? [all / 1 / 2 / 3 / none]`   → ["all","1","2","3","none"]
+    /// Options can be WORDS, not just ints, so this returns `[String]` (vs
+    /// `detect`'s `[Int]`). nil when the trailing lines carry no such affordance.
+    /// Separate from the line-prefixed `bestRun` scanner — these are one-line
+    /// prompts where the choices live inside one `[ … ]` group. (§18.3)
+    static func detectInlineOptions(in content: String) -> [String]? {
+        guard !content.isEmpty else { return nil }
+        // The live prompt sits at the very bottom; scan up through at most a few
+        // trailing non-empty lines (an input cursor `❯` / hint may follow it).
+        var checked = 0
+        for raw in content.components(separatedBy: "\n").suffix(scanLineLimit).reversed() {
+            let line = stripANSI(raw).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if let opts = parseInlineChoiceLine(line) { return opts }
+            checked += 1
+            if checked >= 3 { break }
+        }
+        return nil
+    }
+
+    /// Parse one line as an inline bracketed choice, or nil. Guards against prose
+    /// brackets (`array[0]`, `rm -rf [dir]`, markdown `[text](url)`): the `[ … ]`
+    /// must be trailing (only `.`/`?`/`)`/space after `]`), contain a `/`
+    /// separator, sit after a choice cue (`?` or a cue word) on the same line,
+    /// and every token must be charset-safe with at least one digit/known anchor.
+    private static func parseInlineChoiceLine(_ line: String) -> [String]? {
+        guard let close = line.lastIndex(of: "]") else { return nil }
+        // Only trailing punctuation/whitespace may follow the closing bracket.
+        let after = line[line.index(after: close)...]
+        guard after.allSatisfy({ $0 == " " || $0 == "." || $0 == "?" || $0 == ")" }) else { return nil }
+        guard let open = line[..<close].lastIndex(of: "[") else { return nil }
+        let inner = line[line.index(after: open)..<close]
+        guard inner.contains("/") else { return nil }   // a list, not `[single]`
+        // Choice cue must precede the bracket on the same line.
+        let before = line[..<open].lowercased()
+        let hasCue = before.contains("?") || choiceCueWords.contains { before.contains($0) }
+        guard hasCue else { return nil }
+
+        let rawTokens = inner.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard rawTokens.count >= 2 else { return nil }
+        var tokens: [String] = []
+        var hasAnchor = false
+        for t in rawTokens {
+            guard !t.isEmpty, t.count <= inlineTokenMaxLength,
+                  // Charset-safe (no spaces/quotes/metachars) so the token is safe
+                  // to type into a terminal and a multi-word prose token is rejected.
+                  t.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." })
+            else { return nil }
+            let lower = t.lowercased()
+            if lower.allSatisfy(\.isNumber) {
+                guard let n = Int(lower), n >= 1, n <= maxOptionNumber else { return nil }
+                hasAnchor = true
+            } else if inlineAnchorWords.contains(lower) {
+                hasAnchor = true
+            }
+            tokens.append(t)
+        }
+        // At least one digit/known-word token, else a bare `[foo / bar]` stays prose.
+        return hasAnchor ? tokens : nil
+    }
+
     private struct Match { let number: Int; let hasMarker: Bool; let hasCheckbox: Bool; let normalized: String; let letter: Character?; let lineIndex: Int }
 
     /// At most this many non-numbered lines may sit BETWEEN two numbered
@@ -187,6 +261,13 @@ enum NumberedPromptDetector {
     static func fingerprint(in content: String) -> String? {
         if let run = bestRun(in: content) {
             return fnv1a(run.map(\.normalized).joined(separator: "\n"))
+        }
+        // Inline bracketed choice prompts (§18.3) — hash the option tokens so an
+        // inline answer (`select_N` for a digit / `answer_text:<word>`) can be
+        // re-validated. Namespaced so it can't collide with a numbered or y/n
+        // prompt's hash. Numbered wins above; inline second.
+        if let inline = detectInlineOptions(in: content) {
+            return fnv1a("inline:" + inline.joined(separator: "\n"))
         }
         // y/n prompts have no numbered run; hash the y/n line so press_y /
         // press_n answers can be re-validated uniformly. (§3.2)

@@ -409,4 +409,78 @@ final class NumberedPromptDetectorTests: XCTestCase {
         """
         XCTAssertNil(NumberedPromptDetector.detect(in: content))
     }
+
+    // MARK: - Inline bracketed choice prompts (§18.3)
+
+    func test_inline_deleteWhich_digitsAndWords_detected() {
+        let c = "Approve which to delete? [all / 1 / 2 / 3 / none / pick]"
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: c),
+                       ["all", "1", "2", "3", "none", "pick"])
+        // It's NOT a numbered line-run, so detect() stays nil; fingerprint exists.
+        XCTAssertNil(NumberedPromptDetector.detect(in: c))
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: c))
+    }
+
+    func test_inline_continueYesNo_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Continue? [yes/no]"),
+                       ["yes", "no"])
+    }
+
+    func test_inline_yn_shorthand_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Proceed? [y/n]"),
+                       ["y", "n"])
+    }
+
+    func test_inline_skipCancel_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Apply or skip? [yes / skip / cancel]"),
+                       ["yes", "skip", "cancel"])
+    }
+
+    func test_inline_trailingPunct_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Which? [yes / no]."),
+                       ["yes", "no"])
+    }
+
+    func test_inline_namedOptionsWithAnchor_detected() {
+        // main/dev aren't anchor words but `cancel` is → group qualifies (relaxed).
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Pick a branch [main / dev / cancel]"),
+                       ["main", "dev", "cancel"])
+    }
+
+    func test_inline_promptWithCursorLineBelow_detected() {
+        // An input cursor sits below the prompt — scan must reach past it.
+        let c = "Approve which to delete? [all / 1 / 2 / none]\n❯ "
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: c),
+                       ["all", "1", "2", "none"])
+    }
+
+    // Negatives — prose / code brackets must not register.
+    func test_inline_proseBracketNoCue_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "Run rm -rf [dir] to clean."))
+    }
+
+    func test_inline_codeIndex_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "Set array[0] = value here."))
+    }
+
+    func test_inline_markdownLink_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "See the [docs](url) for details."))
+    }
+
+    func test_inline_singleBracketWord_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "Updated the [docs] section."))
+    }
+
+    func test_inline_multiWordTokens_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "Pick? [main branch / dev branch]"))
+    }
+
+    func test_inline_noAnchorToken_rejected() {
+        // foo/bar are neither digits nor known anchor words → stays prose.
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "Choose? [foo / bar]"))
+    }
+
+    func test_inline_listInProseNoCue_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "The list was [1 / 2 / 3] long."))
+    }
 }

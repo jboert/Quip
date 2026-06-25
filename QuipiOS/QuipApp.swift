@@ -5025,6 +5025,45 @@ private struct MultiSelectAnswerBar: View {
     }
 }
 
+/// §18.3 — Answer bar for a single-line INLINE bracketed prompt
+/// (`Approve which to delete? [all / 1 / 2 / 3 / none / pick]`). Single-select:
+/// one tap = one answer. A digit token reuses the proven `select_N` path; a word
+/// token (`all`/`none`/`pick`/…) sends `answer_text:<word>`. Both carry the
+/// prompt fingerprint so the Mac re-validates the token is still offered before
+/// typing it + Return.
+private struct InlineAnswerBar: View {
+    let tokens: [String]
+    let fingerprint: String?
+    /// (action, fingerprint) — action is `select_2` or `answer_text:all`.
+    let onSubmit: (String, String?) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(tokens, id: \.self) { tok in
+                    Button {
+                        let action = tok.allSatisfy(\.isNumber) ? "select_\(tok)" : "answer_text:\(tok)"
+                        onSubmit(action, fingerprint)
+                    } label: {
+                        Text(tok)
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.white)
+                            .padding(.horizontal, 12)
+                            .frame(height: 40)
+                            .background(Color.accentColor.opacity(0.85))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .accessibilityLabel("Answer \(tok)")
+                    .accessibilityAddTraits(.isButton)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+    }
+}
+
 struct InlineTerminalContent: View {
     let content: String
     let screenshot: String?
@@ -5339,6 +5378,13 @@ struct InlineTerminalContent: View {
                     .padding(.top, 4)
                     .padding(.bottom, 2)
                 }
+            } else if let tokens = NumberedPromptDetector.detectInlineOptions(in: content), tokens.count >= 2 {
+                // §18.3 — inline bracketed choice prompt (`…? [all / 1 / 2 / none]`).
+                // Single-select: each chip answers immediately. Digit tokens reuse
+                // `select_N`; word tokens (all/none/pick/…) send `answer_text:<word>`.
+                InlineAnswerBar(tokens: tokens,
+                                fingerprint: NumberedPromptDetector.fingerprint(in: content),
+                                onSubmit: onSendAction)
             }
 
             // URL tray above the content area so users can open URLs from

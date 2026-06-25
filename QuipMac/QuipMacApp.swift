@@ -2180,6 +2180,21 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         action == "press_y" || action == "press_n"
             || selectedOptionNumber(from: action) != nil
             || selectedOptionNumbers(from: action) != nil
+            || answerTextToken(from: action) != nil
+    }
+
+    /// Parse a WORD answer to an inline bracketed prompt: `answer_text:all` →
+    /// "all". Charset + length sanity here (defense-in-depth); the real gate is
+    /// `answerStillValid`, which only injects a token the live prompt offers.
+    /// Returns nil for any other action. (§18.3)
+    nonisolated static func answerTextToken(from action: String) -> String? {
+        let prefix = "answer_text:"
+        guard action.hasPrefix(prefix) else { return nil }
+        let raw = String(action.dropFirst(prefix.count))
+        guard !raw.isEmpty, raw.count <= NumberedPromptDetector.inlineTokenMaxLength,
+              raw.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." })
+        else { return nil }
+        return raw
     }
 
     /// Parse the shared dynamic in-app prompt action format. The wire string
@@ -2231,9 +2246,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             guard let offered = NumberedPromptDetector.detect(in: liveContent) else { return false }
             return ns.allSatisfy { offered.contains($0) }
         }
-        // For a numbered answer, also confirm N is still an offered option.
+        // For a word answer to an inline bracketed prompt, the token must still
+        // be an offered option. (§18.3)
+        if let tok = answerTextToken(from: action) {
+            return NumberedPromptDetector.detectInlineOptions(in: liveContent)?.contains(tok) ?? false
+        }
+        // For a numbered answer, confirm N is still offered — as a line-prefixed
+        // numbered option OR a digit token in an inline bracketed prompt. (§18.3)
         if let n = selectedOptionNumber(from: action) {
-            return NumberedPromptDetector.detect(in: liveContent)?.contains(n) ?? false
+            if NumberedPromptDetector.detect(in: liveContent)?.contains(n) ?? false { return true }
+            return NumberedPromptDetector.detectInlineOptions(in: liveContent)?.contains(String(n)) ?? false
         }
         return true  // press_y / press_n — fingerprint match is sufficient
     }
@@ -2263,6 +2285,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     // keystrokes — the input buffer would read "1"+"3" as the
                     // single number "13". (§18.2)
                     return ns.map(String.init).joined(separator: ", ")
+                }
+                // Inline bracketed word answer (§18.3) — type the chosen token
+                // (`all` / `none` / `pick` / a branch name) + Return. Validated
+                // against the live offered options in answerStillValid above.
+                if let tok = Self.answerTextToken(from: action) {
+                    return tok
                 }
                 if let n = Self.selectedOptionNumber(from: action) {
                     return String(n)
