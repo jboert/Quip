@@ -1791,7 +1791,20 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // to send the awaited result back into MainActor. The Sendable
             // shim below (file-scope) tells the compiler we vouch for it —
             // we only ever touch the kit on main from here on.
-            let kit = try await WhisperKit(model: "openai_whisper-base")
+            //
+            // Download the CoreML model into Application Support rather than
+            // WhisperKit's default (~/Documents). On Macs with iCloud "Desktop
+            // & Documents" sync, ~/Documents gets offloaded and the model files
+            // are evicted to dataless placeholders — so WhisperKit fails at
+            // launch with "model not found. please check the model or repo" and
+            // the phone falls back to local dictation. Application Support is
+            // never iCloud-synced, so the model stays resident.
+            let modelBase = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Quip", isDirectory: true)
+            try? FileManager.default.createDirectory(at: modelBase, withIntermediateDirectories: true)
+            let config = WhisperKitConfig(model: "openai_whisper-base", downloadBase: modelBase)
+            let kit = try await WhisperKit(config)
             let transcriber = WhisperKitTranscriber(kit: kit)
             self.whisperService = WhisperDictationService(transcriber: transcriber) { msg in
                 // Hop back to Main to use the existing broadcast helper.

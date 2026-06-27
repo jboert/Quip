@@ -33,6 +33,12 @@ targets:
           - "Tests/**"
     dependencies:
       - package: WhisperKit
+    preBuildScripts:
+      - script: |
+          # cloudflared is not committed (issue #16) — fetch + checksum-verify
+          # the pinned upstream release into Resources/ before it gets bundled.
+          "${SRCROOT}/../tools/fetch-cloudflared.sh"
+        name: Fetch cloudflared
     postBuildScripts:
       - script: |
           cp -f "${SRCROOT}/Resources/cloudflared" "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared"
