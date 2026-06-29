@@ -93,34 +93,54 @@ enum NumberedPromptDetector {
         return nil
     }
 
-    /// Parse one line as an inline bracketed choice, or nil. Guards against prose
-    /// brackets (`array[0]`, `rm -rf [dir]`, markdown `[text](url)`): the `[ … ]`
-    /// must be trailing (only `.`/`?`/`)`/space after `]`), contain a `/`
-    /// separator, sit after a choice cue (`?` or a cue word) on the same line,
-    /// and every token must be charset-safe with at least one digit/known anchor.
+    /// Parse one line as an inline choice group, or nil. Tries a trailing
+    /// bracketed group `[ … ]` first, then a parenthesized group `( … )` —
+    /// many CLIs write `(yes/no)` / `(1/2/3)` rather than brackets. BOTH shapes
+    /// pass through the SAME prose guards (trailing-only after the close, a `/`
+    /// separator inside, a choice cue before the group, charset-safe tokens, at
+    /// least one digit/known anchor), so `printf(a/b)` and `The ratio (1/2)`
+    /// stay prose while `Continue? (yes/no)` renders chips. (§18.3)
     private static func parseInlineChoiceLine(_ line: String) -> [String]? {
-        guard let close = line.lastIndex(of: "]") else { return nil }
-        // Only trailing punctuation/whitespace may follow the closing bracket.
-        // A trailing `:` is the canonical CLI prompt shape (`… [yes/no]:`), so it
-        // counts as benign trailing punctuation alongside `.`/`?`/`)`.
-        let after = line[line.index(after: close)...]
+        if let opts = parseChoiceGroup(line, open: "[", close: "]") { return opts }
+        if let opts = parseChoiceGroup(line, open: "(", close: ")") { return opts }
+        return nil
+    }
+
+    /// Parse the trailing `open … close` group on `line` as an inline choice,
+    /// or nil. Guards against prose groups (`array[0]`, `rm -rf [dir]`, markdown
+    /// `[text](url)`, `printf(a/b)`): the group must be trailing (only
+    /// `.`/`?`/`)`/`:`/space after the close), contain a `/` separator, sit
+    /// after a choice cue (`?` or a cue word) on the same line, and every token
+    /// must be charset-safe with at least one digit/known anchor.
+    private static func parseChoiceGroup(_ line: String, open: Character, close: Character) -> [String]? {
+        guard let closeIdx = line.lastIndex(of: close) else { return nil }
+        // Only trailing punctuation/whitespace may follow the close. A trailing
+        // `:` is the canonical CLI prompt shape (`… [yes/no]:`), so it counts as
+        // benign trailing punctuation alongside `.`/`?`/`)`.
+        let after = line[line.index(after: closeIdx)...]
         guard after.allSatisfy({ $0 == " " || $0 == "." || $0 == "?" || $0 == ")" || $0 == ":" }) else { return nil }
-        guard let open = line[..<close].lastIndex(of: "[") else { return nil }
-        let inner = line[line.index(after: open)..<close]
-        guard inner.contains("/") else { return nil }   // a list, not `[single]`
-        // Choice cue must precede the bracket on the same line.
-        let before = line[..<open].lowercased()
+        guard let openIdx = line[..<closeIdx].lastIndex(of: open) else { return nil }
+        let inner = line[line.index(after: openIdx)..<closeIdx]
+        guard inner.contains("/") else { return nil }   // a list, not `(single)`
+        // Choice cue must precede the group on the same line.
+        let before = line[..<openIdx].lowercased()
         let hasCue = before.contains("?") || choiceCueWords.contains { before.contains($0) }
         guard hasCue else { return nil }
+        return validateChoiceTokens(inner)
+    }
 
+    /// Split a group's inner text on `/` and validate every token: non-empty,
+    /// within length, charset-safe (so a multi-word prose token is rejected and
+    /// the token is safe to type into a terminal), with AT LEAST ONE digit or
+    /// known anchor word — else a bare `[foo / bar]` / `(main / dev)` stays
+    /// prose. Shared by the bracket and paren paths so both behave identically.
+    private static func validateChoiceTokens(_ inner: Substring) -> [String]? {
         let rawTokens = inner.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
         guard rawTokens.count >= 2 else { return nil }
         var tokens: [String] = []
         var hasAnchor = false
         for t in rawTokens {
             guard !t.isEmpty, t.count <= inlineTokenMaxLength,
-                  // Charset-safe (no spaces/quotes/metachars) so the token is safe
-                  // to type into a terminal and a multi-word prose token is rejected.
                   t.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." })
             else { return nil }
             let lower = t.lowercased()
@@ -132,7 +152,6 @@ enum NumberedPromptDetector {
             }
             tokens.append(t)
         }
-        // At least one digit/known-word token, else a bare `[foo / bar]` stays prose.
         return hasAnchor ? tokens : nil
     }
 

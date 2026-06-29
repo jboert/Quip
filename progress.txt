@@ -1,0 +1,76 @@
+# Ralph progress — Magic-wand auto-enable terminals + simulators
+
+## Codebase Patterns (read before each story)
+
+- COMPILE ORACLE: only `xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS,name=My Mac' -derivedDataPath build` → look for `** BUILD SUCCEEDED **`. SourceKit / IDE errors like "Cannot find WindowManager / ManagedWindow / TerminalApp / TerminalStateDetector in scope" and "Generic parameter 'T' could not be inferred" are SPURIOUS cross-file noise — IGNORE them, trust xcodebuild.
+- DO NOT: install to /Applications, ditto, killall, codesign, open, touch TCC, or use dev-browser / any browser. Native macOS app, no web surface. A human installs + visually verifies.
+- EDIT ONLY: QuipMac/Views/WindowListSidebar.swift.
+
+## Key file facts — WindowListSidebar.swift
+
+- `windowTier(_ window: ManagedWindow) -> Int`: tier 0 = `window.isTerminal` (iTerm2 + Terminal.app), tier 1 = `window.targetKind == "simulator"`, tier 2 = everything else. THIS is the target classifier — targets to toggle = `windowTier(w) <= 1`.
+- `magicSort()` is the wand button action (header()). It sorts windowManager.windows and writes `windowOrder` inside `withAnimation(.easeOut(duration: 0.22))`. Extend THIS tap to also toggle enable-state; keep the sort logic byte-for-byte.
+- Enable/disable path: `windowManager.toggleWindow(id, enabled: Bool)`. `WindowRow.enabledBinding` reads `window.isEnabled` live and writes through onToggle → toggleWindow, so a wand-driven enable shows up in the checkbox automatically. NEVER mirror enabled-state into a private @State.
+- Toggle-all predicate: `let targets = windowManager.windows.filter { windowTier($0) <= 1 }`; `let allOn = !targets.isEmpty && targets.allSatisfy { $0.isEnabled }`; `let enableAll = !allOn`; for each target call `windowManager.toggleWindow($0.id, enabled: enableAll)`. Empty targets → skip toggle, still sort, no crash.
+- DO NOT TOUCH: `dragReorder` (.onMove), `moveWindow` / `moveAction` (hover chevrons), `syncWindowOrder`, `orderedWindows`. Sort order, tiers, attention-first, drag, chevrons all stay as-is.
+
+## Rules
+- Stay on eb-branch. Never push. Never `git add -A` — add only WindowListSidebar.swift + prd.json + progress.txt.
+
+## Codebase Patterns — Smart-answer detector v2 (THIS PRD; read first)
+- EDIT ONLY: `Shared/NumberedPromptDetector.swift` (logic) + `QuipiOS/Tests/NumberedPromptDetectorTests.swift` (tests). No other files.
+- GATES (both must pass):
+  - iOS test: `xcodebuild test -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:QuipiOSTests/NumberedPromptDetectorTests -derivedDataPath build` → `** TEST SUCCEEDED **`.
+  - Mac compile: `xcodebuild build -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -destination 'platform=macOS,name=My Mac' -derivedDataPath build-mac` → `** BUILD SUCCEEDED **`. Do NOT run the Mac TEST action (Team-ID signing mismatch, unrelated).
+- SourceKit "No such module 'XCTest'" on the test file is SPURIOUS — only xcodebuild is the oracle. Ignore.
+- Inline-choice parser shape: `detectInlineOptions` scans last 3 non-empty trailing lines → `parseInlineChoiceLine` → tries `parseChoiceGroup(open:"[",close:"]")` then `(...)`. Shared guards: trailing-only after close (`space . ? ) :`), `/` inside, choice cue (`?` or cue word) before group, charset-safe tokens via `validateChoiceTokens`, ≥1 digit/anchor word. `inlineAnchorWords` = all/none/yes/no/pick/skip/cancel/y/n/a/done/quit.
+- fingerprint precedence: numbered `bestRun` → `detectInlineOptions` ("inline:"+join) → `yesNoLine` ("yn:"). A paren `(y/n)` now hits the inline branch (not yn). detectYesNo still independent.
+
+## Log
+(append per iteration)
+
+## 2026-06-22 - US-001
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Made the magic-wand tap ALSO toggle enabled-state of dev windows (tier 0 terminals + tier 1 simulators) in the SAME tap, on top of the existing sort.
+- Files changed: QuipMac/Views/WindowListSidebar.swift (only magicSort() + its doc comment), prd.json, progress.txt.
+- Implementation: after the existing `sorted` id list, added:
+    let targets = windows.filter { windowTier($0) <= 1 }
+    let allOn = !targets.isEmpty && targets.allSatisfy { $0.isEnabled }
+    let enableAll = !allOn
+  then inside the SAME `withAnimation(.easeOut(duration: 0.22))` block, after `windowOrder = sorted`, looped `windowManager.toggleWindow(target.id, enabled: enableAll)`.
+- Sort logic (tier order, attention-first, subtitle tiebreak, offset stability) left byte-for-byte. dragReorder / moveWindow / syncWindowOrder / orderedWindows untouched.
+- Verified: xcodebuild build ... → `** BUILD SUCCEEDED **`. (SourceKit "Cannot find WindowManager/ManagedWindow/TerminalApp/TerminalStateDetector in scope" + "Generic parameter T could not be inferred" appeared as expected spurious cross-file noise — ignored per oracle rule.)
+- **Learnings for future iterations:**
+  - Toggle-all semantics confirmed: enable-all unless EVERY target already on → then disable-all. `!targets.isEmpty` guard makes the empty-target case fall through to `enableAll = true` but the for-loop has nothing to iterate, so it just sorts (no crash). Matches AC.
+  - Putting the toggleWindow loop INSIDE the withAnimation envelope (not after it) is what makes the checkbox flips animate as one motion with the sort. The checkbox reads window.isEnabled live via enabledBinding, so no view-state plumbing needed.
+  - US-002 (tooltip) is the only remaining story: just update the wand Button's `.help(...)` string at line ~49 to name both actions. Single line, same file.
+---
+
+## 2026-06-22 - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Updated the magic-wand Button's `.help(...)` tooltip so it names BOTH actions (auto-sort AND toggle-enable terminals + simulators), per US-002.
+- Files changed: QuipMac/Views/WindowListSidebar.swift (one line — the wand `.help(...)` string in header()), prd.json, progress.txt.
+- New tooltip: "Auto-sort + toggle your dev windows — terminals (attention-needed first) and simulators sort to the top and turn on; tap again to turn them off. Other windows just get sorted."
+- No behavior change: drag-reorder (.onMove), hover chevrons, add/refresh buttons all untouched. Only the help string changed.
+- Verified: xcodebuild build ... → `** BUILD SUCCEEDED **`. SourceKit "Cannot find WindowManager/ManagedWindow/TerminalApp/TerminalStateDetector in scope" + "Generic parameter T could not be inferred" appeared as the expected spurious cross-file noise — ignored per oracle rule.
+- **Learnings for future iterations:**
+  - All PRD stories now pass. Both edits were confined to WindowListSidebar.swift exactly as the hard constraints required.
+  - The wand button is at header() in WindowListSidebar.swift; its `.help()` sits right after `.buttonStyle(.borderless)`. The "+" (add terminal) button below has its own separate `.help("Spawn a new terminal window")` — don't confuse the two when editing tooltips.
+---
+
+## 2026-06-28 - US-001 (Smart-answer detector v2)
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Extended `detectInlineOptions(in:)` to recognize parenthesized inline choices `( … / … )` alongside the existing `[ … ]`, with identical prose guards.
+- Files changed: Shared/NumberedPromptDetector.swift, QuipiOS/Tests/NumberedPromptDetectorTests.swift, prd.json, progress.txt.
+- Implementation: split the old bracket-only `parseInlineChoiceLine` into:
+  - `parseInlineChoiceLine` → tries `parseChoiceGroup(line, open:"[", close:"]")` then `(open:"(", close:")")`.
+  - `parseChoiceGroup(_:open:close:)` → the trailing/`/`/cue guards, parameterized by delimiter.
+  - `validateChoiceTokens(_:)` → the token charset/anchor loop, extracted verbatim so bracket behavior is byte-identical.
+  Bracket path runs FIRST, so every existing bracket test is unaffected; paren path only adds coverage.
+- Detected: 'Continue? (yes/no)'→[yes,no]; 'Approve which? (all / 1 / 2 / none)'→[all,1,2,none]; 'Proceed? (y/n)'→[y,n]. Rejected (nil): 'printf(a/b) returns void.' / 'The ratio (1/2) is small.' (letters after `)` → trailing guard) and 'Pick? (main / dev)' (no anchor token).
+- Verified: iOS gate `** TEST SUCCEEDED **` (57 tests, 0 failures); Mac gate `** BUILD SUCCEEDED **`.
+- **Learnings for future iterations:**
+  - Existing prose-rejection strings are all safe under the new paren path because they either have letters after `)` (trailing-guard reject) or no `/`/no cue. Verified by re-reading all `test_inline_*_rejected` before adding the path — do this check for US-003 too (it loosens the trailing-after set with cursor glyphs).
+  - `(y/n)` now resolves via the inline branch in `fingerprint`, NOT the `yn:` branch. US-002 must assert fingerprint non-nil for paren prompts; no existing test pins the old `yn:` value, so this is safe. `detectYesNo`/`yesNoLine` are independent and untouched.
+  - `detectInlineOptions` only inspects the last 3 NON-empty trailing lines (scanLineLimit window, `checked >= 3` break). Multi-line paren spans (e.g. a `(read-only …\n… one at a time)` body) never match because no single line holds both `(` and `)`.
+---

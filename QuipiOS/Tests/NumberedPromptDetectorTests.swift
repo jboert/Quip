@@ -497,4 +497,41 @@ final class NumberedPromptDetectorTests: XCTestCase {
     func test_inline_listInProseNoCue_rejected() {
         XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "The list was [1 / 2 / 3] long."))
     }
+
+    // MARK: - Inline PARENTHESIZED choice prompts (§18.3, US-001)
+
+    func test_inlineParen_continueYesNo_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Continue? (yes/no)"),
+                       ["yes", "no"])
+    }
+
+    func test_inlineParen_digitsAndWords_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Approve which? (all / 1 / 2 / none)"),
+                       ["all", "1", "2", "none"])
+    }
+
+    func test_inlineParen_ynShorthand_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Proceed? (y/n)"),
+                       ["y", "n"])
+    }
+
+    // Negatives — parenthesized prose / code must not register.
+    func test_inlineParen_codeCallNoCue_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "printf(a/b) returns void."))
+    }
+
+    func test_inlineParen_namedNoAnchor_rejected() {
+        // main/dev are neither digits nor anchor words → stays prose.
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "Pick? (main / dev)"))
+    }
+
+    func test_inlineParen_ratioInProseNoCue_rejected() {
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "The ratio (1/2) is small."))
+    }
+
+    func test_inlineBracket_stillDetected_afterParenSupport() {
+        // Bracketed detection unchanged once paren support lands.
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Continue? [yes/no]"),
+                       ["yes", "no"])
+    }
 }
