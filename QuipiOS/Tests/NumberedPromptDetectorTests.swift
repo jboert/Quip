@@ -534,4 +534,60 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Continue? [yes/no]"),
                        ["yes", "no"])
     }
+
+    // MARK: - Parenthesized prompt fingerprint lockstep (US-002)
+
+    func test_inlineParen_fingerprint_nonNil() {
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: "Continue? (yes/no)"))
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: "Approve which? (all / 1 / 2 / none)"))
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: "Proceed? (y/n)"))
+    }
+
+    func test_inlineParen_fingerprint_agreesWithDetect() {
+        // Every paren prompt detectInlineOptions catches has a non-nil
+        // fingerprint; every paren prose it rejects has a nil fingerprint.
+        for p in ["Continue? (yes/no)", "Approve which? (all / 1 / 2 / none)", "Proceed? (y/n)"] {
+            XCTAssertNotNil(NumberedPromptDetector.detectInlineOptions(in: p))
+            XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: p),
+                            "detected paren prompt must have a fingerprint: \(p)")
+        }
+        for p in ["printf(a/b) returns void.", "Pick? (main / dev)",
+                  "The ratio (1/2) is small.", "call foo(a/b) now."] {
+            XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: p))
+            XCTAssertNil(NumberedPromptDetector.fingerprint(in: p),
+                         "rejected paren prose must have a nil fingerprint: \(p)")
+        }
+    }
+
+    func test_inlineParen_fingerprint_stableAcrossAnsiAndCursor() {
+        // Surrounding ANSI codes, a trailing cursor line, and trailing spaces are
+        // all noise — the fingerprint must not move.
+        let plain = NumberedPromptDetector.fingerprint(in: "Continue? (yes/no)")
+        XCTAssertNotNil(plain)
+        XCTAssertEqual(plain, NumberedPromptDetector.fingerprint(in: "\u{1B}[36mContinue? (yes/no)\u{1B}[0m"))
+        XCTAssertEqual(plain, NumberedPromptDetector.fingerprint(in: "Continue? (yes/no)\n❯ "))
+        XCTAssertEqual(plain, NumberedPromptDetector.fingerprint(in: "Continue? (yes/no)   "))
+    }
+
+    func test_inlineParen_fingerprint_changesWhenTokensChange() {
+        let two = NumberedPromptDetector.fingerprint(in: "Continue? (yes/no)")
+        let three = NumberedPromptDetector.fingerprint(in: "Continue? (yes/no/cancel)")
+        XCTAssertNotNil(two)
+        XCTAssertNotNil(three)
+        XCTAssertNotEqual(two, three)
+    }
+
+    func test_inlineParen_fingerprint_changesWhenChoiceTextChanges() {
+        // Same option tokens, different question → different fingerprint.
+        let a = NumberedPromptDetector.fingerprint(in: "Continue? (yes/no)")
+        let b = NumberedPromptDetector.fingerprint(in: "Abort the run? (yes/no)")
+        XCTAssertNotNil(a)
+        XCTAssertNotNil(b)
+        XCTAssertNotEqual(a, b)
+    }
+
+    func test_inlineParen_proseFingerprint_nil() {
+        // A prose string with parens but no prompt → nil (agrees with detect).
+        XCTAssertNil(NumberedPromptDetector.fingerprint(in: "call foo(a/b) now."))
+    }
 }

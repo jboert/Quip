@@ -34,8 +34,8 @@
         "Mac compile gate passes: xcodebuild build ... QuipMac prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Refactored detectInlineOptions to wrap private inlineChoiceMatch(in:) returning the normalized matched line + tokens. fingerprint's inline branch now hashes the whole normalized line ('inline:'+line), so it changes when the question text changes (not just option tokens) yet stays stable across ANSI/trailing-cursor/whitespace. Same match func ⇒ detect/fingerprint agreement guaranteed. 63 tests pass, Mac BUILD SUCCEEDED."
     },
     {
       "id": "US-003",

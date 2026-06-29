@@ -79,6 +79,17 @@ enum NumberedPromptDetector {
     /// Separate from the line-prefixed `bestRun` scanner — these are one-line
     /// prompts where the choices live inside one `[ … ]` group. (§18.3)
     static func detectInlineOptions(in content: String) -> [String]? {
+        inlineChoiceMatch(in: content)?.tokens
+    }
+
+    /// The matched inline choice line (ANSI-stripped, trimmed, whitespace-
+    /// collapsed) PLUS its option tokens, or nil. `detectInlineOptions` exposes
+    /// only the tokens; `fingerprint` hashes the normalized LINE so its value is
+    /// stable across surrounding ANSI codes and a trailing cursor/whitespace
+    /// change (those never touch the choice line's normalized text) yet changes
+    /// when either the option tokens OR the question text changes — keeping the
+    /// inline fingerprint in lockstep with detection. (§18.3, US-002)
+    private static func inlineChoiceMatch(in content: String) -> (line: String, tokens: [String])? {
         guard !content.isEmpty else { return nil }
         // The live prompt sits at the very bottom; scan up through at most a few
         // trailing non-empty lines (an input cursor `❯` / hint may follow it).
@@ -86,7 +97,11 @@ enum NumberedPromptDetector {
         for raw in content.components(separatedBy: "\n").suffix(scanLineLimit).reversed() {
             let line = stripANSI(raw).trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
-            if let opts = parseInlineChoiceLine(line) { return opts }
+            if let opts = parseInlineChoiceLine(line) {
+                let normalized = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                    .joined(separator: " ")
+                return (normalized, opts)
+            }
             checked += 1
             if checked >= 3 { break }
         }
@@ -283,12 +298,16 @@ enum NumberedPromptDetector {
         if let run = bestRun(in: content) {
             return fnv1a(run.map(\.normalized).joined(separator: "\n"))
         }
-        // Inline bracketed choice prompts (§18.3) — hash the option tokens so an
-        // inline answer (`select_N` for a digit / `answer_text:<word>`) can be
-        // re-validated. Namespaced so it can't collide with a numbered or y/n
-        // prompt's hash. Numbered wins above; inline second.
-        if let inline = detectInlineOptions(in: content) {
-            return fnv1a("inline:" + inline.joined(separator: "\n"))
+        // Inline bracketed/parenthesized choice prompts (§18.3) — hash the
+        // NORMALIZED choice line (question + option group) so an inline answer
+        // (`select_N` for a digit / `answer_text:<word>`) can be re-validated.
+        // Hashing the whole line (not just the tokens) makes the fingerprint
+        // change when the question text changes too, while staying stable across
+        // ANSI / trailing-cursor / whitespace noise. Namespaced so it can't
+        // collide with a numbered or y/n prompt's hash. Numbered wins above;
+        // inline second.
+        if let inline = inlineChoiceMatch(in: content) {
+            return fnv1a("inline:" + inline.line)
         }
         // y/n prompts have no numbered run; hash the y/n line so press_y /
         // press_n answers can be re-validated uniformly. (§3.2)

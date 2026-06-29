@@ -74,3 +74,20 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - `(y/n)` now resolves via the inline branch in `fingerprint`, NOT the `yn:` branch. US-002 must assert fingerprint non-nil for paren prompts; no existing test pins the old `yn:` value, so this is safe. `detectYesNo`/`yesNoLine` are independent and untouched.
   - `detectInlineOptions` only inspects the last 3 NON-empty trailing lines (scanLineLimit window, `checked >= 3` break). Multi-line paren spans (e.g. a `(read-only …\n… one at a time)` body) never match because no single line holds both `(` and `)`.
 ---
+
+## 2026-06-28 - US-002 (Smart-answer detector v2)
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Made the inline-choice fingerprint track parenthesized prompts in lockstep with detection, and change on question-text changes (not just option tokens).
+- Files changed: Shared/NumberedPromptDetector.swift, QuipiOS/Tests/NumberedPromptDetectorTests.swift, prd.json, progress.txt.
+- Implementation:
+  - Extracted a private `inlineChoiceMatch(in:) -> (line: String, tokens: [String])?` from the old `detectInlineOptions` body. Returns the matched choice line (ANSI-stripped + trimmed + whitespace-collapsed) plus the option tokens.
+  - `detectInlineOptions` now wraps it: `inlineChoiceMatch(in:)?.tokens` — behavior byte-identical, all US-001 paren/bracket tests still pass.
+  - `fingerprint`'s inline branch changed from `"inline:" + tokens.joined("\n")` to `"inline:" + inline.line`. Hashing the whole normalized line makes the fp change when the QUESTION text changes; ANSI/trailing-cursor/whitespace are normalized away so it stays stable.
+- Detect/fingerprint agreement is now structural: both derive from the SAME `inlineChoiceMatch`, so a detected inline prompt can't have a nil fingerprint and vice-versa.
+- New tests (MARK "Parenthesized prompt fingerprint lockstep (US-002)"): non-nil; detect-agreement (3 prompts + 4 prose incl. `call foo(a/b) now.`); stability across ANSI + trailing-cursor-line + trailing-spaces; changes-on-token-change; changes-on-question-change; prose-nil.
+- Verified: iOS gate `** TEST SUCCEEDED **` (63 tests, 0 failures); Mac gate `** BUILD SUCCEEDED **`.
+- **Learnings for future iterations:**
+  - The inline fingerprint format is now LINE-based, not token-based. US-004's matrix can assert fingerprint non-nil/nil per row WITHOUT pinning hash values — no test pins the hash string, keep it that way.
+  - Precedence is numbered → inline → yn, so `(y/n)` resolves via the inline branch; the yn: branch is dead for paren `(y/n)`. `detectYesNo()` is independent and untouched.
+  - Trailing-cursor stability works because the cursor (`❯`) lands on a SEPARATE trailing line that inlineChoiceMatch skips, so the hashed line is the choice line only. US-003 (same-line cursor) WILL put the glyph ON the choice line — re-verify these stability fps after US-003 loosens the trailing-after set (the glyph must be stripped/normalized out of the hashed line or these fps will move).
+---
