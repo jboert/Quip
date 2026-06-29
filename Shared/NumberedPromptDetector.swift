@@ -66,6 +66,15 @@ enum NumberedPromptDetector {
     private static let inlineAnchorWords: Set<String> =
         ["all", "none", "yes", "no", "pick", "skip", "cancel", "y", "n", "a", "done", "quit"]
 
+    /// Characters allowed to trail an inline choice group's close delimiter
+    /// (`[…]` / `(…)`) without disqualifying it as prose. Benign trailing
+    /// punctuation (`.`/`?`/`)`/`:`/space) plus a same-line input-cursor glyph
+    /// (`❯ › » > $ # :`) that many CLIs print right after the choice
+    /// (`Continue? [yes/no] ❯`, `Proceed? (y/n) >`). Prose after the close
+    /// carries letters, which the token charset guard rejects regardless. (US-003)
+    private static let inlineTrailingAfterClose: Set<Character> =
+        [" ", ".", "?", ")", ":", "❯", "›", "»", ">", "$", "#"]
+
     /// Max length of a single inline option token — real options are short words
     /// (`all`, `none`, a branch name). Caps the text we'd type into a terminal.
     static let inlineTokenMaxLength = 32
@@ -124,16 +133,21 @@ enum NumberedPromptDetector {
     /// Parse the trailing `open … close` group on `line` as an inline choice,
     /// or nil. Guards against prose groups (`array[0]`, `rm -rf [dir]`, markdown
     /// `[text](url)`, `printf(a/b)`): the group must be trailing (only
-    /// `.`/`?`/`)`/`:`/space after the close), contain a `/` separator, sit
-    /// after a choice cue (`?` or a cue word) on the same line, and every token
-    /// must be charset-safe with at least one digit/known anchor.
+    /// `.`/`?`/`)`/`:`, a prompt-marker glyph, or space after the close), contain
+    /// a `/` separator, sit after a choice cue (`?` or a cue word) on the same
+    /// line, and every token must be charset-safe with at least one digit/known
+    /// anchor.
     private static func parseChoiceGroup(_ line: String, open: Character, close: Character) -> [String]? {
         guard let closeIdx = line.lastIndex(of: close) else { return nil }
         // Only trailing punctuation/whitespace may follow the close. A trailing
         // `:` is the canonical CLI prompt shape (`… [yes/no]:`), so it counts as
-        // benign trailing punctuation alongside `.`/`?`/`)`.
+        // benign trailing punctuation alongside `.`/`?`/`)`. A same-line input
+        // cursor glyph (`❯ › » > $ # :`) also follows the choice on many CLIs
+        // (`Continue? [yes/no] ❯`, `Proceed? (y/n) >`), so those are benign
+        // trailing markers too — prose after the close still carries letters,
+        // which the charset guard below rejects. (US-003)
         let after = line[line.index(after: closeIdx)...]
-        guard after.allSatisfy({ $0 == " " || $0 == "." || $0 == "?" || $0 == ")" || $0 == ":" }) else { return nil }
+        guard after.allSatisfy({ inlineTrailingAfterClose.contains($0) }) else { return nil }
         guard let openIdx = line[..<closeIdx].lastIndex(of: open) else { return nil }
         let inner = line[line.index(after: openIdx)..<closeIdx]
         guard inner.contains("/") else { return nil }   // a list, not `(single)`

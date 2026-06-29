@@ -535,6 +535,35 @@ final class NumberedPromptDetectorTests: XCTestCase {
                        ["yes", "no"])
     }
 
+    // MARK: - Same-line trailing prompt cursor (US-003)
+
+    func test_inlineBracket_sameLineCursor_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Continue? [yes/no] ❯"),
+                       ["yes", "no"])
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Which? [1 / 2 / 3] ›"),
+                       ["1", "2", "3"])
+    }
+
+    func test_inlineParen_sameLineCursor_detected() {
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Proceed? (y/n) > "),
+                       ["y", "n"])
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Continue? (yes/no) ❯ "),
+                       ["yes", "no"])
+    }
+
+    func test_inline_sameLineCursor_proseGlyph_rejected() {
+        // A glyph that is part of prose after the bracket is still rejected —
+        // the trailing text carries letters, which fail the token charset guard.
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "See [docs](url) › home."))
+    }
+
+    func test_inline_sameLineCursor_fingerprint_nonNil() {
+        // fingerprint stays in agreement (non-nil) for same-line-cursor prompts.
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: "Continue? [yes/no] ❯"))
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: "Proceed? (y/n) > "))
+        XCTAssertNil(NumberedPromptDetector.fingerprint(in: "See [docs](url) › home."))
+    }
+
     // MARK: - Parenthesized prompt fingerprint lockstep (US-002)
 
     func test_inlineParen_fingerprint_nonNil() {

@@ -52,8 +52,8 @@
         "Mac compile gate passes: xcodebuild build ... QuipMac prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added inlineTrailingAfterClose Set<Character> = [space . ? ) : ❯ › » > $ #]; parseChoiceGroup's after-close guard now checks membership in that set instead of an inline allSatisfy. Same-line cursor glyphs pass for BOTH bracket+paren; prose after the close still carries letters → token charset guard rejects. fingerprint stays non-nil (same inlineChoiceMatch path). 67 tests pass, Mac BUILD SUCCEEDED."
     },
     {
       "id": "US-004",

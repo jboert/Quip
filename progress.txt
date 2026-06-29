@@ -91,3 +91,16 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - Precedence is numbered → inline → yn, so `(y/n)` resolves via the inline branch; the yn: branch is dead for paren `(y/n)`. `detectYesNo()` is independent and untouched.
   - Trailing-cursor stability works because the cursor (`❯`) lands on a SEPARATE trailing line that inlineChoiceMatch skips, so the hashed line is the choice line only. US-003 (same-line cursor) WILL put the glyph ON the choice line — re-verify these stability fps after US-003 loosens the trailing-after set (the glyph must be stripped/normalized out of the hashed line or these fps will move).
 ---
+
+## 2026-06-28 - US-003 (Smart-answer detector v2)
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Recognize a same-line trailing prompt-cursor glyph after the choice group for BOTH bracket and paren shapes.
+- Files changed: Shared/NumberedPromptDetector.swift, QuipiOS/Tests/NumberedPromptDetectorTests.swift, prd.json, progress.txt.
+- Implementation: added `inlineTrailingAfterClose: Set<Character> = [" ", ".", "?", ")", ":", "❯", "›", "»", ">", "$", "#"]`. `parseChoiceGroup`'s after-close guard changed from an inline `allSatisfy({ $0 == " " || ... })` to `after.allSatisfy({ inlineTrailingAfterClose.contains($0) })`. One spot, drives both bracket+paren paths identically.
+- Detected: 'Continue? [yes/no] ❯'→[yes,no]; 'Which? [1 / 2 / 3] ›'→[1,2,3]; 'Proceed? (y/n) > '→[y,n]; 'Continue? (yes/no) ❯ '→[yes,no]. Rejected: 'See [docs](url) › home.' (letters after close → token charset guard). fingerprint non-nil for detected, nil for prose (same inlineChoiceMatch path → agreement).
+- Verified: iOS gate `** TEST SUCCEEDED **` (67 tests, 0 failures); Mac gate `** BUILD SUCCEEDED **`.
+- **Learnings for future iterations:**
+  - The prose-rejection guard for trailing glyphs is the TOKEN CHARSET check, not the trailing-after set — real prose after a close delimiter carries letters (`home`, `returns void`), which `validateChoiceTokens` rejects. So loosening `inlineTrailingAfterClose` is safe: every existing negative fails on cue/anchor/letters, never on the trailing set. Re-verified all bracket+paren negatives before adding glyphs.
+  - US-003's same-line glyph lands ON the choice line, but no US-002 stability fp moved: those tests use a SEPARATE cursor line (`\n❯ `), which inlineChoiceMatch still skips. Full suite re-ran 0 failures. A same-line glyph DOES become part of the hashed line (`... (yes/no) ❯`), which is correct — it's part of that prompt's identity.
+  - US-004 (last story) is a table-driven matrix test ONLY — no logic change. Assert fingerprint non-nil per chip-row / nil per nil-row WITHOUT pinning hash strings (fp format is line-based; keep unpinned). Include ≥1 row per US-001/002/003 capability + ≥3 prose negatives.
+---
