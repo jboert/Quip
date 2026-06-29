@@ -441,6 +441,20 @@ final class NumberedPromptDetectorTests: XCTestCase {
                        ["yes", "no"])
     }
 
+    func test_inline_trailingColon_detected() {
+        // Canonical CLI prompt shape: `… [yes/no]:` (apt/npm/shell `read`).
+        // The trailing colon must not block the bracketed choice.
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Continue? [yes/no]:"),
+                       ["yes", "no"])
+        XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Proceed? [y/n]: "),
+                       ["y", "n"])
+    }
+
+    func test_inline_colonInProseNoCue_rejected() {
+        // A colon after a bracket is NOT enough on its own — still needs a cue.
+        XCTAssertNil(NumberedPromptDetector.detectInlineOptions(in: "Ratio was [1/2]: large."))
+    }
+
     func test_inline_namedOptionsWithAnchor_detected() {
         // main/dev aren't anchor words but `cancel` is → group qualifies (relaxed).
         XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: "Pick a branch [main / dev / cancel]"),

@@ -101,8 +101,10 @@ enum NumberedPromptDetector {
     private static func parseInlineChoiceLine(_ line: String) -> [String]? {
         guard let close = line.lastIndex(of: "]") else { return nil }
         // Only trailing punctuation/whitespace may follow the closing bracket.
+        // A trailing `:` is the canonical CLI prompt shape (`… [yes/no]:`), so it
+        // counts as benign trailing punctuation alongside `.`/`?`/`)`.
         let after = line[line.index(after: close)...]
-        guard after.allSatisfy({ $0 == " " || $0 == "." || $0 == "?" || $0 == ")" }) else { return nil }
+        guard after.allSatisfy({ $0 == " " || $0 == "." || $0 == "?" || $0 == ")" || $0 == ":" }) else { return nil }
         guard let open = line[..<close].lastIndex(of: "[") else { return nil }
         let inner = line[line.index(after: open)..<close]
         guard inner.contains("/") else { return nil }   // a list, not `[single]`
