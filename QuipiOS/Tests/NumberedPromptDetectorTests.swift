@@ -619,4 +619,56 @@ final class NumberedPromptDetectorTests: XCTestCase {
         // A prose string with parens but no prompt → nil (agrees with detect).
         XCTAssertNil(NumberedPromptDetector.fingerprint(in: "call foo(a/b) now."))
     }
+
+    // MARK: - v2 regression matrix (US-004)
+
+    /// One table mapping realistic Claude/Codex/shell prompt strings to their
+    /// expected chips (or nil), pinning the v2 detector behavior so a future edit
+    /// can't silently regress a real prompt shape. Every chip row also proves
+    /// fingerprint(in:) is non-nil and every nil row proves it is nil — so
+    /// detect↔fingerprint agreement is asserted across the whole matrix.
+    ///
+    /// Coverage spans every v2 capability: bracket + paren groups (US-001),
+    /// digits + words, yes/no shorthand, trailing period/question/colon and a
+    /// same-line cursor glyph (US-003), a multi-line prompt with the input cursor
+    /// on the line below, plus prose bracket/paren non-prompts that must stay nil.
+    /// fingerprint non-nil/nil per row is the US-002 lockstep proof.
+    func test_v2RegressionMatrix_detectAndFingerprintInLockstep() {
+        // (input, expected chips or nil, label)
+        let matrix: [(String, [String]?, String)] = [
+            // — bracket shapes —
+            ("Continue? [yes/no]",                                   ["yes", "no"],                            "bracket yes/no"),
+            ("Approve which to delete? [all / 1 / 2 / 3 / none / pick]",
+                                                                     ["all", "1", "2", "3", "none", "pick"],   "bracket digits+words"),
+            ("Proceed? [y/n]",                                       ["y", "n"],                               "bracket y/n shorthand"),
+            ("Which? [yes / no].",                                   ["yes", "no"],                            "bracket trailing period"),
+            ("Proceed? [y/n]?",                                      ["y", "n"],                               "bracket trailing question"),
+            ("Continue? [yes/no]:",                                  ["yes", "no"],                            "bracket trailing colon"),
+            ("Continue? [yes/no] ❯",                                 ["yes", "no"],                            "bracket same-line cursor (US-003)"),
+            // — paren shapes (US-001) —
+            ("Continue? (yes/no)",                                   ["yes", "no"],                            "paren yes/no (US-001)"),
+            ("Approve which? (all / 1 / 2 / none)",                  ["all", "1", "2", "none"],                "paren digits+words (US-001)"),
+            ("Proceed? (y/n)",                                       ["y", "n"],                               "paren y/n shorthand (US-001)"),
+            ("Proceed? (y/n) > ",                                    ["y", "n"],                               "paren same-line cursor (US-003)"),
+            // — multi-line: input cursor on the line below the choice —
+            ("Approve which to delete? [all / 1 / 2 / none]\n❯ ",    ["all", "1", "2", "none"],                "multi-line cursor below"),
+            // — prose / code non-prompts (must stay nil, ≥3) —
+            ("printf(a/b) returns void.",                            nil,                                      "paren code call (no cue)"),
+            ("The ratio (1/2) is small.",                            nil,                                      "paren ratio prose (no cue)"),
+            ("Run rm -rf [dir] to clean.",                           nil,                                      "bracket prose (no cue)"),
+            ("See [docs](url) › home.",                              nil,                                      "bracket+glyph prose (US-003 neg)"),
+        ]
+
+        for (input, expected, label) in matrix {
+            XCTAssertEqual(NumberedPromptDetector.detectInlineOptions(in: input), expected,
+                           "detectInlineOptions mismatch for [\(label)]: \(input)")
+            if expected == nil {
+                XCTAssertNil(NumberedPromptDetector.fingerprint(in: input),
+                             "nil-chip row must have a nil fingerprint [\(label)]: \(input)")
+            } else {
+                XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: input),
+                                "chip row must have a non-nil fingerprint [\(label)]: \(input)")
+            }
+        }
+    }
 }

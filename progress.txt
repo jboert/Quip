@@ -104,3 +104,15 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - US-003's same-line glyph lands ON the choice line, but no US-002 stability fp moved: those tests use a SEPARATE cursor line (`\n❯ `), which inlineChoiceMatch still skips. Full suite re-ran 0 failures. A same-line glyph DOES become part of the hashed line (`... (yes/no) ❯`), which is correct — it's part of that prompt's identity.
   - US-004 (last story) is a table-driven matrix test ONLY — no logic change. Assert fingerprint non-nil per chip-row / nil per nil-row WITHOUT pinning hash strings (fp format is line-based; keep unpinned). Include ≥1 row per US-001/002/003 capability + ≥3 prose negatives.
 ---
+
+## 2026-06-28 - US-004 (Smart-answer detector v2)
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Locked v2 detector behavior with a table-driven regression matrix. TEST-ONLY story; no detector logic changed.
+- Files changed: QuipiOS/Tests/NumberedPromptDetectorTests.swift, prd.json, progress.txt. (Shared/NumberedPromptDetector.swift untouched.)
+- Added `test_v2RegressionMatrix_detectAndFingerprintInLockstep`: a `[(String, [String]?, String)]` matrix of 16 rows — 12 chip rows + 4 prose-nil rows. Each row asserts `detectInlineOptions == expected` AND fingerprint non-nil (chip) / nil (prose) → detect↔fingerprint agreement proven across the whole table.
+- Coverage: bracket yes/no, bracket digits+words, bracket y/n, trailing period, trailing question (`[y/n]?`), trailing colon, bracket same-line cursor `❯` (US-003); paren yes/no + digits+words + y/n (US-001), paren same-line cursor `(y/n) > ` (US-003); multi-line `[…]\n❯ ` cursor-below; negatives: `printf(a/b) returns void.`, `The ratio (1/2) is small.`, `Run rm -rf [dir] to clean.`, `See [docs](url) › home.`
+- Verified: iOS gate `** TEST SUCCEEDED **` (68 tests, 0 failures); Mac gate `** BUILD SUCCEEDED **`.
+- **Learnings for future iterations:**
+  - ALL four PRD stories now pass. fingerprint format stays line-based and UNPINNED — the matrix asserts only non-nil/nil, never a hash string, so future fp-format tweaks won't break it.
+  - Negatives chosen are proven-nil for BOTH detectInlineOptions AND fingerprint (no numbered/yn fallback fires on them) — reuse this set if extending the matrix.
+---

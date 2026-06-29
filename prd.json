@@ -67,8 +67,8 @@
         "Mac compile gate passes: xcodebuild build ... QuipMac prints '** BUILD SUCCEEDED **'."
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Added test_v2RegressionMatrix_detectAndFingerprintInLockstep: 16-row table (12 chip rows + 4 prose-nil rows) asserting detectInlineOptions AND fingerprint per row. Covers bracket+paren, digits+words, yes/no shorthand, trailing period/question/colon/same-line-cursor (US-003), multi-line cursor-below, plus 4 prose negatives. fingerprint non-nil per chip row / nil per nil row proves detect↔fp agreement (US-002) across the matrix; hash values NOT pinned (fp format is line-based). 68 tests pass, Mac BUILD SUCCEEDED. Test-file-only change, no detector logic touched."
     }
   ]
 }
