@@ -92,6 +92,11 @@ struct QuipApp: App {
     @State private var importPackErrorMsg: String?
     @State private var showImportPackError = false
 
+    // Content-share intake: a `quip://share` deep link parks a parsed draft here
+    // for review (US-004 renders it). Set only from a well-formed link; a
+    // malformed link is a no-op and never touches selectedWindowId / showTextInput.
+    @State private var pendingContentShare: PendingContentShare?
+
     @State private var windows: [WindowState] = []
     @State private var selectedWindowId: String?
     @State private var monitorName: String = "Mac"
@@ -319,37 +324,34 @@ struct QuipApp: App {
                 //   quip://perms            — pop the SettingsSheet open (Mac
                 //                             perms section is at the top)
                 guard url.scheme == "quip" else { return }
-                if url.host == "pair" {
+                // Classify once (pure); the side effects stay here. A malformed
+                // link classifies as `.none` and is a no-op — it never changes
+                // selectedWindowId or opens the text input.
+                switch ContentShareDeepLink.route(for: url) {
+                case .pair:
                     // §50 — tap-to-pair from a shared `quip://pair?url=…&pin=…`
                     // link (AirDrop/Messages/Mail), so remote users never need
                     // the on-screen QR or the native Camera. Decode here, then
                     // hand off to MainiOSView's `applyPairingPayload` (which owns
                     // the connect path) via `.quipApplyPairing`. Decode failure
-                    // is a no-op — a malformed link shouldn't fall through to the
-                    // window/perms branches below.
+                    // is a no-op.
                     if let payload = PairingPayload.decode(url.absoluteString) {
                         NotificationCenter.default.post(name: .quipApplyPairing, object: payload)
                     }
-                    return
-                }
-                if url.host == "perms" {
+                case .perms:
                     NotificationCenter.default.post(name: .quipShowSettings, object: nil)
+                case .window(let windowId):
+                    selectedWindowId = windowId
+                    attentionCenter.clearAttention(for: windowId)
+                    showTextInput = true
+                    client.send(SelectWindowMessage(windowId: windowId))
+                case .share(let draft, let mode):
+                    // Park the draft for review (US-004). Do NOT select a window
+                    // or open the text input — nothing is sent until reviewed.
+                    pendingContentShare = PendingContentShare(draft: draft, mode: mode)
+                case .none:
                     return
                 }
-                let windowId: String
-                if url.host == "window" {
-                    windowId = url.pathComponents.dropFirst().first ?? ""
-                } else if let host = url.host, !host.isEmpty, url.pathComponents.count <= 1 {
-                    // Fallback: quip://<windowId> (no "window/" prefix)
-                    windowId = host
-                } else {
-                    return
-                }
-                guard !windowId.isEmpty else { return }
-                selectedWindowId = windowId
-                attentionCenter.clearAttention(for: windowId)
-                showTextInput = true
-                client.send(SelectWindowMessage(windowId: windowId))
             }
             .sheet(item: $importablePack) { item in
                 ImportPackSheet(pack: item.pack) { applyImportedPack(item.pack) }

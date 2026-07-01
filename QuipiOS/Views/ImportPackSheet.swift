@@ -6,6 +6,21 @@ struct ImportablePack: Identifiable {
     let pack: SharedPromptPack
 }
 
+/// Identifiable wrapper for a `quip://share` draft awaiting review before send.
+/// Parked by the deep-link handler and rendered by the pending-share UI (US-004).
+struct PendingContentShare: Identifiable {
+    let id = UUID()
+    let draft: ContentShareDraft
+    /// Requested mode from the link's `mode` param; defaults to `.summarize`
+    /// when the producer didn't specify one.
+    var mode: ContentSharePromptMode
+
+    init(draft: ContentShareDraft, mode: ContentSharePromptMode?) {
+        self.draft = draft
+        self.mode = mode ?? .summarize
+    }
+}
+
 /// Import preview — lists what a `.quippack` contains and requires explicit
 /// confirmation (never silent). (§6.1)
 struct ImportPackSheet: View {
