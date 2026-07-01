@@ -848,91 +848,6 @@ final class BackendConnectionManager {
         return 3
     }
 
-    // MARK: - Local-network switch (§ "Use Local Network")
-
-    /// True when `url` is a local-network endpoint — Bonjour `.local`
-    /// (priority 0) or an RFC1918 LAN IP (priority 1). Tailscale and tunnels
-    /// are not LAN. Drives the picker's "Use Local Network" affordance.
-    static func isLANURL(_ url: URL) -> Bool {
-        urlPriority(url.absoluteString) <= 1
-    }
-
-    /// Human label for the transport a URL rides on. Shown next to the
-    /// switch control so the user can see which path they're currently on.
-    static func pathLabel(for url: URL?) -> String {
-        guard let url else { return "—" }
-        switch urlPriority(url.absoluteString) {
-        case 0, 1: return "Local network"
-        case 2:    return "Tailscale"
-        default:   return "Remote"
-        }
-    }
-
-    /// Pure merge of LAN URLs reported in a `device_identity` into an existing
-    /// `urlsInOrder` list. New URLs are unioned (deduped) and the whole set is
-    /// re-sorted with the shared Tailscale-first `mergedURLOrder`, so a learned
-    /// LAN URL lands as a *fallback* without disturbing the live primary. Pure
-    /// so the ingestion contract is unit-testable without networking.
-    static func urlsByAddingLocal(_ existing: [String], _ localURLs: [String]) -> [String] {
-        var all = existing
-        for u in localURLs where !all.contains(u) { all.append(u) }
-        guard all != existing else { return existing }   // nothing new → no reorder churn
-        return mergedURLOrder(all)
-    }
-
-    /// Merge LAN URLs from a peer's `device_identity` into the paired row at
-    /// `backendID`. Updates the persisted URL list only — does not touch the
-    /// live socket (fallback URLs are consumed on the next reconnect, and the
-    /// manual `switchToLANPath` triggers that explicitly). No-op when there's
-    /// nothing new to add.
-    private func ingestLocalURLs(_ localURLs: [String], into backendID: String) {
-        guard !localURLs.isEmpty,
-              let i = paired.firstIndex(where: { $0.id == backendID }) else { return }
-        let merged = Self.urlsByAddingLocal(paired[i].urlsInOrder, localURLs)
-        guard merged != paired[i].urlsInOrder else { return }
-        paired[i].url = merged.first ?? paired[i].url
-        paired[i].fallbackURLs = Array(merged.dropFirst())
-        savePaired()
-    }
-
-    /// Force a backend's live connection onto its local-network URL. Mirrors
-    /// `performHotSwap`: reorder the LAN URL to index 0 in-memory (so a
-    /// `resetToPrimaryURL` on a Wi-Fi path change keeps LAN rather than
-    /// reverting to the Tailscale primary), then reconnect. The reorder is
-    /// not persisted — relaunch returns to the saved Tailscale-first order, so
-    /// the switch is tactical, matching the hot-swap contract. No-op when the
-    /// session is already on its LAN URL or has no LAN URL to switch to.
-    func switchToLANPath(_ id: String) {
-        guard let i = paired.firstIndex(where: { $0.id == id }),
-              let session = sessions[id] else { return }
-        let urls = paired[i].urlsInOrder.compactMap { URL(string: $0) }
-        guard let lan = urls.first(where: { Self.isLANURL($0) }) else { return }
-        if session.client.serverURL == lan { return }   // already on LAN
-        var reordered = urls
-        reordered.removeAll { $0 == lan }
-        reordered.insert(lan, at: 0)
-        NSLog("[Quip][LAN] manual switch: backend=%@ to=%@", id, lan.host ?? "?")
-        session.client.disconnect()
-        session.reachability = .connecting
-        primePINIfPresent(session: session)
-        session.client.connect(toURLs: reordered)
-        lastSwapAt = Date()   // suppress the auto-evaluator from fighting the manual choice
-    }
-
-    /// The LAN URL the active/given backend could switch to, or nil when none
-    /// is known. Used by the picker to decide whether to show the switch tile.
-    func lanURL(for id: String) -> URL? {
-        guard let backend = paired.first(where: { $0.id == id }) else { return nil }
-        return backend.urlsInOrder.compactMap { URL(string: $0) }.first(where: { Self.isLANURL($0) })
-    }
-
-    /// True when the given backend's live socket is currently on a LAN URL —
-    /// in which case the "Use Local Network" tile is hidden (already there).
-    func isOnLANPath(_ id: String) -> Bool {
-        guard let url = sessions[id]?.client.serverURL else { return false }
-        return Self.isLANURL(url)
-    }
-
     // MARK: - Internals
 
     private func connect(session: BackendSession, url: URL) {
@@ -1117,17 +1032,6 @@ final class BackendConnectionManager {
 
         c.onDeviceIdentity = { [weak self, weak session] identity in
             guard let self, let session else { return }
-
-            // Learn the Mac's LAN URL(s) from its identity so a "Use Local
-            // Network" switch is possible even when this phone only ever
-            // paired over Tailscale. Done BEFORE the rekey/merge branches so
-            // the new fallback URLs ride along when the row is rekeyed or
-            // folded into an existing same-Mac row. Keyed on the session's
-            // current id (synthetic pre-rekey, real post-rekey) — whichever
-            // row this path owns right now.
-            if let localURLs = identity.localURLs, !localURLs.isEmpty {
-                self.ingestLocalURLs(localURLs, into: session.backendID)
-            }
 
             // Replay persisted QA pair on every identity ack — covers
             // reconnects (the closure also fires on the equal-IDs path

@@ -72,7 +72,6 @@ struct BackendPickerSheet: View {
         let lastSeen = Self.lastSeenCaption(status: status,
                                              lastConnectedAt: backend.lastConnectedAt,
                                              now: Date())
-        VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 10) {
             Circle()
                 .fill(status.dot(colors: colors))
@@ -146,55 +145,6 @@ struct BackendPickerSheet: View {
             .buttonStyle(.plain)
             .accessibilityLabel(backend.enabled ? "Disconnect" : "Connect")
         }
-
-        // Active backend currently on a non-LAN path while a LAN URL is
-        // known → offer a one-tap switch to the faster local network.
-        // Hidden when already on LAN or when no LAN URL has been learned.
-        if isActive,
-           let lan = manager.lanURL(for: backend.id),
-           !manager.isOnLANPath(backend.id) {
-            lanSwitchTile(backend, lan: lan)
-        }
-        }
-    }
-
-    /// One-tap "Use Local Network" control shown under the active backend.
-    /// Switches the live connection onto its LAN URL (`switchToLANPath`) and
-    /// dismisses the sheet. Caption names the path you're leaving so the
-    /// trade-off is legible.
-    @ViewBuilder
-    private func lanSwitchTile(_ backend: PairedBackend, lan: URL) -> some View {
-        let current = manager.sessions[backend.id]?.client.serverURL
-        Button {
-            manager.switchToLANPath(backend.id)
-            isPresented = false
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "wifi")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.tint)
-                    .frame(width: 8)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Use Local Network")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.primary)
-                    Text("On \(BackendConnectionManager.pathLabel(for: current)) now · \(lan.host ?? "LAN") is faster on Wi-Fi")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 4)
-                Image(systemName: "arrow.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tint)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.leading, 18)   // align under the row body, past the status dot
-        .accessibilityLabel("Use Local Network. Switches this backend to its faster local Wi-Fi connection.")
     }
 
     /// Live row state, derived from the user's `enabled` toggle + the

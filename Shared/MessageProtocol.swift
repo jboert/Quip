@@ -1164,21 +1164,12 @@ struct DeviceIdentityMessage: Codable, Sendable {
     let deviceID: String   // UUIDv4
     let deviceKind: String // "mac" | "linux" | "ios" | "watchos"
     let displayName: String
-    /// Ready-to-use LAN WebSocket URLs the daemon is reachable on over the
-    /// local network, e.g. `["ws://192.168.1.50:8765"]`. The phone merges
-    /// these into the backend's fallback URL list so a "Use Local Network"
-    /// switch is possible even when the phone only ever paired over Tailscale
-    /// (and so the LAN path was never otherwise learned). Optional / nil from
-    /// peers that don't supply it (iOS self-identity, Linux daemon) — older
-    /// builds that predate this field simply decode it as nil.
-    let localURLs: [String]?
 
-    init(deviceID: String, deviceKind: String, displayName: String, localURLs: [String]? = nil) {
+    init(deviceID: String, deviceKind: String, displayName: String) {
         self.type = "device_identity"
         self.deviceID = deviceID
         self.deviceKind = deviceKind
         self.displayName = displayName
-        self.localURLs = localURLs
     }
 }
 

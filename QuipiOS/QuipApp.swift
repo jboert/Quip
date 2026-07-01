@@ -2157,37 +2157,6 @@ struct MainiOSView: View {
                 }
             }
 
-            // No Macs discovered after the grace window — most often iOS
-            // Local Network permission is off (Bonjour then silently returns
-            // nothing). Surface a tappable hint to Settings rather than
-            // leaving the user staring at an empty list. Heuristic, not a
-            // hard permission read (iOS exposes none).
-            if bonjourBrowser.discoveredHosts.isEmpty, bonjourBrowser.graceElapsed,
-               let settingsURL = URL(string: UIApplication.openSettingsURLString) {
-                Link(destination: settingsURL) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "wifi.exclamationmark")
-                            .font(.system(size: 14))
-                            .foregroundStyle(colors.textTertiary)
-                        Text("No Macs found on Wi-Fi — Local Network access may be off")
-                            .font(.system(size: 11))
-                            .foregroundStyle(colors.textTertiary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 4)
-                        Image(systemName: "arrow.up.forward")
-                            .font(.system(size: 10))
-                            .foregroundStyle(colors.textFaint)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(colors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .accessibilityLabel("No Macs found on Wi-Fi. Local Network access may be off. Tap to open Settings.")
-            }
-
             // Recent connections
             if !recentConnections.isEmpty {
                 ScrollView(.vertical, showsIndicators: false) {

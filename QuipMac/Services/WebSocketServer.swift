@@ -372,8 +372,7 @@ final class WebSocketServer {
                     self.send(DeviceIdentityMessage(
                         deviceID: Self.deviceID(),
                         deviceKind: "mac",
-                        displayName: Host.current().localizedName ?? "Mac",
-                        localURLs: Self.localWebSocketURLs()
+                        displayName: Host.current().localizedName ?? "Mac"
                     ), to: connection)
                 }
                 self.receiveMessage(on: connection)
@@ -780,50 +779,6 @@ final class WebSocketServer {
         return new
     }
 
-    /// True for an RFC1918 private-LAN IPv4 literal (10/8, 172.16-31/12,
-    /// 192.168/16). Deliberately excludes loopback (127/8), link-local
-    /// (169.254/16), and Tailscale CGNAT (100.64-127/10) — the phone reaches
-    /// Tailscale on its own path and we never want to advertise a TS address
-    /// as "local network".
-    nonisolated static func isPrivateIPv4(_ ip: String) -> Bool {
-        let parts = ip.split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
-        if parts[0] == 10 { return true }
-        if parts[0] == 172, (16...31).contains(parts[1]) { return true }
-        if parts[0] == 192, parts[1] == 168 { return true }
-        return false
-    }
-
-    /// Ready-to-use LAN WebSocket URLs this Mac is reachable on — one per
-    /// private-IPv4 interface that's up and non-loopback. Sent in
-    /// `DeviceIdentityMessage.localURLs` so the phone can learn the LAN path
-    /// even when it only ever paired over Tailscale. The WS listener binds a
-    /// fixed `0.0.0.0:8765`, so the port is constant.
-    nonisolated static func localWebSocketURLs(port: UInt16 = 8765) -> [String] {
-        var urls: [String] = []
-        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0 else { return [] }
-        defer { freeifaddrs(ifaddrPtr) }
-        var ptr = ifaddrPtr
-        while let p = ptr {
-            defer { ptr = p.pointee.ifa_next }
-            let flags = Int32(p.pointee.ifa_flags)
-            guard (flags & IFF_UP) == IFF_UP,
-                  (flags & IFF_LOOPBACK) == 0,
-                  let addr = p.pointee.ifa_addr,
-                  addr.pointee.sa_family == UInt8(AF_INET) else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let rc = getnameinfo(addr, socklen_t(addr.pointee.sa_len),
-                                 &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            guard rc == 0 else { continue }
-            let ip = String(cString: host)
-            guard isPrivateIPv4(ip) else { continue }
-            let url = "ws://\(ip):\(port)"
-            if !urls.contains(url) { urls.append(url) }
-        }
-        return urls
-    }
-
     /// Per-host auth throttle. See AuthThrottle.swift for policy.
     private let authThrottle = AuthThrottle()
 
@@ -868,8 +823,7 @@ final class WebSocketServer {
             send(DeviceIdentityMessage(
                 deviceID: Self.deviceID(),
                 deviceKind: "mac",
-                displayName: Host.current().localizedName ?? "Mac",
-                localURLs: Self.localWebSocketURLs()
+                displayName: Host.current().localizedName ?? "Mac"
             ), to: connection)
             print("[WebSocketServer] Client authenticated successfully")
             connectionLog?.record(.authSucceeded, remote: remoteStr, detail: nil)
