@@ -51,6 +51,31 @@ one path. 4. Confirm single stable ESTABLISHED (netstat 8765). 5. Picker → tap
 "Use Local Network" → confirm serverURL flips to current LAN IP, no flap.
 One clean pairing removes accumulated test rows muddying the log.
 
+## TOP PRIORITY next — "it should find LAN automatically / remember connections"
+
+User's repeated ask (3×) + the real regression they felt. NOT a code bug — our
+repeated delete+reinstall today wiped the phone's connection memory.
+
+Two mechanisms held the LAN before, both local-only (@AppStorage), both wiped on reinstall:
+- `paired` backends (auto-connect on launch, multi-backend system)
+- `recentConnections` / `recentConnectionsData` (connect-bar list, incl. LAN IPs)
+
+Durable fix (design, not yet built):
+1. **Persist connection memory across reinstalls** — back up `paired` + `recentConnections`
+   to the Mac over the existing prefs channel (`phonePrefsSnapshot` / PreferencesSnapshot;
+   see [[project_phone_prefs_backup]]). Reinstalled phone re-knows recent LANs automatically.
+2. **Re-enable Bonjour advertising in Tailscale mode** (QuipMacApp.swift:387-402 currently
+   skips it). Gives the phone the LAN URL PRE-auth so it can auth over LAN when the LAX relay
+   is down (the chicken-and-egg: localURLs is POST-auth, useless when auth can't complete over
+   relay). Safe now that fresh-install single-row + C1 URL-refresh + reap prevent the flap that
+   originally justified disabling it. Mac rebuild (TCC reset) required.
+
+Chicken-and-egg confirmed live: phone connects over Tailscale relay (100.72.13.19), socket
+ESTABLISHED but auth never completes (57 ENOTCONN mid-auth-roundtrip over LAX relay) → Mac
+shows "None connected" → device_identity/localURLs never delivered → LAN never learned →
+"Use Local Network" tile has nothing to switch to. Direct LAN pair (ws://192.168.4.26:8765)
+sidesteps it. Root: localURLs delivered post-auth can't rescue a phone that can't auth.
+
 ## Open
 
 - Push? All local. Do NOT push without explicit OK.
