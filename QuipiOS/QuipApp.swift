@@ -357,16 +357,26 @@ struct QuipApp: App {
                 ImportPackSheet(pack: item.pack) { applyImportedPack(item.pack) }
             }
             .sheet(item: $pendingContentShare) { share in
-                // US-004 — review a parked quip://share draft before anything is
-                // sent. Send is gated on a selected window + a live connection
-                // (ContentShareReviewState.canSend). The real send path lands in
-                // US-005; for now Send just dismisses the review.
+                // US-004/US-005 — review a parked quip://share draft, then ship
+                // it through the same send_text path as a typed prompt. Send is
+                // gated on a selected window + a live connection
+                // (ContentShareReviewState.canSend).
                 ContentShareReviewSheet(
                     pending: share,
                     windows: windows,
                     isConnected: client.isConnected,
                     initialWindowId: selectedWindowId,
-                    onSend: { _, _ in
+                    onSend: { windowId, mode in
+                        // flushPendingImage fires the callback immediately when
+                        // no image is queued, so the image pipeline is only
+                        // touched when something is actually pending.
+                        let message = ContentShareSend.message(
+                            for: share.draft, mode: mode, windowId: windowId)
+                        flushPendingImage(windowId: windowId) { [client] in
+                            client.send(message)
+                        }
+                        ContentShareSend.recordRecent(share.draft)
+                        selectedWindowId = windowId
                         pendingContentShare = nil
                     },
                     onCancel: {
