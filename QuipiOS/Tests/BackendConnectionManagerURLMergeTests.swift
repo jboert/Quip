@@ -497,4 +497,57 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         // Generation matches but browsing has stopped → nothing to grace-elapse.
         XCTAssertFalse(BonjourBrowser.graceStillValid(captured: 3, current: 3, isSearching: false))
     }
+
+    // MARK: - Connection persistence across reinstall (restore = MERGE, not clobber)
+
+    /// A restored backup row for the SAME Mac (same UUID) unions with the live
+    /// row into one — the exact engine `mergeRestoredBackends` delegates to.
+    func testRestoreUnionSameMacCollapsesToOneRow() {
+        let live = PairedBackend(id: "UUID-A", url: ts, name: "Studio")          // live over Tailscale
+        let restored = PairedBackend(id: "UUID-A", url: lan, name: "Studio")     // backup knew the LAN
+        let merged = BackendConnectionManager.mergeSameIDRows([live, restored])
+        XCTAssertEqual(merged.count, 1, "same-UUID restore folds into the live row")
+        XCTAssertEqual(Set(merged[0].urlsInOrder), [ts, lan], "both transports retained")
+        XCTAssertEqual(merged[0].urlsInOrder.first, ts, "Tailscale stays primary (roam-stable)")
+    }
+
+    /// A restored row for a DIFFERENT Mac must NOT be merged away.
+    func testRestoreDifferentMacKeepsBothRows() {
+        let live = PairedBackend(id: "UUID-A", url: ts, name: "Studio")
+        let restored = PairedBackend(id: "UUID-B", url: other, name: "Laptop")
+        let merged = BackendConnectionManager.mergeSameIDRows([live, restored])
+        XCTAssertEqual(merged.count, 2, "distinct Macs (no id/URL overlap) both survive a restore")
+    }
+
+    /// Legacy-id restore that shares a URL with the live real-UUID row folds in
+    /// (URL-overlap pass), so a reinstall can't spawn a phantom duplicate.
+    func testRestoreLegacyIDSharedURLFolds() {
+        let live = PairedBackend(id: "UUID-A", url: lan, name: "Studio")
+        let restored = PairedBackend(id: "legacy-xyz", url: lan, name: "Backend")
+        let merged = BackendConnectionManager.mergeSameIDRows([live, restored])
+        XCTAssertEqual(merged.count, 1, "shared-URL restore folds despite different ids")
+    }
+
+    // MARK: - Recents restore merge (pure helper)
+
+    func testRecentsMergeDedupsByURLKeepingNewestAndPin() {
+        let old = SavedConnection(url: lan, name: nil, pinned: false, lastUsed: Date(timeIntervalSince1970: 100))
+        let backup = SavedConnection(url: lan, name: "Home", pinned: true, lastUsed: Date(timeIntervalSince1970: 500))
+        let out = SavedConnection.mergedRecents(existing: [old], incoming: [backup], cap: 10)
+        XCTAssertEqual(out.count, 1, "same URL dedups to one entry")
+        XCTAssertTrue(out[0].pinned, "pinned is OR'd true")
+        XCTAssertEqual(out[0].lastUsed, Date(timeIntervalSince1970: 500), "newest lastUsed wins")
+        XCTAssertEqual(out[0].name, "Home", "restored name adopted when existing had none")
+    }
+
+    func testRecentsMergeAppendsNewAndCapsKeepingPinned() {
+        let existing = [SavedConnection(url: ts, pinned: true, lastUsed: Date(timeIntervalSince1970: 1))]
+        // 11 fresh unpinned incoming — cap is 10, pinned must survive.
+        let incoming = (0..<11).map {
+            SavedConnection(url: "ws://10.0.0.\($0):8765", lastUsed: Date(timeIntervalSince1970: TimeInterval(100 + $0)))
+        }
+        let out = SavedConnection.mergedRecents(existing: existing, incoming: incoming, cap: 10)
+        XCTAssertEqual(out.count, 10, "capped at 10")
+        XCTAssertTrue(out.contains { $0.url == ts && $0.pinned }, "pinned entry is never evicted by the cap")
+    }
 }

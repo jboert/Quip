@@ -21,6 +21,14 @@ final class PreferencesSyncService {
     /// service can be wired up before the WebSocket exists.
     var send: ((Data) -> Void)?
 
+    /// Connection memory is MERGED into live state, not written straight to
+    /// UserDefaults (loads are overwrite-only, so a blind write would clobber
+    /// the currently-connected session). The owner sets these to fold a
+    /// restored backup into the running app. Args: (pairedBackendsJSON,
+    /// activeBackendID?) and (recentConnectionsJSON).
+    var onRestorePaired: ((String, String?) -> Void)?
+    var onRestoreRecents: ((String) -> Void)?
+
     /// Stable device identifier used as the Mac-side storage key.
     let deviceID: String
 
@@ -132,6 +140,13 @@ final class PreferencesSyncService {
         if let v = snapshot.quickSlotsJSON { d.set(v, forKey: "quickSlotsJSON") }
         if let v = snapshot.customButtonsJSON { d.set(v, forKey: "customButtonsJSON") }
         if let v = snapshot.followFrontmost { d.set(v, forKey: "followFrontmost") }
+        // Connection memory: hand to the merge hooks rather than writing the
+        // blob directly (a direct write would clobber the live, overwrite-only
+        // paired/recents lists). The hooks union restored rows into running
+        // state and re-persist. The suppression window above still covers the
+        // savePaired/saveRecents writes they trigger.
+        if let v = snapshot.pairedBackendsJSON { onRestorePaired?(v, snapshot.activeBackendID) }
+        if let v = snapshot.recentConnectionsJSON { onRestoreRecents?(v) }
     }
 
     private func scheduleSync() {
@@ -189,7 +204,10 @@ final class PreferencesSyncService {
             ttsEnabled: d.object(forKey: "ttsEnabled") as? Bool,
             quickSlotsJSON: d.string(forKey: "quickSlotsJSON"),
             customButtonsJSON: d.string(forKey: "customButtonsJSON"),
-            followFrontmost: d.object(forKey: "followFrontmost") as? Bool
+            followFrontmost: d.object(forKey: "followFrontmost") as? Bool,
+            pairedBackendsJSON: d.data(forKey: "pairedBackendsData").flatMap { String(data: $0, encoding: .utf8) },
+            recentConnectionsJSON: d.data(forKey: "recentConnectionsData").flatMap { String(data: $0, encoding: .utf8) },
+            activeBackendID: d.string(forKey: "activeBackendID")
         )
     }
 }

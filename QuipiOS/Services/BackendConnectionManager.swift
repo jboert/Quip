@@ -724,6 +724,50 @@ final class BackendConnectionManager {
         UserDefaults.standard.set(activeBackendID, forKey: "activeBackendID")
     }
 
+    /// Merge a restored backup (from the Mac's prefs mirror) into live state.
+    /// Loads are overwrite-only, so we UNION the restored rows into `paired`
+    /// via the same dedup used at launch — keeping any currently-live session
+    /// authoritative (a restored row that turns out to be a same-Mac duplicate
+    /// collapses through `mergeSameIDRows`, and the same-device-gated reap on
+    /// the next `device_identity` finishes the job). Then spawn sessions for
+    /// newly-restored `enabled` rows without disturbing existing ones. Called
+    /// from `PreferencesSyncService.onRestorePaired` after a reinstall.
+    func mergeRestoredBackends(_ json: String, activeID: String?) {
+        guard let data = json.data(using: .utf8),
+              let restored = try? JSONDecoder().decode([PairedBackend].self, from: data),
+              !restored.isEmpty else { return }
+        let before = paired
+        paired = Self.mergeSameIDRows(paired + restored)
+        // Nothing genuinely new after dedup → don't churn sessions/persistence.
+        if paired == before { return }
+        savePaired()
+        // Spawn sessions for any newly-present rows. The `sessions[id] != nil`
+        // guard leaves live connections untouched (same guard as bootstrap()).
+        for backend in paired where sessions[backend.id] == nil {
+            let session = BackendSession(backendID: backend.id, client: WebSocketClient())
+            wire(session: session)
+            sessions[backend.id] = session
+            if backend.enabled {
+                let urls = urlList(for: backend)
+                if !urls.isEmpty {
+                    primePINIfPresent(session: session)
+                    connect(session: session, urls: urls)
+                }
+            }
+        }
+        // Re-select the backed-up active backend only if nothing is active yet
+        // (never steal focus from a connection the user is already using).
+        if activeBackendID.isEmpty {
+            if let activeID, paired.contains(where: { $0.id == activeID }) {
+                activeBackendID = activeID
+            } else if let first = paired.first {
+                activeBackendID = first.id
+            }
+            savePaired()
+        }
+        rebindProbeService()
+    }
+
     /// Collapse multiple rows that share an `id` OR overlap on any URL
     /// into one row whose `url` is the LAN-preferring primary and whose
     /// `fallbackURLs` carry the rest.

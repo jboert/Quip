@@ -937,10 +937,14 @@ struct PushPreferencesMessage: Codable, Sendable {
 // MARK: - Preferences Backup Messages
 
 /// Bundle of phone preferences that survive a reinstall by being mirrored
-/// to the Mac. Connection-specific keys (lastURL, recentConnectionsData)
-/// are intentionally excluded — those are tied to the current install's
-/// network state and shouldn't move between installs. Each field optional
-/// so we only persist values the user has actually touched.
+/// to the Mac. Connection memory (paired backends + recent connections) IS
+/// backed up here BY DESIGN (per repeated user request: reinstalls must
+/// remember known LANs) — a change from the earlier policy that excluded it.
+/// The phone MERGES these into live state on restore, never clobbers, and
+/// only ships them to the user's own Mac over the authenticated socket.
+/// `lastURL` (legacy single-backend) stays excluded — superseded by
+/// `pairedBackendsJSON`. Each field optional so we only persist values the
+/// user has actually touched and mixed-version peers drop unknown keys.
 struct PreferencesSnapshot: Codable, Sendable, Equatable {
     var enabledQuickButtons: String?
     var tintContentBorder: Bool?
@@ -973,6 +977,14 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// to follow the Mac's frontmost window. Optional so older Macs decode
     /// cleanly as nil → phone keeps whatever local default it had.
     var followFrontmost: Bool?
+    /// Connection memory, backed up across reinstalls (see struct doc). The
+    /// phone merges these into live state on restore — it does not overwrite.
+    /// JSON text of the phone's `pairedBackendsData` blob (`[PairedBackend]`).
+    var pairedBackendsJSON: String?
+    /// JSON text of the phone's `recentConnectionsData` blob (`[SavedConnection]`).
+    var recentConnectionsJSON: String?
+    /// Which backend was active, so a reinstalled phone re-selects it.
+    var activeBackendID: String?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -992,7 +1004,10 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         ttsEnabled: Bool? = nil,
         quickSlotsJSON: String? = nil,
         customButtonsJSON: String? = nil,
-        followFrontmost: Bool? = nil
+        followFrontmost: Bool? = nil,
+        pairedBackendsJSON: String? = nil,
+        recentConnectionsJSON: String? = nil,
+        activeBackendID: String? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -1012,6 +1027,9 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.quickSlotsJSON = quickSlotsJSON
         self.customButtonsJSON = customButtonsJSON
         self.followFrontmost = followFrontmost
+        self.pairedBackendsJSON = pairedBackendsJSON
+        self.recentConnectionsJSON = recentConnectionsJSON
+        self.activeBackendID = activeBackendID
     }
 }
 

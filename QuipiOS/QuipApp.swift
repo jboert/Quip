@@ -794,6 +794,32 @@ struct QuipApp: App {
             }
         }
 
+        // Connection memory is merged (not clobbered) into live state — the
+        // backup restores paired backends + recent LANs across reinstalls.
+        prefsSync.onRestorePaired = { [manager] json, activeID in
+            DispatchQueue.main.async {
+                manager.mergeRestoredBackends(json, activeID: activeID)
+            }
+        }
+        prefsSync.onRestoreRecents = { json in
+            DispatchQueue.main.async {
+                // Recents live in MainiOSView's @State; merge at the UserDefaults
+                // key it's backed by (@AppStorage "recentConnectionsData") so the
+                // connect bar re-reads the union on its next appear. cap 10 mirrors
+                // MainiOSView.maxConnections.
+                let d = UserDefaults.standard
+                guard let data = json.data(using: .utf8),
+                      let restored = try? JSONDecoder().decode([SavedConnection].self, from: data),
+                      !restored.isEmpty else { return }
+                let existing = d.data(forKey: "recentConnectionsData")
+                    .flatMap { try? JSONDecoder().decode([SavedConnection].self, from: $0) } ?? []
+                let merged = SavedConnection.mergedRecents(existing: existing, incoming: restored, cap: 10)
+                if let encoded = try? JSONEncoder().encode(merged) {
+                    d.set(encoded, forKey: "recentConnectionsData")
+                }
+            }
+        }
+
         // Wire the sync service to actually transmit via the WebSocket. The
         // closure dynamically resolves `manager.active.client` each call, so
         // it always targets the current active backend even after a swap.
@@ -4801,6 +4827,27 @@ struct SavedConnection: Codable, Identifiable {
             return short
         }
         return url
+    }
+
+    /// Pure merge for recents restore — union `incoming` into `existing` by
+    /// URL (keep newest `lastUsed`, OR `pinned`, adopt a name only when the
+    /// existing entry has none), then cap to `cap` (all pinned + newest
+    /// unpinned), matching `addToRecents`. Value-in/value-out for unit testing.
+    static func mergedRecents(existing: [SavedConnection], incoming: [SavedConnection], cap: Int) -> [SavedConnection] {
+        var out = existing
+        for r in incoming {
+            if let i = out.firstIndex(where: { $0.url == r.url }) {
+                if r.lastUsed > out[i].lastUsed { out[i].lastUsed = r.lastUsed }
+                out[i].pinned = out[i].pinned || r.pinned
+                if out[i].name == nil, let n = r.name, !n.isEmpty { out[i].name = n }
+            } else {
+                out.append(r)
+            }
+        }
+        let pinned = out.filter(\.pinned)
+        let unpinned = out.filter { !$0.pinned }.sorted { $0.lastUsed > $1.lastUsed }
+        let unpinnedLimit = max(0, cap - pinned.count)
+        return pinned + Array(unpinned.prefix(unpinnedLimit))
     }
 }
 
