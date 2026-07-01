@@ -20,12 +20,20 @@ final class BonjourBrowser {
 
     private(set) var discoveredHosts: [DiscoveredHost] = []
     private(set) var isSearching = false
+    /// Flips true ~4s after `startBrowsing` if discovery is still running.
+    /// The Connect Bar uses `graceElapsed && discoveredHosts.isEmpty` to show
+    /// a "no Macs found — Local Network access may be off" hint, without
+    /// flashing it during the normal first-few-seconds-empty window. (iOS
+    /// exposes no clean read of the Local Network permission, so this is a
+    /// heuristic, not a hard status.)
+    private(set) var graceElapsed = false
 
     private var delegate: BonjourDelegate?
 
     func startBrowsing() {
         guard !isSearching else { return }
         discoveredHosts = []
+        graceElapsed = false
 
         let del = BonjourDelegate { [weak self] host in
             Task { @MainActor in
@@ -44,12 +52,19 @@ final class BonjourBrowser {
         delegate = del
         isSearching = true
         print("[BonjourBrowser] Searching...")
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, self.isSearching else { return }
+            self.graceElapsed = true
+        }
     }
 
     func stopBrowsing() {
         delegate?.stop()
         delegate = nil
         isSearching = false
+        graceElapsed = false
     }
 }
 

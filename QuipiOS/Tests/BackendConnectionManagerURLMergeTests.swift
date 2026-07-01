@@ -135,6 +135,49 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertEqual(merged[0].urlsInOrder, [lan, ts])
     }
 
+    // MARK: - LAN classification (Use Local Network switch)
+
+    func testIsLANURL() {
+        XCTAssertTrue(BackendConnectionManager.isLANURL(URL(string: bonjour)!), "Bonjour .local is LAN")
+        XCTAssertTrue(BackendConnectionManager.isLANURL(URL(string: lan)!), "RFC1918 is LAN")
+        XCTAssertFalse(BackendConnectionManager.isLANURL(URL(string: ts)!), "Tailscale CGNAT is not LAN")
+        XCTAssertFalse(BackendConnectionManager.isLANURL(URL(string: tsDNS)!), "Tailscale MagicDNS is not LAN")
+        XCTAssertFalse(BackendConnectionManager.isLANURL(URL(string: other)!), "Cloudflare tunnel is not LAN")
+    }
+
+    func testPathLabel() {
+        XCTAssertEqual(BackendConnectionManager.pathLabel(for: URL(string: bonjour)!), "Local network")
+        XCTAssertEqual(BackendConnectionManager.pathLabel(for: URL(string: lan)!), "Local network")
+        XCTAssertEqual(BackendConnectionManager.pathLabel(for: URL(string: ts)!), "Tailscale")
+        XCTAssertEqual(BackendConnectionManager.pathLabel(for: URL(string: tsDNS)!), "Tailscale")
+        XCTAssertEqual(BackendConnectionManager.pathLabel(for: URL(string: other)!), "Remote")
+        XCTAssertEqual(BackendConnectionManager.pathLabel(for: nil), "—")
+    }
+
+    // MARK: - urlsByAddingLocal (LAN URL ingestion from device_identity)
+
+    func testAddingLocalURLLandsAsFallbackKeepingTailscalePrimary() {
+        // Phone paired only over Tailscale; Mac's identity now reports its LAN
+        // URL. LAN must join as a *fallback* — the live Tailscale primary is
+        // never disrupted, but a LAN switch is now possible.
+        let out = BackendConnectionManager.urlsByAddingLocal([ts], [lan])
+        XCTAssertEqual(out, [ts, lan])
+    }
+
+    func testAddingLocalURLDeduplicates() {
+        let out = BackendConnectionManager.urlsByAddingLocal([ts, lan], [lan])
+        XCTAssertEqual(out, [ts, lan], "Already-known LAN URL is not duplicated")
+    }
+
+    func testAddingEmptyLocalURLsLeavesOrderUnchanged() {
+        XCTAssertEqual(BackendConnectionManager.urlsByAddingLocal([ts, lan], []), [ts, lan])
+    }
+
+    func testAddingMultipleLocalURLs() {
+        let out = BackendConnectionManager.urlsByAddingLocal([ts], [bonjour, lan])
+        XCTAssertEqual(out, [ts, bonjour, lan], "TS stays primary; new LAN URLs sort Bonjour→LAN behind it")
+    }
+
     // MARK: - consolidateByMonitorName (dual-backend flap one-shot)
 
     func testConsolidateByMonitorNameFoldsDisjointURLsSameName() {
