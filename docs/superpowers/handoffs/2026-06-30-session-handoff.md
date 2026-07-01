@@ -76,6 +76,21 @@ shows "None connected" → device_identity/localURLs never delivered → LAN nev
 "Use Local Network" tile has nothing to switch to. Direct LAN pair (ws://192.168.4.26:8765)
 sidesteps it. Root: localURLs delivered post-auth can't rescue a phone that can't auth.
 
+## Also requested: clean up Mac Settings page
+
+User asked "clean up settings page" (the QuipMac Settings screen — Server / Connected
+Clients / Network Mode sections; `QuipMac/Views/SettingsView.swift`). Under-specified;
+brainstorm scope first. Known concrete problem to fix: **"Bonjour discovery: Stopped"
+renders with a red ✗ that reads as an error, but in Tailscale mode it's intentional**
+(advertising is deliberately off, QuipMacApp.swift:387-402). Relabel/neutralize it in
+Tailscale mode ("Off — not needed in Tailscale mode") or hide it, so it doesn't look
+broken. Confirm other rows (Port shows 8,765; Bonjour service name "Quip") and whether
+Network Mode picker needs clearer help text. Deferred — needs a fresh session.
+
+Note: no user toggle re-enables Bonjour in Tailscale mode. MenuBarView.swift:451-463
+server switch calls startAdvertising() but applyNetworkMode() stops it again in TS mode.
+Re-enabling = code change (see auto-LAN item above).
+
 ## Open
 
 - Push? All local. Do NOT push without explicit OK.
