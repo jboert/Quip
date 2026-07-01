@@ -201,12 +201,13 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
 
     func testReapCollapsesDisjointLANDuplicateIntoCanonical() {
         // The flap: a Tailscale-primary canonical row (real UUID) and a
-        // LAN-only duplicate (synthetic id, disjoint URL). The Mac's identity
-        // carries its LAN URL in localURLs → the canonical session reaps the
-        // LAN row WITHOUT waiting for that row's (doomed) socket to identify.
+        // LAN-only duplicate (synthetic id, disjoint URL) that is PROVABLY the
+        // same Mac (same monitor name). The Mac's identity carries its LAN URL
+        // in localURLs → the canonical session reaps the LAN row WITHOUT
+        // waiting for that row's (doomed) socket to identify.
         let rows = [
-            PairedBackend(id: "mac-X", url: ts, name: "Mac"),
-            PairedBackend(id: "legacy-lan", url: lan, name: "Mac"),
+            PairedBackend(id: "mac-X", url: ts, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "legacy-lan", url: lan, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
         ]
         let (out, reaped) = BackendConnectionManager.reapDuplicates(
             rows: rows, canonicalID: "mac-X", knownURLs: [lan])
@@ -217,11 +218,11 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
     }
 
     func testReapMatchesViaCanonicalURLsEvenWithEmptyLocalURLs() {
-        // Even with no localURLs, a duplicate sharing a URL with the canonical
-        // row is still collapsed (defensive overlap dedup).
+        // Even with no localURLs, a same-Mac duplicate (matching monitor name)
+        // sharing a URL with the canonical row is still collapsed.
         let rows = [
-            PairedBackend(id: "mac-X", url: ts, name: "Mac", fallbackURLs: [lan]),
-            PairedBackend(id: "legacy", url: lan, name: "Mac"),
+            PairedBackend(id: "mac-X", url: ts, name: "Mac", lastSeenLayoutMonitorName: "Studio Display", fallbackURLs: [lan]),
+            PairedBackend(id: "legacy", url: lan, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
         ]
         let (out, reaped) = BackendConnectionManager.reapDuplicates(
             rows: rows, canonicalID: "mac-X", knownURLs: [])
@@ -232,15 +233,69 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
 
     func testReapLeavesDifferentMacUntouched() {
         let rows = [
-            PairedBackend(id: "mac-X", url: ts, name: "Mac"),
-            PairedBackend(id: "legacy-lan", url: lan, name: "Mac"),
-            PairedBackend(id: "mac-Y", url: other, name: "Other Mac"),
+            PairedBackend(id: "mac-X", url: ts, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "legacy-lan", url: lan, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "mac-Y", url: other, name: "Other Mac", lastSeenLayoutMonitorName: "LG UltraFine"),
         ]
         let (out, reaped) = BackendConnectionManager.reapDuplicates(
             rows: rows, canonicalID: "mac-X", knownURLs: [lan])
         XCTAssertEqual(reaped, ["legacy-lan"])
         XCTAssertEqual(out.count, 2)
         XCTAssertTrue(out.contains { $0.id == "mac-Y" }, "unrelated Mac is never reaped")
+    }
+
+    // MARK: - reapDuplicates safety gate (US-001: positive same-Mac evidence)
+
+    func testReapDoesNotFoldDifferentMacsSharingLANIP() {
+        // Two DIFFERENT Macs that happen to advertise the same private-LAN IP
+        // literal, with DIFFERENT monitor names. URL overlap alone must NOT
+        // reap — folding here would tear down a different Mac's live row and
+        // delete its Keychain PIN.
+        let sharedLAN = "ws://192.168.1.50:8765"
+        let rows = [
+            PairedBackend(id: "UUID-A", url: sharedLAN, name: "Mac A", lastSeenLayoutMonitorName: "Display A"),
+            PairedBackend(id: "UUID-B", url: sharedLAN, name: "Mac B", lastSeenLayoutMonitorName: "Display B"),
+        ]
+        let (out, reaped) = BackendConnectionManager.reapDuplicates(
+            rows: rows, canonicalID: "UUID-B", knownURLs: [sharedLAN])
+        XCTAssertTrue(reaped.isEmpty,
+                      "different monitor names ⇒ different Macs ⇒ no reap despite shared LAN IP")
+        XCTAssertEqual(out.count, 2, "both rows survive")
+    }
+
+    func testReapDoesNotFoldOnURLOverlapWithoutMonitorEvidence() {
+        // Same shared LAN IP but NO monitor evidence on either row. A nil/empty
+        // monitor name is not proof of sameness — raw URL overlap must not reap.
+        let sharedLAN = "ws://192.168.1.50:8765"
+        let rows = [
+            PairedBackend(id: "UUID-A", url: sharedLAN, name: "Mac A"),
+            PairedBackend(id: "UUID-B", url: sharedLAN, name: "Mac B"),
+        ]
+        let (out, reaped) = BackendConnectionManager.reapDuplicates(
+            rows: rows, canonicalID: "UUID-B", knownURLs: [sharedLAN])
+        XCTAssertTrue(reaped.isEmpty,
+                      "raw URL overlap without positive same-Mac evidence must not reap")
+        XCTAssertEqual(out.count, 2)
+    }
+
+    func testReapKeepsLiveCanonicalAndFoldsSyntheticSecondPath() {
+        // Same Mac, two paths. The LIVE canonical (real UUID, holds the PIN) is
+        // the identified session; the stuck second path is a synthetic LAN-only
+        // row racing it. The Mac advertises its LAN URL in localURLs → the reap
+        // folds the synthetic row into the live canonical. The canonical id is
+        // NEVER the one reaped, so its live socket + Keychain PIN survive and
+        // reachability never drops to needsAuth.
+        let rows = [
+            PairedBackend(id: "UUID-real", url: ts, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+            PairedBackend(id: "legacy-lan", url: lan, name: "Mac", lastSeenLayoutMonitorName: "Studio Display"),
+        ]
+        let (out, reaped) = BackendConnectionManager.reapDuplicates(
+            rows: rows, canonicalID: "UUID-real", knownURLs: [lan])
+        XCTAssertEqual(reaped, ["legacy-lan"], "the synthetic second path is folded, not the live row")
+        XCTAssertFalse(reaped.contains("UUID-real"), "the surviving canonical id is never reaped/PIN-deleted")
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].id, "UUID-real", "the live authenticated row survives")
+        XCTAssertEqual(out[0].urlsInOrder, [ts, lan], "both transports retained, Tailscale-first")
     }
 
     func testReapNoDuplicateIsNoOp() {

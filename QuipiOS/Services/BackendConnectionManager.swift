@@ -929,38 +929,67 @@ final class BackendConnectionManager {
     }
 
     /// Pure same-Mac duplicate collapse. Given all `rows`, a `canonicalID`
-    /// (the row whose live session just identified), and `knownURLs` (the
-    /// Mac's advertised `localURLs`), fold every OTHER row whose URL set
-    /// intersects {knownURLs ∪ canonical's URLs} into the canonical row and
+    /// (the row whose live session just identified — the post-rekey REAL
+    /// device UUID), and `knownURLs` (the Mac's advertised `localURLs`), fold
+    /// every OTHER row that is PROVABLY the same Mac into the canonical row and
     /// report the reaped ids. This breaks the dual-path flap deadlock: the
     /// surviving session collapses its disjoint-URL duplicate (LAN vs
     /// Tailscale) using the identity it already has, instead of waiting for
     /// the duplicate's socket to identify — which the Mac's same-deviceID
-    /// dedup keeps killing first. Pure / value-in-value-out for unit testing.
+    /// dedup keeps killing first.
+    ///
+    /// SAFETY GATE (US-001): URL-string overlap alone is NOT evidence of
+    /// sameness — two DIFFERENT Macs can advertise the same private-LAN IP
+    /// literal (192.168.x.y), and folding on that reaps a *different* Mac's
+    /// live row and deletes its Keychain PIN. A candidate is folded ONLY when
+    /// it (a) overlaps the canonical's URL set AND (b) carries POSITIVE
+    /// same-Mac evidence: the SAME real device UUID (`row.id == canonicalID`)
+    /// OR the SAME non-empty monitor/display name. A nil/empty monitor name is
+    /// not evidence, so an unidentified row is never merged into a stranger.
+    /// Pure / value-in-value-out for unit testing.
     static func reapDuplicates(
         rows: [PairedBackend],
         canonicalID: String,
         knownURLs: [String]
     ) -> (rows: [PairedBackend], reaped: [String]) {
         guard let ci = rows.firstIndex(where: { $0.id == canonicalID }) else { return (rows, []) }
-        let known = Set(knownURLs).union(rows[ci].urlsInOrder)
+        let canonical = rows[ci]
+        let known = Set(knownURLs).union(canonical.urlsInOrder)
+        // Canonical Mac's monitor/display name, iff non-empty (nil = no evidence).
+        let canonicalMonitor: String? = {
+            guard let m = canonical.lastSeenLayoutMonitorName, !m.isEmpty else { return nil }
+            return m
+        }()
         var reaped: [String] = []
-        var canonicalURLs = rows[ci].urlsInOrder
-        for row in rows where row.id != canonicalID {
+        var canonicalURLs = canonical.urlsInOrder
+        for (idx, row) in rows.enumerated() where idx != ci {
+            // URL overlap identifies a *candidate* only — not proof of sameness.
             guard !Set(row.urlsInOrder).isDisjoint(with: known) else { continue }
+            // Require POSITIVE same-Mac evidence before folding: exact device
+            // UUID, or an equal non-empty monitor name.
+            let sameDevice = (row.id == canonicalID)
+            let sameMonitor: Bool
+            if let cm = canonicalMonitor,
+               let rm = row.lastSeenLayoutMonitorName, !rm.isEmpty {
+                sameMonitor = (rm == cm)
+            } else {
+                sameMonitor = false
+            }
+            guard sameDevice || sameMonitor else { continue }
             reaped.append(row.id)
             for u in row.urlsInOrder where !canonicalURLs.contains(u) { canonicalURLs.append(u) }
         }
         guard !reaped.isEmpty else { return (rows, []) }
         canonicalURLs = mergedURLOrder(canonicalURLs)
         var out: [PairedBackend] = []
-        for var row in rows {
-            if row.id == canonicalID {
+        for (idx, r) in rows.enumerated() {
+            if idx == ci {
+                var row = r
                 row.url = canonicalURLs.first ?? row.url
                 row.fallbackURLs = Array(canonicalURLs.dropFirst())
                 out.append(row)
-            } else if !reaped.contains(row.id) {
-                out.append(row)
+            } else if !reaped.contains(r.id) {
+                out.append(r)
             }
         }
         return (out, reaped)
@@ -1195,16 +1224,17 @@ final class BackendConnectionManager {
                 self.ingestLocalURLs(localURLs, into: session.backendID)
             }
 
-            // Break the dual-path flap: if a SECOND paired row points at this
-            // same Mac on a disjoint URL (a LAN-only duplicate racing the
-            // Tailscale primary), collapse it now using the Mac's advertised
-            // localURLs — without waiting for that row's socket to identify,
-            // which the Mac's same-deviceID dedup keeps resetting first. Keyed
-            // on the row this session already owns (canonical once rekeyed; a
-            // synthetic pre-rekey id simply finds no match and no-ops, and the
-            // next identity after rekey reaps). See project_dual_path_reap_deadlock.
-            self.reapDuplicateSameMac(canonicalID: session.backendID,
-                                      knownLocalURLs: identity.localURLs ?? [])
+            // Break the dual-path flap: fold any stuck same-Mac duplicate row
+            // (a LAN-only duplicate racing the Tailscale primary, whose socket
+            // the Mac's same-deviceID dedup keeps resetting before it can
+            // identify) into the canonical row. The reap is invoked below,
+            // keyed on the Mac's REAL device UUID (`identity.deviceID`), ONLY
+            // from the branches AFTER rekey/merge — never on the pre-rekey
+            // synthetic `session.backendID`, which folded the WRONG direction
+            // and tore down the live authenticated row, deleting its PIN.
+            // reapDuplicates also requires positive same-Mac evidence, so two
+            // different Macs sharing a LAN IP literal are never collapsed.
+            // See project_dual_path_reap_deadlock.
 
             // Replay persisted QA pair on every identity ack — covers
             // reconnects (the closure also fires on the equal-IDs path
@@ -1227,6 +1257,10 @@ final class BackendConnectionManager {
                 if let canonical = self.sessions[oldID], canonical !== session {
                     c.disconnect()
                 }
+                // Steady-state reconnect on the already-real-UUID canonical:
+                // fold any duplicate whose own socket never got to identify.
+                self.reapDuplicateSameMac(canonicalID: identity.deviceID,
+                                          knownLocalURLs: identity.localURLs ?? [])
                 return
             }
 
@@ -1253,6 +1287,10 @@ final class BackendConnectionManager {
                 KeychainBackendPINs.delete(backendID: oldID)
                 if self.activeBackendID == oldID { self.activeBackendID = identity.deviceID }
                 self.savePaired()
+                // The keeper (id == deviceID) is now canonical — fold any other
+                // stuck same-Mac rows into it.
+                self.reapDuplicateSameMac(canonicalID: identity.deviceID,
+                                          knownLocalURLs: identity.localURLs ?? [])
                 return
             }
 
@@ -1288,6 +1326,10 @@ final class BackendConnectionManager {
             if self.activeBackendID == oldID {
                 self.activeBackendID = identity.deviceID
             }
+            // This session just became the real-UUID canonical — fold any
+            // stuck same-Mac duplicate rows into it.
+            self.reapDuplicateSameMac(canonicalID: identity.deviceID,
+                                      knownLocalURLs: identity.localURLs ?? [])
         }
 
         c.onPreferencesRestore = { [weak self, weak session] snap in
