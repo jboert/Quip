@@ -356,6 +356,25 @@ struct QuipApp: App {
             .sheet(item: $importablePack) { item in
                 ImportPackSheet(pack: item.pack) { applyImportedPack(item.pack) }
             }
+            .sheet(item: $pendingContentShare) { share in
+                // US-004 — review a parked quip://share draft before anything is
+                // sent. Send is gated on a selected window + a live connection
+                // (ContentShareReviewState.canSend). The real send path lands in
+                // US-005; for now Send just dismisses the review.
+                ContentShareReviewSheet(
+                    pending: share,
+                    windows: windows,
+                    isConnected: client.isConnected,
+                    initialWindowId: selectedWindowId,
+                    onSend: { _, _ in
+                        pendingContentShare = nil
+                    },
+                    onCancel: {
+                        // Dismiss without touching selectedWindowId or sending.
+                        pendingContentShare = nil
+                    }
+                )
+            }
             .alert("Couldn't import pack", isPresented: $showImportPackError) {
                 Button("OK", role: .cancel) {}
             } message: {
