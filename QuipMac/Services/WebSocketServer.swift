@@ -794,11 +794,25 @@ final class WebSocketServer {
         return false
     }
 
+    /// True for a PRIMARY Wi-Fi/Ethernet interface name (`en0`, `en1`; USB and
+    /// Thunderbolt Ethernet adapters also enumerate as `en*`). Excludes every
+    /// interface that carries a private-IPv4 address the phone can NOT reach:
+    /// Internet-Sharing / Thunderbolt bridges (`bridge*`), VPN/Tailscale tunnels
+    /// (`utun*`), virtualization host interfaces (`vmenet*`, `vnic*`, `vboxnet*`,
+    /// `vlan*`), and Apple Wireless Direct Link (`awdl*`, `llw*`). Advertising a
+    /// bridge/VM subnet IP (e.g. `192.168.2.1` on `bridge100`) as a LAN URL
+    /// dead-ends the "Use Local Network" switch, so only `en*` is advertised.
+    nonisolated static func isPrimaryLANInterface(_ name: String) -> Bool {
+        name.hasPrefix("en")
+    }
+
     /// Ready-to-use LAN WebSocket URLs this Mac is reachable on — one per
-    /// private-IPv4 interface that's up and non-loopback. Sent in
-    /// `DeviceIdentityMessage.localURLs` so the phone can learn the LAN path
-    /// even when it only ever paired over Tailscale. The WS listener binds a
-    /// fixed `0.0.0.0:8765`, so the port is constant.
+    /// private-IPv4 address on a PRIMARY (`en*`) interface that's up and
+    /// non-loopback. Sent in `DeviceIdentityMessage.localURLs` so the phone can
+    /// learn the LAN path even when it only ever paired over Tailscale. The WS
+    /// listener binds a fixed `0.0.0.0:8765`, so the port is constant. Bridge /
+    /// VM / tunnel interfaces are excluded (see `isPrimaryLANInterface`) — their
+    /// private IPs are not reachable from the phone.
     nonisolated static func localWebSocketURLs(port: UInt16 = 8765) -> [String] {
         var urls: [String] = []
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
@@ -808,8 +822,10 @@ final class WebSocketServer {
         while let p = ptr {
             defer { ptr = p.pointee.ifa_next }
             let flags = Int32(p.pointee.ifa_flags)
+            let ifName = String(cString: p.pointee.ifa_name)
             guard (flags & IFF_UP) == IFF_UP,
                   (flags & IFF_LOOPBACK) == 0,
+                  isPrimaryLANInterface(ifName),
                   let addr = p.pointee.ifa_addr,
                   addr.pointee.sa_family == UInt8(AF_INET) else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))

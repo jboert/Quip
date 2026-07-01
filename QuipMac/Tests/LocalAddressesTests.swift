@@ -30,4 +30,28 @@ final class LocalAddressesTests: XCTestCase {
         XCTAssertFalse(WebSocketServer.isPrivateIPv4("192.168.1.256"), "octet out of range")
         XCTAssertFalse(WebSocketServer.isPrivateIPv4(""))
     }
+
+    // MARK: - Primary-interface gate (US-003: drop bridge/VM/tunnel LAN IPs)
+
+    /// Only primary Wi-Fi/Ethernet (`en*`) interfaces are advertised as LAN
+    /// URLs. A Mac running Internet Sharing or a VM has a private-IPv4 address
+    /// on `bridge100` / `vmenet0` that the phone can NOT reach — advertising it
+    /// dead-ends the "Use Local Network" switch, so those interfaces are
+    /// excluded even though `isPrivateIPv4` accepts their address.
+    func testAcceptsPrimaryEthernetInterfaces() {
+        XCTAssertTrue(WebSocketServer.isPrimaryLANInterface("en0"), "Wi-Fi")
+        XCTAssertTrue(WebSocketServer.isPrimaryLANInterface("en1"), "Ethernet / adapter")
+        XCTAssertTrue(WebSocketServer.isPrimaryLANInterface("en10"), "USB/Thunderbolt Ethernet")
+    }
+
+    func testRejectsBridgeAndVirtualInterfaces() {
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("bridge100"), "Internet-Sharing / Thunderbolt bridge")
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("bridge0"), "bridge")
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("vmenet0"), "virtualization host interface")
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("vnic0"), "VM NIC")
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("utun3"), "VPN / Tailscale tunnel")
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("awdl0"), "Apple Wireless Direct Link")
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("llw0"), "low-latency WLAN")
+        XCTAssertFalse(WebSocketServer.isPrimaryLANInterface("lo0"), "loopback")
+    }
 }

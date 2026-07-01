@@ -406,4 +406,51 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertEqual(once.map(\.urlsInOrder), twice.map(\.urlsInOrder))
         XCTAssertEqual(twice.count, 1)
     }
+
+    // MARK: - US-003: .local preserved across raw-IP refresh
+
+    func testRefreshPreservesLocalAcrossRawIPRefresh() {
+        // The Mac's DHCP IP moved .26 → .45. The stale raw-IP LAN URL must be
+        // replaced, but the DHCP-stable Bonjour `.local` fallback is PRESERVED
+        // (it re-resolves after the IP change) — the C3 regression the old
+        // "drop all urlPriority<=1" filter caused by nuking `.local` too.
+        let out = BackendConnectionManager.urlsByRefreshingLocal([ts, bonjour, lan], [lan45])
+        XCTAssertTrue(out.contains(bonjour), ".local fallback survives a raw-IP refresh")
+        XCTAssertFalse(out.contains(lan), "stale raw-IP LAN URL is dropped")
+        XCTAssertTrue(out.contains(lan45), "current raw-IP LAN URL is added")
+        XCTAssertTrue(out.contains(ts), "non-LAN transport untouched")
+        XCTAssertEqual(out, [ts, bonjour, lan45], "TS primary, then .local, then current IP")
+    }
+
+    func testRefreshPreservesLocalWhenOnlyLocalKnown() {
+        // Existing list is Tailscale + `.local` only (no raw IP). A raw-IP
+        // advertise adds the IP without disturbing the `.local` fallback.
+        let out = BackendConnectionManager.urlsByRefreshingLocal([ts, bonjour], [lan])
+        XCTAssertEqual(out, [ts, bonjour, lan], ".local kept; advertised IP appended behind it")
+    }
+
+    // MARK: - US-003: switchToLANPath prefers concrete IP over .local
+
+    func testPreferredLANURLPrefersIPOverLocal() {
+        // Both a `.local` host and a concrete RFC1918 IP are known. The explicit
+        // LAN switch must pick the IP — a flaky/permission-off mDNS resolver can
+        // leave `.local` unresolvable and dead-end the switch.
+        let urls = [ts, bonjour, lan].map { URL(string: $0)! }
+        XCTAssertEqual(BackendConnectionManager.preferredLANURL(from: urls),
+                       URL(string: lan)!, "concrete IP (priority 1) wins over .local (priority 0)")
+    }
+
+    func testPreferredLANURLFallsBackToLocalWhenNoIP() {
+        // No raw IP known → `.local` is the last LAN resort, still better than
+        // dead-ending the switch.
+        let urls = [ts, bonjour].map { URL(string: $0)! }
+        XCTAssertEqual(BackendConnectionManager.preferredLANURL(from: urls),
+                       URL(string: bonjour)!, ".local used only when no concrete IP exists")
+    }
+
+    func testPreferredLANURLNilWhenNoLAN() {
+        // Only non-LAN transports (Tailscale, tunnel) → no LAN URL to switch to.
+        let urls = [ts, other].map { URL(string: $0)! }
+        XCTAssertNil(BackendConnectionManager.preferredLANURL(from: urls))
+    }
 }

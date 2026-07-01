@@ -879,10 +879,13 @@ final class BackendConnectionManager {
     /// known LAN path on the strength of silence. Pure / unit-testable.
     static func urlsByRefreshingLocal(_ existing: [String], _ localURLs: [String]) -> [String] {
         guard !localURLs.isEmpty else { return existing }   // silence ≠ "drop LAN"
-        // Keep every non-LAN URL; replace LAN-class ones with the advertised set.
+        // Keep every URL that isn't a raw private-IP LAN URL (urlPriority 1) and
+        // replace those with the advertised set. The Bonjour `.local` fallback
+        // (urlPriority 0) is DHCP-stable — it re-resolves after the Mac's LAN IP
+        // changes — so it is PRESERVED across a raw-IP refresh, never dropped.
         var all = existing.filter { u in
             guard let url = URL(string: u) else { return true }
-            return !isLANURL(url)
+            return urlPriority(url.absoluteString) != 1
         }
         for u in localURLs where !all.contains(u) { all.append(u) }
         let refreshed = mergedURLOrder(all)
@@ -911,11 +914,22 @@ final class BackendConnectionManager {
     /// not persisted — relaunch returns to the saved Tailscale-first order, so
     /// the switch is tactical, matching the hot-swap contract. No-op when the
     /// session is already on its LAN URL or has no LAN URL to switch to.
+    /// The LAN URL to switch a live connection onto, preferring a concrete
+    /// reachable RFC1918 IP (urlPriority 1) over a Bonjour `.local` host
+    /// (urlPriority 0). A flaky or permission-off mDNS resolver can leave
+    /// `.local` unresolvable, so an explicit "Use Local Network" tap must not
+    /// dead-end on it while a raw IP is available; `.local` is the last LAN
+    /// resort, used only when no concrete IP is known. Pure / unit-testable.
+    static func preferredLANURL(from urls: [URL]) -> URL? {
+        urls.first(where: { urlPriority($0.absoluteString) == 1 })
+            ?? urls.first(where: { urlPriority($0.absoluteString) == 0 })
+    }
+
     func switchToLANPath(_ id: String) {
         guard let i = paired.firstIndex(where: { $0.id == id }),
               let session = sessions[id] else { return }
         let urls = paired[i].urlsInOrder.compactMap { URL(string: $0) }
-        guard let lan = urls.first(where: { Self.isLANURL($0) }) else { return }
+        guard let lan = Self.preferredLANURL(from: urls) else { return }
         if session.client.serverURL == lan { return }   // already on LAN
         var reordered = urls
         reordered.removeAll { $0 == lan }
