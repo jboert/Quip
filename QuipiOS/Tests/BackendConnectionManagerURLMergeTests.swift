@@ -35,6 +35,29 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertEqual(BackendConnectionManager.urlPriority("not a url"), 99) // unparseable → conservative last bucket
     }
 
+    // MARK: - Shared NetworkClassifier (US-005: single source of truth)
+
+    /// The RFC1918 range logic now lives once in `Shared/NetworkClassifier.swift`
+    /// and is compiled into BOTH the QuipMac and QuipiOS targets. This asserts the
+    /// shared type is reachable from the iOS module and classifies the same ranges
+    /// the phone's `urlPriority == 1` bucket depends on — so the two peers cannot
+    /// drift and silently hide the "Use Local Network" tile.
+    func testSharedNetworkClassifierDrivesLANBucket() {
+        // Accepts every RFC1918 range.
+        XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("192.168.4.26"))
+        XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("10.0.0.5"))
+        XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("172.16.0.1"))
+        XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("172.31.255.1"))
+        // Rejects Tailscale CGNAT, loopback/link-local, out-of-range, malformed.
+        XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("100.120.141.122"))
+        XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("172.32.0.1"))
+        XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("8.8.8.8"))
+        XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("quip-mac.local"))
+        // urlPriority == 1 iff the host is RFC1918 per the shared classifier.
+        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://192.168.4.26:8765"), 1)
+        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://100.120.141.122:8765"), 2)
+    }
+
     // MARK: - mergedURLOrder (Tailscale-first contract)
 
     func testMergedURLOrderTailscaleLeadsThenPriority() {

@@ -31,6 +31,22 @@ final class LocalAddressesTests: XCTestCase {
         XCTAssertFalse(WebSocketServer.isPrivateIPv4(""))
     }
 
+    // MARK: - Shared classifier (US-005: single source of truth)
+
+    /// `WebSocketServer.isPrivateIPv4` now delegates to the shared
+    /// `NetworkClassifier` in `Shared/`, compiled into BOTH the QuipMac and
+    /// QuipiOS targets. Lock that the Mac forwards to it verbatim so the two
+    /// peers' RFC1918 range logic can never diverge.
+    func testDelegatesToSharedClassifier() {
+        for ip in ["10.0.0.5", "192.168.1.50", "172.16.0.1", "172.31.255.1",
+                   "127.0.0.1", "169.254.1.1", "100.120.141.122", "172.32.0.1",
+                   "8.8.8.8", "192.168.1", "192.168.1.256", "not.an.ip.addr", ""] {
+            XCTAssertEqual(WebSocketServer.isPrivateIPv4(ip),
+                           NetworkClassifier.isRFC1918IPv4(ip),
+                           "isPrivateIPv4 must forward to NetworkClassifier for \(ip)")
+        }
+    }
+
     // MARK: - Primary-interface gate (US-003: drop bridge/VM/tunnel LAN IPs)
 
     /// Only primary Wi-Fi/Ethernet (`en*`) interfaces are advertised as LAN

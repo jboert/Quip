@@ -844,15 +844,11 @@ final class BackendConnectionManager {
         guard let url = URL(string: urlString), let host = url.host else { return 99 }
         let h = host.lowercased()
         if h.hasSuffix(".local") { return 0 }
-        // RFC1918 LAN ranges
-        if h.hasPrefix("192.168.") { return 1 }
-        if h.hasPrefix("10.") { return 1 }
-        if h.hasPrefix("172.") {
-            let parts = h.split(separator: ".")
-            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
-                return 1
-            }
-        }
+        // RFC1918 LAN ranges — delegate to the shared NetworkClassifier so the
+        // phone's LAN bucket and the Mac's isPrivateIPv4 advertise gate stay in
+        // lockstep (single source of truth). `url.host` strips the port, so `h`
+        // is a bare IP literal for LAN URLs.
+        if NetworkClassifier.isRFC1918IPv4(h) { return 1 }
         // Tailscale CGNAT (100.64.0.0/10)
         if h.hasPrefix("100.") {
             let parts = h.split(separator: ".")

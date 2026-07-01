@@ -784,14 +784,10 @@ final class WebSocketServer {
     /// 192.168/16). Deliberately excludes loopback (127/8), link-local
     /// (169.254/16), and Tailscale CGNAT (100.64-127/10) — the phone reaches
     /// Tailscale on its own path and we never want to advertise a TS address
-    /// as "local network".
+    /// as "local network". Delegates to the shared `NetworkClassifier` so the
+    /// Mac's advertise gate and the phone's `urlPriority` can never drift.
     nonisolated static func isPrivateIPv4(_ ip: String) -> Bool {
-        let parts = ip.split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
-        if parts[0] == 10 { return true }
-        if parts[0] == 172, (16...31).contains(parts[1]) { return true }
-        if parts[0] == 192, parts[1] == 168 { return true }
-        return false
+        NetworkClassifier.isRFC1918IPv4(ip)
     }
 
     /// True for a PRIMARY Wi-Fi/Ethernet interface name (`en0`, `en1`; USB and
