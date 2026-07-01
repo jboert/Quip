@@ -27,6 +27,7 @@ That's Quip. Push-to-talk prompting from your phone.
 - **Quick actions & custom buttons** — Return, Ctrl+C, Esc, restart Claude, clear context, `/plan`, plus your own custom buttons
 - **Accurate dictation** — on-device transcription, biased with your project's vocabulary and auto-correcting common mishearings
 - **Prompt & button packs** — share and import reusable setups as `.quippack` files
+- **Content share intake** — accept `quip://share` links from other apps and turn sourced news/context into a reviewed prompt for the selected agent ([integration contract](docs/content-share-intake.md))
 - **View terminal output** — read the last 200 lines of any terminal from your phone
 - **Arrange windows** on your Mac or Linux desktop with one tap
 - **QA Mode** — pair a Simulator with a terminal for side-by-side iteration
