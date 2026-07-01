@@ -919,6 +919,63 @@ final class BackendConnectionManager {
         lastSwapAt = Date()   // suppress the auto-evaluator from fighting the manual choice
     }
 
+    /// Pure same-Mac duplicate collapse. Given all `rows`, a `canonicalID`
+    /// (the row whose live session just identified), and `knownURLs` (the
+    /// Mac's advertised `localURLs`), fold every OTHER row whose URL set
+    /// intersects {knownURLs ∪ canonical's URLs} into the canonical row and
+    /// report the reaped ids. This breaks the dual-path flap deadlock: the
+    /// surviving session collapses its disjoint-URL duplicate (LAN vs
+    /// Tailscale) using the identity it already has, instead of waiting for
+    /// the duplicate's socket to identify — which the Mac's same-deviceID
+    /// dedup keeps killing first. Pure / value-in-value-out for unit testing.
+    static func reapDuplicates(
+        rows: [PairedBackend],
+        canonicalID: String,
+        knownURLs: [String]
+    ) -> (rows: [PairedBackend], reaped: [String]) {
+        guard let ci = rows.firstIndex(where: { $0.id == canonicalID }) else { return (rows, []) }
+        let known = Set(knownURLs).union(rows[ci].urlsInOrder)
+        var reaped: [String] = []
+        var canonicalURLs = rows[ci].urlsInOrder
+        for row in rows where row.id != canonicalID {
+            guard !Set(row.urlsInOrder).isDisjoint(with: known) else { continue }
+            reaped.append(row.id)
+            for u in row.urlsInOrder where !canonicalURLs.contains(u) { canonicalURLs.append(u) }
+        }
+        guard !reaped.isEmpty else { return (rows, []) }
+        canonicalURLs = mergedURLOrder(canonicalURLs)
+        var out: [PairedBackend] = []
+        for var row in rows {
+            if row.id == canonicalID {
+                row.url = canonicalURLs.first ?? row.url
+                row.fallbackURLs = Array(canonicalURLs.dropFirst())
+                out.append(row)
+            } else if !reaped.contains(row.id) {
+                out.append(row)
+            }
+        }
+        return (out, reaped)
+    }
+
+    /// Apply `reapDuplicates` for a backend whose session just received a
+    /// `device_identity`: fold same-Mac duplicate rows into `canonicalID` and
+    /// tear down their now-orphaned sessions + Keychain PINs. No-op when there
+    /// are no duplicates. Ends the LAN↔Tailscale dual-socket flap.
+    private func reapDuplicateSameMac(canonicalID: String, knownLocalURLs: [String]) {
+        let (newRows, reaped) = Self.reapDuplicates(
+            rows: paired, canonicalID: canonicalID, knownURLs: knownLocalURLs)
+        guard !reaped.isEmpty else { return }
+        paired = newRows
+        for id in reaped {
+            sessions[id]?.client.disconnect()
+            sessions.removeValue(forKey: id)
+            KeychainBackendPINs.delete(backendID: id)
+            if activeBackendID == id { activeBackendID = canonicalID }
+        }
+        NSLog("[Quip][LAN] reaped %d duplicate same-Mac row(s) into %@", reaped.count, canonicalID)
+        savePaired()
+    }
+
     /// The LAN URL the active/given backend could switch to, or nil when none
     /// is known. Used by the picker to decide whether to show the switch tile.
     func lanURL(for id: String) -> URL? {
@@ -1128,6 +1185,17 @@ final class BackendConnectionManager {
             if let localURLs = identity.localURLs, !localURLs.isEmpty {
                 self.ingestLocalURLs(localURLs, into: session.backendID)
             }
+
+            // Break the dual-path flap: if a SECOND paired row points at this
+            // same Mac on a disjoint URL (a LAN-only duplicate racing the
+            // Tailscale primary), collapse it now using the Mac's advertised
+            // localURLs — without waiting for that row's socket to identify,
+            // which the Mac's same-deviceID dedup keeps resetting first. Keyed
+            // on the row this session already owns (canonical once rekeyed; a
+            // synthetic pre-rekey id simply finds no match and no-ops, and the
+            // next identity after rekey reaps). See project_dual_path_reap_deadlock.
+            self.reapDuplicateSameMac(canonicalID: session.backendID,
+                                      knownLocalURLs: identity.localURLs ?? [])
 
             // Replay persisted QA pair on every identity ack — covers
             // reconnects (the closure also fires on the equal-IDs path
