@@ -30,10 +30,27 @@ final class BonjourBrowser {
 
     private var delegate: BonjourDelegate?
 
+    /// Monotonic browse-session token. Bumped on every `startBrowsing` and
+    /// `stopBrowsing` so a grace-timer Task that captured an earlier value
+    /// can detect it is an orphan from a prior browse session (a stop+restart
+    /// within the 4s window) and decline to flip `graceElapsed` early.
+    private var browseGeneration = 0
+
+    /// Whether a grace-timer Task that captured browse-generation `captured`
+    /// should still flip `graceElapsed`. Valid only when no start/stop has
+    /// advanced the generation since the Task was scheduled AND a browse is
+    /// still active — otherwise the Task belongs to a superseded session and
+    /// must be ignored. Pure / unit-testable.
+    static func graceStillValid(captured: Int, current: Int, isSearching: Bool) -> Bool {
+        captured == current && isSearching
+    }
+
     func startBrowsing() {
         guard !isSearching else { return }
         discoveredHosts = []
         graceElapsed = false
+        browseGeneration &+= 1
+        let generation = browseGeneration
 
         let del = BonjourDelegate { [weak self] host in
             Task { @MainActor in
@@ -55,7 +72,10 @@ final class BonjourBrowser {
 
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(4))
-            guard let self, self.isSearching else { return }
+            guard let self,
+                  Self.graceStillValid(captured: generation,
+                                       current: self.browseGeneration,
+                                       isSearching: self.isSearching) else { return }
             self.graceElapsed = true
         }
     }
@@ -65,6 +85,7 @@ final class BonjourBrowser {
         delegate = nil
         isSearching = false
         graceElapsed = false
+        browseGeneration &+= 1
     }
 }
 

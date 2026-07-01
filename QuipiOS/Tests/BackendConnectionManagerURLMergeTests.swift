@@ -453,4 +453,25 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         let urls = [ts, other].map { URL(string: $0)! }
         XCTAssertNil(BackendConnectionManager.preferredLANURL(from: urls))
     }
+
+    // MARK: - US-004: BonjourBrowser grace-timer generation token
+
+    func testBonjourGraceTokenAllowsSameSession() {
+        // Same generation and still searching → the grace timer's own session
+        // is intact, so it is allowed to flip `graceElapsed`.
+        XCTAssertTrue(BonjourBrowser.graceStillValid(captured: 3, current: 3, isSearching: true))
+    }
+
+    func testBonjourGraceTokenRejectsOrphanedTask() {
+        // A stop+restart within the 4s window advances the generation. The
+        // orphaned timer from the prior browse session (captured 3, now 4)
+        // must NOT flip `graceElapsed` — that would flash "no Macs found"
+        // early on the fresh session.
+        XCTAssertFalse(BonjourBrowser.graceStillValid(captured: 3, current: 4, isSearching: true))
+    }
+
+    func testBonjourGraceTokenRejectsWhenStopped() {
+        // Generation matches but browsing has stopped → nothing to grace-elapse.
+        XCTAssertFalse(BonjourBrowser.graceStillValid(captured: 3, current: 3, isSearching: false))
+    }
 }

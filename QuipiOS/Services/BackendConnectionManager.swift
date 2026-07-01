@@ -338,10 +338,35 @@ final class BackendConnectionManager {
         return target
     }
 
-    /// Orchestrate the actual disconnect → reorder → reconnect dance.
-    /// Reorders `urlsInOrder` in-memory only — we don't `savePaired()`
-    /// because the user's preference order should be preserved across
-    /// launches; swaps are tactical, not structural.
+    /// The single reorder-and-reconnect dance shared by `performHotSwap` (the
+    /// automatic latency swap) and `switchToLANPath` (the manual "Use Local
+    /// Network" tap), defined once so the two reconnect paths cannot drift.
+    /// Moves `preferred` to index 0 of the session's in-memory URL list — the
+    /// reorder is tactical and deliberately NOT persisted (`savePaired()` is
+    /// not called; relaunch restores the saved Tailscale-first order) — then
+    /// disconnects, marks the reachability `.connecting`, re-primes the
+    /// Keychain PIN, and reconnects onto the reordered list. `lastSwapAt` is
+    /// stamped so the auto-evaluator won't immediately fight a just-completed
+    /// swap.
+    private func reconnect(
+        session: BackendSession,
+        entry: PairedBackend,
+        preferring preferred: URL
+    ) {
+        var reordered = entry.urlsInOrder.compactMap { URL(string: $0) }
+        reordered.removeAll { $0 == preferred }
+        reordered.insert(preferred, at: 0)
+        session.client.disconnect()
+        session.reachability = .connecting
+        primePINIfPresent(session: session)
+        session.client.connect(toURLs: reordered)
+        lastSwapAt = Date()
+    }
+
+    /// Orchestrate the automatic latency-driven swap. Reorders `urlsInOrder`
+    /// in-memory only — we don't `savePaired()` because the user's preference
+    /// order should be preserved across launches; swaps are tactical, not
+    /// structural. Delegates the reorder/disconnect/reconnect to `reconnect`.
     private func performHotSwap(
         session: BackendSession,
         entry: PairedBackend,
@@ -351,15 +376,7 @@ final class BackendConnectionManager {
         let toHost = target.host ?? "?"
         NSLog("[Quip][LATENCY] hot-swap: from=%@ to=%@ reason=avg-30%%-faster",
               fromHost, toHost)
-        // Build the reordered URL list with target first.
-        var reordered = entry.urlsInOrder.compactMap { URL(string: $0) }
-        reordered.removeAll { $0 == target }
-        reordered.insert(target, at: 0)
-        session.client.disconnect()
-        session.reachability = .connecting
-        primePINIfPresent(session: session)
-        session.client.connect(toURLs: reordered)
-        lastSwapAt = Date()
+        reconnect(session: session, entry: entry, preferring: target)
     }
 
     /// Watches OS network path transitions and rewinds every live client's
@@ -931,15 +948,10 @@ final class BackendConnectionManager {
         let urls = paired[i].urlsInOrder.compactMap { URL(string: $0) }
         guard let lan = Self.preferredLANURL(from: urls) else { return }
         if session.client.serverURL == lan { return }   // already on LAN
-        var reordered = urls
-        reordered.removeAll { $0 == lan }
-        reordered.insert(lan, at: 0)
         NSLog("[Quip][LAN] manual switch: backend=%@ to=%@", id, lan.host ?? "?")
-        session.client.disconnect()
-        session.reachability = .connecting
-        primePINIfPresent(session: session)
-        session.client.connect(toURLs: reordered)
-        lastSwapAt = Date()   // suppress the auto-evaluator from fighting the manual choice
+        // `reconnect` stamps `lastSwapAt` — suppresses the auto-evaluator from
+        // fighting the manual choice — using the same dance as the hot-swap.
+        reconnect(session: session, entry: paired[i], preferring: lan)
     }
 
     /// Pure same-Mac duplicate collapse. Given all `rows`, a `canonicalID`
