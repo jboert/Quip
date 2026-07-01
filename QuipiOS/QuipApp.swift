@@ -2169,11 +2169,16 @@ struct MainiOSView: View {
                         Image(systemName: "wifi.exclamationmark")
                             .font(.system(size: 14))
                             .foregroundStyle(colors.textTertiary)
-                        Text("No Macs found on Wi-Fi — Local Network access may be off")
-                            .font(.system(size: 11))
-                            .foregroundStyle(colors.textTertiary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("No Macs found on Wi-Fi")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(colors.textTertiary)
+                            Text("If yours is on this network, tap to check Local Network access")
+                                .font(.system(size: 10))
+                                .foregroundStyle(colors.textFaint)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
                         Spacer(minLength: 4)
                         Image(systemName: "arrow.up.forward")
                             .font(.system(size: 10))
@@ -2185,7 +2190,7 @@ struct MainiOSView: View {
                     .background(colors.surface)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .accessibilityLabel("No Macs found on Wi-Fi. Local Network access may be off. Tap to open Settings.")
+                .accessibilityLabel("No Macs found on Wi-Fi. If yours is on this network, tap to check Local Network access in Settings.")
             }
 
             // Recent connections

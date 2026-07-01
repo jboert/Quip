@@ -154,28 +154,47 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertEqual(BackendConnectionManager.pathLabel(for: nil), "—")
     }
 
-    // MARK: - urlsByAddingLocal (LAN URL ingestion from device_identity)
+    // MARK: - urlsByRefreshingLocal (LAN URL refresh from device_identity)
 
-    func testAddingLocalURLLandsAsFallbackKeepingTailscalePrimary() {
+    private let lan45 = "ws://192.168.4.45:8765"   // urlPriority 1 (Mac's new DHCP IP)
+
+    func testRefreshLandsLANAsFallbackKeepingTailscalePrimary() {
         // Phone paired only over Tailscale; Mac's identity now reports its LAN
         // URL. LAN must join as a *fallback* — the live Tailscale primary is
         // never disrupted, but a LAN switch is now possible.
-        let out = BackendConnectionManager.urlsByAddingLocal([ts], [lan])
+        let out = BackendConnectionManager.urlsByRefreshingLocal([ts], [lan])
         XCTAssertEqual(out, [ts, lan])
     }
 
-    func testAddingLocalURLDeduplicates() {
-        let out = BackendConnectionManager.urlsByAddingLocal([ts, lan], [lan])
+    func testRefreshDeduplicates() {
+        let out = BackendConnectionManager.urlsByRefreshingLocal([ts, lan], [lan])
         XCTAssertEqual(out, [ts, lan], "Already-known LAN URL is not duplicated")
     }
 
-    func testAddingEmptyLocalURLsLeavesOrderUnchanged() {
-        XCTAssertEqual(BackendConnectionManager.urlsByAddingLocal([ts, lan], []), [ts, lan])
+    func testRefreshEmptyLocalURLsLeavesOrderUnchanged() {
+        // Older Mac that doesn't advertise → silence must NOT strip the known LAN path.
+        XCTAssertEqual(BackendConnectionManager.urlsByRefreshingLocal([ts, lan], []), [ts, lan])
     }
 
-    func testAddingMultipleLocalURLs() {
-        let out = BackendConnectionManager.urlsByAddingLocal([ts], [bonjour, lan])
+    func testRefreshMultipleLocalURLs() {
+        let out = BackendConnectionManager.urlsByRefreshingLocal([ts], [bonjour, lan])
         XCTAssertEqual(out, [ts, bonjour, lan], "TS stays primary; new LAN URLs sort Bonjour→LAN behind it")
+    }
+
+    func testRefreshReplacesStaleLANURL() {
+        // C1 regression guard: the Mac's DHCP IP moved .26 → .45. The stale
+        // .26 must be DROPPED (not accumulated) so the phone never dials a dead
+        // LAN address pre-auth — the root cause of the unusable flap.
+        let out = BackendConnectionManager.urlsByRefreshingLocal([ts, lan], [lan45])
+        XCTAssertEqual(out, [ts, lan45], "stale .26 dropped, current .45 kept; Tailscale untouched")
+        XCTAssertFalse(out.contains(lan), "stale LAN URL must not linger")
+    }
+
+    func testRefreshNeverStripsNonLAN() {
+        // Tailscale + tunnel survive a LAN refresh untouched.
+        let out = BackendConnectionManager.urlsByRefreshingLocal([ts, other, lan], [lan45])
+        XCTAssertTrue(out.contains(ts) && out.contains(other), "non-LAN transports preserved")
+        XCTAssertTrue(out.contains(lan45) && !out.contains(lan), "LAN refreshed to current")
     }
 
     // MARK: - reapDuplicates (dual-path flap — collapse same-Mac rows via localURLs)

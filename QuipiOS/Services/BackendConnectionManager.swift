@@ -868,16 +868,25 @@ final class BackendConnectionManager {
         }
     }
 
-    /// Pure merge of LAN URLs reported in a `device_identity` into an existing
-    /// `urlsInOrder` list. New URLs are unioned (deduped) and the whole set is
-    /// re-sorted with the shared Tailscale-first `mergedURLOrder`, so a learned
-    /// LAN URL lands as a *fallback* without disturbing the live primary. Pure
-    /// so the ingestion contract is unit-testable without networking.
-    static func urlsByAddingLocal(_ existing: [String], _ localURLs: [String]) -> [String] {
-        var all = existing
+    /// Pure refresh of the LAN-class URLs in an existing `urlsInOrder` list
+    /// against the Mac's freshly-advertised `localURLs`. The Mac's DHCP LAN IP
+    /// can change between connects, so `localURLs` is treated as *current
+    /// truth*: stale LAN-class entries (`urlPriority <= 1`) are DROPPED and
+    /// replaced with the advertised set — never accumulated. Non-LAN transports
+    /// (Tailscale, tunnels) are left untouched, and the result is re-sorted
+    /// Tailscale-first so the live primary isn't disturbed. Empty `localURLs`
+    /// (older Mac that doesn't advertise) is a no-op — we never strip the only
+    /// known LAN path on the strength of silence. Pure / unit-testable.
+    static func urlsByRefreshingLocal(_ existing: [String], _ localURLs: [String]) -> [String] {
+        guard !localURLs.isEmpty else { return existing }   // silence ≠ "drop LAN"
+        // Keep every non-LAN URL; replace LAN-class ones with the advertised set.
+        var all = existing.filter { u in
+            guard let url = URL(string: u) else { return true }
+            return !isLANURL(url)
+        }
         for u in localURLs where !all.contains(u) { all.append(u) }
-        guard all != existing else { return existing }   // nothing new → no reorder churn
-        return mergedURLOrder(all)
+        let refreshed = mergedURLOrder(all)
+        return refreshed == existing ? existing : refreshed
     }
 
     /// Merge LAN URLs from a peer's `device_identity` into the paired row at
@@ -888,7 +897,7 @@ final class BackendConnectionManager {
     private func ingestLocalURLs(_ localURLs: [String], into backendID: String) {
         guard !localURLs.isEmpty,
               let i = paired.firstIndex(where: { $0.id == backendID }) else { return }
-        let merged = Self.urlsByAddingLocal(paired[i].urlsInOrder, localURLs)
+        let merged = Self.urlsByRefreshingLocal(paired[i].urlsInOrder, localURLs)
         guard merged != paired[i].urlsInOrder else { return }
         paired[i].url = merged.first ?? paired[i].url
         paired[i].fallbackURLs = Array(merged.dropFirst())
