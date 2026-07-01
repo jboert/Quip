@@ -298,6 +298,46 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertEqual(out[0].urlsInOrder, [ts, lan], "both transports retained, Tailscale-first")
     }
 
+    // MARK: - reapDuplicates state-preserving fold (US-002: OR enabled, max lastUsed)
+
+    func testReapFoldEnabledIsOR() {
+        // A DISABLED canonical folds an ENABLED same-Mac duplicate → the
+        // surviving row is ENABLED, mirroring the mergeRows/mergeSameIDRows
+        // enabled-is-OR contract. Consolidation must never silently disable a
+        // backend the user (or a live path) still wants connected.
+        let rows = [
+            PairedBackend(id: "UUID-real", url: ts, name: "Mac",
+                          lastSeenLayoutMonitorName: "Studio Display", enabled: false),
+            PairedBackend(id: "legacy-lan", url: lan, name: "Mac",
+                          lastSeenLayoutMonitorName: "Studio Display", enabled: true),
+        ]
+        let (out, reaped) = BackendConnectionManager.reapDuplicates(
+            rows: rows, canonicalID: "UUID-real", knownURLs: [lan])
+        XCTAssertEqual(reaped, ["legacy-lan"])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertTrue(out[0].enabled,
+                      "enabled is the OR of the folded rows — an enabled duplicate re-enables the survivor")
+    }
+
+    func testReapFoldLastUsedIsMax() {
+        // The surviving row keeps the most-recent lastUsed across the fold, so
+        // consolidation never loses recency (a stale canonical folding a
+        // recently-used duplicate keeps the newer timestamp).
+        let older = Date(timeIntervalSince1970: 1_000)
+        let newer = Date(timeIntervalSince1970: 2_000)
+        let rows = [
+            PairedBackend(id: "UUID-real", url: ts, name: "Mac",
+                          lastSeenLayoutMonitorName: "Studio Display", lastUsed: older),
+            PairedBackend(id: "legacy-lan", url: lan, name: "Mac",
+                          lastSeenLayoutMonitorName: "Studio Display", lastUsed: newer),
+        ]
+        let (out, reaped) = BackendConnectionManager.reapDuplicates(
+            rows: rows, canonicalID: "UUID-real", knownURLs: [lan])
+        XCTAssertEqual(reaped, ["legacy-lan"])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].lastUsed, newer, "lastUsed is the max across the folded rows")
+    }
+
     func testReapNoDuplicateIsNoOp() {
         let rows = [
             PairedBackend(id: "mac-X", url: ts, name: "Mac"),

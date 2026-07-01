@@ -962,6 +962,12 @@ final class BackendConnectionManager {
         }()
         var reaped: [String] = []
         var canonicalURLs = canonical.urlsInOrder
+        // State-preserving fold (US-002): mirror the mergeRows/mergeSameIDRows
+        // contract — enabled is a logical OR across the folded group, lastUsed
+        // is the max — so consolidation never silently disables a backend or
+        // loses its recency. Seed from the canonical, then fold each duplicate.
+        var foldedEnabled = canonical.enabled
+        var foldedLastUsed = canonical.lastUsed
         for (idx, row) in rows.enumerated() where idx != ci {
             // URL overlap identifies a *candidate* only — not proof of sameness.
             guard !Set(row.urlsInOrder).isDisjoint(with: known) else { continue }
@@ -977,6 +983,8 @@ final class BackendConnectionManager {
             }
             guard sameDevice || sameMonitor else { continue }
             reaped.append(row.id)
+            foldedEnabled = foldedEnabled || row.enabled
+            foldedLastUsed = max(foldedLastUsed, row.lastUsed)
             for u in row.urlsInOrder where !canonicalURLs.contains(u) { canonicalURLs.append(u) }
         }
         guard !reaped.isEmpty else { return (rows, []) }
@@ -987,6 +995,8 @@ final class BackendConnectionManager {
                 var row = r
                 row.url = canonicalURLs.first ?? row.url
                 row.fallbackURLs = Array(canonicalURLs.dropFirst())
+                row.enabled = foldedEnabled
+                row.lastUsed = foldedLastUsed
                 out.append(row)
             } else if !reaped.contains(r.id) {
                 out.append(r)
