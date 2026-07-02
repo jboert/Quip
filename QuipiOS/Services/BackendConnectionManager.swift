@@ -768,6 +768,33 @@ final class BackendConnectionManager {
         rebindProbeService()
     }
 
+    /// Compute a paired row's URL list after learning a Bonjour-discovered LAN
+    /// URL for that same Mac: union + Tailscale-first order. Returns nil when
+    /// the URL adds nothing (already present, or order unchanged). Pure —
+    /// exposed at file scope for unit testing.
+    static func foldDiscoveredURL(into existing: [String], url: String) -> [String]? {
+        guard !existing.contains(url) else { return nil }
+        let merged = mergedURLOrder(existing + [url])
+        return merged == existing ? nil : merged
+    }
+
+    /// Bonjour discovered a Mac advertising `deviceID` at `url`. If we already
+    /// have a paired row for that deviceID, fold the LAN URL into it (as a
+    /// fallback) and return true so the caller HIDES it from the "new host"
+    /// list — the anti-flap contract: a known Mac augments its existing row and
+    /// never spawns a second backend. Unknown or nil deviceID returns false so
+    /// the caller can still offer it as a brand-new pairing.
+    @discardableResult
+    func ingestDiscoveredHost(deviceID: String?, url: String) -> Bool {
+        guard let deviceID, let i = paired.firstIndex(where: { $0.id == deviceID }) else { return false }
+        if let refreshed = Self.foldDiscoveredURL(into: paired[i].urlsInOrder, url: url) {
+            paired[i].url = refreshed.first ?? paired[i].url
+            paired[i].fallbackURLs = Array(refreshed.dropFirst())
+            savePaired()
+        }
+        return true
+    }
+
     /// Collapse multiple rows that share an `id` OR overlap on any URL
     /// into one row whose `url` is the LAN-preferring primary and whose
     /// `fallbackURLs` carry the rest.

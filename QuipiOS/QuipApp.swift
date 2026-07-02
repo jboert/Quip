@@ -2177,7 +2177,7 @@ struct MainiOSView: View {
             // Discovered on local network
             if !bonjourBrowser.discoveredHosts.isEmpty {
                 VStack(spacing: 4) {
-                    ForEach(bonjourBrowser.discoveredHosts) { host in
+                    ForEach(newDiscoveredHosts) { host in
                         Button {
                             if let url = host.wsURL {
                                 connectToBackendURL(url)
@@ -2209,6 +2209,17 @@ struct MainiOSView: View {
                             .padding(.vertical, 10)
                             .background(colors.discoveredBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+                // Fold any discovered host that belongs to a Mac we already know
+                // (TXT deviceID match) into that paired row's URLs, instead of
+                // listing it as a new backend — the anti-flap contract. Unknown
+                // Macs fall through to `newDiscoveredHosts` and stay listed.
+                .onChange(of: bonjourBrowser.discoveredHosts) { _, hosts in
+                    for host in hosts {
+                        if let url = host.wsURL?.absoluteString {
+                            manager.ingestDiscoveredHost(deviceID: host.deviceID, url: url)
                         }
                     }
                 }
@@ -4114,6 +4125,17 @@ struct MainiOSView: View {
     }
 
     // MARK: - Recent Connections
+
+    /// Discovered Bonjour hosts we don't already have a paired row for — the
+    /// only ones worth offering as a NEW connection. A host whose TXT deviceID
+    /// matches a paired row is folded into that row (see the .onChange above)
+    /// and hidden here, so a known Mac never shows up as a second backend.
+    private var newDiscoveredHosts: [DiscoveredHost] {
+        bonjourBrowser.discoveredHosts.filter { host in
+            guard let did = host.deviceID else { return true }   // unknown Mac → offer it
+            return !manager.paired.contains { $0.id == did }
+        }
+    }
 
     private func loadRecents() {
         if let decoded = try? JSONDecoder().decode([SavedConnection].self, from: recentConnectionsData) {

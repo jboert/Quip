@@ -9,6 +9,11 @@ struct DiscoveredHost: Identifiable, Equatable {
     let name: String
     let host: String
     let port: Int
+    /// The advertising Mac's stable device UUID, read from the Bonjour TXT
+    /// record ("did"). Present when the Mac runs the TXT-fold build; nil for
+    /// older Macs. Lets the phone fold this LAN URL into an existing paired
+    /// row instead of offering it as a brand-new backend.
+    var deviceID: String?
     var wsURL: URL? {
         URL(string: "ws://\(host):\(port)")
     }
@@ -125,9 +130,18 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
         resolvingServices.removeAll { $0 === service }
     }
 
+    /// Pull the Mac's advertised deviceID out of the Bonjour TXT record.
+    private func deviceID(from sender: NetService) -> String? {
+        guard let txt = sender.txtRecordData() else { return nil }
+        let dict = NetService.dictionary(fromTXTRecord: txt)
+        guard let data = dict["did"], let id = String(data: data, encoding: .utf8), !id.isEmpty else { return nil }
+        return id
+    }
+
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard let addresses = sender.addresses else { return }
         let port = sender.port
+        let did = deviceID(from: sender)
 
         var linkLocalFallback: String?
 
@@ -151,8 +165,8 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
                     if linkLocalFallback == nil { linkLocalFallback = ip }
                     continue
                 }
-                print("[BonjourBrowser] Resolved: \(sender.name) -> \(ip):\(port)")
-                onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port))
+                print("[BonjourBrowser] Resolved: \(sender.name) -> \(ip):\(port) did=\(did?.prefix(8) ?? "nil")")
+                onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port, deviceID: did))
                 return
             }
         }
@@ -160,7 +174,7 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
         // No real LAN IP found — use link-local as last resort
         if let ip = linkLocalFallback {
             print("[BonjourBrowser] Resolved (link-local fallback): \(sender.name) -> \(ip):\(port)")
-            onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port))
+            onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port, deviceID: did))
         }
     }
 

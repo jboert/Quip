@@ -198,15 +198,14 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .onAppear { startServicesOnce() }
                 .onChange(of: networkModeRaw) { _, _ in
                     applyNetworkMode()
-                    // Keep LAN Bonjour OFF in Tailscale mode (prevents the phone
-                    // re-creating a redundant LAN backend → dual-socket flap);
-                    // restore it when switching to a mode that wants local
-                    // discovery. startAdvertising() is idempotent.
-                    if networkMode == .tailscale {
-                        bonjourAdvertiser.stopAdvertising()
-                    } else {
-                        bonjourAdvertiser.startAdvertising()
-                    }
+                    // Advertise LAN Bonjour in ALL modes now, including Tailscale.
+                    // The TXT record carries this Mac's deviceID, so a phone that
+                    // already knows this Mac folds the discovered LAN URL into its
+                    // existing row instead of creating a second backend — no
+                    // dual-socket flap. Gives the phone the LAN path pre-auth so
+                    // it can reach us over LAN when the Tailscale relay is down.
+                    // startAdvertising() is idempotent.
+                    bonjourAdvertiser.startAdvertising()
                 }
         }
         .windowStyle(.titleBar)
@@ -384,21 +383,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         applyNetworkMode()
 
         // Small delay to let WebSocket listener reach .ready before advertising.
-        // In Tailscale mode we deliberately DON'T advertise on the LAN: the phone
-        // reaches us over Tailscale (which itself takes the direct LAN path when
-        // on the same network), so a separate raw-LAN `_quip._tcp` service is
-        // redundant — and it makes the phone auto-create a SECOND backend client,
-        // which produces the LAN+Tailscale dual-socket flap (both routes reset
-        // each other every ~30-60s). Local/cloudflare modes still advertise.
-        if networkMode != .tailscale {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                // Re-check at fire time: the user could have switched to Tailscale
-                // within the 0.5s, whose onChange already called stopAdvertising().
-                // Without this guard the stale start would fire after the stop and
-                // re-enable LAN advertising in Tailscale mode (the flap we prevent).
-                guard self.networkMode != .tailscale else { return }
-                bonjourAdvertiser.startAdvertising()
-            }
+        // Advertise in ALL modes, including Tailscale: the TXT record carries this
+        // Mac's deviceID, so a phone that already knows this Mac folds the LAN URL
+        // into its existing row rather than spawning a second backend (no
+        // dual-socket flap). This hands the phone the LAN path pre-auth, so it can
+        // reach us over LAN even when the Tailscale relay can't complete auth.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            bonjourAdvertiser.startAdvertising()
         }
 
         // Re-detect Tailscale whenever another app activates — cheap way to

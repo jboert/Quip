@@ -25,10 +25,20 @@ final class BonjourAdvertiser {
             name: "Quip \(hostName)",
             port: Int32(port)
         )
+        // Advertise this Mac's stable device UUID in the TXT record so a phone
+        // that already has a paired row for this Mac folds the discovered LAN
+        // URL into that row (as a fallback) instead of spawning a SECOND
+        // backend — the anti-flap contract that lets us advertise safely even
+        // in Tailscale mode. Key "did" matches BackendConnectionManager's fold.
+        var txt: [String: Data] = [:]
+        if let idData = WebSocketServer.deviceID().data(using: .utf8) {
+            txt["did"] = idData
+        }
+        service.setTXTRecord(NetService.data(fromTXTRecord: txt))
         service.publish()
         netService = service
         isAdvertising = true
-        print("[BonjourAdvertiser] Advertising '\(service.name)' on port \(port)")
+        print("[BonjourAdvertiser] Advertising '\(service.name)' on port \(port) (did=\(WebSocketServer.deviceID().prefix(8)))")
     }
 
     func stopAdvertising() {

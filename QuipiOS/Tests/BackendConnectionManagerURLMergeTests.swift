@@ -550,4 +550,23 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertEqual(out.count, 10, "capped at 10")
         XCTAssertTrue(out.contains { $0.url == ts && $0.pinned }, "pinned entry is never evicted by the cap")
     }
+
+    // MARK: - Bonjour TXT-fold (Phase 2): discovered LAN URL folds into an existing row
+
+    func testFoldDiscoveredURLAddsLANKeepsTailscaleFirst() {
+        let folded = BackendConnectionManager.foldDiscoveredURL(into: [ts], url: lan)
+        XCTAssertEqual(folded, [ts, lan], "discovered LAN appended, Tailscale stays primary")
+    }
+
+    func testFoldDiscoveredURLNilWhenAlreadyPresent() {
+        XCTAssertNil(BackendConnectionManager.foldDiscoveredURL(into: [ts, lan], url: lan),
+                     "already-known URL adds nothing → nil (no churn)")
+    }
+
+    func testFoldDiscoveredURLReordersBonjourAheadOfNothingButBehindTailscale() {
+        // Fold a .local into a row that already has Tailscale — Tailscale first,
+        // then the Bonjour .local (priority 0) ahead of any RFC1918 the row lacks.
+        let folded = BackendConnectionManager.foldDiscoveredURL(into: [ts], url: bonjour)
+        XCTAssertEqual(folded, [ts, bonjour])
+    }
 }
