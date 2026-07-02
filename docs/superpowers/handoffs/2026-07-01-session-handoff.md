@@ -48,13 +48,23 @@ Verify recipe when the network cooperates:
    `pairedBackendsJSON` (watcher script at `/tmp/quip-watch-backup.sh`).
 4. Delete + reinstall the app, connect once → paired list + recent LANs repopulate.
 
-## Not started: Phase 2 — Bonjour TXT-fold (auto-find LAN in Tailscale mode)
-Plan approved (TXT-fold, safest). Mac advertises Bonjour in TS mode WITH deviceID in the
-TXT record; phone folds the discovered LAN URL into the EXISTING paired row (deviceID
-match) instead of spawning a 2nd backend → no flap by construction. Requires a Mac rebuild
-(TCC reset). Full plan: `/Users/erickbzovi/.claude/plans/make-sure-connecting-local-graceful-crescent.md`.
-Files: BonjourAdvertiser (TXT), QuipMacApp (remove 3 `!= .tailscale` guards),
-MenuBarView (toggle), BonjourBrowser (parse TXT), BackendConnectionManager (deviceID-match fold).
+## Phase 2 — Bonjour TXT-fold (COMMITTED, `8dbfa93`; NOT hardware-verified)
+Mac advertises Bonjour in ALL modes (incl. Tailscale) with its deviceID in the TXT record;
+the phone folds the discovered LAN URL into the EXISTING paired row (deviceID match) instead
+of spawning a 2nd backend → no flap by construction. Also gives the phone the LAN path
+pre-auth so it can reach the Mac when the Tailscale relay can't complete auth.
+- Mac: `BonjourAdvertiser` TXT `{did: WebSocketServer.deviceID()}` (use `setTXTRecord(_:)`,
+  NOT the Swift-3-obsoleted `setTXTRecordData`); `QuipMacApp` removed both `!= .tailscale`
+  advertising guards (startup + onChange).
+- iOS: `DiscoveredHost.deviceID` + TXT parse in `BonjourBrowser`; `foldDiscoveredURL` (pure)
+  + `ingestDiscoveredHost` in `BackendConnectionManager`; connect bar folds known-device
+  hosts (.onChange) and lists only `newDiscoveredHosts`.
+- Tests +3. iOS 55 SUCCEEDED, Mac BUILD SUCCEEDED.
+- ⚠️ Needs a **Mac rebuild** (Developer ID `D2PM6R797Q`, ditto, TCC re-grant) to take effect,
+  + hardware verify (deferred with Phase 1 while transport is flaky). Verify: Mac in Tailscale
+  mode, phone with a paired row → Bonjour discovers the Mac, folds LAN URL into the row (no 2nd
+  backend), netstat 8765 shows ONE socket. Full plan:
+  `/Users/erickbzovi/.claude/plans/make-sure-connecting-local-graceful-crescent.md`.
 
 ## State
 - Branch eb-branch. NOT pushed. Cycle-47 + `f75dcef` all local.
