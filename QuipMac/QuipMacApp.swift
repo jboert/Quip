@@ -2234,6 +2234,38 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         return nums.isEmpty ? nil : nums
     }
 
+    /// Keystroke sequence to answer Claude's INTERACTIVE checkbox multi-select
+    /// by space-toggling each pick. The cursor sits on the first option after
+    /// (re)render (`cursorStartsAt`, default 1); we walk DOWN to each pick in
+    /// ascending order, press space to toggle it, then Return to confirm. Keys
+    /// use the vocabulary `sendKeystroke` understands ("down"/"space"/"return").
+    /// This is the shipped path — universally reliable for Ink checkbox widgets
+    /// (space toggles the highlighted row regardless of digit support). Pure.
+    nonisolated static func multiSelectChoreography(picks: [Int], cursorStartsAt: Int = 1) -> [String] {
+        let sorted = picks.filter { $0 >= cursorStartsAt }.sorted()
+        guard !sorted.isEmpty else { return [] }
+        var keys: [String] = []
+        var pos = cursorStartsAt
+        for pick in sorted {
+            for _ in 0..<(pick - pos) { keys.append("down") }
+            keys.append("space")
+            pos = pick
+        }
+        keys.append("return")
+        return keys
+    }
+
+    /// Alternate strategy: press each pick's DIGIT to toggle it, then Return —
+    /// for Ink widgets that support digit-toggle. Built + tested but NOT the
+    /// shipped path (a digit that SUBMITS instead of toggling can't be safely
+    /// probed at runtime); swap in once confirmed live on the target widget.
+    /// Pure.
+    nonisolated static func multiSelectDigitKeys(picks: [Int]) -> [String] {
+        let sorted = picks.sorted()
+        guard !sorted.isEmpty else { return [] }
+        return sorted.map(String.init) + ["return"]
+    }
+
     /// Pure decision: may we inject `action` given the prompt the phone saw
     /// (`expectedFingerprint`) versus what's on screen now (`liveContent`)?
     /// True only if the live prompt still hashes to the same value (and, for
@@ -2313,6 +2345,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             let freshOptions = NumberedPromptDetector.detect(in: content)
             let freshIsYesNo = NumberedPromptDetector.detectYesNo(in: content)
             let freshFingerprint = NumberedPromptDetector.fingerprint(in: content)
+            // Multi-select into Claude's INTERACTIVE checkbox widget must be
+            // answered with keystrokes (space/arrow/Return), not typed text —
+            // typing into the widget does nothing and the prompt never advances.
+            let multiPicks = Self.selectedOptionNumbers(from: action)
+            let interactiveMulti = multiPicks != nil
+                && NumberedPromptDetector.isInteractiveMultiSelect(in: content)
             DispatchQueue.main.async {
                 guard ok else {
                     print("[Quip] one-tap answer DROPPED (prompt changed): action=\(action) window=\(wid)")
@@ -2332,6 +2370,18 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 windowManager.focusWindow(wid)
                 let delay = KeystrokeInjector.focusDelay(path: .quickAction, terminalApp: termApp,
                                                          iterm2SessionId: sessionId)
+                // Interactive checkbox widget → space-toggle each pick + Return,
+                // paced so the Ink TUI registers each key. NOT typed text.
+                if interactiveMulti, let picks = multiPicks {
+                    let keys = Self.multiSelectChoreography(picks: picks)
+                    let fire = {
+                        self.injectKeystrokeSequence(keys, to: wid, sessionId: sessionId,
+                                                     termApp: termApp, cgWindowNumber: wn)
+                    }
+                    if delay == 0 { fire() }
+                    else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: fire) }
+                    return
+                }
                 let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sid in
                     keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
                                                windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
@@ -2356,6 +2406,29 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 if delay == 0 { injectWithSelfHeal() }
                 else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: injectWithSelfHeal) }
             }
+        }
+    }
+
+    /// Send a paced sequence of keystrokes (e.g. the multi-select choreography
+    /// "down/space/…/return") into a terminal window, one key per hop so the
+    /// Ink TUI registers each before the next. Recurses on the main queue with
+    /// a small gap; aborts + reports if any key fails to inject.
+    @MainActor
+    private func injectKeystrokeSequence(_ keys: [String], index: Int = 0,
+                                         to windowId: String, sessionId: String?,
+                                         termApp: TerminalApp, cgWindowNumber: CGWindowID,
+                                         gap: TimeInterval = 0.12) {
+        guard index < keys.count else { return }
+        let key = keys[index]
+        let r = keystrokeInjector.sendKeystroke(key, to: windowId, terminalApp: termApp,
+                                                cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
+        guard r.success else {
+            webSocketServer.broadcast(ErrorMessage(reason: "Multi-select key '\(key)' failed: \(r.error ?? "unknown")"))
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + gap) {
+            self.injectKeystrokeSequence(keys, index: index + 1, to: windowId, sessionId: sessionId,
+                                         termApp: termApp, cgWindowNumber: cgWindowNumber, gap: gap)
         }
     }
 

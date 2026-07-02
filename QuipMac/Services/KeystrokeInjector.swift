@@ -605,6 +605,11 @@ final class KeystrokeInjector {
         case "return", "enter":      return "(character id 13)"   // CR
         case "escape", "esc":        return "(character id 27)"   // ESC
         case "tab":                  return "(character id 9)"    // HT
+        case "space":                return "(character id 32)"   // SP — toggles the highlighted checkbox in Ink multiselects
+        // Arrow keys as CSI sequences (ESC [ A/B), same verbatim-byte approach as
+        // shift+tab below. Ink TUIs (Claude Code) read these as up/down navigation.
+        case "up":                   return #"((character id 27) & "[A")"#
+        case "down":                 return #"((character id 27) & "[B")"#
         case "backspace", "delete":  return "(character id 127)"  // DEL
         case "ctrl+c":               return "(character id 3)"    // ETX / SIGINT
         case "ctrl+d":               return "(character id 4)"    // EOT / EOF
@@ -978,6 +983,8 @@ final class KeystrokeInjector {
         case "tab": return 48
         case "delete": return 51
         case "space": return 49
+        case "down": return 125
+        case "up": return 126
         default: return 0
         }
     }

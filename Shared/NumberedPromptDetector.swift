@@ -53,6 +53,31 @@ enum NumberedPromptDetector {
         bestRun(in: content)?.contains(where: \.hasCheckbox) ?? false
     }
 
+    /// True when a multi-select prompt is Claude's INTERACTIVE checkbox widget
+    /// (arrow-navigate + space-toggle + Enter-confirm) rather than a plain text
+    /// menu the user types picks into. Signature: a navigation/confirm footer
+    /// ("↑/↓ to navigate", "Esc to cancel", "Enter to …") or a cursor caret
+    /// (❯ › » >) on a checkbox option line. The Mac must inject KEYSTROKES
+    /// (space/arrow/Return) for these, NOT typed text — typing into the widget
+    /// does nothing and the prompt never advances. (§18.2)
+    static func isInteractiveMultiSelect(in content: String) -> Bool {
+        guard isMultiSelect(in: content) else { return false }
+        let s = stripANSI(content).lowercased()
+        if s.contains("to navigate") || s.contains("to cancel")
+            || s.contains("↑") || s.contains("↓") || s.contains("arrow") {
+            return true
+        }
+        // Cursor caret preceding a checkbox option line.
+        for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = stripANSI(String(line)).trimmingCharacters(in: .whitespaces)
+            if (t.hasPrefix("❯") || t.hasPrefix("›") || t.hasPrefix("»") || t.hasPrefix(">"))
+                && lineHasCheckbox(String(line)) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// A `[ ]` / `[x]` / `[X]` / `[✓]` checkbox token anywhere on the line —
     /// the signature of an interactive multi-select option.
     static func lineHasCheckbox(_ line: String) -> Bool {

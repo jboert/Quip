@@ -390,6 +390,52 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertFalse(NumberedPromptDetector.isMultiSelect(in: content))
     }
 
+    func test_isInteractiveMultiSelect_navFooterWidget_true() {
+        // Claude Code's interactive checkbox widget — arrow/space/enter, NOT typed text.
+        let content = """
+        What's making Settings hard to understand?
+        ❯ 1. [ ] Cryptic labels/wording
+          2. [ ] Too many / unclear tabs
+          3. [ ] Can't find things
+        Enter to select · ↑/↓ to navigate · Esc to cancel
+        """
+        XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: content))
+        XCTAssertTrue(NumberedPromptDetector.isInteractiveMultiSelect(in: content))
+    }
+
+    func test_isInteractiveMultiSelect_cursorCaretWidget_true() {
+        // No footer, but a caret on a checkbox line still marks the interactive widget.
+        let content = """
+        Pick items:
+        ❯ 1. [ ] alpha
+          2. [ ] beta
+        """
+        XCTAssertTrue(NumberedPromptDetector.isInteractiveMultiSelect(in: content))
+    }
+
+    func test_isInteractiveMultiSelect_plainCheckboxMenu_false() {
+        // Checkbox tokens but no widget signature (no nav footer, no caret) →
+        // a text menu the user types into, not the interactive widget.
+        let content = """
+        Which to delete?
+        1. [ ] G1 caches
+        2. [ ] G2 backups
+        """
+        XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: content))
+        XCTAssertFalse(NumberedPromptDetector.isInteractiveMultiSelect(in: content))
+    }
+
+    func test_isInteractiveMultiSelect_singleSelectWidget_false() {
+        // Interactive but NOT multi-select (no checkboxes) → false.
+        let content = """
+        Apply this change?
+        ❯ 1. Yes
+          2. No
+        Enter to select · ↑/↓ to navigate
+        """
+        XCTAssertFalse(NumberedPromptDetector.isInteractiveMultiSelect(in: content))
+    }
+
     func test_isMultiSelect_noPrompt_false() {
         XCTAssertFalse(NumberedPromptDetector.isMultiSelect(in: "just some prose output"))
     }

@@ -158,4 +158,32 @@ final class AnswerRevalidationTests: XCTestCase {
         XCTAssertFalse(QuipMacApp.answerStillValid(action: "answer_text:all",
                                                    expectedFingerprint: staleFp, liveContent: inlineMenu))
     }
+
+    // MARK: - Interactive multi-select keystroke choreography (§18.2)
+
+    func test_multiSelectChoreography_adjacentPicks() {
+        // Cursor on option 1: space (toggle 1), down, space (toggle 2), return.
+        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: [1, 2]),
+                       ["space", "down", "space", "return"])
+    }
+
+    func test_multiSelectChoreography_gappedPicks() {
+        // 2 and 4 from cursor 1: down→2 space, down down→4 space, return.
+        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: [2, 4]),
+                       ["down", "space", "down", "down", "space", "return"])
+    }
+
+    func test_multiSelectChoreography_unsortedInput_sorted() {
+        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: [3, 1]),
+                       ["space", "down", "down", "space", "return"])
+    }
+
+    func test_multiSelectChoreography_empty() {
+        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: []), [])
+    }
+
+    func test_multiSelectDigitKeys_sortedPlusReturn() {
+        XCTAssertEqual(QuipMacApp.multiSelectDigitKeys(picks: [2, 1]), ["1", "2", "return"])
+        XCTAssertEqual(QuipMacApp.multiSelectDigitKeys(picks: []), [])
+    }
 }
