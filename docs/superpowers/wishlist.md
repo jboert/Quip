@@ -6,6 +6,22 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## VibeCut prompt inherit (SHIPPED 2026-07-03, branch ralph/vibecut-prompt-inherit)
+
+One-way inherit of VibeCut's prompt catalog (`~/Projects/vibecut/shared/prompts.json`)
+into Quip's Prompts page, via a manual Sync button. US-001..US-006 all green.
+- Pure Shared mapper (`VibeCutPromptMapper`): real-text filter (type text|nil +
+  non-empty body + mode!=send), preamble stripped, `vibecut__<slug>` ids, `vibecut`
+  tag, deterministic collision suffixes.
+- Mac engine: `VibeCutPromptReader` (+ `vibecutRepoPath` override) + least-flap
+  `PromptLibrary.replaceVibeCutSet` (delete-only-`vibecut__`, one broadcast) +
+  `handleSyncVibeCut` (`sync_vibecut` / `sync_vibecut_ack`).
+- iOS: Sync button in `PromptLibrarySheet`, `VibeCut` badge, per-prompt hide
+  (`hiddenPromptIDsJSON`, `PromptHideState`) filtered at `sortedPromptsByMRU()`.
+- Contract: `docs/vibecut-prompt-inherit.md`. **NOT hardware-verified** — needs a
+  Mac rebuild (touches QuipMac) + live phone sync.
+- Possible v2: Settings UI for `vibecutRepoPath`; two-way sync (out of scope now).
+
 ## Wishlist — Alternate app icons (user-selectable in Settings)  [2026-06-20, requested]
 
 User ask: "add a couple new icons and in settings make the icon change in preferences, up to the user — creative icons that keep the [brand] integrity intact."

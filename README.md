@@ -28,6 +28,7 @@ That's Quip. Push-to-talk prompting from your phone.
 - **Accurate dictation** — on-device transcription, biased with your project's vocabulary and auto-correcting common mishearings
 - **Prompt & button packs** — share and import reusable setups as `.quippack` files
 - **Content share intake** — accept `quip://share` links from other apps and turn sourced news/context into a reviewed prompt for the selected agent ([integration contract](docs/content-share-intake.md))
+- **VibeCut prompt inherit** — one-tap sync to pull your curated VibeCut prompt catalog into Quip's Prompts page, tagged and individually hide-able ([integration contract](docs/vibecut-prompt-inherit.md))
 - **View terminal output** — read the last 200 lines of any terminal from your phone
 - **Arrange windows** on your Mac or Linux desktop with one tap
 - **QA Mode** — pair a Simulator with a terminal for side-by-side iteration
