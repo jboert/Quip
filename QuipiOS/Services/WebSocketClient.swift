@@ -235,6 +235,9 @@ final class WebSocketClient {
     var onPutPromptAck: ((PutPromptAckMessage) -> Void)?
     /// Mac confirms prompt delete reached disk, or reports why it failed.
     var onDeletePromptAck: ((DeletePromptAckMessage) -> Void)?
+    /// Mac confirms a VibeCut prompt sync completed (with the synced/skipped
+    /// counts), or reports why it could not run.
+    var onSyncVibeCutAck: ((SyncVibeCutAckMessage) -> Void)?
     /// Cached catalog from the Mac — published so SwiftUI views can
     /// observe directly (avoids piping through host state).
     var promptLibrary: [PromptEntry] = []
@@ -1287,6 +1290,13 @@ final class WebSocketClient {
                 NSLog("[WebSocketClient] delete_prompt_ack: id=%@ success=%d err=%@",
                       msg.id, msg.success ? 1 : 0, msg.error ?? "none")
                 onDeletePromptAck?(msg)
+            }
+        case "sync_vibecut_ack":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(SyncVibeCutAckMessage.self, from: data, msgType: peek.type) {
+                NSLog("[WebSocketClient] sync_vibecut_ack: synced=%d skipped=%d err=%@",
+                      msg.syncedCount, msg.skippedCount, msg.error ?? "none")
+                onSyncVibeCutAck?(msg)
             }
         case "whisper_status":
             guard isAuthenticated else { return }

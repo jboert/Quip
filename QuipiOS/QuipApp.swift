@@ -1289,6 +1289,9 @@ struct MainiOSView: View {
     // Phone-local; doesn't sync to Mac because each device's usage
     // pattern is its own — Mac keeps the catalog, phone keeps the order.
     @AppStorage("promptUsageMRUJSON") private var promptUsageMRUJSON: String = "{}"
+    /// Prompts the user hid on this phone (VibeCut inherit, US-005). Shared with
+    /// the settings editor via the same @AppStorage key; drives the picker filter.
+    @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
     @State private var showPromptsPickerSheet = false
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
@@ -1729,6 +1732,13 @@ struct MainiOSView: View {
         // who turns it off in Settings doesn't see it pop back on every
         // reconnect.
         .onChange(of: client.promptLibrary.count) { _, count in
+            // Prune hidden ids that no longer exist in the catalog (e.g. a prompt
+            // dropped by a later VibeCut sync) so the set can't grow unbounded and
+            // a re-created prompt can't be silently re-hidden.
+            let present = Set(client.promptLibrary.map(\.id))
+            if let pruned = PromptHideState.pruned(hiddenJSON: hiddenPromptIDsJSON, presentIDs: present) {
+                hiddenPromptIDsJSON = pruned
+            }
             guard count > 0, !promptsAutoEnabledOnce else { return }
             promptsAutoEnabledOnce = true
             mainRowPrompts = true
@@ -4644,7 +4654,8 @@ struct MainiOSView: View {
         let mru = (try? JSONDecoder().decode([String: String].self, from: raw)) ?? [:]
         let formatter = ISO8601DateFormatter()
         let usedDates: [String: Date] = mru.compactMapValues { formatter.date(from: $0) }
-        return client.promptLibrary.sorted { a, b in
+        // Hidden prompts (e.g. unwanted VibeCut inherits) never reach the picker.
+        return PromptHideState.visible(client.promptLibrary, hiddenJSON: hiddenPromptIDsJSON).sorted { a, b in
             switch (usedDates[a.id], usedDates[b.id]) {
             case let (.some(da), .some(db)): return da > db
             case (.some, .none): return true
@@ -8403,6 +8414,12 @@ struct PromptLibrarySheet: View {
     @State private var pendingDeleteIDs: Set<String> = []
     @State private var deleteTimeouts: [UUID: Task<Void, Never>] = [:]
     @State private var deleteErrorMessage: String?
+    // VibeCut inherit (US-004/005): manual sync state + per-prompt hide set.
+    @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
+    @State private var syncing = false
+    @State private var syncResult: String?
+    @State private var syncTimeout: Task<Void, Never>?
+    @State private var syncResultClear: Task<Void, Never>?
 
     var body: some View {
         List {
@@ -8418,6 +8435,16 @@ struct PromptLibrarySheet: View {
                 Section {
                     ForEach(client.promptLibrary) { entry in
                         promptRow(entry)
+                            .swipeActions(edge: .leading) {
+                                let hidden = PromptHideState.isHidden(entry.id, in: hiddenPromptIDsJSON)
+                                Button {
+                                    hiddenPromptIDsJSON = PromptHideState.toggled(entry.id, in: hiddenPromptIDsJSON)
+                                } label: {
+                                    Label(hidden ? "Show" : "Hide",
+                                          systemImage: hidden ? "eye" : "eye.slash")
+                                }
+                                .tint(.gray)
+                            }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     deletePrompt(entry)
@@ -8437,6 +8464,11 @@ struct PromptLibrarySheet: View {
                     HStack {
                         Text("Library")
                         Spacer()
+                        if let syncResult {
+                            Text(syncResult)
+                                .font(.caption)
+                                .foregroundStyle(syncResult.contains("synced") ? .green : .orange)
+                        }
                         Text("\(client.promptLibrary.count)")
                             .foregroundStyle(.secondary)
                             .font(.caption)
@@ -8457,6 +8489,19 @@ struct PromptLibrarySheet: View {
                     Image(systemName: "wand.and.stars")
                 }
                 .accessibilityLabel("Generate prompt")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    syncFromVibeCut()
+                } label: {
+                    if syncing {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(syncing || !(client.isConnected && client.isAuthenticated))
+                .accessibilityLabel("Sync from VibeCut")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -8526,21 +8571,72 @@ struct PromptLibrarySheet: View {
             client.onDeletePromptAck = { ack in
                 handleDeleteAck(ack)
             }
+            client.onSyncVibeCutAck = { ack in
+                handleSyncAck(ack)
+            }
         }
         .onDisappear {
             deleteTimeouts.values.forEach { $0.cancel() }
             deleteTimeouts.removeAll()
+            syncTimeout?.cancel()
+            syncResultClear?.cancel()
             client.onPutPromptAck = nil
             client.onDeletePromptAck = nil
+            client.onSyncVibeCutAck = nil
+        }
+    }
+
+    /// Ask the Mac to re-read VibeCut's catalog and re-land the inherited set. The
+    /// refreshed prompts arrive via the normal `prompt_library` broadcast; this ack
+    /// just reports the count. 8s watchdog covers a lost ack.
+    private func syncFromVibeCut() {
+        guard client.isConnected && client.isAuthenticated else { return }
+        syncing = true
+        syncResult = nil
+        syncResultClear?.cancel()
+        let messageId = UUID()
+        guard client.send(SyncVibeCutMessage(messageId: messageId)) else {
+            syncing = false
+            showSyncResult("Sync failed to send")
+            return
+        }
+        syncTimeout?.cancel()
+        syncTimeout = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard syncing else { return }
+            syncing = false
+            showSyncResult("Sync timed out")
+        }
+    }
+
+    private func handleSyncAck(_ ack: SyncVibeCutAckMessage) {
+        syncTimeout?.cancel()
+        syncing = false
+        if let error = ack.error {
+            showSyncResult(error)
+        } else {
+            showSyncResult("\(ack.syncedCount) synced")
+        }
+    }
+
+    private func showSyncResult(_ text: String) {
+        syncResult = text
+        syncResultClear?.cancel()
+        syncResultClear = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            syncResult = nil
         }
     }
 
     @ViewBuilder
     private func promptRow(_ entry: PromptEntry) -> some View {
+        let hidden = PromptHideState.isHidden(entry.id, in: hiddenPromptIDsJSON)
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(entry.label)
                     .font(.system(size: 14, weight: .medium))
+                if entry.isInherited { promptBadge("VibeCut") }
+                if hidden { promptBadge("Hidden") }
                 Spacer()
                 Text("\(entry.bodyBytes)B")
                     .font(.system(size: 10))
@@ -8561,9 +8657,22 @@ struct PromptLibrarySheet: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .opacity(hidden ? 0.4 : 1)
         .contentShape(Rectangle())
         .onTapGesture { fire(entry, pressReturn: false) }
         .onLongPressGesture(minimumDuration: 0.4) { fire(entry, pressReturn: true) }
+    }
+
+    /// Compact provenance / state capsule, quieter than the label so the merged
+    /// list still scans as one library.
+    @ViewBuilder
+    private func promptBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Color.secondary.opacity(0.15), in: Capsule())
+            .foregroundStyle(.secondary)
     }
 
     private func fire(_ entry: PromptEntry, pressReturn: Bool) {
