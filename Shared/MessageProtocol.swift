@@ -672,6 +672,12 @@ struct PromptEntry: Codable, Sendable, Hashable, Identifiable {
     var bodyPreview: String { String(body.prefix(120)) }
     var bodyBytes: Int { body.utf8.count }
 
+    /// True when this prompt was inherited from VibeCut (carries the provenance
+    /// tag written by `VibeCutPromptMapper`). Drives the iOS "VibeCut" badge and
+    /// the per-prompt hide filter. Never the deletion selector on the Mac —
+    /// re-sync keys off the reserved `vibecut__` filename namespace instead.
+    var isInherited: Bool { tags?.contains(VibeCutPromptMapper.providerTag) == true }
+
     init(id: String, label: String, body: String,
          tags: [String]? = nil, targetAgent: String? = nil, description: String? = nil) {
         self.id = id
@@ -782,6 +788,41 @@ struct DeletePromptAckMessage: Codable, Sendable {
         self.messageId = messageId
         self.id = id
         self.success = success
+        self.error = error
+    }
+}
+
+/// iPhone → Mac. Trigger a one-way re-sync of the prompt catalog from VibeCut
+/// (`<vibecut-repo>/shared/prompts.json`). The Mac reads that file, maps its real
+/// text prompts into the `vibecut__*` reserved namespace, replaces the prior
+/// inherited set on disk, and broadcasts the refreshed `prompt_library` as usual
+/// plus the ack below. No auto/live sync — this is manual, user-tapped only.
+struct SyncVibeCutMessage: Codable, Sendable {
+    let type: String
+    let messageId: UUID?
+
+    init(messageId: UUID? = UUID()) {
+        self.type = "sync_vibecut"
+        self.messageId = messageId
+    }
+}
+
+/// Mac → iPhone. Confirms a VibeCut sync completed: how many prompts were landed
+/// and how many source entries were skipped by the include filter, or the reason
+/// the sync could not run (e.g. the VibeCut repo was not found). On error the
+/// Mac leaves the existing inherited set untouched.
+struct SyncVibeCutAckMessage: Codable, Sendable {
+    let type: String
+    let messageId: UUID
+    let syncedCount: Int
+    let skippedCount: Int
+    let error: String?
+
+    init(messageId: UUID, syncedCount: Int, skippedCount: Int, error: String? = nil) {
+        self.type = "sync_vibecut_ack"
+        self.messageId = messageId
+        self.syncedCount = syncedCount
+        self.skippedCount = skippedCount
         self.error = error
     }
 }
