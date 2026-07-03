@@ -121,6 +121,50 @@ final class PromptLibrary {
         }
     }
 
+    /// Replace the entire inherited VibeCut set on disk in ONE batch that fires
+    /// exactly one broadcast. Deletes every `vibecut__*.txt` (the reserved
+    /// namespace only — never touches the user's own prompts or README.txt), then
+    /// writes the fresh set via the same non-throwing `createFile` path as `put()`,
+    /// then rescans ONCE. Returns the number of files written.
+    ///
+    /// The single-broadcast guarantee relies on this running synchronously on the
+    /// MainActor: the FS watcher's rescan hops through a 0.15s-debounced
+    /// `@MainActor` Task, so it cannot preempt this method mid-batch, and the
+    /// trailing watcher-driven `rescan()` no-ops against `rescan()`'s equality
+    /// guard (`newEntries == entries`). N prompts → one `prompt_library` message,
+    /// not N. Do not introduce an `await` between the delete and the final rescan.
+    @discardableResult
+    func replaceVibeCutSet(_ inherited: [PromptEntry]) -> Int {
+        ensureDirExists()
+        let fm = FileManager.default
+
+        // 1. Delete the prior inherited set — reserved `vibecut__` filename
+        //    namespace ONLY, so a user-authored prompt (or README.txt) is never
+        //    at risk even if it happens to carry a `vibecut` tag.
+        if let urls = try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil) {
+            for url in urls where url.pathExtension == "txt"
+                && url.lastPathComponent.hasPrefix(VibeCutPromptMapper.idPrefix) {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        // 2. Write the fresh set (non-throwing createFile — see put()'s SIGTRAP note).
+        var written = 0
+        for entry in inherited {
+            let safeID = Self.sanitizeID(entry.id)
+            guard !safeID.isEmpty else { continue }
+            let url = Self.directory.appendingPathComponent("\(safeID).txt")
+            let fileBody = Self.renderFile(id: safeID, label: entry.label, body: entry.body,
+                                           tags: entry.tags, targetAgent: entry.targetAgent,
+                                           description: entry.description)
+            if fm.createFile(atPath: url.path, contents: Data(fileBody.utf8)) { written += 1 }
+        }
+
+        // 3. One rescan → one onChange → one broadcast.
+        rescan()
+        return written
+    }
+
     /// Strip path separators / leading dots / shell metacharacters so a
     /// hostile id (e.g. `../../../etc/passwd`) can't escape the prompts
     /// directory or write outside it. Allowed: alphanumeric, dash,
@@ -166,6 +210,11 @@ final class PromptLibrary {
 
         That uses osadecompile to pull the `set the clipboard to "..."`
         body out of each .scpt and writes it here as a .txt file.
+
+        Reserved: files named "vibecut__*.txt" are managed by the VibeCut
+        prompt-inherit sync (Settings -> Prompts -> Sync on the phone). They
+        are deleted + rewritten on every sync, so do NOT hand-edit them or
+        name your own prompts with the "vibecut__" prefix.
         """
         try? body.write(to: readme, atomically: true, encoding: .utf8)
     }

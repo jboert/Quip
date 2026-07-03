@@ -1678,6 +1678,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 }
             }
 
+        case "sync_vibecut":
+            if let msg = MessageCoder.decode(SyncVibeCutMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] sync_vibecut DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
+                handleSyncVibeCut(msg)
+            }
+
         case "register_push_device":
             if let msg = MessageCoder.decode(RegisterPushDeviceMessage.self, from: data) {
                 appendPushDiagnostic("register_push_device: \(msg.deviceToken.prefix(8)) env=\(msg.environment)")
@@ -1924,6 +1933,46 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 self.webSocketServer.broadcast(ErrorMessage(reason: "Prompt paste failed: \(reason)"))
             }
         }
+    }
+
+    /// Phone tapped "Sync from VibeCut". Read `<repo>/shared/prompts.json`, map its
+    /// real text prompts into the reserved `vibecut__*` namespace (tagged
+    /// "vibecut"), replace the prior inherited set on disk in one batch, and ack
+    /// with the synced/skipped counts. `replaceVibeCutSet` fires the single
+    /// `prompt_library` broadcast that refreshes the phone's catalog. One-way only.
+    ///
+    /// On repo-not-found (or an empty/failed read) the prompts directory is left
+    /// untouched — we do NOT wipe the existing inherited set on a transient miss —
+    /// and the ack carries `syncedCount: 0` + a reason string.
+    @MainActor
+    private func handleSyncVibeCut(_ msg: SyncVibeCutMessage) {
+        let messageId = msg.messageId ?? UUID()
+
+        let catalog: VibeCutCatalog
+        do {
+            catalog = try VibeCutPromptReader(root: VibeCutPromptReader.defaultRoot()).read()
+        } catch {
+            let reason = (error as? VibeCutPromptReader.ReadError)?.description ?? "\(error)"
+            print("[Quip] sync_vibecut failed: \(reason)")
+            webSocketServer.broadcast(SyncVibeCutAckMessage(
+                messageId: messageId, syncedCount: 0, skippedCount: 0, error: reason))
+            return
+        }
+
+        let mapped = VibeCutPromptMapper.map(catalog: catalog)
+        guard !mapped.entries.isEmpty else {
+            // Valid read but nothing inheritable — don't wipe the existing set.
+            print("[Quip] sync_vibecut: 0 inheritable prompts (\(mapped.skipped) skipped); leaving set untouched")
+            webSocketServer.broadcast(SyncVibeCutAckMessage(
+                messageId: messageId, syncedCount: 0, skippedCount: mapped.skipped,
+                error: "No inheritable prompts found in VibeCut."))
+            return
+        }
+
+        let written = promptLibrary.replaceVibeCutSet(mapped.entries)
+        print("[Quip] sync_vibecut: wrote \(written) prompts (\(mapped.skipped) skipped)")
+        webSocketServer.broadcast(SyncVibeCutAckMessage(
+            messageId: messageId, syncedCount: written, skippedCount: mapped.skipped, error: nil))
     }
 
     /// Phone asked for the Mac's diagnostic log bundle. Build the zip on a
