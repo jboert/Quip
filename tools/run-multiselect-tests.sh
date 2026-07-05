@@ -9,6 +9,7 @@ cd "$(dirname "$0")/.."
 
 SRC=(
   Shared/NumberedPromptDetector.swift
+  Shared/MultiSelectSync.swift
   tools/main.swift
 )
 

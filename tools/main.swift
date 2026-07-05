@@ -82,6 +82,18 @@ eq(NumberedPromptDetector.checkedOptions(in: noPrompt), Set<Int>(),
 check(NumberedPromptDetector.cursorOption(in: noPrompt) == nil,
       "no-prompt cursorOption == nil")
 
+print("US-002: togglesToReach")
+eq(MultiSelectSync.togglesToReach(desired: Set([1, 2]), from: Set([1, 2])), [],
+   "already-correct pre-checked set needs zero toggles")
+eq(MultiSelectSync.togglesToReach(desired: Set([3]), from: Set([1, 2])), [1, 2, 3],
+   "turn off 1 & 2, turn on 3")
+eq(MultiSelectSync.togglesToReach(desired: Set([1, 2, 3]), from: Set([1, 2])), [3],
+   "keep pre-checked, add one")
+eq(MultiSelectSync.togglesToReach(desired: Set<Int>(), from: Set<Int>()), [],
+   "empty desired from empty current == []")
+eq(MultiSelectSync.togglesToReach(desired: Set([2, 4]), from: Set([1, 2, 3])), [1, 3, 4],
+   "mixed diff returns ascending symmetric difference")
+
 // MARK: - Summary
 
 print("")
