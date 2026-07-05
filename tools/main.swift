@@ -94,6 +94,19 @@ eq(MultiSelectSync.togglesToReach(desired: Set<Int>(), from: Set<Int>()), [],
 eq(MultiSelectSync.togglesToReach(desired: Set([2, 4]), from: Set([1, 2, 3])), [1, 3, 4],
    "mixed diff returns ascending symmetric difference")
 
+print("US-003: keystrokes")
+eq(MultiSelectSync.keystrokes(desired: Set([1, 2]), liveContent: screenshot), [],
+   "desired equals live checked set => no keystrokes")
+eq(MultiSelectSync.keystrokes(desired: Set([1, 2, 3]), liveContent: screenshot),
+   ["down", "space", "return"],
+   "cursor 2 + {1,2} pre-checked, add 3 => walk down to 3, space, return")
+eq(MultiSelectSync.keystrokes(desired: Set([3]), liveContent: screenshot),
+   ["space", "down", "space", "down", "space", "return"],
+   "desired {3} toggles 1,2,3 in ascending cursor order, ending with return")
+let ks = MultiSelectSync.keystrokes(desired: Set([3]), liveContent: screenshot)
+check(ks.allSatisfy { ["down", "space", "return"].contains($0) },
+      "keystrokes only ever emit down/space/return")
+
 // MARK: - Summary
 
 print("")

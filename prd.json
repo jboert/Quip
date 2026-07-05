@@ -1,0 +1,87 @@
+{
+  "project": "Quip",
+  "branchName": "ralph/multiselect-precheck-sync",
+  "description": "Fix Quip's interactive checkbox multi-select so a phone answer respects options Claude has PRE-CHECKED ([✓]): surface per-option checked state + cursor position in the Shared detector, compute the minimal space-toggle diff to reach the user's desired final set, and wire it into the Mac injector and the iOS answer bar. Every story is gated by a swiftc-compiled assertion harness over the Foundation-only Shared logic (tools/run-multiselect-tests.sh) so the autonomous loop needs no Xcode, simulator, or code signing.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Surface per-option checked state + cursor",
+      "description": "As a Quip developer, I want the Shared NumberedPromptDetector to report which detected options are checked and which option the cursor sits on, so that both peers can reason about an interactive checkbox widget's live state instead of assuming every box starts empty.",
+      "acceptanceCriteria": [
+        "Add NumberedPromptDetector.checkedOptions(in:) -> Set<Int> returning the option numbers in the detected bestRun whose line carries a CHECKED token ([x], [X], or [✓]); unchecked ([ ]) options are excluded; a non-multi-select or no-prompt input returns an empty set.",
+        "Add NumberedPromptDetector.cursorOption(in:) -> Int? returning the option number on the line that carries a prompt marker (❯ / › / >), or nil when no option line carries a marker.",
+        "For the real screenshot content (options 1 & 2 rendered [✓] Recommended, 3 & 4 rendered [ ], cursor › on option 2), checkedOptions returns exactly {1, 2} and cursorOption returns 2.",
+        "A markdown task list scrolled in the buffer (no choice cue) still yields an empty checkedOptions set, matching detect(in:) == nil.",
+        "Create tools/run-multiselect-tests.sh that compiles Shared/NumberedPromptDetector.swift plus a Foundation-only assertion harness with swiftc and runs it, exiting non-zero on any failed assertion.",
+        "bash tools/run-multiselect-tests.sh exits 0 with all US-001 assertions passing."
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Compute minimal toggle diff",
+      "description": "As a Quip developer, I want a pure helper that computes which options must be space-toggled to move an interactive checkbox widget from its current checked set to the user's desired final set, so the phone can send an ABSOLUTE selection while the Mac toggles only what actually differs.",
+      "acceptanceCriteria": [
+        "Create Shared/MultiSelectSync.swift (import Foundation only, no AppKit/UIKit/SwiftUI) exposing MultiSelectSync.togglesToReach(desired: Set<Int>, from current: Set<Int>) -> [Int].",
+        "togglesToReach returns the ascending-sorted symmetric difference of desired and current (options to turn ON that are off, plus options to turn OFF that are on).",
+        "togglesToReach(desired: [1,2], from: [1,2]) == [] (already-correct pre-checked set needs zero keystrokes).",
+        "togglesToReach(desired: [3], from: [1,2]) == [1,2,3] (turn off the two pre-checked, turn on 3).",
+        "togglesToReach(desired: [1,2,3], from: [1,2]) == [3] (keep pre-checked, add one).",
+        "Extend tools/run-multiselect-tests.sh to also compile Shared/MultiSelectSync.swift, and bash tools/run-multiselect-tests.sh exits 0 with all US-001 and US-002 assertions passing."
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Compose choreography from live state",
+      "description": "As a Quip developer, I want one pure decision function that turns a desired selection plus the live terminal content into the exact space/down/return keystroke sequence, so the Mac injection path has no embedded assumptions about initial checkbox state or cursor position.",
+      "acceptanceCriteria": [
+        "Add MultiSelectSync.keystrokes(desired: Set<Int>, liveContent: String) -> [String] that reads the live checked set via NumberedPromptDetector.checkedOptions, reads the starting cursor via NumberedPromptDetector.cursorOption (defaulting to option 1 when nil), computes the toggle diff, and walks the cursor DOWN to each toggled option in ascending order emitting one \"space\" per toggle, then a final \"return\".",
+        "keystrokes only ever emits the tokens \"down\", \"space\", and \"return\" (the vocabulary sendKeystroke understands).",
+        "When desired already equals the live checked set, keystrokes returns [] (nothing to submit / no accidental toggles).",
+        "For live content with cursor on option 2 and options {1,2} pre-checked, keystrokes(desired: {1,2,3}) walks from 2 to 3 (one \"down\", one \"space\") then \"return\" — it does NOT toggle the already-correct 1 and 2.",
+        "For the same content, keystrokes(desired: {3}) toggles 1, 2, and 3 (turning the pre-checked ones off and 3 on) in ascending cursor order, ending with \"return\".",
+        "Extend tools/run-multiselect-tests.sh accordingly, and bash tools/run-multiselect-tests.sh exits 0 with all US-001..US-003 assertions passing."
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Wire Mac injector to live-state diff",
+      "description": "As a Quip user, I want the Mac to answer an interactive checkbox prompt by toggling only the options that differ from what Claude pre-checked, so submitting a phone selection never flips an already-correct box the wrong way.",
+      "acceptanceCriteria": [
+        "In QuipMac/QuipMacApp.swift revalidateAnswer, the interactive-multi-select branch computes its keystrokes via MultiSelectSync.keystrokes(desired: Set(picks), liveContent: content) instead of the old multiSelectChoreography(picks:) which assumed an all-unchecked start at cursor option 1.",
+        "grep confirms QuipMacApp.swift references MultiSelectSync.keystrokes in the interactive multi-select path.",
+        "The old multiSelectChoreography(picks:cursorStartsAt:) either delegates to the new Shared helper or is removed, leaving no code path that space-toggles raw picks against an assumed empty start.",
+        "The existing QuipMac/Tests/AnswerRevalidationTests.swift multi-select expectations are updated or preserved so they still describe correct behavior (no test asserts the old raw-toggle-from-empty semantics).",
+        "bash tools/run-multiselect-tests.sh exits 0 (the pure decision function US-004 delegates to remains fully covered).",
+        "Manual integration check noted for a human: rebuild QuipMac and confirm a pre-checked prompt answered from the phone keeps the pre-checked options selected."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Seed iOS answer bar from checked state",
+      "description": "As a Quip user, I want the phone's multi-select bar to show the boxes Claude already pre-checked so I can see and edit the real starting selection, and my Submit to represent the desired final set rather than a blind set of toggles.",
+      "acceptanceCriteria": [
+        "MultiSelectAnswerBar in QuipiOS/QuipApp.swift seeds its initial picks from NumberedPromptDetector.checkedOptions(in: content) via a pure helper (e.g. MultiSelectSync.initialPicks(liveContent:) -> Set<Int>) rather than always starting empty.",
+        "When the prompt fingerprint changes, the bar re-seeds from the new content's checked set (not to an empty set), so a fresh pre-checked prompt shows its pre-checked boxes.",
+        "The bar continues to submit select_multi:<comma-separated picks> carrying the prompt fingerprint, now representing the desired FINAL selection (consumed by the US-004 Mac diff).",
+        "A pure MultiSelectSync.initialPicks helper returns {1,2} for the screenshot content and {} for content with no checked boxes, and this is asserted in the harness.",
+        "bash tools/run-multiselect-tests.sh exits 0 with all US-001..US-005 assertions passing.",
+        "Manual UI check noted for a human: install on iPhone and confirm the bar renders options 1 & 2 pre-checked for a Recommended-style prompt."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

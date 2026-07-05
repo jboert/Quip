@@ -17,4 +17,34 @@ enum MultiSelectSync {
     static func togglesToReach(desired: Set<Int>, from current: Set<Int>) -> [Int] {
         desired.symmetricDifference(current).sorted()
     }
+
+    /// Turn a desired FINAL selection plus the live terminal content into the
+    /// exact keystroke sequence the Mac injector should replay.
+    ///
+    /// Reads the live checked set and starting cursor straight from the Shared
+    /// `NumberedPromptDetector`, computes the minimal toggle diff, then walks the
+    /// cursor DOWN to each toggled option in ascending order — one `"space"` per
+    /// toggle — and finishes with a single `"return"`. When nothing differs the
+    /// result is empty (nothing to submit, no accidental toggles).
+    ///
+    /// The only tokens emitted are `"down"`, `"space"`, and `"return"` — the
+    /// vocabulary the Mac's `sendKeystroke` understands. The cursor defaults to
+    /// option 1 when no marker is present; a toggle above the current cursor
+    /// needs no downward move (clamped to zero) since there is no "up" token.
+    static func keystrokes(desired: Set<Int>, liveContent: String) -> [String] {
+        let current = NumberedPromptDetector.checkedOptions(in: liveContent)
+        let toggles = togglesToReach(desired: desired, from: current)
+        guard !toggles.isEmpty else { return [] }
+
+        var cursor = NumberedPromptDetector.cursorOption(in: liveContent) ?? 1
+        var out: [String] = []
+        for option in toggles {
+            let downs = max(0, option - cursor)
+            out.append(contentsOf: Array(repeating: "down", count: downs))
+            out.append("space")
+            cursor = option
+        }
+        out.append("return")
+        return out
+    }
 }
