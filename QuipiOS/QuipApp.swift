@@ -5117,6 +5117,8 @@ enum ContentRenderMode: String, CaseIterable, Identifiable {
 private struct MultiSelectAnswerBar: View {
     let options: [Int]
     let fingerprint: String?
+    /// Live terminal content — seeds `picks` from the boxes Claude pre-checked.
+    let content: String
     /// (action, fingerprint) — action is `select_multi:1,3`.
     let onSubmit: (String, String?) -> Void
     @State private var picks: Set<Int> = []
@@ -5166,9 +5168,14 @@ private struct MultiSelectAnswerBar: View {
         .padding(.horizontal, 10)
         .padding(.top, 6)
         .padding(.bottom, 4)
-        // Clear picks when the prompt changes out from under us so stale ticks
-        // never submit against a different menu.
-        .onChange(of: fingerprint) { _, _ in picks = [] }
+        // Seed from the boxes Claude pre-checked so the bar shows (and can edit)
+        // the real starting selection. Submit then represents the desired FINAL
+        // set the US-004 Mac diff consumes.
+        .onAppear { picks = MultiSelectSync.initialPicks(liveContent: content) }
+        // Re-seed from the NEW prompt's checked set when the fingerprint changes
+        // out from under us — a fresh pre-checked prompt shows its pre-checked
+        // boxes rather than clearing to empty.
+        .onChange(of: fingerprint) { _, _ in picks = MultiSelectSync.initialPicks(liveContent: content) }
     }
 }
 
@@ -5471,7 +5478,7 @@ struct InlineTerminalContent: View {
                     // submit against `fingerprint` (no per-tap drop), toggles
                     // each pick, and presses Return once.
                     MultiSelectAnswerBar(options: options, fingerprint: fingerprint,
-                                         onSubmit: onSendAction)
+                                         content: content, onSubmit: onSendAction)
                 } else if labsOneTapAnswer {
                     // §3.2 Labs — prominent, equal-width answer buttons with the
                     // prompt fingerprint so the Mac re-validates before injecting.

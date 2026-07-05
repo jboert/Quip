@@ -107,6 +107,14 @@ let ks = MultiSelectSync.keystrokes(desired: Set([3]), liveContent: screenshot)
 check(ks.allSatisfy { ["down", "space", "return"].contains($0) },
       "keystrokes only ever emit down/space/return")
 
+print("US-005: initialPicks")
+eq(MultiSelectSync.initialPicks(liveContent: screenshot), Set([1, 2]),
+   "screenshot initialPicks == {1,2} (seed from pre-checked boxes)")
+eq(MultiSelectSync.initialPicks(liveContent: noPrompt), Set<Int>(),
+   "no-checked content initialPicks == {}")
+eq(MultiSelectSync.initialPicks(liveContent: taskList), Set<Int>(),
+   "task list (no choice cue) initialPicks == {}")
+
 // MARK: - Summary
 
 print("")

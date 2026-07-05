@@ -80,7 +80,7 @@
         "Manual UI check noted for a human: install on iPhone and confirm the bar renders options 1 & 2 pre-checked for a Recommended-style prompt."
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

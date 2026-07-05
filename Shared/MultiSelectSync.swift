@@ -18,6 +18,15 @@ enum MultiSelectSync {
         desired.symmetricDifference(current).sorted()
     }
 
+    /// The options an interactive checkbox widget starts with PRE-CHECKED, read
+    /// straight from live terminal content. The iOS answer bar seeds its picks
+    /// from this so its Submit represents the desired FINAL set (consumed by the
+    /// Mac `keystrokes` diff), not a blind toggle-from-empty. Empty for content
+    /// with no checked boxes or no multi-select prompt.
+    static func initialPicks(liveContent: String) -> Set<Int> {
+        NumberedPromptDetector.checkedOptions(in: liveContent)
+    }
+
     /// Turn a desired FINAL selection plus the live terminal content into the
     /// exact keystroke sequence the Mac injector should replay.
     ///

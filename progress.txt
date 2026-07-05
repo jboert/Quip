@@ -659,3 +659,41 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     carries the desired FINAL set this Mac diff consumes. Same xcodegen dance on
     the QuipiOS side.
 ---
+
+## 2026-07-05 - US-005
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Seeded the iOS multi-select bar from Claude's pre-checked boxes so Submit
+  represents the desired FINAL set (consumed by the US-004 Mac diff).
+- Added MultiSelectSync.initialPicks(liveContent:) -> Set<Int> (delegates to
+  NumberedPromptDetector.checkedOptions). Pure, Foundation-only.
+- MultiSelectAnswerBar (QuipiOS/QuipApp.swift): added `content: String` param;
+  `.onAppear` and `.onChange(of: fingerprint)` now seed/re-seed picks via
+  initialPicks(liveContent: content) instead of clearing to []. Call site at
+  ~5473 passes `content: content`. Submit path unchanged (still
+  select_multi:<picks> + fingerprint).
+- Added 3 US-005 assertions to tools/main.swift (screenshot => {1,2},
+  no-checked => {}, task-list-no-cue => {}).
+- Files: Shared/MultiSelectSync.swift, QuipiOS/QuipApp.swift, tools/main.swift,
+  prd.json, progress.txt.
+- Gates: `bash tools/run-multiselect-tests.sh` -> 21 checks, 0 failures, exit 0.
+  iOS COMPILE oracle (xcodegen dance): `xcodegen generate --spec
+  QuipiOS/project.yml --project QuipiOS` then `xcodebuild build -project
+  QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination 'platform=iOS
+  Simulator,id=CFCE8360-...'` -> ** BUILD SUCCEEDED ** (answer-bar edit +
+  MultiSelectSync visible to QuipiOS target). Then `git restore` the pbxproj so
+  the commit carries ZERO pbxproj changes (zero-pbxproj protocol). Human/CI must
+  run `xcodegen generate` post-pull before building QuipiOS (../Shared already
+  sourced in project.yml — no spec edit needed).
+- AC #6 manual: human installs on iPhone + confirms the bar renders options 1 & 2
+  pre-checked for a Recommended-style prompt. NOT auto-verifiable (native UI).
+- **Learnings for future iterations:**
+  - MultiSelectSync.swift is picked up by BOTH QuipMac (US-004) and QuipiOS
+    `../Shared` globs on xcodegen — no project.yml edit either side. Regen adds it
+    to the pbxproj Sources phase; restore pbxproj after verifying the build.
+  - SwiftUI seeding: `@State var picks` can't read a `let content` at its
+    initializer, so seed in `.onAppear` + re-seed in `.onChange(of: fingerprint)`.
+    Reading `content` inside those closures gets the current (per-render) value —
+    the struct is re-created with fresh `content` each render.
+  - PRD COMPLETE: all 5 stories pass. Multiselect pre-check sync fully wired:
+    Shared detector -> pure diff/keystrokes/initialPicks -> Mac injector + iOS bar.
+---
