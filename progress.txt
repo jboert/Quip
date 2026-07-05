@@ -621,3 +621,41 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     via MultiSelectSync.keystrokes(desired: Set(picks), liveContent: content),
     replacing multiSelectChoreography(picks:) which assumed all-unchecked/cursor-1.
 ---
+
+## 2026-07-05 - US-004
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Wired Mac injector to the live-state diff. In QuipMacApp.swift revalidateAnswer
+  the interactive-multi-select branch now computes keys via
+  MultiSelectSync.keystrokes(desired: Set(picks), liveContent: content) instead
+  of the old multiSelectChoreography(picks:) (which assumed all-unchecked start
+  at cursor 1 and could flip a pre-checked box the wrong way).
+- Removed multiSelectChoreography(picks:cursorStartsAt:) entirely (left a
+  doc-comment pointer to the Shared helper). multiSelectDigitKeys kept (separate).
+- Updated QuipMac/Tests/AnswerRevalidationTests.swift: dropped the 4 old
+  raw-toggle-from-empty choreography tests, added 4 MultiSelectSync.keystrokes
+  tests over pre-checked live content (already-correct=>[], add-one keeps
+  pre-checked, replace toggles diff, empty content starts unchecked).
+- Files: QuipMac/QuipMacApp.swift, QuipMac/Tests/AnswerRevalidationTests.swift,
+  prd.json, progress.txt.
+- Gates: `bash tools/run-multiselect-tests.sh` -> 18 checks, 0 failures, exit 0.
+  Mac `xcodebuild test ... -only-testing:QuipMacTests/AnswerRevalidationTests
+  ... CODE_SIGNING_ALLOWED=NO` -> Executed 23 tests, 0 failures, ** TEST
+  SUCCEEDED ** (full QuipMac module compiled, so the injector edit built clean).
+- AC #6 manual: human must rebuild QuipMac + confirm a pre-checked prompt
+  answered from the phone keeps the pre-checked options selected. NOT auto-verifiable.
+- **Learnings for future iterations:**
+  - MultiSelectSync.swift lives in Shared/ and IS picked up by QuipMac's
+    `../Shared` path glob on `xcodegen generate` — no project.yml edit needed.
+    Committed pbxproj omits it (zero-pbxproj protocol): run `xcodegen generate
+    --spec QuipMac/project.yml --project QuipMac` before build/test, then
+    `git checkout -- QuipMac/QuipMac.xcodeproj/project.pbxproj` to stay clean.
+  - `content` (the freshly re-scraped live buffer) is already in scope inside the
+    bg->main nested closure in revalidateAnswer; pass it straight to
+    keystrokes(liveContent:). No extra plumbing.
+  - AnswerRevalidationTests can reference MultiSelectSync directly via @testable
+    import QuipMac — Shared sources compile into the main module, so both
+    NumberedPromptDetector and MultiSelectSync are visible to the test target.
+  - US-005 (last story) seeds the iOS answer bar from checkedOptions so Submit
+    carries the desired FINAL set this Mac diff consumes. Same xcodegen dance on
+    the QuipiOS side.
+---

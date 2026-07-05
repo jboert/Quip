@@ -64,7 +64,7 @@
         "Manual integration check noted for a human: rebuild QuipMac and confirm a pre-checked prompt answered from the phone keeps the pre-checked options selected."
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

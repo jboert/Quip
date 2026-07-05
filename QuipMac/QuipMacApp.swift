@@ -2283,26 +2283,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         return nums.isEmpty ? nil : nums
     }
 
-    /// Keystroke sequence to answer Claude's INTERACTIVE checkbox multi-select
-    /// by space-toggling each pick. The cursor sits on the first option after
-    /// (re)render (`cursorStartsAt`, default 1); we walk DOWN to each pick in
-    /// ascending order, press space to toggle it, then Return to confirm. Keys
-    /// use the vocabulary `sendKeystroke` understands ("down"/"space"/"return").
-    /// This is the shipped path — universally reliable for Ink checkbox widgets
-    /// (space toggles the highlighted row regardless of digit support). Pure.
-    nonisolated static func multiSelectChoreography(picks: [Int], cursorStartsAt: Int = 1) -> [String] {
-        let sorted = picks.filter { $0 >= cursorStartsAt }.sorted()
-        guard !sorted.isEmpty else { return [] }
-        var keys: [String] = []
-        var pos = cursorStartsAt
-        for pick in sorted {
-            for _ in 0..<(pick - pos) { keys.append("down") }
-            keys.append("space")
-            pos = pick
-        }
-        keys.append("return")
-        return keys
-    }
+    /// Interactive checkbox multi-select is now driven by the Shared
+    /// `MultiSelectSync.keystrokes(desired:liveContent:)` decision function,
+    /// which diffs the phone's desired FINAL selection against the widget's
+    /// live PRE-CHECKED set (US-004) — replacing the old
+    /// `multiSelectChoreography(picks:)` that assumed an all-unchecked start at
+    /// cursor option 1 and could flip an already-correct box the wrong way.
 
     /// Alternate strategy: press each pick's DIGIT to toggle it, then Return —
     /// for Ink widgets that support digit-toggle. Built + tested but NOT the
@@ -2422,7 +2408,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // Interactive checkbox widget → space-toggle each pick + Return,
                 // paced so the Ink TUI registers each key. NOT typed text.
                 if interactiveMulti, let picks = multiPicks {
-                    let keys = Self.multiSelectChoreography(picks: picks)
+                    // Diff the desired FINAL selection against what the widget
+                    // already PRE-CHECKED (live content) so we only toggle the
+                    // boxes that differ — never flipping an already-correct box
+                    // the wrong way. Replaces the old raw-toggle-from-empty
+                    // choreography. (US-004)
+                    let keys = MultiSelectSync.keystrokes(desired: Set(picks), liveContent: content)
                     let fire = {
                         self.injectKeystrokeSequence(keys, to: wid, sessionId: sessionId,
                                                      termApp: termApp, cgWindowNumber: wn)

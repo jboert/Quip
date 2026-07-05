@@ -159,27 +159,48 @@ final class AnswerRevalidationTests: XCTestCase {
                                                    expectedFingerprint: staleFp, liveContent: inlineMenu))
     }
 
-    // MARK: - Interactive multi-select keystroke choreography (§18.2)
+    // MARK: - Interactive multi-select keystroke choreography (§18.2, US-004)
+    //
+    // The injector now diffs the desired FINAL selection against the widget's
+    // live PRE-CHECKED set via MultiSelectSync.keystrokes — it never assumes an
+    // all-unchecked start. `preChecked` renders options 1 & 2 as [✓] with the
+    // cursor › on option 2 (matching the real Recommended-style prompt).
 
-    func test_multiSelectChoreography_adjacentPicks() {
-        // Cursor on option 1: space (toggle 1), down, space (toggle 2), return.
-        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: [1, 2]),
+    private let preChecked = """
+    Which files should I clean up?
+
+      1. [✓] config.cache  (Recommended)
+    › 2. [✓] build.artifacts  (Recommended)
+      3. [ ] logs.txt
+      4. [ ] user.data
+
+    ↑/↓ to navigate · space to toggle · Enter to confirm
+    """
+
+    func test_multiSelectSync_alreadyCorrect_noKeystrokes() {
+        // Desired == live checked set {1,2}: nothing to toggle, no submit.
+        XCTAssertEqual(MultiSelectSync.keystrokes(desired: Set([1, 2]), liveContent: preChecked),
+                       [])
+    }
+
+    func test_multiSelectSync_addOne_keepsPreChecked() {
+        // Keep 1 & 2, add 3. Cursor on 2 → down to 3, space, return.
+        XCTAssertEqual(MultiSelectSync.keystrokes(desired: Set([1, 2, 3]), liveContent: preChecked),
+                       ["down", "space", "return"])
+    }
+
+    func test_multiSelectSync_replaceSelection_togglesDiff() {
+        // Desired {3} from pre-checked {1,2}, cursor 2: toggle 1,2 off + 3 on,
+        // ascending cursor order.
+        XCTAssertEqual(MultiSelectSync.keystrokes(desired: Set([3]), liveContent: preChecked),
+                       ["space", "down", "space", "down", "space", "return"])
+    }
+
+    func test_multiSelectSync_emptyContent_startsUnchecked() {
+        // No live checkbox state (empty content) → default cursor 1, empty
+        // checked set: desired {1,2} toggles both on from the top.
+        XCTAssertEqual(MultiSelectSync.keystrokes(desired: Set([1, 2]), liveContent: ""),
                        ["space", "down", "space", "return"])
-    }
-
-    func test_multiSelectChoreography_gappedPicks() {
-        // 2 and 4 from cursor 1: down→2 space, down down→4 space, return.
-        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: [2, 4]),
-                       ["down", "space", "down", "down", "space", "return"])
-    }
-
-    func test_multiSelectChoreography_unsortedInput_sorted() {
-        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: [3, 1]),
-                       ["space", "down", "down", "space", "return"])
-    }
-
-    func test_multiSelectChoreography_empty() {
-        XCTAssertEqual(QuipMacApp.multiSelectChoreography(picks: []), [])
     }
 
     func test_multiSelectDigitKeys_sortedPlusReturn() {
