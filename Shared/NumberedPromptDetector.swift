@@ -85,6 +85,38 @@ enum NumberedPromptDetector {
         return s.contains("[ ]") || s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
     }
 
+    /// A CHECKED checkbox token (`[x]` / `[X]` / `[✓]`) anywhere on the line —
+    /// distinct from an unchecked `[ ]`. Reads which options Claude has
+    /// PRE-CHECKED in an interactive multi-select widget. (US-001)
+    static func lineHasCheckedBox(_ line: String) -> Bool {
+        let s = stripANSI(line)
+        return s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
+    }
+
+    /// The option numbers in the detected prompt (`bestRun`) whose line renders
+    /// a CHECKED box (`[x]`/`[X]`/`[✓]`) — the boxes Claude has PRE-CHECKED.
+    /// Unchecked (`[ ]`) and non-checkbox options are excluded; a
+    /// non-multi-select or no-prompt input returns an empty set (bestRun == nil,
+    /// e.g. a markdown task list with no choice cue). Lets both peers reason
+    /// about a widget's live checked state instead of assuming an empty start.
+    /// (US-001)
+    static func checkedOptions(in content: String) -> Set<Int> {
+        guard let run = bestRun(in: content) else { return [] }
+        var checked: Set<Int> = []
+        for m in run where lineHasCheckedBox(m.normalized) {
+            checked.insert(m.number)
+        }
+        return checked
+    }
+
+    /// The option number the cursor sits on — the detected option line carrying
+    /// a prompt marker (`❯`/`›`/`>`) — or nil when no option line carries one.
+    /// Tells the injector where the widget's highlight starts so it can walk
+    /// DOWN to each option it must toggle. (US-001)
+    static func cursorOption(in content: String) -> Int? {
+        bestRun(in: content)?.first(where: \.hasMarker)?.number
+    }
+
     /// Tokens that anchor an inline bracketed choice as a real prompt (vs prose
     /// that merely contains a `[ … / … ]` group). A group qualifies only when at
     /// least one token is a digit OR one of these known choice words. (§18.3)
