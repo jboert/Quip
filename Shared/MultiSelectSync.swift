@@ -32,24 +32,30 @@ enum MultiSelectSync {
     ///
     /// Reads the live checked set and starting cursor straight from the Shared
     /// `NumberedPromptDetector`, computes the minimal toggle diff, then walks the
-    /// cursor DOWN to each toggled option in ascending order — one `"space"` per
-    /// toggle — and finishes with a single `"return"`. When nothing differs the
-    /// result is empty (nothing to submit, no accidental toggles).
+    /// cursor to each toggled option in ascending order — moving `"down"` OR
+    /// `"up"` as needed since the live cursor can start on any option (Claude
+    /// renders the highlight wherever it last sat, not always the top) — presses
+    /// one `"space"` per toggle, and finishes with a single `"return"`.
     ///
-    /// The only tokens emitted are `"down"`, `"space"`, and `"return"` — the
-    /// vocabulary the Mac's `sendKeystroke` understands. The cursor defaults to
-    /// option 1 when no marker is present; a toggle above the current cursor
-    /// needs no downward move (clamped to zero) since there is no "up" token.
+    /// When nothing needs toggling (the desired set already matches what's
+    /// pre-checked) the result is still `["return"]`: a Submit must always
+    /// CONFIRM the widget, otherwise tapping Submit to accept the pre-checked
+    /// defaults would inject nothing and leave the prompt open.
+    ///
+    /// The only tokens emitted are `"up"`, `"down"`, `"space"`, and `"return"` —
+    /// all in the vocabulary the Mac's `sendKeystroke` understands. The cursor
+    /// defaults to option 1 when no marker is present.
     static func keystrokes(desired: Set<Int>, liveContent: String) -> [String] {
         let current = NumberedPromptDetector.checkedOptions(in: liveContent)
         let toggles = togglesToReach(desired: desired, from: current)
-        guard !toggles.isEmpty else { return [] }
+        // Even with no toggles, a submit still needs Return to confirm.
+        guard !toggles.isEmpty else { return ["return"] }
 
         var cursor = NumberedPromptDetector.cursorOption(in: liveContent) ?? 1
         var out: [String] = []
         for option in toggles {
-            let downs = max(0, option - cursor)
-            out.append(contentsOf: Array(repeating: "down", count: downs))
+            let delta = option - cursor
+            out.append(contentsOf: Array(repeating: delta >= 0 ? "down" : "up", count: abs(delta)))
             out.append("space")
             cursor = option
         }

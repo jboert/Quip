@@ -95,17 +95,46 @@ eq(MultiSelectSync.togglesToReach(desired: Set([2, 4]), from: Set([1, 2, 3])), [
    "mixed diff returns ascending symmetric difference")
 
 print("US-003: keystrokes")
-eq(MultiSelectSync.keystrokes(desired: Set([1, 2]), liveContent: screenshot), [],
-   "desired equals live checked set => no keystrokes")
+// A submit ALWAYS confirms with Return — even when nothing needs toggling.
+eq(MultiSelectSync.keystrokes(desired: Set([1, 2]), liveContent: screenshot), ["return"],
+   "desired equals live checked set => just Return (confirm), never empty")
+// Add 3 (below the cursor): walk down to it, toggle, confirm.
 eq(MultiSelectSync.keystrokes(desired: Set([1, 2, 3]), liveContent: screenshot),
    ["down", "space", "return"],
-   "cursor 2 + {1,2} pre-checked, add 3 => walk down to 3, space, return")
+   "cursor 2 + {1,2} pre-checked, add 3 => down to 3, space, return")
+// Replace with {3}: option 1 is ABOVE the cursor (2) so the walk must go UP,
+// not clamp to zero — the old down-only code toggled the wrong rows.
 eq(MultiSelectSync.keystrokes(desired: Set([3]), liveContent: screenshot),
-   ["space", "down", "space", "down", "space", "return"],
-   "desired {3} toggles 1,2,3 in ascending cursor order, ending with return")
+   ["up", "space", "down", "space", "down", "space", "return"],
+   "desired {3}: up to 1, down to 2, down to 3 — toggle each, then return")
 let ks = MultiSelectSync.keystrokes(desired: Set([3]), liveContent: screenshot)
-check(ks.allSatisfy { ["down", "space", "return"].contains($0) },
-      "keystrokes only ever emit down/space/return")
+check(ks.allSatisfy { ["up", "down", "space", "return"].contains($0) },
+      "keystrokes only ever emit up/down/space/return")
+
+// H3 — assert the RESULTING widget state, not just the key array. Replay the
+// keys against a model widget (cursor + checked set) and confirm the final
+// checked set equals the desired set. This is what actually proves correctness;
+// the old array-only checks blessed a buggy sequence.
+func replay(_ keys: [String], startCursor: Int, checked: Set<Int>, optionCount: Int) -> Set<Int> {
+    var cur = startCursor
+    var set = checked
+    for k in keys {
+        switch k {
+        case "down":   cur = min(optionCount, cur + 1)
+        case "up":     cur = max(1, cur - 1)
+        case "space":  if set.contains(cur) { set.remove(cur) } else { set.insert(cur) }
+        case "return": break
+        default:       break
+        }
+    }
+    return set
+}
+// screenshot: cursor starts on option 2, {1,2} pre-checked, 4 options.
+for desired in [Set([1, 2]), Set([1, 2, 3]), Set([3]), Set([2, 4]), Set([1, 3, 4])] {
+    let keys = MultiSelectSync.keystrokes(desired: desired, liveContent: screenshot)
+    let final = replay(keys, startCursor: 2, checked: Set([1, 2]), optionCount: 4)
+    eq(final, desired, "replay reaches desired \(desired.sorted()) from pre-checked {1,2} cursor@2")
+}
 
 print("US-005: initialPicks")
 eq(MultiSelectSync.initialPicks(liveContent: screenshot), Set([1, 2]),

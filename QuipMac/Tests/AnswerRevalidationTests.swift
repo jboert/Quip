@@ -177,10 +177,12 @@ final class AnswerRevalidationTests: XCTestCase {
     ↑/↓ to navigate · space to toggle · Enter to confirm
     """
 
-    func test_multiSelectSync_alreadyCorrect_noKeystrokes() {
-        // Desired == live checked set {1,2}: nothing to toggle, no submit.
+    func test_multiSelectSync_alreadyCorrect_stillConfirms() {
+        // Desired == live checked set {1,2}: nothing to toggle, but Submit must
+        // still press Return to CONFIRM the widget — otherwise tapping Submit to
+        // accept the pre-checked defaults injects nothing and the prompt hangs.
         XCTAssertEqual(MultiSelectSync.keystrokes(desired: Set([1, 2]), liveContent: preChecked),
-                       [])
+                       ["return"])
     }
 
     func test_multiSelectSync_addOne_keepsPreChecked() {
@@ -189,11 +191,37 @@ final class AnswerRevalidationTests: XCTestCase {
                        ["down", "space", "return"])
     }
 
-    func test_multiSelectSync_replaceSelection_togglesDiff() {
-        // Desired {3} from pre-checked {1,2}, cursor 2: toggle 1,2 off + 3 on,
-        // ascending cursor order.
+    func test_multiSelectSync_replaceSelection_walksUpForAboveCursor() {
+        // Desired {3} from pre-checked {1,2}, cursor on 2: option 1 is ABOVE the
+        // cursor, so the walk must go UP to reach it. The old down-only code
+        // clamped that move to zero and toggled the wrong rows.
         XCTAssertEqual(MultiSelectSync.keystrokes(desired: Set([3]), liveContent: preChecked),
-                       ["space", "down", "space", "down", "space", "return"])
+                       ["up", "space", "down", "space", "down", "space", "return"])
+    }
+
+    /// Replay the emitted keys against a model widget (cursor + checked set) and
+    /// assert the RESULTING checked set equals the desired set — the check that
+    /// actually proves correctness, vs pinning the raw key array. (review H3)
+    private func replay(_ keys: [String], startCursor: Int, checked: Set<Int>, optionCount: Int) -> Set<Int> {
+        var cur = startCursor, set = checked
+        for k in keys {
+            switch k {
+            case "down":  cur = min(optionCount, cur + 1)
+            case "up":    cur = max(1, cur - 1)
+            case "space": if set.contains(cur) { set.remove(cur) } else { set.insert(cur) }
+            default:      break
+            }
+        }
+        return set
+    }
+
+    func test_multiSelectSync_replayReachesDesired() {
+        // preChecked: cursor on option 2, {1,2} pre-checked, 4 options.
+        for desired: Set<Int> in [[1, 2], [1, 2, 3], [3], [2, 4], [1, 3, 4]] {
+            let keys = MultiSelectSync.keystrokes(desired: desired, liveContent: preChecked)
+            XCTAssertEqual(replay(keys, startCursor: 2, checked: [1, 2], optionCount: 4), desired,
+                           "keys must land the widget on desired \(desired.sorted())")
+        }
     }
 
     func test_multiSelectSync_emptyContent_startsUnchecked() {
