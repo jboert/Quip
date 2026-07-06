@@ -22,6 +22,13 @@ final class KeystrokeInjectorWriteExpressionTests: XCTestCase {
     /// Shift+Tab is the standard CSI back-tab sequence — ESC followed by `[Z`.
     /// This is what TUIs (Claude Code, vim, etc.) read as Shift+Tab on a real
     /// keyboard, and the only safe way to drive Claude Code's mode cycle.
+    func test_arrowKeys_areCSISequences() {
+        XCTAssertEqual(KeystrokeInjector.iTerm2WriteExpression(for: "up"),    #"((character id 27) & "[A")"#)
+        XCTAssertEqual(KeystrokeInjector.iTerm2WriteExpression(for: "down"),  #"((character id 27) & "[B")"#)
+        // Right-arrow accepts the inline autocomplete suggestion.
+        XCTAssertEqual(KeystrokeInjector.iTerm2WriteExpression(for: "right"), #"((character id 27) & "[C")"#)
+    }
+
     func test_shiftTab_isEscapeBracketZ() {
         XCTAssertEqual(KeystrokeInjector.iTerm2WriteExpression(for: "shift+tab"), #"((character id 27) & "[Z")"#)
     }

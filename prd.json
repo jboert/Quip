@@ -32,7 +32,7 @@
         "Human integration gate noted: run xcodebuild test -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -only-testing:QuipMacTests/KeystrokeInjectorWriteExpressionTests -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO after an xcodegen generate (zero-pbxproj protocol)."
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

@@ -719,3 +719,15 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - Injector CSI style for US-002: iTerm2WriteExpression uses ((character id 27) & "[C")
     form; keyCodeFor uses down=125/up=126, right=124.
 ---
+
+## 2026-07-05 - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Taught KeystrokeInjector the Right-arrow: iTerm2WriteExpression(for:) "right" -> ((character id 27) & "[C"); keyCodeFor "right" -> 124 (macOS Right-arrow keycode, beside down=125/up=126).
+- Added test_arrowKeys_areCSISequences to KeystrokeInjectorWriteExpressionTests (locks up/down/right AppleScript exprs).
+- Added US-002 assertions to tools/run-accept-autocomplete-tests.sh: pure Foundation helper derives ((character id 27) & "tail") from TerminalKeyBytes.csi, asserts up/down/right. exits 0.
+- Files: QuipMac/Services/KeystrokeInjector.swift, QuipMac/Tests/KeystrokeInjectorWriteExpressionTests.swift, tools/run-accept-autocomplete-tests.sh
+- **Learnings for future iterations:**
+  - ZERO-PBXPROJ TRAP HIT: fresh Mac build fails `cannot find 'VibeCutPromptMapper' in scope` — Shared/VibeCutPromptMapper.swift exists on disk but is NOT enumerated in the committed pbxproj (pre-existing gap, unrelated to this story). Fix per protocol: `xcodegen generate --spec QuipMac/project.yml --project QuipMac`, then `xcodebuild build` (BUILD SUCCEEDED), then `git restore --source=HEAD -- QuipMac/QuipMac.xcodeproj/project.pbxproj` to commit ZERO pbxproj changes. Every future story touching QuipMac MUST regen first or the Mac compile gate fails on this stale file.
+  - Mac compile gate (BUILD SUCCEEDED) is the proxy oracle for the human integration test. Runtime test-host may hang while /Applications/Quip.app holds port 8765 — do NOT kill the installed app; trust the compile.
+  - iTerm2WriteExpression arrow entries use Swift raw string literals `#"...& "[C")"#` because they contain double-quotes; keep that form.
+---

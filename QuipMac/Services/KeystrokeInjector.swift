@@ -610,6 +610,10 @@ final class KeystrokeInjector {
         // shift+tab below. Ink TUIs (Claude Code) read these as up/down navigation.
         case "up":                   return #"((character id 27) & "[A")"#
         case "down":                 return #"((character id 27) & "[B")"#
+        // Right-arrow (CSI C) — the primary accept-autocomplete key: zsh-autosuggestions,
+        // fish, and Claude Code inline suggest all accept the greyed ghost text on Right.
+        // Bytes derive from TerminalKeyBytes.csi(for: "right").
+        case "right":                return #"((character id 27) & "[C")"#
         case "backspace", "delete":  return "(character id 127)"  // DEL
         case "ctrl+c":               return "(character id 3)"    // ETX / SIGINT
         case "ctrl+d":               return "(character id 4)"    // EOT / EOF
@@ -985,6 +989,7 @@ final class KeystrokeInjector {
         case "space": return 49
         case "down": return 125
         case "up": return 126
+        case "right": return 124
         default: return 0
         }
     }

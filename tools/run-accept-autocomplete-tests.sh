@@ -30,6 +30,19 @@ expect(TerminalKeyBytes.csi(for: "left"),  "\u{1B}[D", "csi(left)")
 expect(TerminalKeyBytes.csi(for: "end"),   "\u{1B}[F", "csi(end)")
 expect(TerminalKeyBytes.csi(for: "bogus"), nil,        "csi(bogus)")
 
+// US-002 — the Mac injector's iTerm2 write expression for an arrow key is
+// derivable from the CSI bytes: ESC + tail  ->  ((character id 27) & "tail").
+// This locks the byte contract KeystrokeInjector.iTerm2WriteExpression depends on
+// without needing AppKit (the injector itself is grep-verified in the loop).
+func iTerm2Expr(fromCSI key: String) -> String? {
+    guard let csi = TerminalKeyBytes.csi(for: key), csi.hasPrefix("\u{1B}") else { return nil }
+    let tail = String(csi.dropFirst())   // drop the ESC
+    return "((character id 27) & \"\(tail)\")"
+}
+expect(iTerm2Expr(fromCSI: "up"),    "((character id 27) & \"[A\")", "iTerm2 expr up")
+expect(iTerm2Expr(fromCSI: "down"),  "((character id 27) & \"[B\")", "iTerm2 expr down")
+expect(iTerm2Expr(fromCSI: "right"), "((character id 27) & \"[C\")", "iTerm2 expr right (accept autocomplete)")
+
 if failures > 0 {
     FileHandle.standardError.write(Data("\(failures) assertion(s) failed\n".utf8))
     exit(1)
