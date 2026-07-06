@@ -570,6 +570,17 @@ final class KeystrokeInjector {
                 terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
+        // Arrow keys via System Events `key code` (keystrokeScript treats these
+        // as special keys). Without this, Terminal.app windows silently fail:
+        // accept-autocomplete (`right`) and interactive multi-select navigation
+        // (`down`/`up`) returned "Unknown key" and no-op'd, working only on
+        // iTerm2. `left` rounds out the set for symmetry.
+        case "right", "down", "up", "left":
+            script = keystrokeScript(
+                key: key.lowercased(), using: "",
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
+            )
+
         case "backspace", "delete":
             script = keystrokeScript(
                 key: "delete", using: "",
@@ -936,7 +947,8 @@ final class KeystrokeInjector {
     /// model doesn't expose CGWindowID directly.
     private func keystrokeScript(key: String, using modifiers: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID, windowIndex: Int) -> String {
         let appName = terminalApp.rawValue
-        let isSpecialKey = ["return", "escape", "tab", "delete"].contains(key.lowercased())
+        let isSpecialKey = ["return", "escape", "tab", "delete",
+                            "right", "left", "down", "up"].contains(key.lowercased())
 
         let keystrokeCmd: String
         if isSpecialKey {
@@ -990,6 +1002,7 @@ final class KeystrokeInjector {
         case "down": return 125
         case "up": return 126
         case "right": return 124
+        case "left": return 123
         default: return 0
         }
     }
