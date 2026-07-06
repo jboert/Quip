@@ -1186,3 +1186,31 @@ rest below"). Functional tap-behavior not yet hardware-exercised by USER.
 **Possible v2 (open to input):** a thinking/active middle sub-tier (today it's
 waiting → everything-else); a sticky toggle as an opt-in; remember per-display
 arrangements.
+
+---
+
+## Accept Claude's autocomplete / ghost text from the phone
+
+**Ask (2026-07-05, USER):** The terminal shows Claude's autocomplete suggestion
+(greyed ghost text) in the prompt. Quip renders it, but there's no way to ACCEPT
+/ enter it from the phone. Want a control that accepts the shown suggestion.
+
+**Shape (unbuilt):**
+- **Accept key:** shell/Claude ghost-suggest is accepted with a keystroke —
+  usually Right-arrow (zsh/fish autosuggest) or End; Claude Code's own inline
+  suggestion may differ. CONFIRM the exact key on a live prompt before wiring.
+- **Wiring exists:** `KeystrokeInjector.sendKeystroke` already takes a key
+  vocabulary (`tab`/`escape`/`ctrl+c`/`backspace`/`shift+tab`/…). Add `right`
+  (and/or `end`) to that vocab + a `quick_action`/wire message from iOS, same
+  pattern as the existing action keys in `QuipMacApp.swift` (~line 2527+).
+- **iOS control (Compact UI):** an icon button in the existing input row (e.g.
+  `arrow.right.to.line` / `text.append`), only shown when ghost text is present
+  if detectable — else always-available "accept suggestion" key. No new fixed
+  row (see compact-UI rule).
+- **Detection (optional v2):** Mac could detect that a suggestion is present
+  (dim/ANSI-styled trailing text after the cursor) and only then surface the
+  button + push it to the phone; v1 can be an unconditional accept key.
+
+**Gate when built:** pure keystroke-mapping unit + live confirm on a real
+autosuggesting prompt. `/prd`-able as a small 2-3 story feature (add key to vocab
+→ iOS control + wire message → optional suggestion-present detection).
