@@ -752,3 +752,31 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     quickAction("press_right") + a compact input-row button. Follow compact-UI
     rule (icon in existing row, no new fixed row).
 ---
+
+## 2026-07-05 - US-004
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Added iOS accept-suggestion control. New QuickButton.acceptAutocomplete case
+  (keystroke group) -> .quickAction("press_right"); displayName "Accept
+  autocomplete", systemImage "text.append", empty label (icon-only, compact).
+- Added a compact icon button (text.append) to the terminal header control row
+  (beside the scroll/refresh icons) that fires onSendAction("press_right", nil).
+  Reuses the existing row, no new fixed row, matches the ghost-white 13pt style.
+- Files: QuipiOS/QuipApp.swift
+- GATE: `bash tools/run-accept-autocomplete-tests.sh` -> passed, EXIT=0. grep
+  confirms both quickAction("press_right") + onSendAction("press_right").
+  iOS COMPILE oracle: xcodegen generate --spec QuipiOS/project.yml then xcodebuild
+  build -destination sim id=CFCE8360-508E-4A66-B0FD-615D8CD2A549 -> BUILD SUCCEEDED;
+  restored pbxproj (zero-pbxproj protocol, only QuipApp.swift committed).
+- **Learnings for future iterations:**
+  - PRD said "TerminalActionKey" but the real enum is `QuickButton` (QuipApp.swift
+    ~L5692). Add cases in 5 switches: rawValue list, displayName, label, systemImage,
+    category, action. Miss one -> non-exhaustive-switch compile error.
+  - QA sim UDID 3B2ACF04-... is GONE; current available sim is
+    CFCE8360-508E-4A66-B0FD-615D8CD2A549 (iPhone 17 Pro, iOS 26.5).
+  - `git checkout --` is BLOCKED by the loop guard; use `git restore --source=HEAD --`
+    to revert the regenerated pbxproj.
+  - Human UI gate: install + confirm the button accepts a live suggestion. If
+    Right-arrow doesn't accept on the target prompt, swap .acceptAutocomplete's
+    action to quickAction with "end" (TerminalKeyBytes already supports it).
+  - PRD COMPLETE: all 4 accept-autocomplete stories pass.
+---

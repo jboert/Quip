@@ -63,7 +63,7 @@
         "Human UI gate noted: install QuipiOS and confirm the button accepts a live autosuggestion; if Right-arrow does not accept on the target prompt, swap the mapped key to \"end\" (already supported by TerminalKeyBytes) \u2014 a one-line change."
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

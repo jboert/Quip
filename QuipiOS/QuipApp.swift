@@ -5455,6 +5455,19 @@ struct InlineTerminalContent: View {
                     LongPressGesture(minimumDuration: 0.4)
                         .onEnded { _ in onSendAction("scroll_bottom", nil) }
                 )
+                // Accept autocomplete — presses Right-arrow in the focused
+                // terminal to commit the shell/Claude inline suggestion (greyed
+                // ghost text). Compact: reuses this header row, no new fixed row.
+                Button {
+                    onSendAction("press_right", nil)
+                } label: {
+                    Image(systemName: "text.append")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
+                .accessibilityLabel("Accept autocomplete")
+                .accessibilityHint("Presses Right-arrow to accept the shown suggestion")
+                .accessibilityAddTraits(.isButton)
                 Button { onRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13))
@@ -5700,6 +5713,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
     case shiftTab
+    // Right-arrow — commits the shell/Claude inline autocomplete (greyed
+    // ghost text). Maps to the Mac `press_right` quick-action.
+    case acceptAutocomplete
 
     var id: String { rawValue }
 
@@ -5726,6 +5742,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .backspace: return "Backspace"
         case .clearInput: return "Clear input"
         case .shiftTab: return "Shift+Tab"
+        case .acceptAutocomplete: return "Accept autocomplete"
         }
     }
 
@@ -5758,6 +5775,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .backspace: return ""
         case .clearInput: return ""
         case .shiftTab: return ""
+        case .acceptAutocomplete: return ""
         }
     }
 
@@ -5770,6 +5788,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return "arrow.right.to.line"
         case .clearInput: return "delete.left.fill"
         case .shiftTab: return "arrow.left.to.line"
+        case .acceptAutocomplete: return "text.append"
         default: return nil
         }
     }
@@ -5793,7 +5812,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         switch self {
         case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview: return .slash
         case .yes, .no, .one, .two, .three: return .answer
-        case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab: return .keystroke
+        case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab, .acceptAutocomplete: return .keystroke
         }
     }
 
@@ -5830,6 +5849,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .clearInput: return .quickAction("clear_input")
         // Raw Shift+Tab — cycles Claude mode (normal → autoAccept → plan).
         case .shiftTab: return .quickAction("press_shift_tab")
+        // Right-arrow — accepts the shown inline autocomplete suggestion.
+        case .acceptAutocomplete: return .quickAction("press_right")
         }
     }
 
