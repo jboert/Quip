@@ -2538,6 +2538,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             runAfterDelay {
                 keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
+        case "press_right":
+            // Accept-autocomplete: Right-arrow commits the shown inline suggestion
+            // (zsh-autosuggestions / fish / Claude Code ghost text). See US-003.
+            runAfterDelay {
+                keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            }
         case "press_backspace":
             runAfterDelay {
                 keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)

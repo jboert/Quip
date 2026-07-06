@@ -731,3 +731,24 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - Mac compile gate (BUILD SUCCEEDED) is the proxy oracle for the human integration test. Runtime test-host may hang while /Applications/Quip.app holds port 8765 — do NOT kill the installed app; trust the compile.
   - iTerm2WriteExpression arrow entries use Swift raw string literals `#"...& "[C")"#` because they contain double-quotes; keep that form.
 ---
+
+## 2026-07-05 - US-003
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Wired Mac press_right quick-action. handleQuickAction gains `case "press_right"`
+  after press_tab: runs through the same runAfterDelay focus path and calls
+  keystrokeInjector.sendKeystroke("right", ...) with identical window/session args
+  to press_tab/press_escape. "right" is emitted by the injector (US-002) as
+  ((character id 27) & "[C") / keycode 124.
+- Files: QuipMac/QuipMacApp.swift
+- GATE: `bash tools/run-accept-autocomplete-tests.sh` -> "all accept-autocomplete
+  assertions passed", EXIT=0. grep confirms press_right -> sendKeystroke("right").
+- **Learnings for future iterations:**
+  - Loop-verifiable gate for US-003 is the swiftc harness + grep only; the
+    xcodebuild rebuild is the HUMAN integration gate (PRD split). Did NOT rebuild
+    the Mac app (DO NOT list + zero-pbxproj: Shared/TerminalKeyBytes.swift still
+    absent from committed pbxproj; a human must `xcodegen generate` pre-build).
+  - The case is a byte-for-byte clone of press_tab's shape; lowest-risk wiring.
+  - US-004 (last story) is iOS: QuipiOS/QuipApp.swift TerminalActionKey +
+    quickAction("press_right") + a compact input-row button. Follow compact-UI
+    rule (icon in existing row, no new fixed row).
+---

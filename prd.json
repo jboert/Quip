@@ -47,7 +47,7 @@
         "Human integration gate noted: rebuild QuipMac and confirm a press_right from the phone advances the cursor / accepts a shell autosuggestion in the focused terminal."
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
