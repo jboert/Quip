@@ -947,22 +947,22 @@ final class KeystrokeInjector {
     /// model doesn't expose CGWindowID directly.
     private func keystrokeScript(key: String, using modifiers: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID, windowIndex: Int) -> String {
         let appName = terminalApp.rawValue
-        let isSpecialKey = ["return", "escape", "tab", "delete",
-                            "right", "left", "down", "up"].contains(key.lowercased())
 
+        // A key with a known virtual keycode is injected as `key code N` (special
+        // keys: return/escape/tab/delete/arrows); everything else is typed as a
+        // literal `keystroke "x"`. Driving this off keyCodeFor (not a parallel
+        // list) means the two can't drift — and an unmapped "special" key falls
+        // to a visible literal keystroke instead of silently injecting keycode 0
+        // (= the `a` key).
         let keystrokeCmd: String
-        if isSpecialKey {
-            if modifiers.isEmpty {
-                keystrokeCmd = "key code \(keyCodeFor(key))"
-            } else {
-                keystrokeCmd = "key code \(keyCodeFor(key)) using {\(modifiers)}"
-            }
+        if let code = Self.keyCodeFor(key) {
+            keystrokeCmd = modifiers.isEmpty
+                ? "key code \(code)"
+                : "key code \(code) using {\(modifiers)}"
         } else {
-            if modifiers.isEmpty {
-                keystrokeCmd = "keystroke \"\(key)\""
-            } else {
-                keystrokeCmd = "keystroke \"\(key)\" using {\(modifiers)}"
-            }
+            keystrokeCmd = modifiers.isEmpty
+                ? "keystroke \"\(key)\""
+                : "keystroke \"\(key)\" using {\(modifiers)}"
         }
 
         // NOTE on window targeting: an earlier version of this function tried
@@ -991,8 +991,11 @@ final class KeystrokeInjector {
         """
     }
 
-    /// Map key names to macOS virtual key codes
-    private func keyCodeFor(_ key: String) -> Int {
+    /// Map key names to macOS virtual key codes, or nil for an unmapped key.
+    /// `nonisolated static` + internal so the table is unit-testable (mirrors
+    /// `iTerm2WriteExpression`). Returning nil (not 0) stops `keystrokeScript`
+    /// from silently injecting keycode 0 — the `a` key — for an unknown key.
+    nonisolated static func keyCodeFor(_ key: String) -> Int? {
         switch key.lowercased() {
         case "return", "enter": return 36
         case "escape", "esc": return 53
@@ -1003,7 +1006,7 @@ final class KeystrokeInjector {
         case "up": return 126
         case "right": return 124
         case "left": return 123
-        default: return 0
+        default: return nil
         }
     }
 

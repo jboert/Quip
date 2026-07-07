@@ -43,4 +43,37 @@ final class KeystrokeInjectorWriteExpressionTests: XCTestCase {
         XCTAssertNil(KeystrokeInjector.iTerm2WriteExpression(for: ""))
         XCTAssertNil(KeystrokeInjector.iTerm2WriteExpression(for: "f1"))
     }
+
+    // MARK: - keyCodeFor (System Events / Terminal.app path, review M1)
+    //
+    // Locks the macOS virtual keycodes used on the System Events keystroke path.
+    // A transposed code here would silently inject the wrong key on Terminal.app
+    // windows (arrow navigation / accept-autocomplete), so pin every entry.
+
+    func test_keyCodeFor_mappedKeys() {
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("return"), 36)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("enter"),  36)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("escape"), 53)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("esc"),    53)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("tab"),    48)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("delete"), 51)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("space"),  49)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("down"),   125)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("up"),     126)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("right"),  124)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("left"),   123)
+    }
+
+    func test_keyCodeFor_caseInsensitive() {
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("RIGHT"), 124)
+        XCTAssertEqual(KeystrokeInjector.keyCodeFor("Up"),    126)
+    }
+
+    /// nil (not 0) for an unmapped key — 0 is the `a` keycode, so a silent
+    /// fallback would type `a` instead of the intended special key. (review M1)
+    func test_keyCodeFor_unmappedReturnsNil() {
+        XCTAssertNil(KeystrokeInjector.keyCodeFor("f1"))
+        XCTAssertNil(KeystrokeInjector.keyCodeFor("home"))
+        XCTAssertNil(KeystrokeInjector.keyCodeFor(""))
+    }
 }
