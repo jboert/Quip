@@ -83,6 +83,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipMacTests
         GENERATE_INFOPLIST_FILE: "YES"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: D2PM6R797Q
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Quip.app/Contents/MacOS/Quip"
         BUNDLE_LOADER: "$(TEST_HOST)"
         # Tests stay on Swift 5 language mode — CI's Xcode 16.4 errors
