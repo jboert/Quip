@@ -5472,13 +5472,18 @@ struct InlineTerminalContent: View {
                 // Accept autocomplete — presses Right-arrow in the focused
                 // terminal to commit the shell/Claude inline suggestion (greyed
                 // ghost text). Compact: reuses this header row, no new fixed row.
+                // Gated on hasAutosuggest (US-003): active only when the Mac
+                // reports a live suggestion, so a tap never nudges the cursor
+                // into empty air.
                 Button {
+                    guard hasAutosuggest else { return }
                     onSendAction("press_right", nil)
                 } label: {
                     Image(systemName: "text.append")
                         .font(.system(size: 13))
-                        .foregroundStyle(Color.white.opacity(0.5))
+                        .foregroundStyle(Color.white.opacity(hasAutosuggest ? 0.5 : 0.15))
                 }
+                .disabled(!hasAutosuggest)
                 .accessibilityLabel("Accept autocomplete")
                 .accessibilityHint("Presses Right-arrow to accept the shown suggestion")
                 .accessibilityAddTraits(.isButton)

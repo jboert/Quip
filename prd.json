@@ -49,8 +49,8 @@
         "Human UI gate noted: install QuipiOS and confirm the button greys out with no suggestion and accepts a live one."
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "InlineTerminalContent accept button: guard hasAutosuggest + .disabled(!hasAutosuggest) + opacity 0.5/0.15; same header row (compact-UI). Harness EXIT=0; QuipiOS BUILD SUCCEEDED (xcodegen regen, pbxproj restored). Human UI gate: install + confirm grey-out/accept."
     },
     {
       "id": "US-004",

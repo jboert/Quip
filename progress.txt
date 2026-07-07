@@ -858,3 +858,32 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     hasAutosuggest property (.disabled + opacity); the flag is already plumbed
     to the view — no further transport work needed.
 ---
+
+## 2026-07-06 - US-003
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Gated the iOS accept-autocomplete button on live suggestion state. In
+  InlineTerminalContent (QuipiOS/QuipApp.swift ~5475) the text.append header
+  button now: `guard hasAutosuggest else { return }` before
+  onSendAction("press_right", nil), `.disabled(!hasAutosuggest)`, and icon
+  opacity 0.5 (active, matches sibling icons) vs 0.15 (dimmed). Same header
+  row — no new fixed row (compact-UI rule).
+- Files: QuipiOS/QuipApp.swift only.
+- Gates: bash tools/run-autosuggest-tests.sh EXIT=0 ("all autosuggest
+  assertions passed"). grep confirms guard + .disabled + opacity all driven by
+  hasAutosuggest. iOS compile oracle: xcodegen regen -> xcodebuild build (sim
+  id=CFCE8360) ** BUILD SUCCEEDED **; pbxproj git-restored (zero-pbxproj
+  protocol, commit carries QuipApp.swift only).
+- Human UI gate (AC #6, not auto-verifiable): install QuipiOS, confirm button
+  greys out with no suggestion and accepts a live one.
+- **Learnings for future iterations:**
+  - Double-gate the tap: .disabled alone covers the Button, but the guard in
+    the action closure is what the AC's "does not send press_right" names —
+    belt-and-suspenders costs one line and survives a future refactor that
+    drops the modifier.
+  - Sibling header icons idle at opacity(0.5), so "full-opacity" for this row
+    means 0.5; disabled state uses 0.15 to read as inert without vanishing.
+  - US-004 (last story): add AutosuggestDetector.shouldAccept(liveContent:) to
+    the SAME Shared file (harness compiles one source), wire QuipMacApp
+    handleQuickAction press_right to re-scrape + consult it, add harness
+    asserts. Mac side needs the same xcodegen dance (QuipMac/project.yml).
+---
