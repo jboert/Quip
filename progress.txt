@@ -887,3 +887,41 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
     handleQuickAction press_right to re-scrape + consult it, add harness
     asserts. Mac side needs the same xcodegen dance (QuipMac/project.yml).
 ---
+
+## 2026-07-06 - US-004
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Guarded Mac Right-arrow injection on live suggestion state.
+- Shared/AutosuggestDetector.swift: added shouldAccept(liveContent:) ->
+  hasSuggestion(in:) — the pure inject-time decision.
+- QuipMac/QuipMacApp.swift handleQuickAction "press_right": now re-scrapes the
+  focused window's live buffer on DispatchQueue.global(.userInitiated) via
+  keystrokeInjector.readContent (isTerminal ? scrape : ""), consults
+  AutosuggestDetector.shouldAccept, and only then hops to main +
+  injectionDelay-paced sendKeystroke("right"). No suggestion at inject time =>
+  drop + print "[Quip] press_right DROPPED..." (mirrors revalidateAnswer's
+  scrape-on-bg / inject-on-main shape).
+- tools/run-autosuggest-tests.sh: +2 US-004 asserts (shouldAccept true for
+  ghost sample, false for plain line).
+- Files: Shared/AutosuggestDetector.swift, QuipMac/QuipMacApp.swift,
+  tools/run-autosuggest-tests.sh, prd.json, progress.txt.
+- Gates: bash tools/run-autosuggest-tests.sh EXIT=0 ("all autosuggest
+  assertions passed", 18 asserts). grep confirms press_right consults
+  AutosuggestDetector before sendKeystroke("right"). Mac compile oracle:
+  xcodegen regen -> xcodebuild build ** BUILD SUCCEEDED **; pbxproj
+  git-restored (commit carries source only).
+- Human integration gate (AC #6): rebuild QuipMac (run xcodegen generate
+  first — Shared/AutosuggestDetector.swift not in committed pbxproj), confirm
+  a tap with no suggestion is a no-op and a tap with one accepts.
+- **Learnings for future iterations:**
+  - The local runAfterDelay closure in handleQuickAction is NOT Sendable —
+    capturing it in a DispatchQueue.global @Sendable closure would trip Swift 6.
+    Capture the plain Double injectionDelay instead and re-implement the
+    delay-or-fire dispatch inside the main hop.
+  - sendKeystroke is @discardableResult -> InjectionResult; a single-expression
+    closure infers `() -> InjectionResult` and won't pass to asyncAfter(execute:).
+    Annotate `let fire: () -> Void = {...}` explicitly.
+  - readContent(terminalApp:cgWindowNumber:iterm2SessionId:) is safe to call
+    from a background queue — revalidateAnswer already does; copy its
+    [keystrokeInjector] capture-list pattern.
+  - PRD COMPLETE: all 4 autosuggest-detection stories pass.
+---

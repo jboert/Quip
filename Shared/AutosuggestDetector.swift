@@ -57,6 +57,14 @@ enum AutosuggestDetector {
         suggestionText(in: content) != nil
     }
 
+    /// Pure inject-time decision the Mac's press_right handler consults: a tap
+    /// that raced the screen (suggestion gone by inject time) must be dropped,
+    /// never injected into empty air where Right-arrow would move the cursor
+    /// into the user's typed text.
+    static func shouldAccept(liveContent: String) -> Bool {
+        hasSuggestion(in: liveContent)
+    }
+
     // MARK: - ANSI parsing
 
     private struct StyledCharacter {

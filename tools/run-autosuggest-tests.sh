@@ -77,6 +77,12 @@ expect(AutosuggestDetector.suggestionText(in: "you typed \u{1B}[2mghost\u{1B}[0m
 expect(AutosuggestDetector.suggestionText(in: "you typed \u{1B}[2mghost\u{1B}[0m\n"),
        "ghost", "trailing newline ignored")
 
+// US-004 — inject-time guard consults the same detection.
+expect(AutosuggestDetector.shouldAccept(liveContent: ghost), true,
+       "shouldAccept true for ghost-text sample")
+expect(AutosuggestDetector.shouldAccept(liveContent: plain), false,
+       "shouldAccept false for plain no-suggestion line")
+
 if failures > 0 {
     FileHandle.standardError.write(Data("\(failures) assertion(s) failed\n".utf8))
     exit(1)

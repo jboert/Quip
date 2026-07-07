@@ -2544,9 +2544,27 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
         case "press_right":
             // Accept-autocomplete: Right-arrow commits the shown inline suggestion
-            // (zsh-autosuggestions / fish / Claude Code ghost text). See US-003.
-            runAfterDelay {
-                keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            // (zsh-autosuggestions / fish / Claude Code ghost text). Re-scrape the
+            // live buffer and inject only while a suggestion is actually showing —
+            // a tap that raced the screen must not nudge the cursor into typed
+            // text (mirrors answerStillValid's revalidate-before-inject).
+            let sessionId = window.iterm2SessionId
+            let isTerminal = window.isTerminal
+            DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
+                let content = isTerminal
+                    ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
+                    : ""
+                guard AutosuggestDetector.shouldAccept(liveContent: content) else {
+                    print("[Quip] press_right DROPPED (no autosuggestion at inject time): window=\(wid)")
+                    return
+                }
+                DispatchQueue.main.async {
+                    let fire: () -> Void = {
+                        keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                    }
+                    if injectionDelay == 0 { fire() }
+                    else { DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay, execute: fire) }
+                }
             }
         case "press_backspace":
             runAfterDelay {

@@ -65,8 +65,8 @@
         "Human integration gate noted: rebuild QuipMac and confirm a tap with no suggestion is a no-op while a tap with one accepts."
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "AutosuggestDetector.shouldAccept(liveContent:) added; QuipMacApp press_right re-scrapes via keystrokeInjector.readContent on bg queue and injects Right only when shouldAccept (drop logged). Harness 18 asserts EXIT=0; QuipMac BUILD SUCCEEDED (xcodegen regen, pbxproj restored). Human gate: rebuild QuipMac, tap w/o suggestion = no-op, with one = accepts."
     }
   ]
 }
