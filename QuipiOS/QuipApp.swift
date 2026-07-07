@@ -121,6 +121,10 @@ struct QuipApp: App {
     @State private var terminalContentScreenshotById: [String: String] = [:]
     @State private var terminalContentURLsById: [String: [String]] = [:]
     @State private var terminalContentUpdatedAtById: [String: Date] = [:]
+    /// Per-window inline-autosuggestion flag from the Mac's terminal_content
+    /// broadcast (AutosuggestDetector). Gates the accept-autocomplete button.
+    /// Missing key = false (older Mac builds never send the field).
+    @State private var terminalContentHasAutosuggestById: [String: Bool] = [:]
     @State private var showPINEntry = false
     @State private var pinText = ""
     @State private var projectDirectories: [String] = []
@@ -200,6 +204,7 @@ struct QuipApp: App {
                 terminalContentScreenshotById: $terminalContentScreenshotById,
                 terminalContentURLsById: $terminalContentURLsById,
                 terminalContentUpdatedAtById: $terminalContentUpdatedAtById,
+                terminalContentHasAutosuggestById: $terminalContentHasAutosuggestById,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
@@ -700,7 +705,7 @@ struct QuipApp: App {
             }
         }
 
-        manager.onTerminalContent = { session, windowId, content, screenshot, urls in
+        manager.onTerminalContent = { session, windowId, content, screenshot, urls, hasAutosuggest in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 let receivedAt = Date()
@@ -708,6 +713,7 @@ struct QuipApp: App {
                 terminalContentText = content
                 terminalContentUpdatedAt = receivedAt
                 terminalContentUpdatedAtById[windowId] = receivedAt
+                terminalContentHasAutosuggestById[windowId] = hasAutosuggest
                 if let screenshot, !screenshot.isEmpty {
                     terminalContentScreenshot = screenshot
                 }
@@ -1247,6 +1253,7 @@ struct MainiOSView: View {
     @Binding var terminalContentScreenshotById: [String: String]
     @Binding var terminalContentURLsById: [String: [String]]
     @Binding var terminalContentUpdatedAtById: [String: Date]
+    @Binding var terminalContentHasAutosuggestById: [String: Bool]
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
     var projectDirectories: [String]
@@ -3455,10 +3462,12 @@ struct MainiOSView: View {
         let text = terminalContentTextById[wid] ?? terminalContentText ?? ""
         let screenshot = terminalContentScreenshotById[wid] ?? terminalContentScreenshot
         let urls = terminalContentURLsById[wid] ?? terminalContentURLs ?? []
+        let hasAutosuggest = terminalContentHasAutosuggestById[wid] ?? false
         return InlineTerminalContent(
             content: text,
             screenshot: screenshot,
             urls: urls,
+            hasAutosuggest: hasAutosuggest,
             windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
             windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
             isExpanded: $isTerminalExpanded,
@@ -5225,6 +5234,11 @@ struct InlineTerminalContent: View {
     /// Screenshot mode (the typical case) renders URLs as pixels with no tap
     /// routing, so this tray is how they become interactive.
     let urls: [String]
+    /// True when the Mac detected an inline autosuggestion (ghost text) on
+    /// this window's input line. Gates the accept-autocomplete button
+    /// (US-003); defaults false so callers without live state (QA pair
+    /// layout, previews) keep compiling and the button stays inert.
+    var hasAutosuggest: Bool = false
     let windowName: String
     let windowColor: Color
     @Binding var isExpanded: Bool

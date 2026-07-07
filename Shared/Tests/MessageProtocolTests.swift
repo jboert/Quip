@@ -733,6 +733,26 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(restored.urls, [])
     }
 
+    func testTerminalContentMessageHasAutosuggestDefaultsFalseWhenAbsent() throws {
+        // Pre-autosuggest Mac builds omit the field entirely — must decode false.
+        let json = """
+        {"type":"terminal_content","windowId":"w1","content":"$ ls\\n"}
+        """.data(using: .utf8)!
+        let msg = try XCTUnwrap(MessageCoder.decode(TerminalContentMessage.self, from: json))
+        XCTAssertFalse(msg.hasAutosuggest)
+    }
+
+    func testTerminalContentMessageHasAutosuggestRoundTrip() throws {
+        let original = TerminalContentMessage(
+            windowId: "w1",
+            content: "$ git ch\u{1B}[2meckout main\u{1B}[0m",
+            hasAutosuggest: true
+        )
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(TerminalContentMessage.self, from: data))
+        XCTAssertTrue(restored.hasAutosuggest)
+    }
+
     // MARK: - Cross-platform JSON key compatibility
 
     func testSortedKeysEncoding() throws {

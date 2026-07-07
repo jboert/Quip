@@ -33,8 +33,8 @@
         "Human integration gate noted: xcodebuild build QuipMac + QuipiOS (after xcodegen generate) succeeds."
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "TerminalContentMessage.hasAutosuggest (custom init(from:) defaults false when absent); Mac computes isTerminal && AutosuggestDetector.hasSuggestion(in: redacted) at broadcast; iOS carries via WebSocketClient->BackendConnectionManager->QuipApp map->InlineTerminalContent(hasAutosuggest:). Both peers BUILD SUCCEEDED after xcodegen regen (pbxproj restored); MessageProtocolTests 95/0."
     },
     {
       "id": "US-003",

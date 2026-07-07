@@ -810,3 +810,51 @@ Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
   - US-004 will add AutosuggestDetector.shouldAccept(liveContent:) — keep it in
     this same file so the harness compiles one Shared source.
 ---
+
+## 2026-07-06 - US-002
+Thread: https://ampcode.com/threads/$AMP_CURRENT_THREAD_ID
+- Broadcast per-window hasAutosuggest flag Mac -> phone.
+- Shared/MessageProtocol.swift: TerminalContentMessage gains
+  `let hasAutosuggest: Bool` + custom init(from:) decoding
+  `(try? decode) ?? false` (additive-field pattern) + init param default false.
+  Explicit CodingKeys added (type/windowId/content/screenshot/urls/hasAutosuggest).
+- QuipMac/QuipMacApp.swift ~1538 (request_content handler): computes
+  `isTerminal && AutosuggestDetector.hasSuggestion(in: redacted)` on the same
+  scrape the phone renders; passes into the broadcast TerminalContentMessage.
+- iOS carry: WebSocketClient.onTerminalContent tuple + decode site gain Bool;
+  BackendConnectionManager callback + wire() bridge gain Bool; QuipApp
+  onTerminalContent stores into NEW @State terminalContentHasAutosuggestById
+  [String:Bool] (bound through MainiOSView); terminalContentView passes
+  `hasAutosuggest: map[wid] ?? false` into InlineTerminalContent, which gains
+  `var hasAutosuggest: Bool = false` (default keeps QAPairLayoutView + previews
+  compiling; US-003 gates the button on it).
+- Tests: Shared/Tests/MessageProtocolTests.swift +2
+  (absent-field decodes false; round-trip true).
+- Gates: bash tools/run-autosuggest-tests.sh EXIT=0. grep confirms Mac sets
+  from AutosuggestDetector + iOS decode path carries it. Compile oracle ran
+  (not just noted): xcodegen regen both projects -> QuipMac ** BUILD
+  SUCCEEDED **, QuipiOS ** BUILD SUCCEEDED ** (sim id=CFCE8360), Mac
+  MessageProtocolTests Executed 95 tests, 0 failures ** TEST SUCCEEDED **;
+  pbxprojs git-restored (zero-pbxproj protocol, commit carries source only).
+- Files: Shared/MessageProtocol.swift, Shared/Tests/MessageProtocolTests.swift,
+  QuipMac/QuipMacApp.swift, QuipiOS/Services/WebSocketClient.swift,
+  QuipiOS/Services/BackendConnectionManager.swift, QuipiOS/QuipApp.swift.
+- **Learnings for future iterations:**
+  - onTerminalContent is a 3-layer bridge (WebSocketClient -> Backend-
+    ConnectionManager wire() -> QuipApp closure). Adding a param means touching
+    ALL THREE plus the callback typealiases at WebSocketClient:179 and
+    BackendConnectionManager:70 — miss one and only xcodebuild (not SourceKit)
+    reports the closure-arity mismatch.
+  - Mac test-host RAN this cycle (95 protocol tests, no hang) even with
+    /Applications/Quip.app installed — the port-8765 hang is specific to tests
+    that boot server paths; pure Codable tests are safe to run.
+  - InlineTerminalContent new inputs: use `var x: T = default` placed before
+    windowName so the memberwise init keeps QAPairLayoutView's label order
+    valid while new call sites pass the label explicitly.
+  - hasAutosuggest computed on `redacted` (SecretRedactor output, 200-line
+    suffix) — same string the phone renders, so button state can't diverge
+    from visible content. isTerminal guard skips the non-terminal placeholder.
+  - US-003: gate the accept button in InlineTerminalContent on the new
+    hasAutosuggest property (.disabled + opacity); the flag is already plumbed
+    to the view — no further transport work needed.
+---

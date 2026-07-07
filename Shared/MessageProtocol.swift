@@ -456,13 +456,35 @@ struct TerminalContentMessage: Codable, Sendable {
     /// screenshot, which is otherwise pixels and can't be linkified.
     /// Optional for backwards compat with pre-tray Mac builds.
     let urls: [String]?
+    /// True when the Mac detected an inline autosuggestion (greyed ghost
+    /// text) on this window's input line, via `AutosuggestDetector`. Gates
+    /// the iOS accept-autocomplete button so it never fires into empty air.
+    /// Decodes as false when absent so pre-autosuggest Mac builds keep
+    /// working (additive-field pattern).
+    let hasAutosuggest: Bool
 
-    init(windowId: String, content: String, screenshot: String? = nil, urls: [String]? = nil) {
+    init(windowId: String, content: String, screenshot: String? = nil, urls: [String]? = nil,
+         hasAutosuggest: Bool = false) {
         self.type = "terminal_content"
         self.windowId = windowId
         self.content = content
         self.screenshot = screenshot
         self.urls = urls
+        self.hasAutosuggest = hasAutosuggest
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        windowId = try c.decode(String.self, forKey: .windowId)
+        content = try c.decode(String.self, forKey: .content)
+        screenshot = try? c.decode(String.self, forKey: .screenshot)
+        urls = try? c.decode([String].self, forKey: .urls)
+        hasAutosuggest = (try? c.decode(Bool.self, forKey: .hasAutosuggest)) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, windowId, content, screenshot, urls, hasAutosuggest
     }
 }
 

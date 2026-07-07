@@ -67,7 +67,7 @@ final class BackendConnectionManager {
     /// for the active session. (US-004.)
     var onSwrmStoryStarted: ((BackendSession, SwrmStoryStartedMessage) -> Void)?
     var onStateChange: ((BackendSession, String, String) -> Void)?
-    var onTerminalContent: ((BackendSession, String, String, String?, [String]?) -> Void)?
+    var onTerminalContent: ((BackendSession, String, String, String?, [String]?, Bool) -> Void)?
     var onOutputDelta: ((BackendSession, String, String, String, Bool) -> Void)?
     var onTTSAudio: ((BackendSession, String, String, String, Int, Bool, Data) -> Void)?
     var onSelectWindow: ((BackendSession, String) -> Void)?
@@ -1215,7 +1215,7 @@ final class BackendConnectionManager {
             self.onStateChange?(session, windowId, newState)
         }
 
-        c.onTerminalContent = { [weak self, weak session] windowId, content, screenshot, urls in
+        c.onTerminalContent = { [weak self, weak session] windowId, content, screenshot, urls, hasAutosuggest in
             guard let self, let session else { return }
             session.terminalContentWindowId = windowId
             session.terminalContentText = content
@@ -1225,7 +1225,7 @@ final class BackendConnectionManager {
             if let urls {
                 session.terminalContentURLs = urls
             }
-            self.onTerminalContent?(session, windowId, content, screenshot, urls)
+            self.onTerminalContent?(session, windowId, content, screenshot, urls, hasAutosuggest)
         }
 
         c.onOutputDelta = { [weak self, weak session] windowId, windowName, text, isFinal in

@@ -1532,8 +1532,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         // respected — we never ship a URL we also redacted
                         // from the visible content.
                         let urls = TerminalURLExtractor.extract(from: redacted)
+                        // Ghost-text flag for the phone's accept-autocomplete
+                        // button — computed on the same scrape the phone
+                        // renders, so button state matches what's on screen.
+                        let hasAutosuggest = isTerminal && AutosuggestDetector.hasSuggestion(in: redacted)
                         DispatchQueue.main.async {
-                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot, urls: urls))
+                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot, urls: urls, hasAutosuggest: hasAutosuggest))
                         }
                     }
                 }
