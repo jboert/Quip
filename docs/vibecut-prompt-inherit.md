@@ -11,7 +11,9 @@ sync). Edits belong in VibeCut; Quip is a refreshable consumer.
 
 ## Source of truth
 
-- File: `<vibecut-repo>/shared/prompts.json` (git-tracked in the VibeCut project).
+- Base catalog: `<vibecut-repo>/shared/prompts.json` (git-tracked in the VibeCut project).
+- User prompt packs: `~/Library/Application Support/VibeCut/packs/*.json`
+  (`vibecutpack/1` files created/imported by VibeCut).
 - Repo path: `~/Projects/vibecut` by default, overridable on the Mac via
   `defaults write com.quip.mac vibecutRepoPath /path/to/vibecut`.
 
@@ -44,6 +46,10 @@ A VibeCut entry becomes a Quip prompt **iff** all hold — "real prompts only":
 
 Everything else (screenshot / stats / shell / chain actions, empty bodies, and
 the send shortcuts) is counted as *skipped* and reported in the sync ack.
+
+Prompt-pack entries are merged after the base catalog and go through the same
+filter/mapping rules. Corrupt pack files are skipped so one bad imported pack
+cannot block sync of the base VibeCut catalog or other valid packs.
 
 VibeCut's shared `preamble` is **not** prepended — Quip inherits only the raw
 per-prompt body.

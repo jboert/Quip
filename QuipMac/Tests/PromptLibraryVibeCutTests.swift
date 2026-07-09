@@ -29,6 +29,39 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         FileManager.default.fileExists(atPath: tmp.appendingPathComponent(name).path)
     }
 
+    func testReaderMergesVibeCutPromptPacksWithBaseCatalog() throws {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        let packs = tmp.appendingPathComponent("VibeCutPacks", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+
+        try """
+        {
+          "version": "3.0",
+          "prompts": [
+            { "id": "base", "name": "Base Prompt", "prompt": "from repo", "mode": "paste", "type": "text" }
+          ]
+        }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+        try """
+        {
+          "format": "vibecutpack/1",
+          "name": "User Pack",
+          "prompts": [
+            { "id": "pack", "name": "Pack Prompt", "prompt": "from pack", "mode": "paste", "type": "text" }
+          ]
+        }
+        """.write(to: packs.appendingPathComponent("User Pack.json"), atomically: true, encoding: .utf8)
+        try "{ nope".write(to: packs.appendingPathComponent("Broken.json"), atomically: true, encoding: .utf8)
+
+        let catalog = try VibeCutPromptReader(root: root, packsDirectory: packs).read()
+        let mapped = VibeCutPromptMapper.map(catalog: catalog)
+
+        XCTAssertEqual(Set(mapped.entries.map(\.label)), ["Base Prompt", "Pack Prompt"])
+        XCTAssertEqual(mapped.entries.first { $0.label == "Pack Prompt" }?.body, "from pack")
+    }
+
     func testReplaceVibeCutSetOnlyTouchesReservedNamespaceAndBroadcastsOnce() {
         // Pre-existing: a user prompt, the README, and a STALE inherited file.
         write("mine.txt", "# My Prompt\n\nkeep me")

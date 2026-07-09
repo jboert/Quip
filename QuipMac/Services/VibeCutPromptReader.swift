@@ -4,13 +4,20 @@
 //
 // This is the ONLY VibeCut file-format seam. Everything downstream — the include
 // filter, id namespacing, tag/provenance, meta emission — lives in the pure Shared
-// `VibeCutPromptMapper`, so this type just locates + decodes the JSON.
+// `VibeCutPromptMapper`, so this type just locates + decodes the JSON sources.
 
 import Foundation
 
 struct VibeCutPromptReader {
     /// Repo root (e.g. `~/Projects/vibecut`). The catalog is `<root>/shared/prompts.json`.
     let root: URL
+    /// VibeCut's user prompt packs (`~/Library/Application Support/VibeCut/packs/*.json`).
+    let packsDirectory: URL
+
+    init(root: URL, packsDirectory: URL = VibeCutPromptReader.defaultPacksDirectory()) {
+        self.root = root
+        self.packsDirectory = packsDirectory
+    }
 
     enum ReadError: Error, CustomStringConvertible {
         case repoNotFound(path: String)
@@ -28,6 +35,11 @@ struct VibeCutPromptReader {
         root.appendingPathComponent("shared/prompts.json")
     }
 
+    static func defaultPacksDirectory() -> URL {
+        URL(fileURLWithPath:
+            ("~/Library/Application Support/VibeCut/packs" as NSString).expandingTildeInPath)
+    }
+
     /// The configured repo root: `vibecutRepoPath` UserDefaults override (tilde
     /// expanded) if set, else the `~/Projects/vibecut` default. Mirrors the
     /// override precedent used by `spawnCommand` / `tailscaleHostnameOverride`.
@@ -37,9 +49,11 @@ struct VibeCutPromptReader {
         return URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
     }
 
-    /// Decode the catalog. Throws `.repoNotFound` when the JSON is absent (so the
-    /// caller can leave the existing inherited set untouched) and `.unreadable`
-    /// on a read/parse failure.
+    /// Decode the catalog and merge any VibeCut prompt packs. Throws `.repoNotFound`
+    /// when the git-tracked catalog is absent (so the caller can leave the existing
+    /// inherited set untouched) and `.unreadable` on a read/parse failure of the main
+    /// catalog. Pack files are best-effort: a single corrupt user pack must not block
+    /// the rest of the VibeCut inherit sync.
     func read() throws -> VibeCutCatalog {
         let url = promptsFileURL
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -47,9 +61,27 @@ struct VibeCutPromptReader {
         }
         do {
             let data = try Data(contentsOf: url)
-            return try JSONDecoder().decode(VibeCutCatalog.self, from: data)
+            var catalog = try JSONDecoder().decode(VibeCutCatalog.self, from: data)
+            catalog.prompts.append(contentsOf: readPackPrompts())
+            return catalog
         } catch {
             throw ReadError.unreadable(path: url.path)
         }
+    }
+
+    private func readPackPrompts() -> [VibeCutPrompt] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: packsDirectory.path) else { return [] }
+
+        var prompts: [VibeCutPrompt] = []
+        for name in names.sorted() where name.hasSuffix(".json") {
+            let url = packsDirectory.appendingPathComponent(name)
+            guard
+                let data = try? Data(contentsOf: url),
+                let pack = try? JSONDecoder().decode(VibeCutCatalog.self, from: data)
+            else { continue }
+            prompts.append(contentsOf: pack.prompts)
+        }
+        return prompts
     }
 }
