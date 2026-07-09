@@ -1952,9 +1952,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     private func handleSyncVibeCut(_ msg: SyncVibeCutMessage) {
         let messageId = msg.messageId ?? UUID()
 
-        let catalog: VibeCutCatalog
+        let readResult: VibeCutPromptReader.ReadResult
         do {
-            catalog = try VibeCutPromptReader(root: VibeCutPromptReader.defaultRoot()).read()
+            readResult = try VibeCutPromptReader(root: VibeCutPromptReader.defaultRoot()).read()
         } catch {
             let reason = (error as? VibeCutPromptReader.ReadError)?.description ?? "\(error)"
             print("[Quip] sync_vibecut failed: \(reason)")
@@ -1963,20 +1963,22 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return
         }
 
-        let mapped = VibeCutPromptMapper.map(catalog: catalog)
+        let mapped = VibeCutPromptMapper.map(catalog: readResult.catalog)
         guard !mapped.entries.isEmpty else {
             // Valid read but nothing inheritable — don't wipe the existing set.
             print("[Quip] sync_vibecut: 0 inheritable prompts (\(mapped.skipped) skipped); leaving set untouched")
             webSocketServer.broadcast(SyncVibeCutAckMessage(
                 messageId: messageId, syncedCount: 0, skippedCount: mapped.skipped,
+                skippedPacks: readResult.skippedPacks,
                 error: "No inheritable prompts found in VibeCut."))
             return
         }
 
         let written = promptLibrary.replaceVibeCutSet(mapped.entries)
-        print("[Quip] sync_vibecut: wrote \(written) prompts (\(mapped.skipped) skipped)")
+        print("[Quip] sync_vibecut: wrote \(written) prompts (\(mapped.skipped) skipped, \(readResult.skippedPacks) pack files unreadable)")
         webSocketServer.broadcast(SyncVibeCutAckMessage(
-            messageId: messageId, syncedCount: written, skippedCount: mapped.skipped, error: nil))
+            messageId: messageId, syncedCount: written, skippedCount: mapped.skipped,
+            skippedPacks: readResult.skippedPacks, error: nil))
     }
 
     /// Phone asked for the Mac's diagnostic log bundle. Build the zip on a

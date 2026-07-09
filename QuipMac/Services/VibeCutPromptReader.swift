@@ -49,12 +49,19 @@ struct VibeCutPromptReader {
         return URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
     }
 
+    /// Merged catalog plus the number of `.json` pack files that could not be
+    /// decoded (surfaced to the phone so a corrupt import isn't silently ignored).
+    struct ReadResult {
+        let catalog: VibeCutCatalog
+        let skippedPacks: Int
+    }
+
     /// Decode the catalog and merge any VibeCut prompt packs. Throws `.repoNotFound`
     /// when the git-tracked catalog is absent (so the caller can leave the existing
     /// inherited set untouched) and `.unreadable` on a read/parse failure of the main
     /// catalog. Pack files are best-effort: a single corrupt user pack must not block
-    /// the rest of the VibeCut inherit sync.
-    func read() throws -> VibeCutCatalog {
+    /// the rest of the VibeCut inherit sync — it is counted in `skippedPacks` instead.
+    func read() throws -> ReadResult {
         let url = promptsFileURL
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw ReadError.repoNotFound(path: url.path)
@@ -62,26 +69,33 @@ struct VibeCutPromptReader {
         do {
             let data = try Data(contentsOf: url)
             var catalog = try JSONDecoder().decode(VibeCutCatalog.self, from: data)
-            catalog.prompts.append(contentsOf: readPackPrompts())
-            return catalog
+            let packs = readPackPrompts()
+            catalog.prompts.append(contentsOf: packs.prompts)
+            return ReadResult(catalog: catalog, skippedPacks: packs.skipped)
         } catch {
             throw ReadError.unreadable(path: url.path)
         }
     }
 
-    private func readPackPrompts() -> [VibeCutPrompt] {
+    private func readPackPrompts() -> (prompts: [VibeCutPrompt], skipped: Int) {
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: packsDirectory.path) else { return [] }
+        guard let names = try? fm.contentsOfDirectory(atPath: packsDirectory.path) else {
+            return ([], 0)
+        }
 
         var prompts: [VibeCutPrompt] = []
+        var skipped = 0
         for name in names.sorted() where name.hasSuffix(".json") {
             let url = packsDirectory.appendingPathComponent(name)
             guard
                 let data = try? Data(contentsOf: url),
                 let pack = try? JSONDecoder().decode(VibeCutCatalog.self, from: data)
-            else { continue }
+            else {
+                skipped += 1
+                continue
+            }
             prompts.append(contentsOf: pack.prompts)
         }
-        return prompts
+        return (prompts, skipped)
     }
 }

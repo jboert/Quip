@@ -55,11 +55,50 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         """.write(to: packs.appendingPathComponent("User Pack.json"), atomically: true, encoding: .utf8)
         try "{ nope".write(to: packs.appendingPathComponent("Broken.json"), atomically: true, encoding: .utf8)
 
-        let catalog = try VibeCutPromptReader(root: root, packsDirectory: packs).read()
+        let catalog = try VibeCutPromptReader(root: root, packsDirectory: packs).read().catalog
         let mapped = VibeCutPromptMapper.map(catalog: catalog)
 
         XCTAssertEqual(Set(mapped.entries.map(\.label)), ["Base Prompt", "Pack Prompt"])
         XCTAssertEqual(mapped.entries.first { $0.label == "Pack Prompt" }?.body, "from pack")
+    }
+
+    func testReaderReportsUndecodablePackFileCount() throws {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        let packs = tmp.appendingPathComponent("VibeCutPacks", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+
+        try """
+        { "prompts": [ { "id": "base", "name": "Base", "prompt": "b", "type": "text" } ] }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+        try """
+        { "format": "vibecutpack/1", "prompts": [ { "id": "p", "name": "Pack", "prompt": "p", "type": "text" } ] }
+        """.write(to: packs.appendingPathComponent("Good.json"), atomically: true, encoding: .utf8)
+        try "{ nope".write(to: packs.appendingPathComponent("Broken.json"), atomically: true, encoding: .utf8)
+        try "also not json".write(to: packs.appendingPathComponent("Worse.json"), atomically: true, encoding: .utf8)
+        // Non-.json files are ignored entirely — neither merged nor counted.
+        try "notes".write(to: packs.appendingPathComponent("readme.txt"), atomically: true, encoding: .utf8)
+
+        let result = try VibeCutPromptReader(root: root, packsDirectory: packs).read()
+
+        XCTAssertEqual(result.skippedPacks, 2)
+        XCTAssertEqual(Set(result.catalog.prompts.compactMap(\.name)), ["Base", "Pack"])
+    }
+
+    func testReaderReportsZeroSkippedPacksWhenPacksDirectoryMissing() throws {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try """
+        { "prompts": [ { "id": "base", "name": "Base", "prompt": "b", "type": "text" } ] }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+
+        let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
+        let result = try VibeCutPromptReader(root: root, packsDirectory: missing).read()
+
+        XCTAssertEqual(result.skippedPacks, 0)
+        XCTAssertEqual(result.catalog.prompts.count, 1)
     }
 
     func testReplaceVibeCutSetOnlyTouchesReservedNamespaceAndBroadcastsOnce() {

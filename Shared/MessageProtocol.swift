@@ -838,13 +838,19 @@ struct SyncVibeCutAckMessage: Codable, Sendable {
     let messageId: UUID
     let syncedCount: Int
     let skippedCount: Int
+    /// Number of pack `.json` files under VibeCut's packs directory that could
+    /// not be decoded and were skipped. Optional for wire back-compat: an older
+    /// Mac omits it (decodes as nil) and an older phone ignores it.
+    let skippedPacks: Int?
     let error: String?
 
-    init(messageId: UUID, syncedCount: Int, skippedCount: Int, error: String? = nil) {
+    init(messageId: UUID, syncedCount: Int, skippedCount: Int,
+         skippedPacks: Int? = nil, error: String? = nil) {
         self.type = "sync_vibecut_ack"
         self.messageId = messageId
         self.syncedCount = syncedCount
         self.skippedCount = skippedCount
+        self.skippedPacks = skippedPacks
         self.error = error
     }
 }
