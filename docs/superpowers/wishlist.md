@@ -1214,3 +1214,24 @@ arrangements.
 **Gate when built:** pure keystroke-mapping unit + live confirm on a real
 autosuggesting prompt. `/prd`-able as a small 2-3 story feature (add key to vocab
 → iOS control + wire message → optional suggestion-present detection).
+
+---
+
+## VibeCut prompt sync — follow-ups from 2026-07-09 verification
+
+Pack merge (`af82c77`) verified end-to-end (sim → live Mac); items surfaced:
+
+- **DECISION (USER):** delete the 23 stale Stream Deck flat imports
+  (`00-rules.txt`, `07-audit-security.txt`, … Jun 3 vintage — preamble baked in,
+  no badge)? They now near-duplicate the `vibecut__*` inherited set; library
+  shows 47 rows.
+- **Security check (USER confirm intent):** Mac runs "no auth required" —
+  unauthenticated WS clients receive full window layout + prompt library.
+  Pre-existing, not af82c77. Re-enable PIN gate or bless the mode explicitly.
+- **UX (small, /prd-able):** sync icon `arrow.triangle.2.circlepath` unlabeled →
+  hard to discover as "Sync from VibeCut"; "N synced" ack clears after 3s;
+  corrupt packs skipped with zero user feedback (maybe "N synced, M packs
+  skipped"); empty state (missing vibecut repo / empty packs) untested.
+- **Acceptance flow (physical <your-iphone>):** Settings → Prompts → sync icon →
+  expect green "N synced", VibeCut badge rows at list bottom. Same code path as
+  sim; 5-minute confirm.
