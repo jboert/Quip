@@ -8521,7 +8521,7 @@ struct PromptLibrarySheet: View {
                             .font(.caption)
                     }
                 } footer: {
-                    Text("Tap to paste. Long-press to paste-and-submit. Swipe a row for Edit / Delete.")
+                    Text("Tap to paste. Long-press to paste-and-submit. Swipe a row for Edit / Delete. The ⟳ button syncs prompts from VibeCut.")
                 }
             }
         }
@@ -8661,6 +8661,8 @@ struct PromptLibrarySheet: View {
         syncing = false
         if let error = ack.error {
             showSyncResult(error)
+        } else if let badPacks = ack.skippedPacks, badPacks > 0 {
+            showSyncResult("\(ack.syncedCount) synced · \(badPacks) pack file\(badPacks == 1 ? "" : "s") skipped")
         } else {
             showSyncResult("\(ack.syncedCount) synced")
         }
