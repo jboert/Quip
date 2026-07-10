@@ -49,7 +49,9 @@ struct TranscriptCorrector {
         (#"tail\s+scale"#,   "Tailscale"),
         (#"mono\s*type"#,    "monospace"),  // "mono type" / "monotype" (documented artifact)
         (#"web\s*socket"#,   "WebSocket"),  // "web socket" / "websocket"
-        (#"co[-\s]+dex"#,    "Codex"),      // "co-dex" / "co dex" — NOT bare "codex" (real word)
+        (#"co[-\s]+dex"#,    "Codex"),      // "co-dex" / "co dex"
+        (#"codex"#,          "Codex"),      // capitalization-only: "codex" is a real word, but in
+                                            // Quip dictation it is always the CLI (audit.log 2026-07-10)
         (#"x\s*code"#,       "Xcode"),      // "x code" / "xcode"
         (#"fin+\s+tech"#,    "Fintech"),    // "fin tech" / "finn tech" (two-token spoken form only)
         (#"whisperers"#,     "Whisper"),    // plural mishearing of "Whisper" (documented artifact)

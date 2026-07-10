@@ -14,6 +14,11 @@ final class QuipDictationVocabularyTests: XCTestCase {
         XCTAssertTrue(text.contains("monospace"))
         XCTAssertTrue(text.contains("Codex"))
         XCTAssertTrue(text.contains("WebSocket"))
+        // AI model / vendor names the user actually dictates — absent until
+        // 2026-07-10, so "Opus"/"Sonnet"/etc had zero decode biasing.
+        for term in ["Anthropic", "Opus", "Sonnet", "Haiku", "Fable", "GPT", "Gemini"] {
+            XCTAssertTrue(text.contains(term), "vocabulary missing \(term)")
+        }
         XCTAssertTrue(text.contains(", "), "terms should be comma-joined")
     }
 

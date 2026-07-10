@@ -25,6 +25,13 @@ prd
 caveman
 ultrareview
 Codex
+Anthropic
+Opus
+Sonnet
+Haiku
+Fable
+GPT
+Gemini
 Grok
 Cursor
 Kokoro

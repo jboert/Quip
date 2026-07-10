@@ -34,6 +34,16 @@ final class TranscriptCorrectorTests: XCTestCase {
         XCTAssertEqual(corrector.correct("co dex"), "Codex")
     }
 
+    func test_bareLowercaseCodex_capitalized() {
+        // whisper output is lowercase-happy; audit.log 2026-07-10 captured
+        // "codex, AI model, and others." verbatim.
+        XCTAssertEqual(corrector.correct("codex, AI model, and others."),
+                       "Codex, AI model, and others.")
+        XCTAssertEqual(corrector.correct("ask codex to review"), "ask Codex to review")
+        // Whole-word only — no substring rewrites.
+        XCTAssertEqual(corrector.correct("codexes"), "codexes")
+    }
+
     func test_xCode_mapsToXcode() {
         XCTAssertEqual(corrector.correct("x code"), "Xcode")
     }

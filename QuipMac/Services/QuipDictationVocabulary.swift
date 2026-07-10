@@ -23,6 +23,7 @@ enum QuipDictationVocabulary {
         "Tailscale", "QRCode", "PTT", "Bluetooth", "Codex", "Grok",
         "Cursor", "Kokoro", "Simulator", "keystroke", "Xcodegen",
         "entitlements", "APNs", "keychain", "devicectl",
+        "Anthropic", "Opus", "Sonnet", "Haiku", "Fable", "GPT", "Gemini",
     ]
 
     /// The conditioning prompt fed to WhisperKit. A comma-joined vocabulary list
