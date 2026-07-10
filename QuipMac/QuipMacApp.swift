@@ -1807,7 +1807,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Quip", isDirectory: true)
             try? FileManager.default.createDirectory(at: modelBase, withIntermediateDirectories: true)
-            let config = WhisperKitConfig(model: "openai_whisper-base", downloadBase: modelBase)
+            // small.en over base: base is the weakest tier and mangles jargon
+            // (audit.log 2026-07-10 — "codex", model names, inverted negations)
+            // even with promptTokens biasing. One-shot decode at PTT release,
+            // so the extra latency is per-utterance, not per-chunk.
+            let config = WhisperKitConfig(model: "openai_whisper-small.en", downloadBase: modelBase)
             let kit = try await WhisperKit(config)
             let transcriber = WhisperKitTranscriber(kit: kit)
             self.whisperService = WhisperDictationService(transcriber: transcriber) { msg in
