@@ -593,6 +593,15 @@ final class KeystrokeInjector {
                 terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
             )
 
+        // Space toggles the highlighted checkbox in Ink multiselects. Without
+        // this case every `select_multi` sequence died on its first toggle in
+        // Terminal.app ("Unknown key: space") — worked only on iTerm2.
+        case "space":
+            script = keystrokeScript(
+                key: "space", using: "",
+                terminalApp: terminalApp, cgWindowNumber: cgWindowNumber, windowIndex: windowIndex
+            )
+
         default:
             return InjectionResult(success: false, error: "Unknown key: \(key)")
         }
