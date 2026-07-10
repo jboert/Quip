@@ -1235,3 +1235,27 @@ Pack merge (`af82c77`) verified end-to-end (sim → live Mac); items surfaced:
 - **Acceptance flow (physical <your-iphone>):** Settings → Prompts → sync icon →
   expect green "N synced", VibeCut badge rows at list bottom. Same code path as
   sim; 5-minute confirm.
+
+---
+
+## Dictation + multi-select fixes — follow-ups from 2026-07-10 session
+
+Shipped (eb-branch bf050c7..6a3ff24, Mac + iPhone installed): Terminal.app space
+keystroke (multi-select), vocab additions both platforms + bare codex→Codex
+corrector, Whisper base→small.en, remote PTT pre-roll + 8s timeout + caption
+fallback.
+
+- **Acceptance (USER, 5 min):** (1) Terminal.app Claude Code checkbox prompt →
+  select 2+ options on phone → Submit → checkboxes toggle + submit lands.
+  (2) Dictate "codex, Opus, Sonnet and other AI model names" → arrives intact,
+  capitalized. First remote PTT after Mac relaunch waits on small.en model load.
+- **Deferred — trailing-audio race at PTT release (H4):** remote path flushes
+  sender immediately at stop; local path has 300ms trailing window. Buffers
+  landing post-finish orphan a new session buffer Mac-side (never transcribed).
+  Also Mac ignores `seq` — no gap detection for dropped audio chunks.
+- **Deferred — model quality escalation:** if small.en still mangles jargon,
+  next step is large-v3-turbo (bigger download, faster than large); also
+  consider `noSpeechThreshold` relaxation (soft-spoken windows dropped whole).
+- **Check after this reinstall:** APNs push still configured (keychain .p8 has
+  history of orphaning on reinstall — Settings → Notifications if push.log
+  shows skips).
