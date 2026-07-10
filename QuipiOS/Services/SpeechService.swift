@@ -293,7 +293,13 @@ final class SpeechService {
                     // the path that mangles Quip terms most. Correct the FINAL
                     // transcript here (separate exit from the local `finished`
                     // branch) before it reaches transcribedText / the send path.
-                    let corrected = TranscriptCorrector.shared.correct(text)
+                    //
+                    // Empty text means the safety timeout fired (or Mac errored)
+                    // — fall back to the live SFSpeech captions instead of wiping
+                    // the utterance. If the user truly said nothing, captions are
+                    // empty too and this is a no-op.
+                    let raw = text.isEmpty ? self.transcribedText : text
+                    let corrected = TranscriptCorrector.shared.correct(raw)
                     self.transcribedText = corrected
                     self.activeSessionToken = nil
                     self.remoteSession = nil
@@ -762,6 +768,15 @@ private class AudioWorker: @unchecked Sendable {
                 // Feed captions recognizer if active. Same buffer, two consumers.
                 self.recognitionRequest?.append(buffer)
                 self.ring.append(buffer: buffer, at: Date())
+            }
+            // Replay the ~500ms pre-roll into the Whisper sender too. Before
+            // this, only the captions recognizer got pre-roll — the remote path
+            // structurally lost everything spoken at/before the press plus the
+            // tap-swap latency, which is why remote transcripts started
+            // mid-sentence ("Voice to Texting that well.").
+            let now = Date()
+            for entry in self.ring.entries(relativeTo: now) {
+                onBuffer(entry.buffer)
             }
             if let onCaption {
                 self.beginCaptionTask(onCaption: onCaption)

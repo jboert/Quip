@@ -15,7 +15,11 @@ final class RemoteSpeechSession {
     private var timeoutTask: Task<Void, Never>?
     private var didResolve = false
 
-    init(sessionId: UUID, sender: WhisperAudioSender, safetyTimeout: TimeInterval = 3.0) {
+    // 8s, was 3s: the Mac decodes the WHOLE utterance one-shot at stop, and
+    // promptTokens biasing disables WhisperKit's prefill KV cache — long
+    // dictations + cold CoreML specialization routinely blew the 3s window,
+    // discarding the entire transcript (cb("") wiped the caption text too).
+    init(sessionId: UUID, sender: WhisperAudioSender, safetyTimeout: TimeInterval = 8.0) {
         self.sessionId = sessionId
         self.sender = sender
         self.safetyTimeout = safetyTimeout
