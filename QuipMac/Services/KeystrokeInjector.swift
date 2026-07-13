@@ -981,9 +981,18 @@ final class KeystrokeInjector {
             try process.run()
             process.waitUntilExit()
         } catch {
+            // Key the cause on the error's SHAPE (domain + code), never on its
+            // interpolation. `process.run()` throws a Cocoa NSError, and
+            // interpolating an NSError renders its userInfo dictionary — whose
+            // key order is not stable. Measured: 50 identical NSErrors produce
+            // 40 distinct strings. A gate whose cause never compares equal never
+            // suppresses, so `\(error)` here would silently defeat the throttle
+            // and flood this 0.5s-per-window path. (Swift's own DecodingError
+            // interpolates stably; Cocoa's NSError does not.)
+            let ns = error as NSError
             Self.reportCaptureFailure(
                 window: cgWindowNumber,
-                cause: "could not launch /usr/sbin/screencapture: \(error)"
+                cause: "could not launch /usr/sbin/screencapture (\(ns.domain) \(ns.code))"
             )
             return nil
         }

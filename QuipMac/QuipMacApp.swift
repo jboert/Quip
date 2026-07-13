@@ -1937,7 +1937,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let session = (object?["sessionId"] as? String) ?? "unknown"
         // The cause must hold nothing that varies chunk-to-chunk — `data.count`
         // in here would make every chunk of one drifted stream compare unequal
-        // and defeat the dedup entirely. The decode error alone is stable.
+        // and defeat the dedup entirely.
+        //
+        // Interpolating the error is safe HERE, and only here, because this is a
+        // Swift `DecodingError` (from JSONDecoder), which renders stably.
+        // Do NOT copy this line for a Cocoa `NSError`: interpolating one renders
+        // its userInfo dictionary, whose key order is not stable — measured, 50
+        // identical NSErrors produce 40 distinct strings. A cause that never
+        // compares equal never suppresses, so the gate silently becomes a no-op
+        // and the path it was protecting floods. Key an NSError on its shape
+        // (domain + code) instead — see `captureWindowScreenshot`.
         let cause = "\(error)"
         guard Self.audioChunkGate.evaluate(session, cause: cause) == .report else { return }
         QuipLog.write(

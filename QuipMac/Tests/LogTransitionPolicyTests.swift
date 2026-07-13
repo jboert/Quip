@@ -164,3 +164,87 @@ private final class NSCounter: @unchecked Sendable {
     func increment() { lock.lock(); count += 1; lock.unlock() }
     var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
+
+/// The cause string a gate compares is only as good as its stability. This is
+/// the trap that silently defeats a transition gate: the cause LOOKS constant
+/// for a constant fault, but isn't.
+///
+/// Interpolating a Cocoa `NSError` renders its `userInfo` dictionary, and
+/// dictionary key order is not stable across calls. So `"\(error)"` on an
+/// NSError yields a DIFFERENT string each time for the SAME failure — the gate's
+/// `cause != previous` check then holds on every call, it never suppresses, and
+/// the path it was protecting floods anyway. `captureWindowScreenshot` keys on
+/// the error's shape (domain + code) precisely because `process.run()` throws
+/// this kind of error.
+///
+/// Swift's own `DecodingError` interpolates stably, which is why the audio-chunk
+/// gate is allowed to use `"\(error)"` — but that exception is load-bearing and
+/// easy to copy to the wrong place. These tests pin both halves.
+final class LogTransitionCauseStabilityTests: XCTestCase {
+
+    private func multiKeyNSError() -> NSError {
+        NSError(domain: "TestDomain", code: -1, userInfo: [
+            "alpha": 1, "beta": "two", "gamma": [1, 2, 3], "delta": ["k": "v"], "epsilon": 5.0,
+        ])
+    }
+
+    /// Documents the hazard itself. If a future Foundation makes NSError render
+    /// deterministically this test fails — which is a fine reason to revisit the
+    /// workaround, and far better than the workaround quietly rotting.
+    func testInterpolatedNSErrorIsNotStable() {
+        let distinct = Set((0..<50).map { _ in "\(multiKeyNSError())" })
+        XCTAssertGreaterThan(
+            distinct.count, 1,
+            "An interpolated multi-key NSError is expected to be unstable; a gate keyed on it silently never suppresses."
+        )
+    }
+
+    /// The shape (domain + code) is what a gate must key on for an NSError.
+    func testNSErrorShapeIsStable() {
+        let distinct = Set((0..<50).map { _ -> String in
+            let ns = multiKeyNSError()
+            return "\(ns.domain) \(ns.code)"
+        })
+        XCTAssertEqual(distinct.count, 1, "domain+code must be a stable cause for the same fault")
+    }
+
+    /// A gate fed the unstable cause reports every single time — i.e. it is a
+    /// no-op. This is the flood, reproduced.
+    func testGateKeyedOnInterpolatedNSErrorNeverSuppresses() {
+        let gate = LogTransitionGate<String>()
+        var reports = 0
+        for _ in 0..<50 where gate.evaluate("win", cause: "\(multiKeyNSError())") == .report {
+            reports += 1
+        }
+        XCTAssertGreaterThan(reports, 1, "unstable cause defeats the gate — that is the bug this guards")
+    }
+
+    /// The same gate, fed the stable shape, reports exactly once.
+    func testGateKeyedOnNSErrorShapeSuppressesAfterFirst() {
+        let gate = LogTransitionGate<String>()
+        var reports = 0
+        for _ in 0..<50 {
+            let ns = multiKeyNSError()
+            if gate.evaluate("win", cause: "screencapture (\(ns.domain) \(ns.code))") == .report {
+                reports += 1
+            }
+        }
+        XCTAssertEqual(reports, 1, "a persistent fault must report once, then stay quiet")
+    }
+
+    /// The audio gate's licence: a Swift DecodingError DOES interpolate stably,
+    /// so `"\(error)"` suppresses correctly there.
+    func testDecodingErrorInterpolatesStablyAndSuppresses() {
+        let gate = LogTransitionGate<String>()
+        let bad = Data(#"{"not":"an array"}"#.utf8)
+        var reports = 0
+        for _ in 0..<50 {
+            do {
+                _ = try JSONDecoder().decode([String].self, from: bad)
+            } catch {
+                if gate.evaluate("session", cause: "\(error)") == .report { reports += 1 }
+            }
+        }
+        XCTAssertEqual(reports, 1, "DecodingError is stable — the audio gate relies on this")
+    }
+}
