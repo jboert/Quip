@@ -1258,6 +1258,10 @@ struct MainiOSView: View {
     @Binding var pinText: String
     var projectDirectories: [String]
     @Binding var iTermScanResults: [ITermWindowInfo]?
+    /// Deadline for the iTerm scan. `iTermScanResults == nil` used to mean
+    /// "scanning…" forever if the Mac never answered (old Mac build with no
+    /// scan handler, or a socket that died one-sided). Now the wait has an end.
+    @StateObject private var iTermScanRequest = PendingMacRequest(deadline: 10)
     var pushRegistration: PushRegistrationService
     var attentionCenter: WindowAttentionCenter
     @Binding var errorToast: String?
@@ -1939,12 +1943,20 @@ struct MainiOSView: View {
             .onChange(of: spawnSheetTab) { _, newValue in
                 if newValue == .attach { requestITermScan() }
             }
+            .onChange(of: iTermScanResults) { _, results in
+                // The Mac answered (via manager.onITermWindowList) — the wait is
+                // over. This is the only thing that can retire the scan short of
+                // its deadline.
+                if results != nil { iTermScanRequest.resolve(.succeeded) }
+            }
             .onChange(of: showSpawnPicker) { _, isShowing in
                 // Reset tab + scan state whenever the sheet closes so the
-                // next open starts from a clean slate.
+                // next open starts from a clean slate — including cancelling any
+                // live deadline, so a dismissed sheet can't fire into a reopened one.
                 if !isShowing {
                     spawnSheetTab = .new
                     iTermScanResults = nil
+                    iTermScanRequest.reset()
                 }
             }
         }
@@ -2025,8 +2037,19 @@ struct MainiOSView: View {
                     .listStyle(.plain)
                     .refreshable { requestITermScan() }
                 }
+            } else if let failure = iTermScanRequest.failureMessage {
+                // The scan was armed with a deadline and blew through it. Say so,
+                // and give the user the one thing they can do about it.
+                ContentUnavailableView {
+                    Label("Scan failed", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(failure)
+                } actions: {
+                    Button("Try again") { requestITermScan() }
+                        .buttonStyle(.borderedProminent)
+                }
             } else {
-                // nil = in-flight scan. Show a spinner instead of empty state.
+                // nil + in-flight = scanning. Bounded by iTermScanRequest's deadline.
                 VStack(spacing: 12) {
                     ProgressView()
                     Text("Scanning iTerm windows…")
@@ -2097,10 +2120,21 @@ struct MainiOSView: View {
 
     /// Clear any prior results and ask the Mac for a fresh list. The
     /// response arrives asynchronously via `onITermWindowList` → the View
-    /// re-renders with the list.
+    /// re-renders with the list, and `.onChange` resolves the request.
+    ///
+    /// The scan is armed with a deadline: if the Mac never answers, the spinner
+    /// becomes an error with a retry rather than spinning until the user gives
+    /// up and force-quits.
     private func requestITermScan() {
         iTermScanResults = nil
-        client.send(ScanITermWindowsMessage())
+        iTermScanRequest.start()
+        guard client.send(ScanITermWindowsMessage()) else {
+            // The frame never left the phone — don't arm a wait for a reply
+            // that provably cannot come.
+            iTermScanRequest.resolve(.failed(cause: "Couldn't reach the Mac",
+                                             nextStep: "Reconnect, then tap rescan"))
+            return
+        }
     }
 
     // MARK: - Connect Bar (disconnected)
@@ -7952,21 +7986,33 @@ struct ConnectionDiagnosticsSheet: View {
     @State private var bundleStatus: String?
     @State private var bundleURL: URL?
     @State private var showShareSheet = false
-    @State private var requesting = false
     @State private var logTailText: String = ""
     @State private var logTailCapturedAt: String = ""
-    @State private var logTailRequesting = false
+    /// Both Mac round-trips on this sheet are deadline-bounded. They used to be
+    /// bare `Bool`s flipped true on send and false only on reply — so a Mac that
+    /// never answered left "Waiting for Mac…" and a disabled button on screen
+    /// with no way out but closing the sheet. The waiting state IS the deadline
+    /// now: there is no way to enter one without arming the other.
+    ///
+    /// The zip gets a longer deadline than the tail — the Mac has to walk the log
+    /// dir and compress up to 4 MiB, where the tail is a 16 KB read.
+    @StateObject private var bundleRequest = PendingMacRequest(deadline: 25)
+    @StateObject private var logTailRequest = PendingMacRequest(deadline: 10)
 
     var body: some View {
         List {
             Section {
-                if logTailRequesting && logTailText.isEmpty {
+                if logTailRequest.isInFlight && logTailText.isEmpty {
                     HStack {
                         ProgressView().controlSize(.small)
                         Text("Fetching…")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
+                } else if let failure = logTailRequest.failureMessage, logTailText.isEmpty {
+                    Text(failure)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
                 } else if logTailText.isEmpty {
                     Text("No snapshot yet — pull to refresh.")
                         .font(.system(size: 12))
@@ -7988,13 +8034,13 @@ struct ConnectionDiagnosticsSheet: View {
                     Button {
                         requestLogTail()
                     } label: {
-                        if logTailRequesting {
+                        if logTailRequest.isInFlight {
                             ProgressView().controlSize(.small)
                         } else {
                             Image(systemName: "arrow.clockwise")
                         }
                     }
-                    .disabled(logTailRequesting || !client.isAuthenticated)
+                    .disabled(logTailRequest.isInFlight || !client.isAuthenticated)
                     .font(.system(size: 12))
                 }
             } footer: {
@@ -8010,14 +8056,14 @@ struct ConnectionDiagnosticsSheet: View {
                     requestMacLogs()
                 } label: {
                     HStack {
-                        if requesting {
+                        if bundleRequest.isInFlight {
                             ProgressView().controlSize(.small)
                         }
                         Image(systemName: "arrow.down.doc")
-                        Text(requesting ? "Waiting for Mac…" : "Get Mac logs (zip)")
+                        Text(bundleRequest.isInFlight ? "Waiting for Mac…" : "Get Mac logs (zip)")
                     }
                 }
-                .disabled(requesting || !client.isAuthenticated)
+                .disabled(bundleRequest.isInFlight || !client.isAuthenticated)
                 if let url = bundleURL {
                     Button {
                         showShareSheet = true
@@ -8030,7 +8076,13 @@ struct ConnectionDiagnosticsSheet: View {
                         }
                     }
                 }
-                if let status = bundleStatus {
+                if let failure = bundleRequest.failureMessage {
+                    // Outranks bundleStatus: on a timeout that would still read
+                    // "Requesting…", which is exactly the lie we're fixing.
+                    Text(failure)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                } else if let status = bundleStatus {
                     Text(status)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -8117,13 +8169,14 @@ struct ConnectionDiagnosticsSheet: View {
         // prior screen instance).
         client.onDiagnosticsBundle = { msg in
             if let err = msg.errorReason {
-                bundleStatus = err
-                requesting = false
+                bundleStatus = nil
+                bundleRequest.resolve(.failed(cause: err, nextStep: "Try again"))
                 return
             }
             guard let base64 = msg.data, let raw = Data(base64Encoded: base64) else {
-                bundleStatus = "Mac sent malformed bundle"
-                requesting = false
+                bundleStatus = nil
+                bundleRequest.resolve(.failed(cause: "Mac sent a malformed bundle",
+                                              nextStep: "Try again — if it repeats, update Quip on the Mac"))
                 return
             }
             do {
@@ -8133,10 +8186,12 @@ struct ConnectionDiagnosticsSheet: View {
                 try raw.write(to: dest)
                 bundleURL = dest
                 bundleStatus = "Bundle ready (\(raw.count / 1024) KB) — tap Share."
+                bundleRequest.resolve(.succeeded)
             } catch {
-                bundleStatus = "Couldn't save bundle: \(error.localizedDescription)"
+                bundleStatus = nil
+                bundleRequest.resolve(.failed(cause: "Couldn't save the bundle: \(error.localizedDescription)",
+                                              nextStep: "Free up space on the phone, then try again"))
             }
-            requesting = false
         }
     }
 
@@ -8154,21 +8209,30 @@ struct ConnectionDiagnosticsSheet: View {
             } else {
                 logTailCapturedAt = msg.capturedAt
             }
-            logTailRequesting = false
+            logTailRequest.resolve(.succeeded)
         }
     }
 
     private func requestLogTail() {
         guard client.isAuthenticated else { return }
-        logTailRequesting = true
-        client.send(RequestLogTailMessage())
+        logTailRequest.start()
+        guard client.send(RequestLogTailMessage()) else {
+            logTailRequest.resolve(.failed(cause: "Couldn't reach the Mac",
+                                           nextStep: "Reconnect, then tap refresh"))
+            return
+        }
     }
 
     private func requestMacLogs() {
-        requesting = true
         bundleStatus = "Requesting…"
         bundleURL = nil
-        client.send(RequestDiagnosticsMessage())
+        bundleRequest.start()
+        guard client.send(RequestDiagnosticsMessage()) else {
+            bundleStatus = nil
+            bundleRequest.resolve(.failed(cause: "Couldn't reach the Mac",
+                                          nextStep: "Reconnect, then try again"))
+            return
+        }
     }
 
     @ViewBuilder
