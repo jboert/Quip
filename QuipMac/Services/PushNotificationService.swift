@@ -178,17 +178,68 @@ final class PushNotificationService {
         loadPreferences()
     }
 
+    /// Pure decode seam for the persisted device list.
+    ///
+    /// Returns the decoded value, or `nil` plus a human-readable reason. The
+    /// reason exists because the failure is otherwise invisible: a blob that
+    /// won't decode leaves `devices` empty, and an empty device list makes
+    /// every `notify*` path take its `guard !devices.isEmpty else { return }`
+    /// exit. Push goes 100% silent and nothing anywhere says why.
+    nonisolated static func decodeDevices(
+        _ data: Data
+    ) -> (value: [RegisteredPushDevice]?, failure: String?) {
+        do {
+            return (try JSONDecoder().decode([RegisteredPushDevice].self, from: data), nil)
+        } catch {
+            return (nil, "\(data.count) stored bytes failed to decode: \(error)")
+        }
+    }
+
+    /// Pure decode seam for the persisted per-device preferences map.
+    ///
+    /// See `DevicePushPreferences.init(from:)` — a schema change once made
+    /// every prior prefs row unreadable here. The custom decoder defends
+    /// against *missing* fields, but a type change or a corrupt blob still
+    /// throws, and the old `try?` turned that into a silent fallback to
+    /// `.defaults` (paused=false) — i.e. "Pause All" stops working and push
+    /// fires anyway. Report it instead of guessing.
+    nonisolated static func decodePreferences(
+        _ data: Data
+    ) -> (value: [String: DevicePushPreferences]?, failure: String?) {
+        do {
+            return (try JSONDecoder().decode([String: DevicePushPreferences].self, from: data), nil)
+        } catch {
+            return (nil, "\(data.count) stored bytes failed to decode: \(error)")
+        }
+    }
+
     private func loadDevices() {
         guard let data = UserDefaults.standard.data(forKey: Self.storageKey) else { return }
-        if let decoded = try? JSONDecoder().decode([RegisteredPushDevice].self, from: data) {
+        let (decoded, failure) = Self.decodeDevices(data)
+        if let decoded {
             devices = decoded
+        } else if let failure {
+            QuipLog.write(
+                severity: .error, subsystem: "push",
+                message: "loadDevices FAILED — \(failure). No devices registered in memory, "
+                       + "so every push will be silently skipped until a device re-registers.",
+                to: LogPaths.pushPath
+            )
         }
     }
 
     private func loadPreferences() {
         guard let data = UserDefaults.standard.data(forKey: Self.preferencesKey) else { return }
-        if let decoded = try? JSONDecoder().decode([String: DevicePushPreferences].self, from: data) {
+        let (decoded, failure) = Self.decodePreferences(data)
+        if let decoded {
             preferences = decoded
+        } else if let failure {
+            QuipLog.write(
+                severity: .error, subsystem: "push",
+                message: "loadPreferences FAILED — \(failure). Falling back to defaults "
+                       + "(paused=false), so 'Pause All' and quiet hours will NOT be honored.",
+                to: LogPaths.pushPath
+            )
         }
     }
 
