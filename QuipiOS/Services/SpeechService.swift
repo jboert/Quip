@@ -6,8 +6,18 @@ import UIKit
 enum DictationVocab {
     static let maxTerms = 100
 
-    static func load(from url: URL) -> [String] {
-        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+    static func load(from url: URL, log: (String) -> Void = { print($0) }) -> [String] {
+        let raw: String
+        do {
+            raw = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            // `loadBundled` already reports a MISSING file. This is the other
+            // case: the file is there but unreadable / not UTF-8, so dictation
+            // silently runs with an empty vocabulary and mis-transcribes every
+            // custom term with nothing in the log to say why.
+            log("[Quip][PTT] dictation vocab UNREADABLE at \(url.lastPathComponent) err=\(error) — running with EMPTY vocabulary")
+            return []
+        }
         let terms = raw.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
@@ -538,7 +548,16 @@ private class AudioWorker: @unchecked Sendable {
         queue.async { [self] in
             guard !self.isArmed else { return }
             let session = AVAudioSession.sharedInstance()
-            try? session.setActive(true)
+            // LOG-ONLY. Control flow is deliberately unchanged (we still fall
+            // through and install the tap exactly as before) — the PTT
+            // audio-session lifecycle is not being touched. But an activation
+            // failure means the engine taps a dead session and PTT captures
+            // pure silence, which until now looked identical to a working mic.
+            do {
+                try session.setActive(true)
+            } catch {
+                print("[Quip][PTT] arm: AVAudioSession.setActive(true) FAILED err=\(error) — mic may capture silence")
+            }
 
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
@@ -748,7 +767,15 @@ private class AudioWorker: @unchecked Sendable {
             if !self.isArmed {
                 do {
                     let session = AVAudioSession.sharedInstance()
-                    try? session.setActive(true)
+                    // LOG-ONLY, as in `arm()`. Kept as an inner catch rather
+                    // than promoting to the outer `try` on purpose: letting it
+                    // throw would skip `audioEngine.start()` and change the
+                    // cold-start path's behaviour.
+                    do {
+                        try session.setActive(true)
+                    } catch {
+                        print("[Quip][PTT] startForwarding: AVAudioSession.setActive(true) FAILED err=\(error) — continuing to engine start anyway")
+                    }
                     self.audioEngine.prepare()
                     try self.audioEngine.start()
                     self.isArmed = true
