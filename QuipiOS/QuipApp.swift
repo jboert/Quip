@@ -4928,11 +4928,47 @@ class QRScannerController: UIViewController, @preconcurrency AVCaptureMetadataOu
     private var captureSession: AVCaptureSession?
     private var hasScanned = false
 
+    /// The camera path has no other failure surface: the scanner is presented
+    /// as a sheet whose whole job is the preview layer, so a setup failure
+    /// renders as an unexplained black rectangle. Draw the cause + next step
+    /// directly into the view instead.
+    private func showFailure(_ message: String) {
+        view.backgroundColor = .black
+        let label = UILabel()
+        label.text = message
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        label.textColor = .white
+        label.font = .preferredFont(forTextStyle: .callout)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24),
+        ])
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         let session = AVCaptureSession()
-        guard let device = AVCaptureDevice.default(for: .video),
-              let input = try? AVCaptureDeviceInput(device: device) else { return }
+        guard let device = AVCaptureDevice.default(for: .video) else {
+            print("[Quip][Pairing] QR scanner: no video capture device available")
+            showFailure("No camera on this device. Pair by entering the Mac's address instead.")
+            return
+        }
+        let input: AVCaptureDeviceInput
+        do {
+            input = try AVCaptureDeviceInput(device: device)
+        } catch {
+            // Permission denied, camera in use by another app, or a hardware
+            // fault. Swallowing this left the user staring at a black sheet
+            // with no message and no way to know why the scan never fired.
+            print("[Quip][Pairing] QR scanner: AVCaptureDeviceInput FAILED err=\(error)")
+            showFailure("Can't open the camera.\nCheck Settings › Privacy › Camera, then try again.")
+            return
+        }
         session.addInput(input)
         let output = AVCaptureMetadataOutput()
         session.addOutput(output)
@@ -7000,6 +7036,7 @@ struct QuickButtonsSheet: View {
     @State private var addSheetQuery: String = ""
     @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
     @State private var shareItem: PackShareItem?
+    @State private var exportError: String?
 
     // Cached snapshots of the @AppStorage-backed JSON. Computed-property
     // versions re-decoded on EVERY body evaluation, and any observable
@@ -7127,8 +7164,14 @@ struct QuickButtonsSheet: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         let pack = SharedPromptPack(name: "Quip Buttons", prompts: [], buttons: customs)
-                        if let url = try? pack.writeToTemp(filename: "quip-buttons") {
-                            shareItem = PackShareItem(url: url)
+                        do {
+                            shareItem = PackShareItem(url: try pack.writeToTemp(filename: "quip-buttons"))
+                        } catch {
+                            // Staging the .quippack to the temp dir can fail on a
+                            // full disk. `try?` made the Share button a no-op —
+                            // the user taps it and nothing happens, forever.
+                            print("[Quip][Packs] export buttons FAILED err=\(error)")
+                            exportError = "Couldn't stage the button pack for sharing. \(error.localizedDescription)"
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
@@ -7139,6 +7182,14 @@ struct QuickButtonsSheet: View {
         }
         .sheet(item: $shareItem) { item in
             DiagnosticsShareSheet(items: [item.url])
+        }
+        .alert("Couldn't share buttons", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
         }
         .onAppear { refreshSnapshots() }
         .onChange(of: quickSlotsJSON) { _, _ in refreshSlotsSnapshot() }
@@ -8663,6 +8714,7 @@ struct PromptLibrarySheet: View {
     @State private var generatedDraft: PromptEntry?
     @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
     @State private var shareItem: PackShareItem?
+    @State private var exportError: String?
     @State private var latestPutAck: PutPromptAckMessage?
     @State private var pendingDeleteIDs: Set<String> = []
     @State private var deleteTimeouts: [UUID: Task<Void, Never>] = [:]
@@ -8770,8 +8822,12 @@ struct PromptLibrarySheet: View {
                     Button {
                         let pack = SharedPromptPack(name: "Quip Prompts",
                                                     prompts: client.promptLibrary, buttons: [])
-                        if let url = try? pack.writeToTemp(filename: "quip-prompts") {
-                            shareItem = PackShareItem(url: url)
+                        do {
+                            shareItem = PackShareItem(url: try pack.writeToTemp(filename: "quip-prompts"))
+                        } catch {
+                            // Same dead-button failure as the buttons export.
+                            print("[Quip][Packs] export prompts FAILED err=\(error)")
+                            exportError = "Couldn't stage the prompt pack for sharing. \(error.localizedDescription)"
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
@@ -8816,6 +8872,14 @@ struct PromptLibrarySheet: View {
             Button("OK", role: .cancel) { deleteErrorMessage = nil }
         } message: {
             Text(deleteErrorMessage ?? "The prompt could not be deleted.")
+        }
+        .alert("Couldn't share prompts", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
         }
         .onAppear {
             client.onPutPromptAck = { ack in
