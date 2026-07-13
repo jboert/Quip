@@ -74,22 +74,37 @@ final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
     }
 
     private static func loadFromDocuments() -> Set<String>? {
-        guard let url = documentsOverrideURL,
-              let data = try? Data(contentsOf: url),
-              let manifest = try? JSONDecoder().decode(PinManifest.self, from: data) else {
+        guard let url = documentsOverrideURL else { return nil }
+        // No override file is the normal case — stay quiet. But a file that
+        // EXISTS and won't parse must be loud: the user (or MDM) deliberately
+        // placed pins here, we silently ignore them, fall through to the
+        // bundled/hardcoded set, and every connection then fails a pin check
+        // for reasons nothing in the logs explains.
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: url)
+            let manifest = try JSONDecoder().decode(PinManifest.self, from: data)
+            print("[Quip][CertPin] Using Documents override (\(manifest.spkiHashes.count) pin(s))")
+            return Set(manifest.spkiHashes)
+        } catch {
+            print("[Quip][CertPin] Documents override present but UNUSABLE at \(url.lastPathComponent) "
+                  + "err=\(error) — IGNORING it and falling back to the bundled/hardcoded pins")
             return nil
         }
-        NSLog("[CertPin] Using Documents override (%d pin(s))", manifest.spkiHashes.count)
-        return Set(manifest.spkiHashes)
     }
 
     private static func loadFromBundle() -> Set<String>? {
-        guard let url = Bundle.main.url(forResource: "CertPins", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let manifest = try? JSONDecoder().decode(PinManifest.self, from: data) else {
+        guard let url = Bundle.main.url(forResource: "CertPins", withExtension: "json") else {
+            print("[Quip][CertPin] CertPins.json missing from bundle — falling back to hardcoded pins")
             return nil
         }
-        return Set(manifest.spkiHashes)
+        do {
+            let data = try Data(contentsOf: url)
+            return Set(try JSONDecoder().decode(PinManifest.self, from: data).spkiHashes)
+        } catch {
+            print("[Quip][CertPin] bundled CertPins.json UNUSABLE err=\(error) — falling back to hardcoded pins")
+            return nil
+        }
     }
 
     func urlSession(
