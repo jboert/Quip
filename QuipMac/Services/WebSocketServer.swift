@@ -988,6 +988,18 @@ final class WebSocketServer {
                             let utf8 = String(data: receivedData, encoding: .utf8) ?? "<non-utf8>"
                             let hex = receivedData.map { String(format: "%02x", $0) }.joined(separator: " ")
                             KokoroTTSDebug.log("§B17 first-unknown bytes utf8=\"\(utf8)\" hex=[\(hex)]")
+                            // The frame is about to be dropped on the floor by
+                            // the `guard let type` in handleIncomingMessage, so
+                            // a phone-side send vanishes into thin air. Say so
+                            // in the log the user is actually told to read —
+                            // once per connection, same suppression as above.
+                            QuipLog.write(
+                                severity: .warn, subsystem: "ws",
+                                message: "dropped inbound frame with no decodable `type` field "
+                                       + "(\(receivedData.count) bytes): \"\(utf8.prefix(200))\". "
+                                       + "Further malformed frames on this connection are suppressed.",
+                                to: LogPaths.webSocketPath
+                            )
                         }
                     }
 

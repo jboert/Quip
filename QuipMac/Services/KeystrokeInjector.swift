@@ -916,33 +916,53 @@ final class KeystrokeInjector {
 
     // MARK: - Capture Window Screenshot
 
-    // Screenshot capture is requested repeatedly (every window-content refresh),
-    // so a persistent cause — a revoked Screen Recording grant fails EVERY call
-    // — would spam the log on a per-frame cadence if we logged unconditionally.
-    // Log state *transitions* instead: the first failure, any change of reason,
-    // and the recovery. Same manual-synchronization pattern as clipboardLock
-    // above: a Sendable immutable NSLock guarding nonisolated(unsafe) state.
-    nonisolated private static let captureLogLock = NSLock()
-    nonisolated(unsafe) private static var lastCaptureFailure: String?
+    // Screenshot capture is requested repeatedly (every window-content refresh)
+    // and independently PER WINDOW, so a persistent cause — a revoked Screen
+    // Recording grant fails EVERY call — would spam the log on a per-frame
+    // cadence if we logged unconditionally. Log state *transitions* instead:
+    // the first failure, any change of cause, and the recovery.
+    //
+    // The state MUST be keyed by window. A single global "last failure" slot
+    // (the first cut of this) alternates failure/recovery every cycle whenever
+    // one window fails while another succeeds — worse than no dedup, and the
+    // "recovered" line is a lie while capture is still broken elsewhere. The
+    // cause string likewise carries no window-identifying data (no id, no tmp
+    // path), so two windows failing the same way compare equal.
+    nonisolated private static let captureGate = LogTransitionGate<CGWindowID>()
 
-    nonisolated private static func reportCaptureFailure(_ reason: String?) {
-        captureLogLock.lock()
-        defer { captureLogLock.unlock() }
-        guard reason != lastCaptureFailure else { return } // same state — stay quiet
-        if let reason {
+    nonisolated private static func reportCaptureFailure(
+        window: CGWindowID,
+        cause: String?,
+        severity: QuipLog.Severity = .error,
+        hint: String = ""
+    ) {
+        switch captureGate.evaluate(window, cause: cause) {
+        case .stayQuiet:
+            return
+        case .report:
+            guard let cause else { return } // unreachable: .report implies a cause
             QuipLog.write(
-                severity: .error, subsystem: "screenshot",
-                message: "screencapture failed: \(reason). The phone will show no screenshot. "
-                       + "Most common cause: Quip lost its Screen Recording grant "
-                       + "(System Settings > Privacy & Security > Screen Recording).",
+                severity: severity, subsystem: "screenshot",
+                message: "screencapture failed for window \(window): \(cause). "
+                       + "The phone will show no screenshot for it.\(hint)",
                 to: LogPaths.webSocketPath
             )
-        } else if lastCaptureFailure != nil {
-            QuipLog.write(severity: .info, subsystem: "screenshot",
-                          message: "screencapture recovered", to: LogPaths.webSocketPath)
+        case .reportRecovery:
+            QuipLog.write(
+                severity: .info, subsystem: "screenshot",
+                message: "screencapture recovered for window \(window)",
+                to: LogPaths.webSocketPath
+            )
         }
-        lastCaptureFailure = reason
     }
+
+    /// Attached only to causes that really do point at TCC. A window that closes
+    /// mid-capture also makes `screencapture` exit non-zero, and dressing that
+    /// benign race up as a lost Screen Recording grant sends the reader hunting
+    /// a permission bug that isn't there.
+    nonisolated private static let screenRecordingHint =
+        " Most common cause: Quip lost its Screen Recording grant "
+        + "(System Settings > Privacy & Security > Screen Recording)."
 
     /// Capture a screenshot of a specific window via the `screencapture` CLI.
     /// Returns base64-encoded PNG data, or nil on failure.
@@ -961,21 +981,38 @@ final class KeystrokeInjector {
             try process.run()
             process.waitUntilExit()
         } catch {
-            Self.reportCaptureFailure("could not launch /usr/sbin/screencapture: \(error)")
+            Self.reportCaptureFailure(
+                window: cgWindowNumber,
+                cause: "could not launch /usr/sbin/screencapture: \(error)"
+            )
             return nil
         }
         guard process.terminationStatus == 0 else {
-            Self.reportCaptureFailure("screencapture exited \(process.terminationStatus)")
+            // A window that closes while we're capturing it exits non-zero too,
+            // and that race is ordinary — .warn, and no TCC accusation. A grant
+            // that's actually gone shows up as the exit-0-no-file case below,
+            // or as this failing for every window at once.
+            Self.reportCaptureFailure(
+                window: cgWindowNumber,
+                cause: "screencapture exited \(process.terminationStatus)",
+                severity: .warn,
+                hint: " Usually the window closed mid-capture; if every window "
+                    + "fails this way, suspect Screen Recording."
+            )
             return nil
         }
         defer { try? FileManager.default.removeItem(atPath: tmpPath) }
         guard let data = FileManager.default.contents(atPath: tmpPath) else {
             // Exit code 0 but no file on disk is the classic silent-TCC-denial
             // shape: screencapture "succeeds" and writes nothing.
-            Self.reportCaptureFailure("screencapture exited 0 but wrote no file to \(tmpPath)")
+            Self.reportCaptureFailure(
+                window: cgWindowNumber,
+                cause: "screencapture exited 0 but wrote no file",
+                hint: Self.screenRecordingHint
+            )
             return nil
         }
-        Self.reportCaptureFailure(nil) // success — clears/announces recovery
+        Self.reportCaptureFailure(window: cgWindowNumber, cause: nil) // success — announces recovery
         return data.base64EncodedString()
     }
 

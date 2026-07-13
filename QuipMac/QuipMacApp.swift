@@ -356,16 +356,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // A frame with no readable `type` is a genuinely malformed message
             // (truncated, wrong encoding, schema drift) — not an ordinary
             // "message we don't handle", which is what `default: break` below
-            // is for. Dropping it silently is how a phone-side send appears to
-            // vanish into thin air.
-            guard let type = MessageCoder.messageType(from: data) else {
-                QuipLog.write(
-                    severity: .warn, subsystem: "ws",
-                    message: "dropped inbound frame with no decodable `type` field (\(data.count) bytes)",
-                    to: LogPaths.webSocketPath
-                )
-                return
-            }
+            // is for. It is REPORTED upstream, once per connection, by the §B17
+            // sink in WebSocketServer.receiveMessage; logging it again here
+            // would fire for every malformed frame (600/min at the per-client
+            // rate limit) and undo that deliberate suppression.
+            guard let type = MessageCoder.messageType(from: data) else { return }
             switch type {
             case "set_qa_pair":
                 if let msg = MessageCoder.decode(SetQAPairMessage.self, from: data) {
@@ -1093,23 +1088,45 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
     }
 
+    // This whole function runs on the 2.0s window-poll timer (every
+    // broadcastLayout calls it), so both failure sites below are hit ~43,000
+    // times a day while a cause persists — an undecodable blob, or a root on an
+    // unmounted volume / a deleted folder / a TCC-restricted path (~/Documents,
+    // ~/Desktop, iCloud Drive) that throws on EVERY tick, permanently. Report
+    // each distinct condition once and stay quiet until it CHANGES. The root
+    // gate is keyed per root: one broken root must not silence (or forge a
+    // recovery for) a different one.
+    nonisolated private static let projectDecodeGate = LogTransitionGate<String>()
+    nonisolated private static let projectRootGate = LogTransitionGate<String>()
+
     private func broadcastProjectDirectories() {
         let data = UserDefaults.standard.data(forKey: "projectDirectories") ?? Data()
         var roots: [String] = []
         // Empty = never configured (ordinary, stay quiet). Non-empty and
         // undecodable = the user's configured roots silently vanish from the
         // phone's spawn picker, which reads to them as "the feature is broken".
+        var decodeFailure: String?
         if !data.isEmpty {
             do {
                 roots = try JSONDecoder().decode([String].self, from: data)
             } catch {
-                QuipLog.write(
-                    severity: .error, subsystem: "prefs",
-                    message: "projectDirectories failed to decode (\(data.count) bytes) — the "
-                           + "phone will be told there are no project directories: \(error)",
-                    to: LogPaths.webSocketPath
-                )
+                decodeFailure = "\(data.count) bytes that don't decode as [String]: \(error)"
             }
+        }
+        switch Self.projectDecodeGate.evaluate("projectDirectories", cause: decodeFailure) {
+        case .report:
+            QuipLog.write(
+                severity: .error, subsystem: "prefs",
+                message: "projectDirectories failed to decode — the phone will be told there "
+                       + "are no project directories: \(decodeFailure ?? "")",
+                to: LogPaths.webSocketPath
+            )
+        case .reportRecovery:
+            QuipLog.write(severity: .info, subsystem: "prefs",
+                          message: "projectDirectories is readable again",
+                          to: LogPaths.webSocketPath)
+        case .stayQuiet:
+            break
         }
         guard !roots.isEmpty else { return }
         // Expand each configured root to its immediate subdirectories so the
@@ -1117,6 +1134,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         var projects: [String] = []
         let fm = FileManager.default
         for root in roots {
+            var rootFailure: String?
             do {
                 let children = try fm.contentsOfDirectory(atPath: root)
                 for child in children.sorted() where !child.hasPrefix(".") {
@@ -1130,12 +1148,22 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // This root was explicitly configured by the user, so failing to
                 // read it is never ordinary — it moved, was deleted, or we lack
                 // permission. It used to just disappear from the broadcast list.
+                rootFailure = error.localizedDescription
+            }
+            switch Self.projectRootGate.evaluate(root, cause: rootFailure) {
+            case .report:
                 QuipLog.write(
                     severity: .warn, subsystem: "prefs",
                     message: "configured project root is unreadable, skipping it: "
-                           + "\(root) — \(error.localizedDescription)",
+                           + "\(root) — \(rootFailure ?? "")",
                     to: LogPaths.webSocketPath
                 )
+            case .reportRecovery:
+                QuipLog.write(severity: .info, subsystem: "prefs",
+                              message: "configured project root is readable again: \(root)",
+                              to: LogPaths.webSocketPath)
+            case .stayQuiet:
+                break
             }
         }
         guard !projects.isEmpty else { return }
@@ -1876,20 +1904,49 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         case "audio_chunk":
             // A dropped audio chunk is invisible by construction: dictation just
             // produces a short/empty transcript and the user reports "PTT does
-            // nothing". Say so instead.
-            guard let msg = try? JSONDecoder().decode(AudioChunkMessage.self, from: data) else {
-                QuipLog.write(
-                    severity: .error, subsystem: "ws",
-                    message: "audio_chunk failed to decode (\(data.count) bytes) — dictation audio dropped",
-                    to: LogPaths.webSocketPath
-                )
+            // nothing". Say so instead — but ONCE PER PTT SESSION. Schema drift
+            // fails every chunk in the stream, so an unthrottled line here means
+            // one press floods the log and every later press repeats it.
+            let msg: AudioChunkMessage
+            do {
+                msg = try JSONDecoder().decode(AudioChunkMessage.self, from: data)
+            } catch {
+                reportAudioChunkDecodeFailure(data: data, error: error)
                 break
             }
+            // Clear this session's failure state (which is what bounds the gate)
+            // without emitting a line: chunks decoding again mid-session is not
+            // news, and an ".info recovered" here would be pure noise.
+            _ = Self.audioChunkGate.evaluate(msg.sessionId.uuidString, cause: nil)
             whisperService?.ingest(msg)
 
         default:
             break
         }
+    }
+
+    /// Keyed by PTT session so a schema-drifted stream — which fails on every
+    /// one of its chunks — costs exactly one line per press, not one per chunk.
+    nonisolated private static let audioChunkGate = LogTransitionGate<String>()
+
+    /// The chunk didn't decode, so `sessionId` has to be dug out of the raw JSON
+    /// leniently. A frame too broken to yield even that is keyed as "unknown",
+    /// which still collapses a flood of identically-broken frames into one line.
+    private func reportAudioChunkDecodeFailure(data: Data, error: Error) {
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let session = (object?["sessionId"] as? String) ?? "unknown"
+        // The cause must hold nothing that varies chunk-to-chunk — `data.count`
+        // in here would make every chunk of one drifted stream compare unequal
+        // and defeat the dedup entirely. The decode error alone is stable.
+        let cause = "\(error)"
+        guard Self.audioChunkGate.evaluate(session, cause: cause) == .report else { return }
+        QuipLog.write(
+            severity: .error, subsystem: "ws",
+            message: "audio_chunk failed to decode (\(data.count) bytes) — dictation audio "
+                   + "dropped for session \(session.prefix(8)): \(cause). Further identical "
+                   + "failures in this session are suppressed.",
+            to: LogPaths.webSocketPath
+        )
     }
 
     /// UserDefaults key under which a given phone's preferences snapshot
