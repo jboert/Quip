@@ -6180,22 +6180,47 @@ extension QuickSlot: Codable {
 /// caseless enum (namespace) so the helpers don't accidentally get
 /// instantiated.
 enum QuickSlotStore {
+    /// Latches the decode-failure log on the offending blob. `decode` is called
+    /// from `MainiOSView.effectiveQuickSlots`, a COMPUTED PROPERTY consumed in
+    /// `body` — and `body` re-evaluates on every output_delta / terminal_content
+    /// / keystroke / TTS event. A corrupt blob (exactly the condition this log
+    /// detects, and a realistic one: `PreferencesSyncService` restores this blob
+    /// from the Mac, so cross-version schema drift lands here) would otherwise
+    /// print hundreds of lines per second while terminal output streams, which
+    /// destroys the log instead of informing it.
+    ///
+    /// Latched on the blob itself, so a CHANGED blob is re-reported and a
+    /// successful decode re-arms — "log once until the cause changes".
+    static let decodeLatch = LogLatch()
+
     /// Empty `raw` is the fresh-install path and stays silent. A NON-empty
     /// `raw` that fails to decode is schema drift / corruption: the user's
     /// saved button row is about to be silently replaced by defaults, which
-    /// reads as "Quip forgot my buttons" with zero log evidence. Log loudly.
-    /// `log` is injected (same shape as `WebSocketClient.decodeMessage`) so
-    /// tests can assert the drop without trapping stdout.
-    static func decode(_ raw: String, log: (String) -> Void = { print($0) }) -> [QuickSlot] {
+    /// reads as "Quip forgot my buttons" with zero log evidence. Log loudly —
+    /// but ONCE per distinct corrupt blob (see `decodeLatch`).
+    /// `log` and `latch` are injected (same shape as
+    /// `WebSocketClient.decodeMessage`) so tests can assert both the drop and
+    /// its cadence without trapping stdout or leaking state between cases.
+    static func decode(_ raw: String,
+                       log: (String) -> Void = { print($0) },
+                       latch: LogLatch = decodeLatch) -> [QuickSlot] {
         guard !raw.isEmpty else { return [] }
         guard let data = raw.data(using: .utf8) else {
-            log("[Quip][Store] quickSlots decode FAILED: raw is not valid UTF-8 (chars=\(raw.count)) — row reset to defaults")
+            let v = latch.verdict(for: "utf8:\(raw)")
+            if v.shouldLog {
+                log("[Quip][Store] quickSlots decode FAILED: raw is not valid UTF-8 (chars=\(raw.count)) — row reset to defaults" + v.suffix)
+            }
             return []
         }
         do {
-            return try JSONDecoder().decode([QuickSlot].self, from: data)
+            let slots = try JSONDecoder().decode([QuickSlot].self, from: data)
+            latch.noteSuccess()
+            return slots
         } catch {
-            log("[Quip][Store] quickSlots decode FAILED bytes=\(data.count) err=\(error) — saved button row lost, resetting to defaults")
+            let v = latch.verdict(for: "json:\(raw)")
+            if v.shouldLog {
+                log("[Quip][Store] quickSlots decode FAILED bytes=\(data.count) err=\(error) — saved button row lost, resetting to defaults" + v.suffix)
+            }
             return []
         }
     }
@@ -6260,19 +6285,34 @@ enum QuickSlotStore {
 
 /// Encode/decode the custom-button definitions table.
 enum CustomButtonStore {
+    /// Same render-cadence hazard as `QuickSlotStore.decodeLatch`, and worse:
+    /// `MainiOSView.customButtonDefs` is read by `effectiveQuickSlots` AND by
+    /// `body` directly, so a corrupt blob decodes 3+ times per render.
+    static let decodeLatch = LogLatch()
+
     /// See `QuickSlotStore.decode` — empty is the fresh-install path; a
     /// non-empty blob that won't decode means the user's custom buttons are
-    /// being silently dropped.
-    static func decode(_ raw: String, log: (String) -> Void = { print($0) }) -> [CustomButton] {
+    /// being silently dropped. Logged once per distinct corrupt blob.
+    static func decode(_ raw: String,
+                       log: (String) -> Void = { print($0) },
+                       latch: LogLatch = decodeLatch) -> [CustomButton] {
         guard !raw.isEmpty else { return [] }
         guard let data = raw.data(using: .utf8) else {
-            log("[Quip][Store] customButtons decode FAILED: raw is not valid UTF-8 (chars=\(raw.count)) — buttons lost")
+            let v = latch.verdict(for: "utf8:\(raw)")
+            if v.shouldLog {
+                log("[Quip][Store] customButtons decode FAILED: raw is not valid UTF-8 (chars=\(raw.count)) — buttons lost" + v.suffix)
+            }
             return []
         }
         do {
-            return try JSONDecoder().decode([CustomButton].self, from: data)
+            let buttons = try JSONDecoder().decode([CustomButton].self, from: data)
+            latch.noteSuccess()
+            return buttons
         } catch {
-            log("[Quip][Store] customButtons decode FAILED bytes=\(data.count) err=\(error) — saved custom buttons lost")
+            let v = latch.verdict(for: "json:\(raw)")
+            if v.shouldLog {
+                log("[Quip][Store] customButtons decode FAILED bytes=\(data.count) err=\(error) — saved custom buttons lost" + v.suffix)
+            }
             return []
         }
     }

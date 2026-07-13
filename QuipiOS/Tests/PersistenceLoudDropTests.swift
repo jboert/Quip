@@ -26,9 +26,12 @@ final class PersistenceLoudDropTests: XCTestCase {
         XCTAssertTrue(logs.isEmpty, "Fresh install is not an error — must not log. Got \(logs)")
     }
 
+    /// A fresh latch per case: the production latch is a shared static, and a
+    /// test that leaned on it would depend on execution order. Cadence itself is
+    /// pinned in `LogLatchCadenceTests`.
     func testQuickSlotDecodeCorruptBlobLogsLoudly() {
         var logs: [String] = []
-        let out = QuickSlotStore.decode("{ this is not json", log: { logs.append($0) })
+        let out = QuickSlotStore.decode("{ this is not json", log: { logs.append($0) }, latch: LogLatch())
         XCTAssertTrue(out.isEmpty, "Fallback value is preserved")
         XCTAssertEqual(logs.count, 1, "Corrupt non-empty blob must emit exactly one line")
         XCTAssertTrue(logs[0].contains("quickSlots decode FAILED"),
@@ -58,7 +61,7 @@ final class PersistenceLoudDropTests: XCTestCase {
 
     func testCustomButtonDecodeCorruptBlobLogsLoudly() {
         var logs: [String] = []
-        let out = CustomButtonStore.decode(#"[{"label":"oops"}]"#, log: { logs.append($0) })
+        let out = CustomButtonStore.decode(#"[{"label":"oops"}]"#, log: { logs.append($0) }, latch: LogLatch())
         XCTAssertTrue(out.isEmpty, "Fallback value is preserved")
         XCTAssertEqual(logs.count, 1, "Schema drift must emit exactly one line")
         XCTAssertTrue(logs[0].contains("customButtons decode FAILED"),

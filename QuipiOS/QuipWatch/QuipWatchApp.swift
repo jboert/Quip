@@ -44,6 +44,42 @@ final class WatchSync: NSObject, ObservableObject, WCSessionDelegate {
     @Published var lastAttention: Date?
     @Published var sessionReachable: Bool = false
 
+    /// Latches the window-list decode-failure log. `applyWindowsData` is fed by
+    /// all three WCSession delegates, so it runs on EVERY window-list message —
+    /// and schema drift (an older phone build against a newer watch app, or vice
+    /// versa) fails identically for every one of them. Unlatched, a single
+    /// mismatched build pair would print on every message the phone ever sends.
+    /// Holds the last-reported cause so a DIFFERENT failure is still reported
+    /// and a successful decode re-arms — mirrors `LogLatch` on the iOS side,
+    /// inlined because the Watch target doesn't compile QuipiOS/Services.
+    private var lastDecodeFailure: String?
+    private var suppressedDecodeFailures = 0
+
+    /// Stable identity for a decode failure. Deliberately NOT `"\(error)"`:
+    /// a DecodingError renders its underlying NSError, whose `userInfo` prints
+    /// in nondeterministic key order, so the same fault yields a different
+    /// string each time and the latch below would never latch. Key on the
+    /// fault's shape instead. (Mirrors `LogLatch.fingerprint` on the iOS side;
+    /// duplicated because the Watch target doesn't compile QuipiOS/Services.)
+    private static func fingerprint(of error: Error) -> String {
+        func path(_ ctx: DecodingError.Context) -> String {
+            ctx.codingPath.map(\.stringValue).joined(separator: ".")
+        }
+        switch error {
+        case let DecodingError.keyNotFound(key, ctx):
+            return "keyNotFound:\(key.stringValue)@\(path(ctx))"
+        case let DecodingError.typeMismatch(type, ctx):
+            return "typeMismatch:\(type)@\(path(ctx))"
+        case let DecodingError.valueNotFound(type, ctx):
+            return "valueNotFound:\(type)@\(path(ctx))"
+        case let DecodingError.dataCorrupted(ctx):
+            return "dataCorrupted:\(ctx.debugDescription)@\(path(ctx))"
+        default:
+            let ns = error as NSError
+            return "\(ns.domain):\(ns.code)"
+        }
+    }
+
     override init() {
         super.init()
         if WCSession.isSupported() {
@@ -87,13 +123,28 @@ final class WatchSync: NSObject, ObservableObject, WCSessionDelegate {
         let decoded: [WatchWindowState]
         do {
             decoded = try JSONDecoder().decode([WatchWindowState].self, from: raw)
+            lastDecodeFailure = nil
+            suppressedDecodeFailures = 0
         } catch {
             // The phone DID send a payload — it just won't decode (schema drift
             // between a freshly-installed watch app and an older phone build, or
             // vice versa). Swallowing this left the watch stuck on an empty or
             // stale window list forever, looking exactly like "the phone never
-            // sent anything".
-            print("[Quip][Watch] window-list decode FAILED bytes=\(raw.count) err=\(error) — watch list will stay stale")
+            // sent anything". Report it once per distinct cause: the phone keeps
+            // sending, and a per-message log would bury the first (and only
+            // useful) report under thousands of copies of itself.
+            let cause = Self.fingerprint(of: error)
+            if lastDecodeFailure == cause {
+                suppressedDecodeFailures += 1
+            } else {
+                let carried = suppressedDecodeFailures
+                let suffix = carried > 0
+                    ? " [+\(carried) identical repeat(s) suppressed since the previous line]"
+                    : ""
+                lastDecodeFailure = cause
+                suppressedDecodeFailures = 0
+                print("[Quip][Watch] window-list decode FAILED bytes=\(raw.count) err=\(error) — watch list will stay stale" + suffix)
+            }
             return
         }
         let previous = self.windows

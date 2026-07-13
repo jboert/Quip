@@ -73,8 +73,23 @@ final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
             .first?.appendingPathComponent("quip-cert-pins.json")
     }
 
-    private static func loadFromDocuments() -> Set<String>? {
-        guard let url = documentsOverrideURL else { return nil }
+    /// `pinnedSPKIHashes` is COMPUTED (deliberately — a dropped-in override file
+    /// is picked up without a relaunch), so both loaders re-run on every read.
+    /// Every cause they report is PERSISTENT (a malformed file stays malformed),
+    /// and the failure self-amplifies: a bad pin set fails the pin check →
+    /// the connection is cancelled → the client reconnects → new handshake →
+    /// more lines. Latch so each distinct cause is reported once, and re-armed
+    /// only when the cause changes (or the load starts succeeding).
+    static let documentsPinLatch = LogLatch()
+    static let bundlePinLatch = LogLatch()
+
+    /// `url`/`latch`/`log` are injected so tests can drive the failure paths
+    /// without touching the real app container. Defaults are the production
+    /// wiring.
+    static func loadFromDocuments(url: URL? = documentsOverrideURL,
+                                  latch: LogLatch = documentsPinLatch,
+                                  log: (String) -> Void = { print($0) }) -> Set<String>? {
+        guard let url else { return nil }
         // No override file is the normal case — stay quiet. But a file that
         // EXISTS and won't parse must be loud: the user (or MDM) deliberately
         // placed pins here, we silently ignore them, fall through to the
@@ -84,25 +99,45 @@ final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
         do {
             let data = try Data(contentsOf: url)
             let manifest = try JSONDecoder().decode(PinManifest.self, from: data)
-            print("[Quip][CertPin] Using Documents override (\(manifest.spkiHashes.count) pin(s))")
+            // "Using the override" is itself a per-handshake line — latch it on
+            // the pin set so it announces the override once, not every connect.
+            let v = latch.verdict(for: "ok:\(manifest.spkiHashes.sorted().joined(separator: ","))")
+            if v.shouldLog {
+                log("[Quip][CertPin] Using Documents override (\(manifest.spkiHashes.count) pin(s))" + v.suffix)
+            }
             return Set(manifest.spkiHashes)
         } catch {
-            print("[Quip][CertPin] Documents override present but UNUSABLE at \(url.lastPathComponent) "
-                  + "err=\(error) — IGNORING it and falling back to the bundled/hardcoded pins")
+            // Keyed on the fault's SHAPE, not "\(error)" — see LogLatch.fingerprint.
+            let v = latch.verdict(for: "err:" + LogLatch.fingerprint(of: error))
+            if v.shouldLog {
+                log("[Quip][CertPin] Documents override present but UNUSABLE at \(url.lastPathComponent) "
+                    + "err=\(error) — IGNORING it and falling back to the bundled/hardcoded pins" + v.suffix)
+            }
             return nil
         }
     }
 
-    private static func loadFromBundle() -> Set<String>? {
-        guard let url = Bundle.main.url(forResource: "CertPins", withExtension: "json") else {
-            print("[Quip][CertPin] CertPins.json missing from bundle — falling back to hardcoded pins")
+    static func loadFromBundle(url: URL? = Bundle.main.url(forResource: "CertPins", withExtension: "json"),
+                               latch: LogLatch = bundlePinLatch,
+                               log: (String) -> Void = { print($0) }) -> Set<String>? {
+        guard let url else {
+            let v = latch.verdict(for: "missing")
+            if v.shouldLog {
+                log("[Quip][CertPin] CertPins.json missing from bundle — falling back to hardcoded pins" + v.suffix)
+            }
             return nil
         }
         do {
             let data = try Data(contentsOf: url)
-            return Set(try JSONDecoder().decode(PinManifest.self, from: data).spkiHashes)
+            let pins = Set(try JSONDecoder().decode(PinManifest.self, from: data).spkiHashes)
+            latch.noteSuccess()
+            return pins
         } catch {
-            print("[Quip][CertPin] bundled CertPins.json UNUSABLE err=\(error) — falling back to hardcoded pins")
+            // Keyed on the fault's SHAPE, not "\(error)" — see LogLatch.fingerprint.
+            let v = latch.verdict(for: "err:" + LogLatch.fingerprint(of: error))
+            if v.shouldLog {
+                log("[Quip][CertPin] bundled CertPins.json UNUSABLE err=\(error) — falling back to hardcoded pins" + v.suffix)
+            }
             return nil
         }
     }
@@ -141,10 +176,16 @@ final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
+        // Resolve the pin set ONCE per handshake. `pinnedSPKIHashes` is a
+        // computed property that hits the filesystem and runs a JSON decode, so
+        // reading it inside the loop did that work 2-3× per handshake (once per
+        // certificate in the chain) — and, before the latches above, emitted
+        // its failure lines that many times too.
+        let pins = Self.pinnedSPKIHashes
         for i in 0..<chainLength {
             let cert = certChain[i]
             let spkiHash = Self.sha256SPKIHash(for: cert)
-            if Self.pinnedSPKIHashes.contains(spkiHash) {
+            if pins.contains(spkiHash) {
                 NSLog("[CertPin] Pin matched at chain position %d for %@", i, host)
                 completionHandler(.useCredential, URLCredential(trust: serverTrust))
                 return

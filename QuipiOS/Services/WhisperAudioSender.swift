@@ -89,7 +89,14 @@ final class WhisperAudioSender: @unchecked Sendable {
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let cap = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
         guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: cap) else {
-            print("[Quip][PTT] WhisperAudioSender: output buffer alloc FAILED (cap=\(cap))")
+            // Per-buffer path, same as the convert failure below — an alloc that
+            // fails once fails for every buffer that follows, so it goes through
+            // the same latch instead of printing every few milliseconds.
+            // `appendBuffer` still counts the drop and `finish()` still reports
+            // the total.
+            if !didLogConvertFailure {
+                print("[Quip][PTT] WhisperAudioSender: output buffer alloc FAILED (cap=\(cap))")
+            }
             return nil
         }
 

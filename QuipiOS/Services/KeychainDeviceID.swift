@@ -15,6 +15,13 @@ enum KeychainDeviceID {
     private static let service = "com.quip.QuipiOS"
     private static let account = "device-id"
 
+    /// `get()` is reached from `sendSelfIdentity()`, which runs after EVERY
+    /// reconnect — and a Keychain that won't read (still locked at launch,
+    /// entitlement lost across a resign) stays that way. Latch on the status so
+    /// the failure is reported once per distinct cause rather than once per
+    /// reconnect, and re-armed when the status changes or the read recovers.
+    static let readLatch = LogLatch()
+
     static func get() -> String {
         if let existing = read() { return existing }
         let new = UUID().uuidString
@@ -22,7 +29,24 @@ enum KeychainDeviceID {
         return new
     }
 
-    private static func read() -> String? {
+    /// Split out so tests can drive statuses a real Keychain won't produce on
+    /// demand (-25308 / -34018). nil when the status is ordinary or latched.
+    static func failureLine(status: OSStatus, latch: LogLatch = readLatch) -> String? {
+        // As in KeychainBackendPINs: not-found is the ordinary first-launch
+        // answer (caller mints and writes a fresh ID). Any OTHER failure used
+        // to look identical, which silently REKEYS the device — the Mac then
+        // sees a brand-new device, and the phone loses its paired identity and
+        // its prefs backup for reasons nothing logged.
+        guard status != errSecSuccess, status != errSecItemNotFound else {
+            latch.noteSuccess()
+            return nil
+        }
+        let v = latch.verdict(for: "OSStatus=\(status)")
+        guard v.shouldLog else { return nil }
+        return "[Quip][Keychain] deviceID read FAILED OSStatus=\(status) — a NEW device ID will be minted, breaking pairing continuity" + v.suffix
+    }
+
+    private static func read(log: (String) -> Void = { print($0) }) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -32,14 +56,8 @@ enum KeychainDeviceID {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        // As in KeychainBackendPINs: not-found is the ordinary first-launch
-        // answer (caller mints and writes a fresh ID). Any OTHER failure used
-        // to look identical, which silently REKEYS the device — the Mac then
-        // sees a brand-new device, and the phone loses its paired identity and
-        // its prefs backup for reasons nothing logged.
-        if status != errSecSuccess && status != errSecItemNotFound {
-            print("[Quip][Keychain] deviceID read FAILED OSStatus=\(status) — a NEW device ID will be minted, breaking pairing continuity")
-            return nil
+        if let line = failureLine(status: status, latch: readLatch) {
+            log(line)
         }
         guard status == errSecSuccess,
               let data = item as? Data,
