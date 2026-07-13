@@ -342,21 +342,34 @@ final class WebSocketServer {
     /// network queue, not the main actor — same context the original inline
     /// closure ran in. Internal main-actor mutations are dispatched via
     /// `DispatchQueue.main.async` blocks, matching the prior pattern.
+    /// One-bit box so the @Sendable state closure can record "handshake done"
+    /// without Swift 6 rejecting a captured mutable local (`sending 'x' risks
+    /// causing data races`). Accessed only from the network queue.
+    private final class HandshakeFlag: @unchecked Sendable {
+        var reachedReady = false
+    }
+
     private nonisolated func handleNewConnection(_ connection: NWConnection) {
         Self.wslog("newConnectionHandler fired for \(connection.endpoint)")
+        // Did this connection ever complete the WS handshake? A probe never
+        // does — and a probe closing is not a failure. Class instance so the
+        // @Sendable state closure can flip it without capturing a mutable var.
+        let handshake = HandshakeFlag()
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
-            Self.wslog("Connection state: \(state) for \(connection.endpoint)")
             switch state {
             case .ready:
-                Self.wslog("Connection ready (pending auth)")
-                KokoroTTSDebug.log("WS connection ready from \(connection.endpoint)")
+                handshake.reachedReady = true
                 // CRITICAL: fire the auth signal and start the receive loop
                 // IMMEDIATELY on the network queue. We used to do this inside
                 // DispatchQueue.main.async, but under reconnect storms main
                 // would get backed up 3-26s by SwiftUI re-renders, iOS would
                 // time out, and the socket would reset mid-handshake.
                 let requireAuthNow = self.requireAuth
+                Self.wslog(requireAuthNow
+                    ? "connection ready from \(connection.endpoint) — awaiting PIN"
+                    : "connection ready from \(connection.endpoint) — authenticated (no PIN required)")
+                KokoroTTSDebug.log("WS connection ready from \(connection.endpoint)")
                 let signalMsg: AuthResultMessage = requireAuthNow
                     ? AuthResultMessage(success: false, error: "auth_required")
                     : AuthResultMessage(success: true, error: nil)
@@ -378,6 +391,7 @@ final class WebSocketServer {
                 }
                 self.receiveMessage(on: connection)
                 Self.wslog("Sent auth signal, starting receiveMessage")
+                Self.wslog("client live: \(connection.endpoint) (auth=\(requireAuthNow ? "pin" : "none"))")
                 let remoteStr = String(describing: connection.endpoint)
                 DispatchQueue.main.async {
                     var client = ClientConnection(connection: connection)
@@ -403,7 +417,11 @@ final class WebSocketServer {
                     }
                 }
             case .failed(let error):
-                Self.wslog("Connection FAILED: \(error)")
+                let outcome = ConnectionOutcome.classify(
+                    reachedReady: handshake.reachedReady,
+                    error: String(describing: error))
+                Self.wslog(outcome.describe(endpoint: String(describing: connection.endpoint)),
+                           severity: outcome.severity)
                 KokoroTTSDebug.log("WS connection FAILED: \(error)")
                 let remoteStr = String(describing: connection.endpoint)
                 let errStr = String(describing: error)
@@ -412,6 +430,10 @@ final class WebSocketServer {
                     self.removeConnection(connection)
                 }
             case .cancelled:
+                let outcome = ConnectionOutcome.classify(
+                    reachedReady: handshake.reachedReady, error: nil)
+                Self.wslog(outcome.describe(endpoint: String(describing: connection.endpoint)),
+                           severity: outcome.severity)
                 let remoteStr = String(describing: connection.endpoint)
                 DispatchQueue.main.async {
                     self.connectionLog?.record(.disconnected, remote: remoteStr, detail: nil)
@@ -671,17 +693,8 @@ final class WebSocketServer {
 
     // MARK: - Private
 
-    private nonisolated static func wslog(_ msg: String) {
-        let ts = ISO8601DateFormatter().string(from: Date())
-        let line = "[\(ts)] \(msg)\n"
-        let path = LogPaths.webSocketPath
-        if let fh = FileHandle(forWritingAtPath: path) {
-            fh.seekToEndOfFile()
-            fh.write(Data(line.utf8))
-            fh.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
-        }
+    private nonisolated static func wslog(_ msg: String, severity: QuipLog.Severity = .info) {
+        QuipLog.write(severity: severity, subsystem: "ws", message: msg, to: LogPaths.webSocketPath)
         print("[WebSocketServer] \(msg)")
     }
 
