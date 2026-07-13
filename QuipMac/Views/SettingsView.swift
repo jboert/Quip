@@ -616,14 +616,33 @@ private struct ProjectsTab: View {
     }
 
     private func loadDirectories() {
-        if let decoded = try? JSONDecoder().decode([String].self, from: directoriesData) {
-            directories = decoded
+        // An EMPTY blob is the ordinary "never configured" state (the
+        // @AppStorage default), so it must stay silent. A non-empty blob that
+        // won't decode is a real failure: the user's configured roots silently
+        // disappear from Settings and from the phone's spawn picker.
+        do {
+            guard !directoriesData.isEmpty else { return }
+            directories = try JSONDecoder().decode([String].self, from: directoriesData)
+        } catch {
+            QuipLog.write(
+                severity: .error, subsystem: "settings",
+                message: "projectDirectories failed to decode (\(directoriesData.count) bytes) "
+                       + "— configured project roots will appear empty: \(error)",
+                to: LogPaths.webSocketPath
+            )
         }
     }
 
     private func saveDirectories() {
-        if let encoded = try? JSONEncoder().encode(directories) {
-            directoriesData = encoded
+        do {
+            directoriesData = try JSONEncoder().encode(directories)
+        } catch {
+            QuipLog.write(
+                severity: .error, subsystem: "settings",
+                message: "could not encode \(directories.count) project directories "
+                       + "— the edit was NOT saved and is lost on relaunch: \(error)",
+                to: LogPaths.webSocketPath
+            )
         }
     }
 
@@ -1067,14 +1086,31 @@ private struct LayoutsTab: View {
     }
 
     private func loadPresets() {
-        if let decoded = try? JSONDecoder().decode([SavedLayoutPreset].self, from: savedPresetsData) {
-            presets = decoded
+        // Empty blob = no presets saved yet (the @AppStorage default) — silent.
+        // Non-empty and undecodable = the user's saved layouts just vanished.
+        do {
+            guard !savedPresetsData.isEmpty else { return }
+            presets = try JSONDecoder().decode([SavedLayoutPreset].self, from: savedPresetsData)
+        } catch {
+            QuipLog.write(
+                severity: .error, subsystem: "settings",
+                message: "savedPresets failed to decode (\(savedPresetsData.count) bytes) "
+                       + "— saved layout presets will appear empty: \(error)",
+                to: LogPaths.webSocketPath
+            )
         }
     }
 
     private func savePresets() {
-        if let encoded = try? JSONEncoder().encode(presets) {
-            savedPresetsData = encoded
+        do {
+            savedPresetsData = try JSONEncoder().encode(presets)
+        } catch {
+            QuipLog.write(
+                severity: .error, subsystem: "settings",
+                message: "could not encode \(presets.count) layout presets "
+                       + "— the preset was NOT saved and is lost on relaunch: \(error)",
+                to: LogPaths.webSocketPath
+            )
         }
     }
 

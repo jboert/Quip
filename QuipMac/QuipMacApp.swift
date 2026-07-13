@@ -1095,14 +1095,30 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
     private func broadcastProjectDirectories() {
         let data = UserDefaults.standard.data(forKey: "projectDirectories") ?? Data()
-        let roots = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+        var roots: [String] = []
+        // Empty = never configured (ordinary, stay quiet). Non-empty and
+        // undecodable = the user's configured roots silently vanish from the
+        // phone's spawn picker, which reads to them as "the feature is broken".
+        if !data.isEmpty {
+            do {
+                roots = try JSONDecoder().decode([String].self, from: data)
+            } catch {
+                QuipLog.write(
+                    severity: .error, subsystem: "prefs",
+                    message: "projectDirectories failed to decode (\(data.count) bytes) — the "
+                           + "phone will be told there are no project directories: \(error)",
+                    to: LogPaths.webSocketPath
+                )
+            }
+        }
         guard !roots.isEmpty else { return }
         // Expand each configured root to its immediate subdirectories so the
         // phone shows individual projects, not just the parent folder.
         var projects: [String] = []
         let fm = FileManager.default
         for root in roots {
-            if let children = try? fm.contentsOfDirectory(atPath: root) {
+            do {
+                let children = try fm.contentsOfDirectory(atPath: root)
                 for child in children.sorted() where !child.hasPrefix(".") {
                     let full = (root as NSString).appendingPathComponent(child)
                     var isDir: ObjCBool = false
@@ -1110,6 +1126,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         projects.append(full)
                     }
                 }
+            } catch {
+                // This root was explicitly configured by the user, so failing to
+                // read it is never ordinary — it moved, was deleted, or we lack
+                // permission. It used to just disappear from the broadcast list.
+                QuipLog.write(
+                    severity: .warn, subsystem: "prefs",
+                    message: "configured project root is unreadable, skipping it: "
+                           + "\(root) — \(error.localizedDescription)",
+                    to: LogPaths.webSocketPath
+                )
             }
         }
         guard !projects.isEmpty else { return }
@@ -1786,9 +1812,22 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         case "preferences_snapshot":
             if let msg = MessageCoder.decode(PreferenceSnapshotMessage.self, from: data) {
                 let key = phonePrefsKey(deviceID: msg.deviceID)
-                if let encoded = try? JSONEncoder().encode(msg.preferences) {
+                do {
+                    let encoded = try JSONEncoder().encode(msg.preferences)
                     UserDefaults.standard.set(encoded, forKey: key)
                     print("[Quip] preferences_snapshot stored for device \(msg.deviceID.prefix(8))")
+                } catch {
+                    // The phone believes its settings are backed up the moment
+                    // it sends this. If the encode fails we store nothing and
+                    // say nothing — and the loss only surfaces later, as a wiped
+                    // config after a reinstall.
+                    QuipLog.write(
+                        severity: .error, subsystem: "prefs",
+                        message: "preferences_snapshot NOT stored for device "
+                               + "\(msg.deviceID.prefix(8)) — encode failed: \(error). "
+                               + "This phone's settings are not backed up.",
+                        to: LogPaths.webSocketPath
+                    )
                 }
             }
 
@@ -1800,10 +1839,27 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             if let msg = MessageCoder.decode(PreferenceRequestMessage.self, from: data) {
                 let key = phonePrefsKey(deviceID: msg.deviceID)
                 let snapshot: PreferencesSnapshot
-                if let blob = UserDefaults.standard.data(forKey: key),
-                   let decoded = try? JSONDecoder().decode(PreferencesSnapshot.self, from: blob) {
-                    snapshot = decoded
-                    print("[Quip] preferences_request: restoring snapshot for device \(msg.deviceID.prefix(8))")
+                // Two very different states used to collapse into one branch —
+                // and into one LIE. "No backup exists" is ordinary (fresh
+                // pairing). "A backup exists but won't decode" means we're about
+                // to hand the phone defaults and silently wipe its real settings
+                // — yet the old code logged "no backup for device" for BOTH.
+                // Schema drift on PreferencesSnapshot lands squarely here.
+                if let blob = UserDefaults.standard.data(forKey: key) {
+                    do {
+                        snapshot = try JSONDecoder().decode(PreferencesSnapshot.self, from: blob)
+                        print("[Quip] preferences_request: restoring snapshot for device \(msg.deviceID.prefix(8))")
+                    } catch {
+                        snapshot = PreferencesSnapshot()
+                        QuipLog.write(
+                            severity: .error, subsystem: "prefs",
+                            message: "preferences_request: a backup EXISTS for device "
+                                   + "\(msg.deviceID.prefix(8)) (\(blob.count) bytes) but failed to "
+                                   + "decode: \(error). Sending defaults — this phone's saved "
+                                   + "settings are being silently replaced.",
+                            to: LogPaths.webSocketPath
+                        )
+                    }
                 } else {
                     snapshot = PreferencesSnapshot()
                     print("[Quip] preferences_request: no backup for device \(msg.deviceID.prefix(8))")
