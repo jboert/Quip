@@ -275,7 +275,18 @@ final class CloudflareTunnel {
                 }
             }
         } catch {
+            // Launching cloudflared failed outright (missing binary, bad perms,
+            // exec denied). Every other state change in this file goes through
+            // logEvent; this one used to just flip `isRunning = false` and say
+            // nothing, so the tunnel would sit "off" with no reason recorded
+            // anywhere — the UI shows no URL and the log shows no failure.
             isRunning = false
+            logEvent("cloudflared FAILED to launch: \(error.localizedDescription) — tunnel is off")
+            QuipLog.write(
+                severity: .error, subsystem: "tunnel",
+                message: "cloudflared failed to launch at \(cfPath): \(error)",
+                to: LogPaths.webSocketPath
+            )
         }
     }
 
@@ -651,9 +662,19 @@ final class CloudflareTunnel {
                     response = AuthResultMessage(success: false, error: pin.isEmpty ? "Server PIN not configured" : "Incorrect PIN")
                     print("[TunnelProxy] Auth failed: \(pin.isEmpty ? "no PIN configured" : "wrong PIN")")
                 }
+                // If this encode fails we send NOTHING back, and the phone sits
+                // on "Connecting…" forever waiting for an auth result that will
+                // never arrive — with no trace on either peer. Report it.
                 if let responseData = try? JSONEncoder().encode(response),
                    let json = String(data: responseData, encoding: .utf8) {
                     self.sendWSFrame(text: json, on: conn)
+                } else {
+                    QuipLog.write(
+                        severity: .error, subsystem: "tunnel",
+                        message: "could not encode AuthResultMessage (success=\(response.success)) "
+                               + "— sent no auth reply, tunnel client will hang on Connecting",
+                        to: LogPaths.webSocketPath
+                    )
                 }
             }
         } else {

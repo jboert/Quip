@@ -353,7 +353,19 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
 
         webSocketServer.onMessageWithConnection = { [self] data, connection in
-            guard let type = MessageCoder.messageType(from: data) else { return }
+            // A frame with no readable `type` is a genuinely malformed message
+            // (truncated, wrong encoding, schema drift) — not an ordinary
+            // "message we don't handle", which is what `default: break` below
+            // is for. Dropping it silently is how a phone-side send appears to
+            // vanish into thin air.
+            guard let type = MessageCoder.messageType(from: data) else {
+                QuipLog.write(
+                    severity: .warn, subsystem: "ws",
+                    message: "dropped inbound frame with no decodable `type` field (\(data.count) bytes)",
+                    to: LogPaths.webSocketPath
+                )
+                return
+            }
             switch type {
             case "set_qa_pair":
                 if let msg = MessageCoder.decode(SetQAPairMessage.self, from: data) {
@@ -1806,7 +1818,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
 
         case "audio_chunk":
-            guard let msg = try? JSONDecoder().decode(AudioChunkMessage.self, from: data) else { break }
+            // A dropped audio chunk is invisible by construction: dictation just
+            // produces a short/empty transcript and the user reports "PTT does
+            // nothing". Say so instead.
+            guard let msg = try? JSONDecoder().decode(AudioChunkMessage.self, from: data) else {
+                QuipLog.write(
+                    severity: .error, subsystem: "ws",
+                    message: "audio_chunk failed to decode (\(data.count) bytes) — dictation audio dropped",
+                    to: LogPaths.webSocketPath
+                )
+                break
+            }
             whisperService?.ingest(msg)
 
         default:
