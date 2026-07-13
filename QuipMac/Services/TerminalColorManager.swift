@@ -134,16 +134,7 @@ final class TerminalColorManager {
     // MARK: - AppleScript Execution
 
     private func executeAppleScript(_ source: String) {
-        guard let appleScript = NSAppleScript(source: source) else {
-            print("[TerminalColorManager] Failed to create NSAppleScript")
-            return
-        }
-
-        var error: NSDictionary?
-        appleScript.executeAndReturnError(&error)
-
-        if let error = error {
-            let message = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
+        if let message = AppleScriptRunner.run(source).errorMessage {
             print("[TerminalColorManager] AppleScript error: \(message)")
         }
     }

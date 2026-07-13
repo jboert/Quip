@@ -396,10 +396,7 @@ struct WindowListSidebar: View {
             """
         }
 
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-        }
+        _ = AppleScriptRunner.run(script)
 
         // Refresh after a brief delay to pick up the new window
         Task {

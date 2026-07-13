@@ -1259,3 +1259,39 @@ fallback.
 - **Check after this reinstall:** APNs push still configured (keychain .p8 has
   history of orphaning on reinstall — Settings → Notifications if push.log
   shows skips).
+
+---
+
+## AppleScript crash (SIGSEGV) — fixed 2026-07-12, watch for recurrence
+
+Mac app segfaulted inside `TASLexer::EndUse()` (crash report
+`Quip-2026-07-12-161807.ips`, v1.5.5): `NSAppleScript` keeps the AppleScript
+parser/lexer in process-wide shared state, and Quip drove it from three
+unsynchronized contexts — the 2s window poll on the *concurrent* global queue
+(`fetchSubtitles` / `fetchIterm2SessionIds`), the 2s Claude-mode poll on its own
+queue (`readContent`), and keystroke injection on main. The subtitle fetch also
+blocks 1-3s, i.e. longer than its own 2s timer period, so it could overlap
+*itself* on the concurrent pool.
+
+Fix: every `NSAppleScript` in the app now runs through `AppleScriptRunner` —
+one serial queue — plus an in-flight gate so the window poll skips a tick
+instead of stacking. FIFO ordering is what the multi-keystroke paths already
+assumed.
+
+- **Not reproduced on demand:** 260 unserialized concurrent compiles (both pure
+  scripts and `tell`-scoped ones across two terminologies) survived in a
+  standalone harness. The race window is narrow — hours of uptime per crash. So
+  the fix is principled (removes the documented-unsafe concurrent access the
+  crash died inside) but was NOT confirmed by a reproduced-then-fixed cycle.
+  **If Quip segfaults again, pull the new `.ips` and check the faulting thread:
+  if it is still inside AppleScript, the serialization theory is wrong and the
+  next suspect is the OSA component instance itself.**
+- **Latency trade (measured, acceptable):** keystroke injection now waits behind
+  any in-flight poll script. Measured on the dev Mac against live iTerm2:
+  `fetchSubtitles` 186ms, `fetchIterm2SessionIds` 208ms, `readContent` 91ms per
+  window — *not* the 1-3s the old code comment claimed. With a few tracked
+  windows the queue is busy ~15-20% of the time and the worst-case wait for a
+  keystroke is one in-flight script (~200ms). If the tracked-window count grows
+  a lot (mode poll is 91ms × N every 2s) this gets worse — at that point move
+  the pollers to `osascript` subprocesses (process isolation, no shared lexer,
+  main never waits) and keep in-process AppleScript for injection only.

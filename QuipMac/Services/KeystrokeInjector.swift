@@ -909,10 +909,8 @@ final class KeystrokeInjector {
             """
         }
 
-        guard let appleScript = NSAppleScript(source: script) else { return nil }
-        var errorInfo: NSDictionary?
-        let result = appleScript.executeAndReturnError(&errorInfo)
-        if errorInfo != nil { return nil }
+        let result = AppleScriptRunner.run(script)
+        if result.error != nil { return nil }
         return result.stringValue
     }
 
@@ -1052,17 +1050,9 @@ final class KeystrokeInjector {
 
     /// Execute an AppleScript and return the result
     nonisolated private func executeAppleScript(_ source: String, context: String) -> InjectionResult {
-        guard let appleScript = NSAppleScript(source: source) else {
-            let msg = "Failed to create NSAppleScript"
-            print("[KeystrokeInjector] \(context): \(msg)")
-            return InjectionResult(success: false, error: msg)
-        }
+        let result = AppleScriptRunner.run(source)
 
-        var errorInfo: NSDictionary?
-        appleScript.executeAndReturnError(&errorInfo)
-
-        if let errorInfo = errorInfo {
-            let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "Unknown AppleScript error"
+        if let message = result.errorMessage {
             print("[KeystrokeInjector] \(context): \(message)")
             return InjectionResult(success: false, error: message,
                                    kind: Self.classifyAppleScriptError(message))

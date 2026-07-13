@@ -601,19 +601,16 @@ final class WindowManager {
         return output
         """
 
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            let asResult = appleScript.executeAndReturnError(&error)
-            if error == nil, let output = asResult.stringValue {
-                for line in output.components(separatedBy: "\n") where !line.isEmpty {
-                    let parts = line.split(separator: ":", maxSplits: 1)
-                    guard parts.count == 2, let wid = Int(parts[0]) else { continue }
-                    let path = String(parts[1])
-                    result[CGWindowID(wid)] = SubtitleInfo(
-                        subtitle: (path as NSString).lastPathComponent,
-                        cwdPath: path.isEmpty ? nil : path
-                    )
-                }
+        let asResult = AppleScriptRunner.run(script)
+        if asResult.error == nil, let output = asResult.stringValue {
+            for line in output.components(separatedBy: "\n") where !line.isEmpty {
+                let parts = line.split(separator: ":", maxSplits: 1)
+                guard parts.count == 2, let wid = Int(parts[0]) else { continue }
+                let path = String(parts[1])
+                result[CGWindowID(wid)] = SubtitleInfo(
+                    subtitle: (path as NSString).lastPathComponent,
+                    cwdPath: path.isEmpty ? nil : path
+                )
             }
         }
 
@@ -645,10 +642,8 @@ final class WindowManager {
             return (name of processes) contains "iTerm2"
         end tell
         """
-        guard let runScript = NSAppleScript(source: runningCheck) else { return [] }
-        var runErr: NSDictionary?
-        let runResult = runScript.executeAndReturnError(&runErr)
-        guard runErr == nil, runResult.booleanValue else { return [] }
+        let runResult = AppleScriptRunner.run(runningCheck)
+        guard runResult.error == nil, runResult.booleanValue else { return [] }
 
         // Four fields per window, TAB-separated, newline between windows.
         // Matches the separator style of `fetchIterm2SessionIds` above so
@@ -676,10 +671,8 @@ final class WindowManager {
         end tell
         return output
         """
-        guard let appleScript = NSAppleScript(source: script) else { return [] }
-        var error: NSDictionary?
-        let asResult = appleScript.executeAndReturnError(&error)
-        guard error == nil, let output = asResult.stringValue else { return [] }
+        let asResult = AppleScriptRunner.run(script)
+        guard asResult.error == nil, let output = asResult.stringValue else { return [] }
         return parseITermWindowList(output)
     }
 
@@ -736,10 +729,8 @@ final class WindowManager {
             end try
         end tell
         """
-        guard let appleScript = NSAppleScript(source: script) else { return false }
-        var error: NSDictionary?
-        let result = appleScript.executeAndReturnError(&error)
-        if let err = error {
+        let result = AppleScriptRunner.run(script)
+        if let err = result.error {
             print("[WindowManager] unminimizeITermWindow failed: \(err)")
             return false
         }
@@ -782,10 +773,8 @@ final class WindowManager {
         return output
         """
 
-        guard let appleScript = NSAppleScript(source: script) else { return result }
-        var error: NSDictionary?
-        let asResult = appleScript.executeAndReturnError(&error)
-        guard error == nil, let output = asResult.stringValue else { return result }
+        let asResult = AppleScriptRunner.run(script)
+        guard asResult.error == nil, let output = asResult.stringValue else { return result }
 
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")

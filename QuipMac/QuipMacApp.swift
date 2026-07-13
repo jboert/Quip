@@ -99,6 +99,31 @@ struct QuipMacApp: App {
     /// shared NSPasteboard snapshot/restore — while still running off the main
     /// actor so the ~0.5s AppleScript doesn't block main / starve the WS keepalive.
     private static let pasteInjectQueue = DispatchQueue(label: "com.quip.mac.paste-inject", qos: .userInitiated)
+    /// Gate for the 2s window poll (see `startServicesOnce`). The poll's
+    /// AppleScript can outlast the timer's own period, and every script in the
+    /// app now shares one serial queue, so a stacked-up poll would sit in front
+    /// of the next keystroke injection. Set on main, cleared on main — but a
+    /// captured local can't cross into the @Sendable global-queue closure under
+    /// Swift 6, so it lives here behind a lock (same shape as
+    /// `KeystrokeInjector.clipboardLock`).
+    private static let pollGateLock = NSLock()
+    nonisolated(unsafe) private static var windowPollInFlight = false
+
+    /// Claim the poll slot. Returns false when a poll is still running, in
+    /// which case this tick should be skipped entirely.
+    private static func beginWindowPoll() -> Bool {
+        pollGateLock.lock()
+        defer { pollGateLock.unlock() }
+        if windowPollInFlight { return false }
+        windowPollInFlight = true
+        return true
+    }
+
+    private static func endWindowPoll() {
+        pollGateLock.lock()
+        defer { pollGateLock.unlock() }
+        windowPollInFlight = false
+    }
     @State private var tunnel = CloudflareTunnel()
     @State private var tailscale = TailscaleService()
     @State private var pinManager = PINManager()
@@ -546,11 +571,20 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         kokoroTTS.preload()
 
         var subtitleCounter = 0
+        // The AppleScript fetches below can block for 1-3 seconds — longer than
+        // this timer's own 2s period. They used to pile onto the *concurrent*
+        // global pool, so a slow tick got a second (and third) fetch compiling
+        // AppleScript alongside it. Every script in the app now shares one
+        // serial queue (AppleScriptRunner), which makes that safe but not free:
+        // a backlog of polls would sit in front of the next keystroke
+        // injection. Skip a tick outright while the previous one is still in
+        // flight — the in-flight pass broadcasts when it lands.
         Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             // Timer fires on the main runloop (we scheduled it from main), so
             // assumeIsolated is sound. Swift 6 types the closure as @Sendable
             // and won't let us touch MainActor state without an explicit hop.
             MainActor.assumeIsolated {
+                guard Self.beginWindowPoll() else { return }
                 // Read on main so we can use @MainActor state; the expensive
                 // AppleScript/CG calls run off-main below. subtitleCounter
                 // stays on main so it isn't shared into the @Sendable global
@@ -569,6 +603,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     let shouldFetchSessions = subtitles != nil || forceSessionFetch
                     let sessions = shouldFetchSessions ? WindowManager.fetchIterm2SessionIds() : nil
                     DispatchQueue.main.async {
+                        Self.endWindowPoll()
                         windowManager.applyWindowSnapshot(snapshot)
                         if let subtitles { windowManager.applySubtitles(subtitles) }
                         if let sessions { windowManager.applyIterm2SessionIds(sessions) }
