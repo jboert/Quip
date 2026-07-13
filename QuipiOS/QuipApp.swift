@@ -3838,9 +3838,15 @@ struct MainiOSView: View {
     /// Re-encode `phoneFrameOverrides` into JSON and write to @AppStorage.
     /// Called after every mutation so a force-quit doesn't lose drag work.
     private func persistOverrides() {
-        if let data = try? JSONEncoder().encode(phoneFrameOverrides),
-           let json = String(data: data, encoding: .utf8) {
+        do {
+            let data = try JSONEncoder().encode(phoneFrameOverrides)
+            guard let json = String(data: data, encoding: .utf8) else {
+                print("[Quip][Layout] persistOverrides FAILED: UTF-8 conversion — drag positions NOT saved")
+                return
+            }
             phoneFrameOverridesJSON = json
+        } catch {
+            print("[Quip][Layout] persistOverrides FAILED count=\(phoneFrameOverrides.count) err=\(error) — drag positions NOT saved")
         }
     }
 
@@ -3848,10 +3854,13 @@ struct MainiOSView: View {
     /// Called on view appear so a returning user sees their last positions
     /// before the first windows-list arrives — no flash of unstyled layout.
     private func loadOverrides() {
-        guard let data = phoneFrameOverridesJSON.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode([String: WindowFrame].self, from: data)
-        else { return }
-        phoneFrameOverrides = decoded
+        guard !phoneFrameOverridesJSON.isEmpty else { return }   // fresh install
+        guard let data = phoneFrameOverridesJSON.data(using: .utf8) else { return }
+        do {
+            phoneFrameOverrides = try JSONDecoder().decode([String: WindowFrame].self, from: data)
+        } catch {
+            print("[Quip][Layout] loadOverrides FAILED bytes=\(data.count) err=\(error) — saved window positions lost")
+        }
     }
 
     /// Drop closed windows from the override dictionary so it doesn't grow
@@ -3920,9 +3929,15 @@ struct MainiOSView: View {
     /// Decode the persisted phone window order on appear so a returning user's
     /// arrangement is in place before the first layout-update arrives.
     private func loadWindowOrder() {
-        guard let data = phoneWindowOrderJSON.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode([String].self, from: data)
-        else { return }
+        guard !phoneWindowOrderJSON.isEmpty else { return }   // fresh install
+        guard let data = phoneWindowOrderJSON.data(using: .utf8) else { return }
+        let decoded: [String]
+        do {
+            decoded = try JSONDecoder().decode([String].self, from: data)
+        } catch {
+            print("[Quip][Layout] loadWindowOrder FAILED bytes=\(data.count) err=\(error) — saved card order lost")
+            return
+        }
         phoneWindowOrder = decoded
         // Migration: a user upgrading from the old free-position drag model has
         // per-window frame overrides saved. Those win in phoneLayoutFrame and
@@ -3939,9 +3954,15 @@ struct MainiOSView: View {
 
     /// Re-encode `phoneWindowOrder` to @AppStorage after every mutation.
     private func persistWindowOrder() {
-        if let data = try? JSONEncoder().encode(phoneWindowOrder),
-           let json = String(data: data, encoding: .utf8) {
+        do {
+            let data = try JSONEncoder().encode(phoneWindowOrder)
+            guard let json = String(data: data, encoding: .utf8) else {
+                print("[Quip][Layout] persistWindowOrder FAILED: UTF-8 conversion — card order NOT saved")
+                return
+            }
             phoneWindowOrderJSON = json
+        } catch {
+            print("[Quip][Layout] persistWindowOrder FAILED count=\(phoneWindowOrder.count) err=\(error) — card order NOT saved")
         }
     }
 
@@ -4191,14 +4212,19 @@ struct MainiOSView: View {
     }
 
     private func loadRecents() {
-        if let decoded = try? JSONDecoder().decode([SavedConnection].self, from: recentConnectionsData) {
-            recentConnections = decoded
+        guard !recentConnectionsData.isEmpty else { return }   // fresh install
+        do {
+            recentConnections = try JSONDecoder().decode([SavedConnection].self, from: recentConnectionsData)
+        } catch {
+            print("[Quip][Connections] loadRecents FAILED bytes=\(recentConnectionsData.count) err=\(error) — recent connection list lost")
         }
     }
 
     private func saveRecents() {
-        if let encoded = try? JSONEncoder().encode(recentConnections) {
-            recentConnectionsData = encoded
+        do {
+            recentConnectionsData = try JSONEncoder().encode(recentConnections)
+        } catch {
+            print("[Quip][Connections] saveRecents FAILED count=\(recentConnections.count) err=\(error) — recent connections NOT persisted")
         }
     }
 
@@ -6094,18 +6120,41 @@ extension QuickSlot: Codable {
 /// caseless enum (namespace) so the helpers don't accidentally get
 /// instantiated.
 enum QuickSlotStore {
-    static func decode(_ raw: String) -> [QuickSlot] {
-        guard let data = raw.data(using: .utf8),
-              let slots = try? JSONDecoder().decode([QuickSlot].self, from: data)
-        else { return [] }
-        return slots
+    /// Empty `raw` is the fresh-install path and stays silent. A NON-empty
+    /// `raw` that fails to decode is schema drift / corruption: the user's
+    /// saved button row is about to be silently replaced by defaults, which
+    /// reads as "Quip forgot my buttons" with zero log evidence. Log loudly.
+    /// `log` is injected (same shape as `WebSocketClient.decodeMessage`) so
+    /// tests can assert the drop without trapping stdout.
+    static func decode(_ raw: String, log: (String) -> Void = { print($0) }) -> [QuickSlot] {
+        guard !raw.isEmpty else { return [] }
+        guard let data = raw.data(using: .utf8) else {
+            log("[Quip][Store] quickSlots decode FAILED: raw is not valid UTF-8 (chars=\(raw.count)) — row reset to defaults")
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([QuickSlot].self, from: data)
+        } catch {
+            log("[Quip][Store] quickSlots decode FAILED bytes=\(data.count) err=\(error) — saved button row lost, resetting to defaults")
+            return []
+        }
     }
 
-    static func encode(_ slots: [QuickSlot]) -> String {
-        guard let data = try? JSONEncoder().encode(slots),
-              let str = String(data: data, encoding: .utf8)
-        else { return "[]" }
-        return str
+    /// An encode failure here persists `"[]"` over the user's real row — a
+    /// destructive silent wipe. Keep the existing fallback (callers assign
+    /// straight into @AppStorage) but make the wipe audible.
+    static func encode(_ slots: [QuickSlot], log: (String) -> Void = { print($0) }) -> String {
+        do {
+            let data = try JSONEncoder().encode(slots)
+            guard let str = String(data: data, encoding: .utf8) else {
+                log("[Quip][Store] quickSlots encode FAILED: UTF-8 conversion (slots=\(slots.count)) — row NOT persisted")
+                return "[]"
+            }
+            return str
+        } catch {
+            log("[Quip][Store] quickSlots encode FAILED slots=\(slots.count) err=\(error) — row NOT persisted")
+            return "[]"
+        }
     }
 
     /// Migrate the legacy CSV `enabledQuickButtons` representation to the
@@ -6151,18 +6200,35 @@ enum QuickSlotStore {
 
 /// Encode/decode the custom-button definitions table.
 enum CustomButtonStore {
-    static func decode(_ raw: String) -> [CustomButton] {
-        guard let data = raw.data(using: .utf8),
-              let buttons = try? JSONDecoder().decode([CustomButton].self, from: data)
-        else { return [] }
-        return buttons
+    /// See `QuickSlotStore.decode` — empty is the fresh-install path; a
+    /// non-empty blob that won't decode means the user's custom buttons are
+    /// being silently dropped.
+    static func decode(_ raw: String, log: (String) -> Void = { print($0) }) -> [CustomButton] {
+        guard !raw.isEmpty else { return [] }
+        guard let data = raw.data(using: .utf8) else {
+            log("[Quip][Store] customButtons decode FAILED: raw is not valid UTF-8 (chars=\(raw.count)) — buttons lost")
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([CustomButton].self, from: data)
+        } catch {
+            log("[Quip][Store] customButtons decode FAILED bytes=\(data.count) err=\(error) — saved custom buttons lost")
+            return []
+        }
     }
 
-    static func encode(_ buttons: [CustomButton]) -> String {
-        guard let data = try? JSONEncoder().encode(buttons),
-              let str = String(data: data, encoding: .utf8)
-        else { return "[]" }
-        return str
+    static func encode(_ buttons: [CustomButton], log: (String) -> Void = { print($0) }) -> String {
+        do {
+            let data = try JSONEncoder().encode(buttons)
+            guard let str = String(data: data, encoding: .utf8) else {
+                log("[Quip][Store] customButtons encode FAILED: UTF-8 conversion (buttons=\(buttons.count)) — NOT persisted")
+                return "[]"
+            }
+            return str
+        } catch {
+            log("[Quip][Store] customButtons encode FAILED buttons=\(buttons.count) err=\(error) — NOT persisted")
+            return "[]"
+        }
     }
 
     /// Single starter custom button seeded on truly-fresh installs so the
