@@ -916,10 +916,43 @@ final class KeystrokeInjector {
 
     // MARK: - Capture Window Screenshot
 
+    // Screenshot capture is requested repeatedly (every window-content refresh),
+    // so a persistent cause — a revoked Screen Recording grant fails EVERY call
+    // — would spam the log on a per-frame cadence if we logged unconditionally.
+    // Log state *transitions* instead: the first failure, any change of reason,
+    // and the recovery. Same manual-synchronization pattern as clipboardLock
+    // above: a Sendable immutable NSLock guarding nonisolated(unsafe) state.
+    nonisolated private static let captureLogLock = NSLock()
+    nonisolated(unsafe) private static var lastCaptureFailure: String?
+
+    nonisolated private static func reportCaptureFailure(_ reason: String?) {
+        captureLogLock.lock()
+        defer { captureLogLock.unlock() }
+        guard reason != lastCaptureFailure else { return } // same state — stay quiet
+        if let reason {
+            QuipLog.write(
+                severity: .error, subsystem: "screenshot",
+                message: "screencapture failed: \(reason). The phone will show no screenshot. "
+                       + "Most common cause: Quip lost its Screen Recording grant "
+                       + "(System Settings > Privacy & Security > Screen Recording).",
+                to: LogPaths.webSocketPath
+            )
+        } else if lastCaptureFailure != nil {
+            QuipLog.write(severity: .info, subsystem: "screenshot",
+                          message: "screencapture recovered", to: LogPaths.webSocketPath)
+        }
+        lastCaptureFailure = reason
+    }
+
     /// Capture a screenshot of a specific window via the `screencapture` CLI.
     /// Returns base64-encoded PNG data, or nil on failure.
+    ///
+    /// Every failure exit here used to return a bare `nil`, so a window that
+    /// wouldn't capture was indistinguishable from one that had nothing to show
+    /// — and the overwhelmingly likely cause (a Screen Recording TCC grant lost
+    /// on a Mac rebuild) left no trace anywhere.
     nonisolated func captureWindowScreenshot(cgWindowNumber: CGWindowID) -> String? {
-        guard cgWindowNumber != 0 else { return nil }
+        guard cgWindowNumber != 0 else { return nil } // no window — nothing to capture
         let tmpPath = NSTemporaryDirectory() + "quip_capture_\(cgWindowNumber).png"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -928,11 +961,21 @@ final class KeystrokeInjector {
             try process.run()
             process.waitUntilExit()
         } catch {
+            Self.reportCaptureFailure("could not launch /usr/sbin/screencapture: \(error)")
             return nil
         }
-        guard process.terminationStatus == 0 else { return nil }
+        guard process.terminationStatus == 0 else {
+            Self.reportCaptureFailure("screencapture exited \(process.terminationStatus)")
+            return nil
+        }
         defer { try? FileManager.default.removeItem(atPath: tmpPath) }
-        guard let data = FileManager.default.contents(atPath: tmpPath) else { return nil }
+        guard let data = FileManager.default.contents(atPath: tmpPath) else {
+            // Exit code 0 but no file on disk is the classic silent-TCC-denial
+            // shape: screencapture "succeeds" and writes nothing.
+            Self.reportCaptureFailure("screencapture exited 0 but wrote no file to \(tmpPath)")
+            return nil
+        }
+        Self.reportCaptureFailure(nil) // success — clears/announces recovery
         return data.base64EncodedString()
     }
 
