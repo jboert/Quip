@@ -7999,25 +7999,57 @@ struct ConnectionDiagnosticsSheet: View {
     @StateObject private var bundleRequest = PendingMacRequest(deadline: 25)
     @StateObject private var logTailRequest = PendingMacRequest(deadline: 10)
 
+    /// What the "Mac log tail" section shows, given the request state and
+    /// whether any tail text is on screen. Pulled out as a pure function so
+    /// the failure-visibility contract is unit-testable without SwiftUI:
+    /// a failure must be shown whenever one exists, regardless of whether
+    /// stale content from an earlier successful fetch is also present. A
+    /// refresh that times out while stale text is showing must not let that
+    /// stale text silently swallow the failure — the user needs to be able
+    /// to tell "Mac returned identical logs" from "Mac never answered".
+    enum LogTailDisplay: Equatable {
+        case fetching
+        case failureOnly(String)
+        case empty
+        /// Stale/fresh tail text, plus an optional failure banner rendered
+        /// above it (non-nil when the most recent refresh failed).
+        case content(failure: String?)
+    }
+
+    static func logTailDisplay(isInFlight: Bool, failureMessage: String?, textIsEmpty: Bool) -> LogTailDisplay {
+        if isInFlight && textIsEmpty { return .fetching }
+        if let failure = failureMessage, textIsEmpty { return .failureOnly(failure) }
+        if textIsEmpty { return .empty }
+        return .content(failure: failureMessage)
+    }
+
     var body: some View {
         List {
             Section {
-                if logTailRequest.isInFlight && logTailText.isEmpty {
+                switch Self.logTailDisplay(isInFlight: logTailRequest.isInFlight,
+                                            failureMessage: logTailRequest.failureMessage,
+                                            textIsEmpty: logTailText.isEmpty) {
+                case .fetching:
                     HStack {
                         ProgressView().controlSize(.small)
                         Text("Fetching…")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
-                } else if let failure = logTailRequest.failureMessage, logTailText.isEmpty {
+                case .failureOnly(let failure):
                     Text(failure)
                         .font(.system(size: 12))
                         .foregroundStyle(.red)
-                } else if logTailText.isEmpty {
+                case .empty:
                     Text("No snapshot yet — pull to refresh.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                } else {
+                case .content(let failure):
+                    if let failure {
+                        Text(failure)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
                     ScrollView {
                         Text(logTailText)
                             .font(.system(size: 10, design: .monospaced))
@@ -8187,6 +8219,15 @@ struct ConnectionDiagnosticsSheet: View {
                 bundleURL = dest
                 bundleStatus = "Bundle ready (\(raw.count / 1024) KB) — tap Share."
                 bundleRequest.resolve(.succeeded)
+                // If the Mac answered after the 25s deadline already fired,
+                // resolve() above is a no-op by design — an action must not
+                // be resurrected once timed out. But we just saved a working
+                // bundle, so leaving the old "Mac didn't respond" failure on
+                // screen would contradict the Share button sitting right above
+                // it. Clear it explicitly so the UI is coherent.
+                if case .failed = bundleRequest.state {
+                    bundleRequest.reset()
+                }
             } catch {
                 bundleStatus = nil
                 bundleRequest.resolve(.failed(cause: "Couldn't save the bundle: \(error.localizedDescription)",
@@ -8224,6 +8265,7 @@ struct ConnectionDiagnosticsSheet: View {
     }
 
     private func requestMacLogs() {
+        guard client.isAuthenticated else { return }
         bundleStatus = "Requesting…"
         bundleURL = nil
         bundleRequest.start()
