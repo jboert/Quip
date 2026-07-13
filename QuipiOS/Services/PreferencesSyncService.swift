@@ -100,10 +100,15 @@ final class PreferencesSyncService {
     /// external change. Goes through `applyRestore` so the same suppression
     /// + write logic handles both Mac-restore and iCloud-restore paths.
     private func hydrateFromICloud() {
-        guard let blob = NSUbiquitousKeyValueStore.default.data(forKey: kvsSnapshotKey),
-              let snapshot = try? JSONDecoder().decode(PreferencesSnapshot.self, from: blob)
-        else { return }
-        applyRestore(snapshot)
+        // No blob = nothing has ever synced. Ordinary, stay quiet.
+        guard let blob = NSUbiquitousKeyValueStore.default.data(forKey: kvsSnapshotKey) else { return }
+        do {
+            applyRestore(try JSONDecoder().decode(PreferencesSnapshot.self, from: blob))
+        } catch {
+            // Schema drift after an app update lands here: the user upgrades,
+            // their prefs quietly fail to restore, and nothing says why.
+            print("[Quip][Prefs] hydrateFromICloud FAILED bytes=\(blob.count) err=\(error) — iCloud prefs NOT restored")
+        }
     }
 
     /// Send a `PreferenceRequestMessage` so the Mac can push back any
@@ -111,7 +116,10 @@ final class PreferencesSyncService {
     /// authenticated connect.
     func requestRestore() {
         let msg = PreferenceRequestMessage(deviceID: deviceID)
-        guard let data = MessageCoder.encode(msg) else { return }
+        guard let data = MessageCoder.encode(msg) else {
+            print("[Quip][Prefs] requestRestore FAILED: could not encode PreferenceRequestMessage — prefs will NOT be restored from Mac this session")
+            return
+        }
         send?(data)
     }
 
@@ -169,13 +177,19 @@ final class PreferencesSyncService {
         // No throttling needed here; NSUbiquitousKeyValueStore handles its
         // own coalescing and throttles writes to roughly once per second
         // internally before pushing to iCloud.
-        if let blob = try? JSONEncoder().encode(snapshot) {
+        do {
+            let blob = try JSONEncoder().encode(snapshot)
             NSUbiquitousKeyValueStore.default.set(blob, forKey: kvsSnapshotKey)
             NSUbiquitousKeyValueStore.default.synchronize()
+        } catch {
+            print("[Quip][Prefs] pushSnapshot FAILED to encode for iCloud err=\(error) — prefs NOT backed up to iCloud")
         }
         // Then hand to the Mac.
         let msg = PreferenceSnapshotMessage(deviceID: deviceID, preferences: snapshot)
-        guard let data = MessageCoder.encode(msg) else { return }
+        guard let data = MessageCoder.encode(msg) else {
+            print("[Quip][Prefs] pushSnapshot FAILED: could not encode PreferenceSnapshotMessage — prefs NOT backed up to Mac")
+            return
+        }
         send?(data)
     }
 

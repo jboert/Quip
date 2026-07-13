@@ -845,14 +845,38 @@ struct QuipApp: App {
                 // connect bar re-reads the union on its next appear. cap 10 mirrors
                 // MainiOSView.maxConnections.
                 let d = UserDefaults.standard
-                guard let data = json.data(using: .utf8),
-                      let restored = try? JSONDecoder().decode([SavedConnection].self, from: data),
-                      !restored.isEmpty else { return }
-                let existing = d.data(forKey: "recentConnectionsData")
-                    .flatMap { try? JSONDecoder().decode([SavedConnection].self, from: $0) } ?? []
+                guard let data = json.data(using: .utf8) else {
+                    print("[Quip][Connections] restoreRecents FAILED: payload is not valid UTF-8 — recents NOT restored from Mac")
+                    return
+                }
+                let restored: [SavedConnection]
+                do {
+                    restored = try JSONDecoder().decode([SavedConnection].self, from: data)
+                } catch {
+                    print("[Quip][Connections] restoreRecents FAILED bytes=\(data.count) err=\(error) — recents NOT restored from Mac")
+                    return
+                }
+                // Empty payload is legitimate (Mac has no backup for this device).
+                guard !restored.isEmpty else { return }
+                let existing: [SavedConnection]
+                if let raw = d.data(forKey: "recentConnectionsData"), !raw.isEmpty {
+                    do {
+                        existing = try JSONDecoder().decode([SavedConnection].self, from: raw)
+                    } catch {
+                        // Local blob is corrupt. Don't abort the restore — the Mac's
+                        // copy is the better source — but say so, because the union
+                        // silently drops whatever was in the local list.
+                        print("[Quip][Connections] restoreRecents: local recents blob corrupt (bytes=\(raw.count), err=\(error)) — merging Mac copy over it")
+                        existing = []
+                    }
+                } else {
+                    existing = []
+                }
                 let merged = SavedConnection.mergedRecents(existing: existing, incoming: restored, cap: 10)
-                if let encoded = try? JSONEncoder().encode(merged) {
-                    d.set(encoded, forKey: "recentConnectionsData")
+                do {
+                    d.set(try JSONEncoder().encode(merged), forKey: "recentConnectionsData")
+                } catch {
+                    print("[Quip][Connections] restoreRecents FAILED to persist merge count=\(merged.count) err=\(error) — recents will be gone on next launch")
                 }
             }
         }

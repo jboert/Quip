@@ -633,7 +633,18 @@ final class BackendConnectionManager {
     func loadPaired() {
         let defaults = UserDefaults.standard
         let raw = defaults.data(forKey: "pairedBackendsData") ?? Data()
-        if let decoded = try? JSONDecoder().decode([PairedBackend].self, from: raw), !decoded.isEmpty {
+        // Empty is the fresh-install path. A non-empty blob that won't decode
+        // means every paired Mac silently disappears and the user is dumped
+        // back on the pairing screen with no explanation — log it loudly.
+        var decodedOrNil: [PairedBackend]?
+        if !raw.isEmpty {
+            do {
+                decodedOrNil = try JSONDecoder().decode([PairedBackend].self, from: raw)
+            } catch {
+                print("[Quip][Connections] loadPaired FAILED bytes=\(raw.count) err=\(error) — ALL paired Macs lost, falling back to unpaired")
+            }
+        }
+        if let decoded = decodedOrNil, !decoded.isEmpty {
             paired = decoded
             activeBackendID = defaults.string(forKey: "activeBackendID") ?? decoded.first?.id ?? ""
             // First-launch migration: before this build all paired backends
@@ -718,8 +729,10 @@ final class BackendConnectionManager {
     }
 
     private func savePaired() {
-        if let data = try? JSONEncoder().encode(paired) {
-            UserDefaults.standard.set(data, forKey: "pairedBackendsData")
+        do {
+            UserDefaults.standard.set(try JSONEncoder().encode(paired), forKey: "pairedBackendsData")
+        } catch {
+            print("[Quip][Connections] savePaired FAILED count=\(paired.count) err=\(error) — pairing NOT persisted, will be gone on next launch")
         }
         UserDefaults.standard.set(activeBackendID, forKey: "activeBackendID")
     }
@@ -733,9 +746,19 @@ final class BackendConnectionManager {
     /// newly-restored `enabled` rows without disturbing existing ones. Called
     /// from `PreferencesSyncService.onRestorePaired` after a reinstall.
     func mergeRestoredBackends(_ json: String, activeID: String?) {
-        guard let data = json.data(using: .utf8),
-              let restored = try? JSONDecoder().decode([PairedBackend].self, from: data),
-              !restored.isEmpty else { return }
+        guard let data = json.data(using: .utf8) else {
+            print("[Quip][Connections] mergeRestoredBackends FAILED: payload is not valid UTF-8 — pairings NOT restored from Mac")
+            return
+        }
+        let restored: [PairedBackend]
+        do {
+            restored = try JSONDecoder().decode([PairedBackend].self, from: data)
+        } catch {
+            print("[Quip][Connections] mergeRestoredBackends FAILED bytes=\(data.count) err=\(error) — pairings NOT restored from Mac")
+            return
+        }
+        // Empty is legitimate: the Mac simply has no backup for this device.
+        guard !restored.isEmpty else { return }
         let before = paired
         paired = Self.mergeSameIDRows(paired + restored)
         // Nothing genuinely new after dedup → don't churn sessions/persistence.
