@@ -8251,6 +8251,16 @@ struct ConnectionDiagnosticsSheet: View {
                 logTailCapturedAt = msg.capturedAt
             }
             logTailRequest.resolve(.succeeded)
+            // If the Mac answered after the 10s deadline already fired,
+            // resolve() above is a no-op by design — an action must not
+            // be resurrected once timed out. But we just wrote fresh,
+            // genuinely current text above, so leaving the old "Mac
+            // didn't respond" failure on screen would contradict the
+            // just-updated tail sitting right below it. Clear it
+            // explicitly so the UI is coherent.
+            if case .failed = logTailRequest.state {
+                logTailRequest.reset()
+            }
         }
     }
 

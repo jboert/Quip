@@ -143,6 +143,40 @@ final class PendingMacRequestTests: XCTestCase {
         XCTAssertNotNil(request.failureMessage)
     }
 
+    /// The fix for Task 5's follow-on finding: `wireBundleHandler` and
+    /// `wireLogTailHandler` both write their successful result to view state
+    /// FIRST, call `resolve(.succeeded)` (a no-op per the test above once
+    /// timed out), then explicitly check for `.failed` and `reset()`. Without
+    /// that reset, a late-but-genuinely-successful reply leaves the "Mac
+    /// didn't respond in 10s" banner rendered directly above fresh, correct
+    /// content — the Mac DID answer, but the UI insists it didn't. This locks
+    /// that the handler-level reset actually clears the contradiction: after
+    /// it runs, no failure message survives to be rendered.
+    func test_lateReply_afterTimeout_thenHandlerResetPattern_clearsStaleFailure() {
+        let (request, clock) = makeRequest(deadline: 10)
+        request.start()
+        clock.advance(by: 11)
+        request.tick()
+        guard case .failed = request.state else {
+            return XCTFail("expected .failed before the late reply, got \(request.state)")
+        }
+        XCTAssertNotNil(request.failureMessage, "sanity: a failure banner is showing before the late reply lands")
+
+        // The Mac's late reply arrives. Mirror wireBundleHandler /
+        // wireLogTailHandler exactly: resolve (no-op), then reset if still
+        // failed, since the caller already wrote the fresh content.
+        request.resolve(.succeeded)
+        if case .failed = request.state {
+            request.reset()
+        }
+
+        XCTAssertEqual(request.state, .idle,
+                       "the handler's reset must clear the stale .failed state once fresh content has landed")
+        XCTAssertNil(request.failureMessage,
+                     "no stale failure message may survive — the view must not contradict content it just received")
+        XCTAssertFalse(request.isInFlight)
+    }
+
     // MARK: - Re-arming
 
     /// Hammering the refresh button while a scan is already in flight must not
