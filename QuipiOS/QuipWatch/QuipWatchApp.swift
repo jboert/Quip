@@ -84,7 +84,18 @@ final class WatchSync: NSObject, ObservableObject, WCSessionDelegate {
 
     @MainActor
     private func applyWindowsData(_ raw: Data) {
-        guard let decoded = try? JSONDecoder().decode([WatchWindowState].self, from: raw) else { return }
+        let decoded: [WatchWindowState]
+        do {
+            decoded = try JSONDecoder().decode([WatchWindowState].self, from: raw)
+        } catch {
+            // The phone DID send a payload — it just won't decode (schema drift
+            // between a freshly-installed watch app and an older phone build, or
+            // vice versa). Swallowing this left the watch stuck on an empty or
+            // stale window list forever, looking exactly like "the phone never
+            // sent anything".
+            print("[Quip][Watch] window-list decode FAILED bytes=\(raw.count) err=\(error) — watch list will stay stale")
+            return
+        }
         let previous = self.windows
         self.windows = decoded
 

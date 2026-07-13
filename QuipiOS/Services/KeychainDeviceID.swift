@@ -32,6 +32,15 @@ enum KeychainDeviceID {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
+        // As in KeychainBackendPINs: not-found is the ordinary first-launch
+        // answer (caller mints and writes a fresh ID). Any OTHER failure used
+        // to look identical, which silently REKEYS the device — the Mac then
+        // sees a brand-new device, and the phone loses its paired identity and
+        // its prefs backup for reasons nothing logged.
+        if status != errSecSuccess && status != errSecItemNotFound {
+            print("[Quip][Keychain] deviceID read FAILED OSStatus=\(status) — a NEW device ID will be minted, breaking pairing continuity")
+            return nil
+        }
         guard status == errSecSuccess,
               let data = item as? Data,
               let str = String(data: data, encoding: .utf8) else { return nil }

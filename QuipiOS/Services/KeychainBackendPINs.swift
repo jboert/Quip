@@ -23,6 +23,18 @@ enum KeychainBackendPINs {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
+        // `errSecItemNotFound` is ORDINARY — this backend simply has no PIN
+        // saved. Every other non-success status is a real failure that we used
+        // to collapse into the same `nil`, so the caller
+        // (`primePINIfPresent`) quietly skipped auth and the phone sat there
+        // "connected but not authenticated" with nothing to explain it.
+        // -25308 errSecInteractionNotAllowed (keychain still locked) and
+        // -34018 errSecMissingEntitlement (access group lost across a resign)
+        // are the two that actually bite.
+        if status != errSecSuccess && status != errSecItemNotFound {
+            print("[Quip][Keychain] PIN read FAILED backend=\(backendID) OSStatus=\(status) — auth will be skipped for this backend")
+            return nil
+        }
         guard status == errSecSuccess,
               let data = item as? Data,
               let str = String(data: data, encoding: .utf8) else { return nil }
