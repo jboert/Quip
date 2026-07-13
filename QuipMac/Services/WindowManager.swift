@@ -112,6 +112,13 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
 @Observable
 final class WindowManager {
 
+    /// Health of AX access, keyed per pid — see `focusWindow`. A revoked
+    /// Accessibility grant fails EVERY focus request, so this reports the first
+    /// failure per app and then stays quiet until it changes or recovers.
+    /// `nonisolated` so the gate isn't pinned to the main actor; the gate does
+    /// its own locking (same pattern as `KeystrokeInjector.captureGate`).
+    nonisolated private static let axFocusGate = LogTransitionGate<pid_t>()
+
     // Rich, vibrant color palette for window identification
     static let colorPalette: [String] = [
         "#F5A623", "#4A90D9", "#7ED321", "#D0021B", "#9013FE",
@@ -348,8 +355,36 @@ final class WindowManager {
         // Also raise the specific window via AX
         let appElement = AXUIElementCreateApplication(window.pid)
         var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let axWindows = windowsRef as? [AXUIElement] else { return }
+        let attrResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
+        guard attrResult == .success, let axWindows = windowsRef as? [AXUIElement] else {
+            // Silent until now — which meant a revoked Accessibility grant made
+            // every focus request do nothing at all, with the phone showing no
+            // error and the Mac saying nothing. Quip loses this grant on
+            // essentially every rebuild, so it is the FIRST thing to suspect.
+            // `moveAndResize` below has always reported this; focus never did.
+            //
+            // Gated per pid: focus is user-driven but a persistent denial fails
+            // every single tap, and an unthrottled line here would bury the
+            // signal it exists to give.
+            // Cause carries no pid — the gate keys on that, and baking it into
+            // the cause would make every pid compare unequal and defeat the dedup.
+            if Self.axFocusGate.evaluate(window.pid, cause: "ax-windows-failed(\(attrResult.rawValue))") == .report {
+                QuipLog.write(
+                    severity: .error, subsystem: "window",
+                    message: "focusWindow: couldn't read AX windows for pid \(window.pid) "
+                           + "(AXError \(attrResult.rawValue)) — the window will not come forward. "
+                           + "Most common cause: Quip lost its Accessibility grant "
+                           + "(System Settings > Privacy & Security > Accessibility).",
+                    to: LogPaths.webSocketPath
+                )
+            }
+            return
+        }
+        if Self.axFocusGate.evaluate(window.pid, cause: nil) == .reportRecovery {
+            QuipLog.write(severity: .info, subsystem: "window",
+                          message: "focusWindow: AX access recovered for pid \(window.pid)",
+                          to: LogPaths.webSocketPath)
+        }
 
         // Find matching AX window by position
         for axWindow in axWindows {

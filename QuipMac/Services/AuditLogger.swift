@@ -54,12 +54,47 @@ enum AuditLogger {
             fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
         }
 
-        // Append entry
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? handle.close() }
-        handle.seekToEndOfFile()
-        if let data = entry.data(using: .utf8) {
-            handle.write(data)
+        // Append entry.
+        //
+        // This used to `guard ... else { return }` and drop the entry without a
+        // sound. An audit log that silently stops auditing is worse than no
+        // audit log: it still LOOKS like a record of what happened, so nobody
+        // goes looking for the gap. If we cannot write the audit trail, that
+        // failure itself has to leave a trace somewhere else.
+        //
+        // Legacy `FileHandle.write(_:)`/`seekToEndOfFile()` raise an uncatchable
+        // ObjC exception on a failed write (disk full) — do/try/catch cannot
+        // intercept it and the process dies. The throwing variants can actually
+        // be handled, which is the whole point here.
+        do {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            guard let data = entry.data(using: .utf8) else { return }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            if auditGate.evaluate("write", cause: nil) == .reportRecovery {
+                QuipLog.write(severity: .info, subsystem: "audit",
+                              message: "audit log writable again", to: LogPaths.webSocketPath)
+            }
+        } catch {
+            // Gated: a persistent cause (disk full, permissions) fails on EVERY
+            // logged command, and this path runs per remote message. Key on the
+            // error's SHAPE — interpolating a Cocoa NSError renders its userInfo
+            // dictionary, whose key order is not stable, which would make the
+            // cause never compare equal and defeat the gate entirely.
+            let ns = error as NSError
+            guard auditGate.evaluate("write", cause: "\(ns.domain) \(ns.code)") == .report else { return }
+            QuipLog.write(
+                severity: .error, subsystem: "audit",
+                message: "AUDIT ENTRY DROPPED — could not write \(url.lastPathComponent) "
+                       + "(\(ns.domain) \(ns.code)). Remote commands are executing but are NOT "
+                       + "being recorded. Further identical failures are suppressed.",
+                to: LogPaths.webSocketPath
+            )
         }
     }
+
+    /// Health of the audit file itself. See the `catch` above: the failure is
+    /// per-message and its causes are persistent, so it reports on transitions.
+    private static let auditGate = LogTransitionGate<String>()
 }
