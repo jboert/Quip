@@ -422,7 +422,15 @@ final class WebSocketServer {
                     error: String(describing: error))
                 Self.wslog(outcome.describe(endpoint: String(describing: connection.endpoint)),
                            severity: outcome.severity)
-                KokoroTTSDebug.log("WS connection FAILED: \(error)")
+                if case .failed = outcome {
+                    // Only genuine post-handshake failures are alarming.
+                    // Benign TCP-only latency probes (LatencyProbeService)
+                    // close before ever reaching .ready and are classified
+                    // as .abortedHandshake — don't let those show up as
+                    // "FAILED" in kokoro.log (same class of bug Task 2 fixed
+                    // in websocket.log).
+                    KokoroTTSDebug.log(outcome.describe(endpoint: String(describing: connection.endpoint)))
+                }
                 let remoteStr = String(describing: connection.endpoint)
                 let errStr = String(describing: error)
                 DispatchQueue.main.async {

@@ -1426,8 +1426,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
                         let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
                         if result.success {
-                            print("[Quip] image_upload: delivered to windowId=\(msg.windowId) cli=\(cliKind.rawValue)")
-                            appendImageUploadDiagnostic("ack id=\(uploadId) route=\(route) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) inject_ms=\(injectMs) total_ms=\(totalMs) self_heal=\(selfHealed ? 1 : 0)")
+                            // "injected", not "delivered": AppleScript returned
+                            // without error, which tells us the keystroke/paste
+                            // was dispatched — NOT that the target app consumed
+                            // it. Claiming delivery here once made a working
+                            // upload indistinguishable from a broken one.
+                            print("[Quip] image_upload: injected into windowId=\(msg.windowId) cli=\(cliKind.rawValue) (app consumption unconfirmed)")
+                            appendImageUploadDiagnostic("injected id=\(uploadId) route=\(route) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) inject_ms=\(injectMs) total_ms=\(totalMs) self_heal=\(selfHealed ? 1 : 0)")
                             self.webSocketServer.broadcast(ImageUploadAckMessage(imageId: msg.imageId, savedPath: savedURL.path))
                         } else {
                             let err = result.error ?? "couldn't deliver image"
