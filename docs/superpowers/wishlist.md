@@ -6,6 +6,53 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-07-13 (error-handling sweep + crash fix + duplicate-instance fix)
+
+### Shipped
+- **AppleScript serialization** (`f32a625`) — `AppleScriptRunner` funnels all 9 NSAppleScript
+  call sites through one serial queue, plus an in-flight gate on the 2s window poll.
+  NSAppleScript shares a process-wide parser; concurrent compiles were segfaulting in
+  `TASLexer::EndUse()`. Honest caveat: the segfault never reproduced under 260 forced
+  concurrent compiles, so this is principled, not a reproduce-then-fix cycle.
+- **Error-handling sweep** (spec `2026-07-13-error-handling-design.md`, plan
+  `2026-07-13-error-handling.md`, audit `2026-07-13-swallowed-errors-audit.md`) —
+  `QuipLog` facility, `ConnectionOutcome` (benign latency probes no longer log as
+  `Connection FAILED`), phone-side `InFlightAction` deadline contract so no action spins
+  forever, `LogTransitionPolicy` + keyed `LogTransitionGate` for cadence.
+  **525 sites audited (Mac 212 + iOS 313): 71 real swallows, 53 fixed, ~16 still open.**
+- **Single-instance guard** (`a684524`) — see below.
+
+### Root cause worth remembering: "two Quips" was two LAUNCHERS, not two installs
+The login item opens the bundle through LaunchServices; `CrashRecoveryAgent`'s LaunchAgent
+exec's `Contents/MacOS/Quip` **directly** with `RunAtLoad=true`. LaunchServices dedupes app
+launches — a direct exec of the Mach-O bypasses that check entirely. At login: two
+instances, two menu-bar icons, two servers racing for 8765.
+Fixed by an exclusive `flock` on `~/Library/Application Support/Quip/instance.lock`, taken
+before the server binds. `flock` over an `NSRunningApplication` scan because both instances
+start milliseconds apart (check-then-claim is a race both can win) and because the kernel
+drops the lock on crash — the exact moment CrashRecoveryAgent relaunches us. Loser exits 0
+so `KeepAlive.SuccessfulExit=false` does not relaunch it in a loop.
+
+### OPEN — acceptance test still unverified on hardware (FIVE sessions running)
+Terminal.app smart-answer multi-select (`bf050c7`). Flow: Terminal.app → Claude Code
+checkbox prompt → select 2+ options on the phone → Submit, while tailing
+`~/Library/Logs/Quip/websocket.log`. **Blocked:** the iPhone is unreachable to `devicectl`
+(no USB; on Tailscale but not the Mac's LAN, and devicectl pairs over Bonjour only, so the
+Tailscale IP does not work). Needs a cable or same-Wi-Fi + unlock. iOS build is ready.
+
+### OPEN — deferred, with reasons
+- **~16 remaining swallowed errors** — listed with risk notes in
+  `docs/superpowers/plans/2026-07-13-swallowed-errors-audit.md`.
+- **`pasteImage` has no Terminal.app fallback** — hard-fails there (the same
+  Terminal.app-vs-iTerm2 blind spot that caused `bf050c7`).
+- **Image paste puts only `public.tiff` on the clipboard** — some targets want PNG/JPEG.
+- **`APNsJWTTests` hangs the whole Mac suite** (~57 min observed) on a Keychain
+  authorization prompt in `APNsKeyStore.get()` (APNsKeyStore.swift:62). Workaround in use:
+  `-skip-testing:QuipMacTests/APNsJWTTests`. Real fix: inject the key store in tests.
+- **Final whole-branch review** across this session's 28 commits was never run.
+
+---
+
 ## VibeCut prompt inherit (SHIPPED 2026-07-03, branch ralph/vibecut-prompt-inherit)
 
 One-way inherit of VibeCut's prompt catalog (`~/Projects/vibecut/shared/prompts.json`)
