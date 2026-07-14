@@ -1196,7 +1196,6 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
         }
         guard !projects.isEmpty else { return }
-        print("[Quip] Broadcasting \(projects.count) project directories to phone")
         webSocketServer.broadcast(ProjectDirectoriesMessage(directories: projects))
     }
 
@@ -1966,17 +1965,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let session = (object?["sessionId"] as? String) ?? "unknown"
         // The cause must hold nothing that varies chunk-to-chunk — `data.count`
         // in here would make every chunk of one drifted stream compare unequal
-        // and defeat the dedup entirely.
-        //
-        // Interpolating the error is safe HERE, and only here, because this is a
-        // Swift `DecodingError` (from JSONDecoder), which renders stably.
-        // Do NOT copy this line for a Cocoa `NSError`: interpolating one renders
-        // its userInfo dictionary, whose key order is not stable — measured, 50
-        // identical NSErrors produce 40 distinct strings. A cause that never
-        // compares equal never suppresses, so the gate silently becomes a no-op
-        // and the path it was protecting floods. Key an NSError on its shape
-        // (domain + code) instead — see `captureWindowScreenshot`.
-        let cause = "\(error)"
+        // and defeat the dedup entirely. `"\(error)"` has the same effect for a
+        // truly malformed frame: JSONDecoder reports that as `dataCorrupted`,
+        // which renders the JSONSerialization NSError underneath it, and an
+        // NSError's userInfo prints in unstable key order. `StableCause` keys on
+        // the fault's shape, which is stable for every DecodingError case.
+        let cause = StableCause.text(for: error)
         guard Self.audioChunkGate.evaluate(session, cause: cause) == .report else { return }
         QuipLog.write(
             severity: .error, subsystem: "ws",

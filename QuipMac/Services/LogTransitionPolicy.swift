@@ -28,6 +28,45 @@ enum LogTransition: Equatable {
     case reportRecovery
 }
 
+/// A cause string safe to feed a `LogTransitionGate` — one that compares EQUAL
+/// across two occurrences of the same fault.
+///
+/// Interpolating an error is the trap. `"\(error)"` renders a Cocoa `NSError`'s
+/// `userInfo` dictionary, whose key order is not stable, so the same fault
+/// yields a different string each time; a cause that never compares equal never
+/// suppresses, and the gate silently becomes a no-op on the very path it was
+/// protecting. That is not confined to errors that ARE an NSError: a
+/// `DecodingError.dataCorrupted` from `JSONDecoder` embeds the
+/// `JSONSerialization` NSError in its context and renders it too (measured: 200
+/// identical corrupt-JSON failures → 2 distinct strings, and it is 2 only
+/// because a two-key userInfo has just two orderings). Swift's own
+/// `typeMismatch` / `keyNotFound` / `valueNotFound` interpolate stably, but
+/// telling those apart at a call site is exactly the reasoning nobody should
+/// have to do — key on the fault's SHAPE and the question never comes up.
+enum StableCause {
+    static func text(for error: Error) -> String {
+        func path(_ ctx: DecodingError.Context) -> String {
+            let joined = ctx.codingPath.map(\.stringValue).joined(separator: ".")
+            return joined.isEmpty ? "<root>" : joined
+        }
+        switch error {
+        case let DecodingError.keyNotFound(key, ctx):
+            return "missing key '\(key.stringValue)' at \(path(ctx))"
+        case let DecodingError.typeMismatch(type, ctx):
+            return "wrong type for \(type) at \(path(ctx))"
+        case let DecodingError.valueNotFound(type, ctx):
+            return "missing value for \(type) at \(path(ctx))"
+        case let DecodingError.dataCorrupted(ctx):
+            // The context's own debugDescription is stable; the underlying
+            // NSError that `"\(error)"` would also print is not.
+            return "corrupt data at \(path(ctx)): \(ctx.debugDescription)"
+        default:
+            let ns = error as NSError
+            return "\(ns.domain) \(ns.code)"
+        }
+    }
+}
+
 enum LogTransitionPolicy {
     /// Pure decision seam. `previous` is the cause last reported for a key
     /// (nil = the key was healthy); `current` is the cause observed now
@@ -62,12 +101,29 @@ enum LogTransitionPolicy {
 /// is: the NSLock below provides the actual synchronization, and the mutable
 /// state it guards never escapes.
 final class LogTransitionGate<Key: Hashable & Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    /// Only *failing* keys are present. Recovery removes the entry, which is
-    /// also what bounds this dictionary on long-lived per-window/per-session use.
-    private var reported: [Key: String] = [:]
 
-    init() {}
+    /// Recovery is NOT a bound. Keys here are per-subject and many subjects die
+    /// broken and never recover: a `CGWindowID` that fails capture and then
+    /// closes (and CGWindowIDs are never reused), a PTT `sessionId` whose every
+    /// chunk fails to decode (one dead key per press, forever). Tens of bytes
+    /// each, but a process that runs for weeks accumulates them without limit.
+    /// So the map is capacity-bounded: past the cap, the oldest failing key is
+    /// evicted. An evicted key that is still broken simply reports again the
+    /// next time it fails — one extra line, not a flood, and only in the
+    /// degenerate case where this many subjects are failing at once.
+    private static var defaultCapacity: Int { 512 }
+
+    private let lock = NSLock()
+    private let capacity: Int
+    /// Only *failing* keys are present; recovery removes the entry.
+    private var reported: [Key: String] = [:]
+    /// The failing keys in first-report order — the eviction queue. Kept in
+    /// lockstep with `reported`, so it is the same size and the same members.
+    private var order: [Key] = []
+
+    init(capacity: Int? = nil) {
+        self.capacity = max(1, capacity ?? Self.defaultCapacity)
+    }
 
     /// Record what we see now and get back whether it deserves a line.
     /// `cause == nil` means "this key is healthy right now".
@@ -77,13 +133,37 @@ final class LogTransitionGate<Key: Hashable & Sendable>: @unchecked Sendable {
         let decision = LogTransitionPolicy.decide(previous: reported[key], current: cause)
         switch decision {
         case .report:
+            if reported[key] == nil { order.append(key) }
             reported[key] = cause
+            evictOldestIfOverCapacity()
         case .reportRecovery:
-            reported.removeValue(forKey: key)
+            forgetLocked(key)
         case .stayQuiet:
             break
         }
         return decision
+    }
+
+    /// Forget a key whose subject is gone — a closed window, a finished PTT
+    /// session. Not required for correctness (the capacity bound above holds
+    /// regardless), but a caller that knows a subject is dead can say so and
+    /// keep the map at its true working size.
+    func forget(_ key: Key) {
+        lock.lock()
+        defer { lock.unlock() }
+        forgetLocked(key)
+    }
+
+    private func forgetLocked(_ key: Key) {
+        guard reported.removeValue(forKey: key) != nil else { return }
+        order.removeAll { $0 == key }
+    }
+
+    private func evictOldestIfOverCapacity() {
+        while order.count > capacity {
+            let oldest = order.removeFirst()
+            reported.removeValue(forKey: oldest)
+        }
     }
 
     /// Test seam: the cause currently on record for `key` (nil = healthy).

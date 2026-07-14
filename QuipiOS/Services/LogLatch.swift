@@ -76,17 +76,24 @@ final class LogLatch: @unchecked Sendable {
 
     /// A STABLE identity for an error, for use as a latch key.
     ///
-    /// `"\(error)"` is NOT usable here, which is a trap worth spelling out: a
-    /// `DecodingError` renders its underlying `NSError`, and that NSError's
-    /// `userInfo` dictionary prints in nondeterministic key order — so the SAME
-    /// fault produces different strings call to call (measured: 50 identical
-    /// JSON failures yielded 32 distinct descriptions). A latch keyed on that
-    /// silently degrades into no latch at all, which is exactly the flood this
-    /// type exists to stop.
+    /// The rule, which the whole tree follows: interpolating a Cocoa `NSError`
+    /// is NOT stable — `"\(error)"` renders its `userInfo` dictionary, whose key
+    /// order varies call to call, so the SAME fault yields different strings. A
+    /// latch keyed on that silently degrades into no latch at all, which is
+    /// exactly the flood this type exists to stop. Key an NSError on its shape —
+    /// domain + code.
     ///
-    /// So key on the fault's shape instead: the DecodingError case, the coding
-    /// path, and the (stable) debug description — falling back to the NSError
-    /// domain/code pair for everything else.
+    /// The trap is that this reaches errors that are not themselves an NSError:
+    /// `DecodingError.dataCorrupted` from JSONDecoder carries the
+    /// `JSONSerialization` NSError in its context and renders it too (measured:
+    /// 200 identical corrupt-JSON failures → 2 distinct strings). Swift's own
+    /// `typeMismatch` / `keyNotFound` / `valueNotFound` interpolate stably, but
+    /// no call site should have to reason about which case it will get.
+    ///
+    /// So key on the fault's shape: the DecodingError case, the coding path, and
+    /// the context's own (stable) debug description — falling back to the
+    /// NSError domain/code pair for everything else. QuipMac's `StableCause`
+    /// applies the identical rule on the Mac side.
     static func fingerprint(of error: Error) -> String {
         func path(_ ctx: DecodingError.Context) -> String {
             ctx.codingPath.map(\.stringValue).joined(separator: ".")

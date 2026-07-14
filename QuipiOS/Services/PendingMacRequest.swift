@@ -69,6 +69,32 @@ final class PendingMacRequest: ObservableObject {
         }
     }
 
+    /// Arm a request and hand the frame to the transport, resolving to a stated
+    /// failure if either the link or the send is unavailable. Returns whether
+    /// the request is now genuinely in flight.
+    ///
+    /// This exists because the obvious spelling — `guard isConnected else
+    /// { return }` at the top of the call site — trades "spins forever" for
+    /// "does nothing", which is not an improvement. The phone displays
+    /// "Connected" over a socket that has been one-sidedly dead since the Mac
+    /// last restarted; on that socket a bare early return makes the button a
+    /// no-op with no spinner, no status and no error, and it never reaches the
+    /// deadline machinery that would otherwise have said so. Every tap must end
+    /// somewhere the user can act on.
+    @discardableResult
+    func attempt(isConnected: Bool, nextStep: String, send: () -> Bool) -> Bool {
+        start()
+        guard isConnected else {
+            resolve(.failed(cause: "Not connected to the Mac", nextStep: nextStep))
+            return false
+        }
+        guard send() else {
+            resolve(.failed(cause: "Couldn't reach the Mac", nextStep: nextStep))
+            return false
+        }
+        return true
+    }
+
     /// Resolve from the Mac's reply. A no-op once the watchdog has already
     /// tripped — a late reply must not un-fail a request the user was already
     /// told had failed.

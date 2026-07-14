@@ -8446,26 +8446,23 @@ struct ConnectionDiagnosticsSheet: View {
     }
 
     private func requestLogTail() {
-        guard client.isAuthenticated else { return }
-        logTailRequest.start()
-        guard client.send(RequestLogTailMessage()) else {
-            logTailRequest.resolve(.failed(cause: "Couldn't reach the Mac",
-                                           nextStep: "Reconnect, then tap refresh"))
-            return
+        logTailRequest.attempt(isConnected: client.isAuthenticated,
+                               nextStep: "Reconnect, then tap refresh") {
+            client.send(RequestLogTailMessage())
         }
     }
 
     private func requestMacLogs() {
-        guard client.isAuthenticated else { return }
         bundleStatus = "Requesting…"
         bundleURL = nil
-        bundleRequest.start()
-        guard client.send(RequestDiagnosticsMessage()) else {
-            bundleStatus = nil
-            bundleRequest.resolve(.failed(cause: "Couldn't reach the Mac",
-                                          nextStep: "Reconnect, then try again"))
-            return
+        let armed = bundleRequest.attempt(isConnected: client.isAuthenticated,
+                                          nextStep: "Reconnect, then try again") {
+            client.send(RequestDiagnosticsMessage())
         }
+        // Nothing left the phone, so there is no bundle coming — the failure
+        // banner from `attempt` is the whole story and a "Requesting…" line
+        // above it would contradict it.
+        if !armed { bundleStatus = nil }
     }
 
     @ViewBuilder

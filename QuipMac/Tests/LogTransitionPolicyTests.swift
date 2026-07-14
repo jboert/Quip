@@ -132,6 +132,74 @@ final class LogTransitionPolicyTests: XCTestCase {
         XCTAssertEqual(gate.failingKeyCount, 1)
     }
 
+    // MARK: - The bound (recovery alone is not one)
+
+    /// The leak recovery cannot close: keys whose subject dies broken never
+    /// recover. A CGWindowID that fails capture and then closes is gone (and
+    /// never reused); a PTT session whose every chunk fails to decode leaves one
+    /// dead key per press. Unbounded, a long-running Quip accumulates them for
+    /// as long as the process lives.
+    func testKeysThatNeverRecoverAreEvictedAtCapacity() {
+        let gate = LogTransitionGate<CGWindowID>(capacity: 8)
+        // 200 windows, each failing exactly once and then closing forever.
+        for window in CGWindowID(1)...CGWindowID(200) {
+            XCTAssertEqual(gate.evaluate(window, cause: "screencapture wrote no file"), .report)
+        }
+        XCTAssertEqual(gate.failingKeyCount, 8,
+                       "the map must be bounded by capacity, not by recoveries that never come")
+    }
+
+    /// Eviction is FIFO by first report, and it must not cost the gate its job:
+    /// a key still inside the window keeps suppressing.
+    func testEvictionDropsTheOldestKeyAndKeepsSuppressingLiveOnes() {
+        let gate = LogTransitionGate<String>(capacity: 2)
+        XCTAssertEqual(gate.evaluate("old", cause: "boom"), .report)
+        XCTAssertEqual(gate.evaluate("mid", cause: "boom"), .report)
+        XCTAssertEqual(gate.evaluate("new", cause: "boom"), .report)   // evicts "old"
+
+        XCTAssertNil(gate.reportedCause("old"), "the oldest failing key is the one evicted")
+        XCTAssertEqual(gate.reportedCause("mid"), "boom")
+        XCTAssertEqual(gate.evaluate("mid", cause: "boom"), .stayQuiet,
+                       "a key still on record must keep suppressing after an eviction")
+        XCTAssertEqual(gate.evaluate("new", cause: "boom"), .stayQuiet)
+        XCTAssertEqual(gate.failingKeyCount, 2)
+    }
+
+    /// An evicted key that is STILL broken reports once more — the honest cost
+    /// of the bound, and one line, not a flood.
+    func testEvictedKeyThatStillFailsReportsAgain() {
+        let gate = LogTransitionGate<String>(capacity: 1)
+        XCTAssertEqual(gate.evaluate("a", cause: "boom"), .report)
+        XCTAssertEqual(gate.evaluate("b", cause: "boom"), .report)     // evicts "a"
+        XCTAssertEqual(gate.evaluate("a", cause: "boom"), .report,
+                       "an evicted key looks new; it costs one extra line, never a flood")
+        XCTAssertEqual(gate.evaluate("a", cause: "boom"), .stayQuiet)
+    }
+
+    /// A caller that knows a subject is dead can say so, keeping the map at its
+    /// true working size rather than riding the capacity bound.
+    func testForgetReleasesADeadSubjectWithoutClaimingRecovery() {
+        let gate = LogTransitionGate<String>()
+        _ = gate.evaluate("session-1", cause: "audio_chunk failed to decode")
+        XCTAssertEqual(gate.failingKeyCount, 1)
+
+        gate.forget("session-1")
+        XCTAssertEqual(gate.failingKeyCount, 0)
+        XCTAssertNil(gate.reportedCause("session-1"))
+
+        // Forgetting is not a recovery — no line was written for it, so the same
+        // failure arriving later is genuinely new.
+        XCTAssertEqual(gate.evaluate("session-1", cause: "audio_chunk failed to decode"), .report)
+    }
+
+    func testForgetIsANoOpForAKeyThatIsNotFailing() {
+        let gate = LogTransitionGate<String>()
+        _ = gate.evaluate("a", cause: "boom")
+        gate.forget("never-seen")
+        XCTAssertEqual(gate.failingKeyCount, 1)
+        XCTAssertEqual(gate.reportedCause("a"), "boom")
+    }
+
     /// One PTT press = one drifted stream = many chunks, all failing the same
     /// way. That is one line, and a second press is a second session.
     func testAudioChunkStreamCostsOneLinePerSession() {
@@ -177,9 +245,13 @@ private final class NSCounter: @unchecked Sendable {
 /// the error's shape (domain + code) precisely because `process.run()` throws
 /// this kind of error.
 ///
-/// Swift's own `DecodingError` interpolates stably, which is why the audio-chunk
-/// gate is allowed to use `"\(error)"` — but that exception is load-bearing and
-/// easy to copy to the wrong place. These tests pin both halves.
+/// The reflex "well, mine is a DecodingError, so interpolation is fine" is the
+/// way this bites twice: `DecodingError.dataCorrupted` — what JSONDecoder hands
+/// back for a malformed frame — carries the JSONSerialization NSError in its
+/// context and renders it, so it inherits exactly the same instability. Hence
+/// `StableCause`: every error that reaches a gate is keyed on its shape, and no
+/// call site has to reason about which case it will be handed. These tests pin
+/// all of it.
 final class LogTransitionCauseStabilityTests: XCTestCase {
 
     private func multiKeyNSError() -> NSError {
@@ -234,7 +306,9 @@ final class LogTransitionCauseStabilityTests: XCTestCase {
 
     /// The audio gate's licence: a Swift DecodingError DOES interpolate stably,
     /// so `"\(error)"` suppresses correctly there.
-    func testDecodingErrorInterpolatesStablyAndSuppresses() {
+    /// Swift's own DecodingError cases (typeMismatch here) do interpolate stably
+    /// — the half of the rule that is true.
+    func testDecodingErrorTypeMismatchInterpolatesStablyAndSuppresses() {
         let gate = LogTransitionGate<String>()
         let bad = Data(#"{"not":"an array"}"#.utf8)
         var reports = 0
@@ -245,6 +319,68 @@ final class LogTransitionCauseStabilityTests: XCTestCase {
                 if gate.evaluate("session", cause: "\(error)") == .report { reports += 1 }
             }
         }
-        XCTAssertEqual(reports, 1, "DecodingError is stable — the audio gate relies on this")
+        XCTAssertEqual(reports, 1, "typeMismatch has no NSError under it")
+    }
+
+    /// The half that is NOT: a genuinely malformed audio_chunk frame decodes to
+    /// `dataCorrupted`, whose interpolation renders the JSONSerialization
+    /// NSError underneath — so the gate that was supposed to cost one line per
+    /// PTT press instead reports repeatedly. This is the flood the audio-chunk
+    /// gate was written to prevent, reproduced against the naive cause.
+    func testGateKeyedOnInterpolatedCorruptJSONFloods() {
+        let gate = LogTransitionGate<String>()
+        let bad = Data("not json at all".utf8)
+        var reports = 0
+        for _ in 0..<200 {
+            do {
+                _ = try JSONDecoder().decode([String].self, from: bad)
+            } catch {
+                if gate.evaluate("session", cause: "\(error)") == .report { reports += 1 }
+            }
+        }
+        XCTAssertGreaterThan(reports, 1,
+                             "if this ever holds at 1 the platform changed; a gate must not depend on it")
+    }
+
+    /// `StableCause` is what the audio-chunk gate actually keys on, and it holds
+    /// for every DecodingError case — including the corrupt-JSON one above.
+    func testStableCauseSuppressesForEveryDecodingErrorCase() {
+        for blob in ["not json at all", #"{"not":"an array"}"#] {
+            let gate = LogTransitionGate<String>()
+            var reports = 0
+            for _ in 0..<200 {
+                do {
+                    _ = try JSONDecoder().decode([String].self, from: Data(blob.utf8))
+                } catch {
+                    if gate.evaluate("session", cause: StableCause.text(for: error)) == .report {
+                        reports += 1
+                    }
+                }
+            }
+            XCTAssertEqual(reports, 1, "one fault, one line — blob: \(blob)")
+        }
+    }
+
+    /// Different faults must still be told apart, or the gate over-suppresses and
+    /// hides the second bug behind the first.
+    func testStableCauseDistinguishesDifferentFaults() {
+        struct M: Decodable { let a: [String] }
+        var causes: [String] = []
+        for blob in ["not json at all", #"{"a": 7}"#, "{}"] {
+            do {
+                _ = try JSONDecoder().decode(M.self, from: Data(blob.utf8))
+            } catch {
+                causes.append(StableCause.text(for: error))
+            }
+        }
+        XCTAssertEqual(Set(causes).count, 3, "corrupt data, wrong type and a missing key are three faults")
+    }
+
+    /// Non-decoding errors fall back to the shape that `captureWindowScreenshot`
+    /// already keys on by hand.
+    func testStableCauseFallsBackToNSErrorShape() {
+        let distinct = Set((0..<50).map { _ in StableCause.text(for: multiKeyNSError()) })
+        XCTAssertEqual(distinct.count, 1)
+        XCTAssertEqual(StableCause.text(for: multiKeyNSError()), "TestDomain -1")
     }
 }

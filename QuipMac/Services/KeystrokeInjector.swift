@@ -987,8 +987,8 @@ final class KeystrokeInjector {
             // key order is not stable. Measured: 50 identical NSErrors produce
             // 40 distinct strings. A gate whose cause never compares equal never
             // suppresses, so `\(error)` here would silently defeat the throttle
-            // and flood this 0.5s-per-window path. (Swift's own DecodingError
-            // interpolates stably; Cocoa's NSError does not.)
+            // and flood this 0.5s-per-window path. (`StableCause` does this for
+            // errors that reach a gate through a shared path.)
             let ns = error as NSError
             Self.reportCaptureFailure(
                 window: cgWindowNumber,

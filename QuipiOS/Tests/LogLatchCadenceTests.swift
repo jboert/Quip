@@ -56,13 +56,11 @@ final class LogLatchCadenceTests: XCTestCase {
 
     private struct Manifest: Decodable { let spkiHashes: [String] }
 
-    /// `"\(error)"` looks like a fine latch key and is NOT one: a DecodingError
-    /// renders its underlying NSError, and that NSError's `userInfo` prints in
-    /// nondeterministic key order — the same fault yields different strings call
-    /// to call (measured: 50 identical failures, 32 distinct descriptions). A
-    /// latch keyed on it degrades into no latch at all, which is precisely the
-    /// flood we're fixing. This test fails if anyone "simplifies"
-    /// `LogLatch.fingerprint` back to string interpolation.
+    /// One fault, one identity — whatever a `LogLatch` keys on has to survive
+    /// being computed 50 times for the same failure, or the latch it feeds
+    /// degrades into no latch at all and the path it protects floods. Corrupt
+    /// JSON is precisely the fault that bare interpolation cannot key (see the
+    /// counterexample below), so it is the one the fingerprint must pin.
     func testFingerprintIsStableAcrossIdenticalDecodeFailures() {
         let bad = Data("not json at all".utf8)
         var fingerprints = Set<String>()
@@ -91,6 +89,50 @@ final class LogLatchCadenceTests: XCTestCase {
         XCTAssertEqual(Set(seen).count, 3,
                        "Corrupt JSON, a type mismatch and a missing key are three DIFFERENT faults "
                        + "and each deserves its own report. Got: \(seen)")
+    }
+
+    /// The rule, pinned by measurement, because "a DecodingError interpolates
+    /// stably" is a half-truth that sends maintainers to the wrong fix.
+    ///
+    /// `typeMismatch` / `keyNotFound` / `valueNotFound` are Swift's own and DO
+    /// render stably. `dataCorrupted` — what JSONDecoder returns for a malformed
+    /// frame — carries the JSONSerialization NSError in its context and renders
+    /// it, inheriting the unstable userInfo key order. So the nondeterminism is
+    /// always an NSError's, and it reaches errors that are not one. No call site
+    /// should have to know which case it will be handed: key on the shape.
+    func testInterpolationIsUnstableForCorruptJSON_butTheFingerprintIsNot() {
+        let bad = Data("not json at all".utf8)
+        var rendered = Set<String>()
+        var fingerprints = Set<String>()
+        for _ in 0..<200 {
+            do {
+                _ = try JSONDecoder().decode(Manifest.self, from: bad)
+                XCTFail("Expected a decode failure")
+            } catch {
+                rendered.insert("\(error)")
+                fingerprints.insert(LogLatch.fingerprint(of: error))
+            }
+        }
+        XCTAssertGreaterThan(rendered.count, 1,
+                             "if this ever holds at 1, the platform changed — but a latch must not "
+                             + "depend on that: dataCorrupted renders an NSError's userInfo")
+        XCTAssertEqual(fingerprints.count, 1,
+                       "the fingerprint is what a latch may key on, in every DecodingError case")
+    }
+
+    /// The stable half of the same rule, kept explicit so nobody "fixes" a
+    /// schema-drift gate that is already correct.
+    func testInterpolationIsStableForSwiftsOwnDecodingErrorCases() {
+        var rendered = Set<String>()
+        for _ in 0..<50 {
+            do {
+                _ = try JSONDecoder().decode(Manifest.self, from: Data(#"{"spkiHashes": 7}"#.utf8))
+                XCTFail("Expected a type mismatch")
+            } catch {
+                rendered.insert("\(error)")
+            }
+        }
+        XCTAssertEqual(rendered.count, 1, "typeMismatch has no NSError under it")
     }
 
     func testFingerprintFallsBackToDomainAndCodeForNonDecodingErrors() {

@@ -83,6 +83,63 @@ final class PendingMacRequestTests: XCTestCase {
         XCTAssertFalse(nextStep.isEmpty)
     }
 
+    // MARK: - Not connected (the button must not become a no-op)
+
+    /// The "Connected" UI can sit over a one-sidedly dead socket, so the
+    /// Diagnostics buttons guard on `isAuthenticated`. That guard must resolve
+    /// the action, not just return: a tap that produces no spinner, no status
+    /// and no error is a silent failure wearing a different hat.
+    func test_notConnected_resolvesToFailure_neverASilentNoOp() {
+        let (request, _) = makeRequest()
+        var sendAttempted = false
+
+        let armed = request.attempt(isConnected: false, nextStep: "Reconnect, then try again") {
+            sendAttempted = true
+            return true
+        }
+
+        XCTAssertFalse(armed)
+        XCTAssertFalse(sendAttempted, "nothing may be handed to a transport that isn't there")
+        XCTAssertFalse(request.isInFlight, "no spinner may be left running")
+        guard case .failed(let cause, let nextStep) = request.state else {
+            return XCTFail("a tap while disconnected must fail loudly, got \(request.state)")
+        }
+        XCTAssertFalse(cause.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       "the failure must say what went wrong")
+        XCTAssertFalse(nextStep.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       "the failure must say what to do about it")
+        XCTAssertEqual(request.failureMessage, "Not connected to the Mac — Reconnect, then try again")
+    }
+
+    /// Connected but the frame never leaves the phone: same contract, different
+    /// cause. `attempt` must not arm a wait for a reply that provably cannot come.
+    func test_attempt_sendReturnsFalse_resolvesToFailure() {
+        let (request, _) = makeRequest()
+
+        let armed = request.attempt(isConnected: true, nextStep: "Reconnect, then tap refresh") { false }
+
+        XCTAssertFalse(armed)
+        XCTAssertFalse(request.isInFlight)
+        XCTAssertEqual(request.failureMessage, "Couldn't reach the Mac — Reconnect, then tap refresh")
+    }
+
+    /// The happy path still arms a real wait with a live deadline behind it.
+    func test_attempt_connectedAndSent_staysInFlightUntilTheDeadline() {
+        let (request, clock) = makeRequest(deadline: 10)
+
+        let armed = request.attempt(isConnected: true, nextStep: "Reconnect, then try again") { true }
+
+        XCTAssertTrue(armed)
+        XCTAssertTrue(request.isInFlight)
+        XCTAssertNil(request.failureMessage)
+
+        clock.advance(by: 11)
+        request.tick()
+        guard case .failed = request.state else {
+            return XCTFail("attempt must leave the deadline armed, got \(request.state)")
+        }
+    }
+
     // MARK: - Send-time failure (socket already dead)
 
     /// `client.send` returning false means the frame never left the phone. The
