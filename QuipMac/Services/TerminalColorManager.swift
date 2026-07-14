@@ -133,9 +133,16 @@ final class TerminalColorManager {
 
     // MARK: - AppleScript Execution
 
+    /// Fire-and-forget from the main actor: nothing here consumes the result and
+    /// a terminal's background tint is cosmetic, so hand the script to the shared
+    /// serial queue and return. Blocking main on that queue — which is what the
+    /// synchronous `run` would do — would stall the UI behind every mode poll
+    /// already on it, for a color change.
     private func executeAppleScript(_ source: String) {
-        if let message = AppleScriptRunner.run(source).errorMessage {
-            print("[TerminalColorManager] AppleScript error: \(message)")
+        Task {
+            if let message = await AppleScriptRunner.runOffMain(source).errorMessage {
+                print("[TerminalColorManager] AppleScript error: \(message)")
+            }
         }
     }
 }

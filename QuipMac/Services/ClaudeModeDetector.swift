@@ -110,6 +110,16 @@ final class ClaudeModeDetector {
             guard let self else { return }
             var results: [(String, ClaudeMode?)] = []
             for tw in snapshot {
+                // This loop is the single biggest consumer of the shared serial
+                // AppleScript queue: one script per tracked window, every 2s. The
+                // queue is strict FIFO, so anything we enqueue now runs BEFORE a
+                // keystroke the user is about to send — and a keystroke is
+                // latency-critical (someone is holding a phone, waiting) while a
+                // mode poll is not; a mode changes only when the user presses
+                // Shift+Tab, and the next pass is 2s away. So yield the rest of
+                // the pass: the windows we skip are picked up on the next tick,
+                // and the results we already have are still published below.
+                if AppleScriptRunner.isUserScriptPending { break }
                 let content = keystrokeInjector.readContent(
                     terminalApp: tw.terminalApp,
                     cgWindowNumber: tw.windowNumber,

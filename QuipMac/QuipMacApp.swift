@@ -1304,26 +1304,26 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     )
                     let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
                     let routingPath = route.rawValue
-                    let inject: () -> KeystrokeInjector.InjectionResult
+                    let inject: @MainActor () async -> KeystrokeInjector.InjectionResult
                     if route == .pasteText {
                         NSLog("[Quip] send_text routing: pasteText (cliKind=%@, term=iterm2, window=%@)", cliKind.rawValue, msg.windowId)
                         inject = {
-                            self.keystrokeInjector.pasteText(msg.text,
-                                                             to: msg.windowId,
-                                                             pressReturn: msg.pressReturn,
-                                                             terminalApp: termApp,
-                                                             iterm2SessionId: window.iterm2SessionId)
+                            await self.keystrokeInjector.pasteText(msg.text,
+                                                                   to: msg.windowId,
+                                                                   pressReturn: msg.pressReturn,
+                                                                   terminalApp: termApp,
+                                                                   iterm2SessionId: window.iterm2SessionId)
                         }
                     } else {
                         NSLog("[Quip] send_text routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
                         inject = {
-                            self.keystrokeInjector.sendText(msg.text,
-                                                            to: msg.windowId,
-                                                            pressReturn: msg.pressReturn,
-                                                            terminalApp: termApp,
-                                                            windowName: name,
-                                                            cgWindowNumber: wn,
-                                                            iterm2SessionId: window.iterm2SessionId)
+                            await self.keystrokeInjector.sendText(msg.text,
+                                                                  to: msg.windowId,
+                                                                  pressReturn: msg.pressReturn,
+                                                                  terminalApp: termApp,
+                                                                  windowName: name,
+                                                                  cgWindowNumber: wn,
+                                                                  iterm2SessionId: window.iterm2SessionId)
                         }
                     }
                     if route == .pasteText {
@@ -1348,18 +1348,18 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             Self.pasteInjectQueue.async {
                                 let primary = ksi.pasteText(text, to: wid, pressReturn: pr,
                                                             terminalApp: termApp, iterm2SessionId: sid)
-                                DispatchQueue.main.async { [self] in
+                                Task { @MainActor [self] in
                                     var result = primary
                                     var selfHealed = false
                                     if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                                        let sessions = WindowManager.fetchIterm2SessionIds()
+                                        let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
                                         self.windowManager.applyIterm2SessionIds(sessions)
                                         if let refreshed = self.windowManager.windows.first(where: { $0.id == wid }),
                                            let newId = refreshed.iterm2SessionId, newId != sid {
                                             NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", wid)
                                             selfHealed = true
-                                            result = self.keystrokeInjector.pasteText(text, to: wid, pressReturn: pr,
-                                                                                      terminalApp: termApp, iterm2SessionId: newId)
+                                            result = await self.keystrokeInjector.pasteText(text, to: wid, pressReturn: pr,
+                                                                                            terminalApp: termApp, iterm2SessionId: newId)
                                         }
                                     }
                                     let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
@@ -1381,19 +1381,21 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { runOffMain() }
                         }
                     } else {
-                        // sendText (Claude, ~0.2s): unchanged inline-on-main path.
-                        let injectAndLog: () -> Void = {
+                        // sendText (Claude, ~0.2s): stays on main — but AWAITS the
+                        // script instead of blocking on the shared AppleScript
+                        // queue behind however many mode polls are already on it.
+                        let injectAndLog: @MainActor () async -> Void = {
                             let tStart = Date()
-                            var result = inject()
+                            var result = await inject()
                             var selfHealed = false
                             if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                                let sessions = WindowManager.fetchIterm2SessionIds()
+                                let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
                                 self.windowManager.applyIterm2SessionIds(sessions)
                                 if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
                                    let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
                                     NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", msg.windowId)
                                     selfHealed = true
-                                    result = self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: newId)
+                                    result = await self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: newId)
                                 }
                             }
                             let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
@@ -1408,9 +1410,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             }
                         }
                         if delay == 0 {
-                            injectAndLog()
+                            Task { await injectAndLog() }
                         } else {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { injectAndLog() }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                Task { await injectAndLog() }
+                            }
                         }
                     }
                 }
@@ -1480,13 +1484,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let finishInjection: () -> Void = {
+                    let finishInjection: @MainActor () async -> Void = {
                         let tStart = Date()
                         let route = cliKind == .codex ? "pasteImage" : "sendTextPath"
-                        let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sessionId in
+                        let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sessionId in
                             switch cliKind {
                             case .codex:
-                                return self.keystrokeInjector.pasteImage(
+                                return await self.keystrokeInjector.pasteImage(
                                     at: savedURL, to: msg.windowId,
                                     terminalApp: termApp, iterm2SessionId: sessionId
                                 )
@@ -1498,23 +1502,23 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                 // Verify on-device; move to the .codex branch if
                                 // Cursor/Grok needs clipboard image paste instead.
                                 let textToInject = savedURL.path + " "
-                                return self.keystrokeInjector.sendText(
+                                return await self.keystrokeInjector.sendText(
                                     textToInject, to: msg.windowId, pressReturn: false,
                                     terminalApp: termApp, windowName: name, cgWindowNumber: wn,
                                     iterm2SessionId: sessionId
                                 )
                             }
                         }
-                        var result = doInject(window.iterm2SessionId)
+                        var result = await doInject(window.iterm2SessionId)
                         var selfHealed = false
                         if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                            let sessions = WindowManager.fetchIterm2SessionIds()
+                            let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
                             self.windowManager.applyIterm2SessionIds(sessions)
                             if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
                                let newId = refreshed.iterm2SessionId,
                                newId != window.iterm2SessionId {
                                 selfHealed = true
-                                result = doInject(newId)
+                                result = await doInject(newId)
                             }
                         }
                         let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
@@ -1536,9 +1540,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         }
                     }
                     if delay == 0 {
-                        finishInjection()
+                        Task { await finishInjection() }
                     } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { finishInjection() }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                            Task { await finishInjection() }
+                        }
                     }
                 }
             }
@@ -1703,7 +1709,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     let termApp = spawnTerminalApp(for: msg.agent, source: source)
                     let cmd = spawnCommand(for: msg.agent)
                     let knownIds = Set(windowManager.windows.map(\.id))
-                    keystrokeInjector.spawnWindow(in: dir, command: cmd, terminalApp: termApp)
+                    Task { await keystrokeInjector.spawnWindow(in: dir, command: cmd, terminalApp: termApp) }
                     // WindowManager's auto-refresh (~1 second) picks up the new window.
                     // When it does, switch the phone's selection to the new window so
                     // the user sees what they just spawned instead of the old card.
@@ -1724,7 +1730,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 print("[Quip] close_window: windowId=\(msg.windowId)")
                 if let window = windowManager.windows.first(where: { $0.id == msg.windowId }) {
                     let termApp = terminalAppForWindow(window)
-                    keystrokeInjector.closeWindow(windowName: window.name, terminalApp: termApp)
+                    let name = window.name
+                    Task { await keystrokeInjector.closeWindow(windowName: name, terminalApp: termApp) }
                     // WindowManager's auto-refresh removes the closed window from the list.
                 } else {
                     let known = windowManager.windows.map { $0.id }
@@ -1742,7 +1749,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 print("[Quip] spawn_window: directory=\(msg.directory) agent=\(msg.agent?.rawValue ?? "default")")
                 let cmd = spawnCommand(for: msg.agent)
                 let knownIds = Set(windowManager.windows.map(\.id))
-                keystrokeInjector.spawnWindow(in: msg.directory, command: cmd, terminalApp: .iterm2)
+                let dir = msg.directory
+                Task { await keystrokeInjector.spawnWindow(in: dir, command: cmd, terminalApp: .iterm2) }
                 selectNewWindowAfterSpawn(knownIds: knownIds, attempt: 0)
             }
 
@@ -2114,13 +2122,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             self.windowManager.focusWindow(msg.windowId)
             let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
             let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
-            let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sessionId in
+            let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sessionId in
                 if route == .pasteText {
-                    return self.keystrokeInjector.pasteText(
+                    return await self.keystrokeInjector.pasteText(
                         body, to: msg.windowId, pressReturn: msg.pressReturn,
                         terminalApp: termApp, iterm2SessionId: sessionId)
                 } else {
-                    return self.keystrokeInjector.sendText(
+                    return await self.keystrokeInjector.sendText(
                         body, to: msg.windowId, pressReturn: msg.pressReturn,
                         terminalApp: termApp, windowName: window.name,
                         cgWindowNumber: window.windowNumber, iterm2SessionId: sessionId)
@@ -2128,24 +2136,26 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
             NSLog("[Quip] paste_prompt routing: %@ (cliKind=%@, term=%@, window=%@)",
                   route.rawValue, cliKind.rawValue, termApp.rawValue, msg.windowId)
-            var result = doInject(window.iterm2SessionId)
-            // (#1) Same self-heal as send_text: stale iTerm2 session id → refresh + retry once.
-            var selfHealed = false
-            if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                let sessions = WindowManager.fetchIterm2SessionIds()
-                self.windowManager.applyIterm2SessionIds(sessions)
-                if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
-                   let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
-                    NSLog("[Quip] paste_prompt self-heal: refreshed iTerm2 session id for %@", msg.windowId)
-                    selfHealed = true
-                    result = doInject(newId)
+            Task { @MainActor in
+                var result = await doInject(window.iterm2SessionId)
+                // (#1) Same self-heal as send_text: stale iTerm2 session id → refresh + retry once.
+                var selfHealed = false
+                if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
+                    let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
+                    self.windowManager.applyIterm2SessionIds(sessions)
+                    if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
+                       let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
+                        NSLog("[Quip] paste_prompt self-heal: refreshed iTerm2 session id for %@", msg.windowId)
+                        selfHealed = true
+                        result = await doInject(newId)
+                    }
                 }
-            }
-            appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)")
-            if !result.success {
-                let reason = result.error ?? "unknown"
-                print("[Quip] paste_prompt FAILED: \(reason)")
-                self.webSocketServer.broadcast(ErrorMessage(reason: "Prompt paste failed: \(reason)"))
+                appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)")
+                if !result.success {
+                    let reason = result.error ?? "unknown"
+                    print("[Quip] paste_prompt FAILED: \(reason)")
+                    self.webSocketServer.broadcast(ErrorMessage(reason: "Prompt paste failed: \(reason)"))
+                }
             }
         }
     }
@@ -2290,32 +2300,38 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // the next CG snapshot will see it.
                 try? await Task.sleep(nanoseconds: 400_000_000)
             }
-            await MainActor.run {
-                guard target != nil else {
-                    print("[Quip] attach_iterm_window DROPPED: window closed between scan and attach")
-                    self.webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
-                    return
-                }
-
-                // Persist FIRST so the enable sticks even if the CG snapshot
-                // hasn't matched this sessionId to a ManagedWindow yet.
-                self.windowManager.markSessionAttached(sessionId: sessionId)
-
-                // Force a fresh scan + session ID match so the ManagedWindow
-                // for this iTerm window is populated and flagged enabled.
-                self.windowManager.refreshWindowList()
-                self.windowManager.refreshIterm2SessionIds()
-
-                if let target = self.windowManager.windows.first(where: { $0.iterm2SessionId == sessionId }) {
-                    self.windowManager.toggleWindow(target.id, enabled: true)
-                    print("[Quip] attach_iterm_window: promoted \(target.id) (sessionId=\(sessionId))")
-                } else {
-                    // sessionId persisted — next snapshot will enable it.
-                    print("[Quip] attach_iterm_window: sessionId=\(sessionId) not yet in CG window list; will enable on next snapshot")
-                }
-                self.broadcastLayout()
-            }
+            await self.finishAttachITermWindow(sessionId: sessionId, found: target != nil)
         }
+    }
+
+    /// Main-actor half of `handleAttachITermWindow`. A `@MainActor` method rather
+    /// than a `MainActor.run` block because it has to AWAIT the session-id refresh
+    /// (AppleScript), and `MainActor.run` takes a synchronous body.
+    @MainActor
+    private func finishAttachITermWindow(sessionId: String, found: Bool) async {
+        guard found else {
+            print("[Quip] attach_iterm_window DROPPED: window closed between scan and attach")
+            webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists"))
+            return
+        }
+
+        // Persist FIRST so the enable sticks even if the CG snapshot
+        // hasn't matched this sessionId to a ManagedWindow yet.
+        windowManager.markSessionAttached(sessionId: sessionId)
+
+        // Force a fresh scan + session ID match so the ManagedWindow
+        // for this iTerm window is populated and flagged enabled.
+        windowManager.refreshWindowList()
+        await windowManager.refreshIterm2SessionIds()
+
+        if let target = windowManager.windows.first(where: { $0.iterm2SessionId == sessionId }) {
+            windowManager.toggleWindow(target.id, enabled: true)
+            print("[Quip] attach_iterm_window: promoted \(target.id) (sessionId=\(sessionId))")
+        } else {
+            // sessionId persisted — next snapshot will enable it.
+            print("[Quip] attach_iterm_window: sessionId=\(sessionId) not yet in CG window list; will enable on next snapshot")
+        }
+        broadcastLayout()
     }
 
     /// Drives the "arrange horizontally/vertically" command coming from the
@@ -2414,21 +2430,21 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     private func injectQuickActionSendText(_ text: String, to wid: String, pressReturn: Bool,
                                            terminalApp: TerminalApp, windowName: String,
                                            cgWindowNumber: CGWindowID,
-                                           iterm2SessionId: String?) {
-        var r = keystrokeInjector.sendText(text, to: wid, pressReturn: pressReturn,
-                                           terminalApp: terminalApp, windowName: windowName,
-                                           cgWindowNumber: cgWindowNumber,
-                                           iterm2SessionId: iterm2SessionId)
+                                           iterm2SessionId: String?) async {
+        var r = await keystrokeInjector.sendText(text, to: wid, pressReturn: pressReturn,
+                                                 terminalApp: terminalApp, windowName: windowName,
+                                                 cgWindowNumber: cgWindowNumber,
+                                                 iterm2SessionId: iterm2SessionId)
         if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: terminalApp) {
-            let sessions = WindowManager.fetchIterm2SessionIds()
+            let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
             windowManager.applyIterm2SessionIds(sessions)
             if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
                let newId = refreshed.iterm2SessionId, newId != iterm2SessionId {
                 NSLog("[Quip] quick_action self-heal: refreshed iTerm2 session id for %@", wid)
-                r = keystrokeInjector.sendText(text, to: wid, pressReturn: pressReturn,
-                                               terminalApp: terminalApp, windowName: windowName,
-                                               cgWindowNumber: cgWindowNumber,
-                                               iterm2SessionId: newId)
+                r = await keystrokeInjector.sendText(text, to: wid, pressReturn: pressReturn,
+                                                     terminalApp: terminalApp, windowName: windowName,
+                                                     cgWindowNumber: cgWindowNumber,
+                                                     iterm2SessionId: newId)
             }
         }
         if !r.success {
@@ -2631,28 +2647,30 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     // the wrong way. Replaces the old raw-toggle-from-empty
                     // choreography. (US-004)
                     let keys = MultiSelectSync.keystrokes(desired: Set(picks), liveContent: content)
-                    let fire = {
-                        self.injectKeystrokeSequence(keys, to: wid, sessionId: sessionId,
-                                                     termApp: termApp, cgWindowNumber: wn)
+                    let fire: () -> Void = {
+                        Task { @MainActor in
+                            await self.injectKeystrokeSequence(keys, to: wid, sessionId: sessionId,
+                                                               termApp: termApp, cgWindowNumber: wn)
+                        }
                     }
                     if delay == 0 { fire() }
-                    else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: fire) }
+                    else { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { fire() } }
                     return
                 }
-                let doInject: (String?) -> KeystrokeInjector.InjectionResult = { sid in
-                    keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
-                                               windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
+                let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sid in
+                    await keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
+                                                     windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
                 }
-                let injectWithSelfHeal: () -> Void = {
-                    var r = doInject(sessionId)
+                let injectWithSelfHeal: @MainActor () async -> Void = {
+                    var r = await doInject(sessionId)
                     // (#1) Self-heal: stale iTerm2 session id → refresh + retry once.
                     if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: termApp) {
-                        let sessions = WindowManager.fetchIterm2SessionIds()
+                        let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
                         windowManager.applyIterm2SessionIds(sessions)
                         if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
                            let newId = refreshed.iterm2SessionId, newId != sessionId {
                             NSLog("[Quip] revalidateAnswer self-heal: refreshed iTerm2 session id for %@", wid)
-                            r = doInject(newId)
+                            r = await doInject(newId)
                         }
                     }
                     if !r.success {
@@ -2660,32 +2678,40 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
                     }
                 }
-                if delay == 0 { injectWithSelfHeal() }
-                else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: injectWithSelfHeal) }
+                if delay == 0 { Task { await injectWithSelfHeal() } }
+                else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        Task { await injectWithSelfHeal() }
+                    }
+                }
             }
         }
     }
 
     /// Send a paced sequence of keystrokes (e.g. the multi-select choreography
-    /// "down/space/…/return") into a terminal window, one key per hop so the
-    /// Ink TUI registers each before the next. Recurses on the main queue with
-    /// a small gap; aborts + reports if any key fails to inject.
+    /// "down/space/…/return") into a terminal window, one key at a time with a
+    /// small gap so the Ink TUI registers each before the next. Aborts + reports
+    /// if any key fails to inject.
+    ///
+    /// Sequential `await`s in one task, so ordering is guaranteed: the widget
+    /// toggles in the order `MultiSelectSync` computed them or not at all. (The
+    /// gap now sits BETWEEN completions rather than between scheduled starts —
+    /// same choreography, and it can no longer compress if a key runs slow.)
     @MainActor
-    private func injectKeystrokeSequence(_ keys: [String], index: Int = 0,
+    private func injectKeystrokeSequence(_ keys: [String],
                                          to windowId: String, sessionId: String?,
                                          termApp: TerminalApp, cgWindowNumber: CGWindowID,
-                                         gap: TimeInterval = 0.12) {
-        guard index < keys.count else { return }
-        let key = keys[index]
-        let r = keystrokeInjector.sendKeystroke(key, to: windowId, terminalApp: termApp,
-                                                cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
-        guard r.success else {
-            webSocketServer.broadcast(ErrorMessage(reason: "Multi-select key '\(key)' failed: \(r.error ?? "unknown")"))
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + gap) {
-            self.injectKeystrokeSequence(keys, index: index + 1, to: windowId, sessionId: sessionId,
-                                         termApp: termApp, cgWindowNumber: cgWindowNumber, gap: gap)
+                                         gap: TimeInterval = 0.12) async {
+        for (index, key) in keys.enumerated() {
+            if index > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(gap * 1_000_000_000))
+            }
+            let r = await keystrokeInjector.sendKeystroke(key, to: windowId, terminalApp: termApp,
+                                                          cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
+            guard r.success else {
+                webSocketServer.broadcast(ErrorMessage(reason: "Multi-select key '\(key)' failed: \(r.error ?? "unknown")"))
+                return
+            }
         }
     }
 
@@ -2717,16 +2743,24 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             path: .quickAction, terminalApp: termApp,
             iterm2SessionId: window.iterm2SessionId
         )
-        let runAfterDelay: (@escaping () -> Void) -> Void = { work in
-            if injectionDelay == 0 { work() }
-            else { DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) { work() } }
+        // Every injection below is AppleScript, and every one of them is now
+        // awaited rather than run inline: a quick action must not park the main
+        // thread on the shared serial queue (see `AppleScriptRunner`). The delay
+        // still schedules on main, so the focus-raise settling time is unchanged.
+        let runAfterDelay: (@escaping @MainActor () async -> Void) -> Void = { work in
+            if injectionDelay == 0 { Task { await work() } }
+            else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) {
+                    Task { await work() }
+                }
+            }
         }
         if let selectedOption = Self.selectedOptionNumber(from: action) {
             runAfterDelay {
-                self.injectQuickActionSendText(String(selectedOption), to: wid, pressReturn: true,
-                                               terminalApp: termApp, windowName: wname,
-                                               cgWindowNumber: wn,
-                                               iterm2SessionId: window.iterm2SessionId)
+                await self.injectQuickActionSendText(String(selectedOption), to: wid, pressReturn: true,
+                                                     terminalApp: termApp, windowName: wname,
+                                                     cgWindowNumber: wn,
+                                                     iterm2SessionId: window.iterm2SessionId)
             }
             return
         }
@@ -2737,23 +2771,23 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // same path reliably; the System Events path races the AX raise and
             // drops Return on iTerm2 when multiple windows are open.
             runAfterDelay {
-                self.injectQuickActionSendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await self.injectQuickActionSendText("", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_ctrl_c":
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_ctrl_d":
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.sendKeystroke("ctrl+d", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_escape":
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.sendKeystroke("escape", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_tab":
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_right":
             // Accept-autocomplete: Right-arrow commits the shown inline suggestion
@@ -2773,22 +2807,24 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 }
                 DispatchQueue.main.async {
                     let fire: () -> Void = {
-                        keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                        Task { @MainActor in
+                            await keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                        }
                     }
                     if injectionDelay == 0 { fire() }
-                    else { DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay, execute: fire) }
+                    else { DispatchQueue.main.asyncAfter(deadline: .now() + injectionDelay) { fire() } }
                 }
             }
         case "press_backspace":
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.sendKeystroke("backspace", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_shift_tab":
             // Single Shift+Tab press — manual override / fallback when the
             // detected mode is unreliable. set_*_mode actions below use
             // detected mode to compute exact press count.
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("shift+tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.sendKeystroke("shift+tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "set_plan_mode":
             cycleClaudeMode(to: .plan, for: window)
@@ -2800,11 +2836,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // prompt input in one keystroke instead of holding backspace.
         case "clear_input":
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("ctrl+u", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.sendKeystroke("ctrl+u", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_y":
             runAfterDelay {
-                self.injectQuickActionSendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await self.injectQuickActionSendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
         // sends the iTerm2 menu shortcut for the corresponding action.
@@ -2824,22 +2860,23 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 }
             }()
             runAfterDelay {
-                keystrokeInjector.iterm2Scroll(dir, to: wid, iterm2SessionId: window.iterm2SessionId)
+                await keystrokeInjector.iterm2Scroll(dir, to: wid, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_n":
             runAfterDelay {
-                self.injectQuickActionSendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await self.injectQuickActionSendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "clear_terminal":
             runAfterDelay {
-                self.injectQuickActionSendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                await self.injectQuickActionSendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "restart_claude":
             runAfterDelay {
-                keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.injectQuickActionSendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
-                }
+                await keystrokeInjector.sendKeystroke("ctrl+c", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+                // 0.5s for the interrupted shell to get its prompt back before
+                // `claude` is typed at it.
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await self.injectQuickActionSendText("claude", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "toggle_enabled":
             let newEnabled = !window.isEnabled
@@ -2894,10 +2931,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         // Stagger the presses by 80ms so Claude Code's TUI has time to redraw
         // between each Shift+Tab. Without the gap, tightly-coupled presses can
-        // get coalesced and the cycle indicator skips a step.
-        for i in 0..<presses {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.08) { [keystrokeInjector] in
-                keystrokeInjector.sendKeystroke("shift+tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sid)
+        // get coalesced and the cycle indicator skips a step. One task with
+        // sequential awaits, so press N+1 can't overtake press N (each press is
+        // an AppleScript that main now awaits rather than blocks on).
+        Task { @MainActor [keystrokeInjector] in
+            for i in 0..<presses {
+                if i > 0 { try? await Task.sleep(nanoseconds: 80_000_000) }
+                await keystrokeInjector.sendKeystroke("shift+tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sid)
             }
         }
     }

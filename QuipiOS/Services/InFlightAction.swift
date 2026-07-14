@@ -1,5 +1,30 @@
 import Foundation
 
+/// The clock a deadline and the sleep that enforces it must BOTH be read from.
+///
+/// Two properties, and a watchdog needs both:
+///
+///   * MONOTONIC — an NTP correction or a user changing the date mid-flight
+///     cannot retire a deadline early or late. (`Date` fails this.)
+///   * CONTINUOUS — it keeps counting while the device is asleep, which is what
+///     `Task.sleep` does. (`ProcessInfo.systemUptime` fails this: it counts only
+///     time the system has been AWAKE, by definition.)
+///
+/// Mixing the two is what stranded a request: sleep on the continuous clock,
+/// measure elapsed on the awake-only one, and a phone locked one second into a
+/// 10s wait comes back with the sleep long over but only ~1.5s of "elapsed" —
+/// the wake ticks, declines to trip, and nothing re-arms. The socket died during
+/// the sleep, so the reply never comes and the spinner runs forever. Both halves
+/// read this, so an early wake is impossible by construction.
+///
+/// `CLOCK_MONOTONIC` on Darwin is the continuous one (it advances across sleep);
+/// `CLOCK_UPTIME_RAW` — what `systemUptime` reports — is the one that stops.
+enum MonotonicClock {
+    static var now: TimeInterval {
+        TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1_000_000_000
+    }
+}
+
 /// An action awaiting a reply from the Mac, with a deadline it cannot outlive.
 ///
 /// The failure this prevents: a thumbnail spinner that never clears. Every
@@ -77,6 +102,16 @@ struct InFlightAction: Equatable {
 
     private static func nonEmpty(_ value: String, fallback: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : value
+    }
+
+    /// Seconds still owed before `tick(now:)` would trip, or nil when there is
+    /// no live deadline to owe them against.
+    ///
+    /// The watchdog sleeps for exactly this, so the sleep and the deadline can
+    /// never disagree about how much time is left — see `MonotonicClock`.
+    func remaining(now: TimeInterval) -> TimeInterval? {
+        guard state == .inFlight, let startedAt else { return nil }
+        return deadline - (now - startedAt)
     }
 
     /// Drive the watchdog. Returns true on the tick that trips it.

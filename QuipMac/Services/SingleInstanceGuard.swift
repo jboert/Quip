@@ -93,8 +93,13 @@ enum SingleInstanceGuard {
         }
 
         let fd = open(url.path, O_CREAT | O_RDWR, 0o600)
+        // Capture errno on the line after the syscall, before anything else runs:
+        // it is thread-local but not call-local, and `url.lastPathComponent` can
+        // make a syscall of its own and overwrite it before the interpolation
+        // reads it. A diagnostic that names the wrong failure is worse than none.
+        let openFailure = errno
         guard fd >= 0 else {
-            return .unavailable("could not open \(url.lastPathComponent) (errno \(errno))")
+            return .unavailable("could not open \(url.lastPathComponent) (errno \(openFailure))")
         }
 
         // LOCK_NB: answer now. Blocking here would hang launch behind the other

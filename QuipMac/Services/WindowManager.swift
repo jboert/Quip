@@ -264,6 +264,15 @@ final class WindowManager {
 
     /// Apply pre-fetched window data on main. Merges with existing state, resolves icons.
     func applyWindowSnapshot(_ raw: [RawWindowInfo]) {
+        // The snapshot is the only lifecycle signal Quip gets that a pid is dead
+        // to us, and `axFocusGate` MUST hear it: pids are recycled, so a gate
+        // entry left behind by a quit app suppresses the FIRST focus failure of
+        // whatever process later lands on the same number — the exact line the
+        // gate exists to guarantee. A pid that is merely windowless for a poll
+        // (every window minimized) is forgotten too; that costs at most one
+        // duplicate line if it fails again, which is the harmless direction.
+        Self.axFocusGate.retainOnly(Set(raw.map(\.pid)))
+
         // Precompute once per snapshot. Accessing NSScreen.screens is MainActor-safe
         // and we're already on main here.
         let screens = NSScreen.screens
@@ -532,14 +541,19 @@ final class WindowManager {
     // MARK: - Terminal Subtitles
 
     /// Query iTerm2 and Terminal.app for current session paths and update subtitles.
-    func refreshSubtitles() {
-        let subs = Self.fetchSubtitles()
+    ///
+    /// `async` because the fetch is AppleScript: from the main actor it has to be
+    /// awaited, never blocked on (see `AppleScriptRunner`). Off-main callers use
+    /// the `fetchSubtitles` / `applySubtitles` pair directly.
+    func refreshSubtitles() async {
+        let subs = await AppleScriptRunner.offMain { Self.fetchSubtitles() }
         applySubtitles(subs)
     }
 
-    /// Query iTerm2 for current session UUIDs and update `iterm2SessionId` on matching windows.
-    func refreshIterm2SessionIds() {
-        let sessions = Self.fetchIterm2SessionIds()
+    /// Query iTerm2 for current session UUIDs and update `iterm2SessionId` on
+    /// matching windows. `async` for the same reason as `refreshSubtitles`.
+    func refreshIterm2SessionIds() async {
+        let sessions = await AppleScriptRunner.offMain { Self.fetchIterm2SessionIds() }
         applyIterm2SessionIds(sessions)
     }
 
@@ -637,7 +651,7 @@ final class WindowManager {
         """
 
         let asResult = AppleScriptRunner.run(script)
-        if asResult.error == nil, let output = asResult.stringValue {
+        if !asResult.failed, let output = asResult.stringValue {
             for line in output.components(separatedBy: "\n") where !line.isEmpty {
                 let parts = line.split(separator: ":", maxSplits: 1)
                 guard parts.count == 2, let wid = Int(parts[0]) else { continue }
@@ -678,7 +692,7 @@ final class WindowManager {
         end tell
         """
         let runResult = AppleScriptRunner.run(runningCheck)
-        guard runResult.error == nil, runResult.booleanValue else { return [] }
+        guard !runResult.failed, runResult.booleanValue else { return [] }
 
         // Four fields per window, TAB-separated, newline between windows.
         // Matches the separator style of `fetchIterm2SessionIds` above so
@@ -707,7 +721,7 @@ final class WindowManager {
         return output
         """
         let asResult = AppleScriptRunner.run(script)
-        guard asResult.error == nil, let output = asResult.stringValue else { return [] }
+        guard !asResult.failed, let output = asResult.stringValue else { return [] }
         return parseITermWindowList(output)
     }
 
@@ -739,9 +753,11 @@ final class WindowManager {
     }
 
     /// Instance-side convenience for callers already on the main actor
-    /// (e.g. the WebSocket scan-request handler in US-002).
-    func listAllITermWindows() -> [ITermWindowDescriptor] {
-        Self.fetchAllITermWindows()
+    /// (e.g. the WebSocket scan-request handler in US-002). `async` so the main
+    /// actor awaits the enumeration rather than blocking the UI on the shared
+    /// AppleScript queue.
+    func listAllITermWindows() async -> [ITermWindowDescriptor] {
+        await AppleScriptRunner.offMain { Self.fetchAllITermWindows() }
     }
 
     /// Un-minimize an iTerm2 window and bring it to the front. Required
@@ -765,7 +781,7 @@ final class WindowManager {
         end tell
         """
         let result = AppleScriptRunner.run(script)
-        if let err = result.error {
+        if let err = result.errorMessage {
             print("[WindowManager] unminimizeITermWindow failed: \(err)")
             return false
         }
@@ -809,7 +825,7 @@ final class WindowManager {
         """
 
         let asResult = AppleScriptRunner.run(script)
-        guard asResult.error == nil, let output = asResult.stringValue else { return result }
+        guard !asResult.failed, let output = asResult.stringValue else { return result }
 
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")

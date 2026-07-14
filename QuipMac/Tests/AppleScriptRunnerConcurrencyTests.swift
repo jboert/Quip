@@ -91,6 +91,83 @@ final class AppleScriptRunnerConcurrencyTests: XCTestCase {
         XCTAssertNil(good.errorMessage, "the queue must still run scripts after a failure")
         XCTAssertEqual(good.stringValue, expected(for: 3))
     }
+
+    // MARK: - offMain: unblock main WITHOUT unserializing the scripts
+
+    /// The invariant the whole file exists for, asserted directly rather than
+    /// inferred from "it didn't crash": across every entry point, under every
+    /// kind of concurrent pressure, no two scripts are ever inside
+    /// `NSAppleScript` at once. `offMain` added a second *waiting* path — this
+    /// proves it did not add a second *executing* one.
+    func test_runAndOffMain_mixedUnderPressure_neverExecuteTwoScriptsAtOnce() async {
+        await withTaskGroup(of: Void.self) { group in
+            // The @MainActor-style path: awaits, never blocks.
+            for i in 0..<40 {
+                group.addTask {
+                    let output = await AppleScriptRunner.offMain { AppleScriptRunner.run(self.source(for: i)) }
+                    XCTAssertEqual(output.stringValue, self.expected(for: i))
+                }
+            }
+            // The off-main polling path, still synchronous, still hammering.
+            for i in 40..<80 {
+                group.addTask {
+                    let output = await withCheckedContinuation { (c: CheckedContinuation<AppleScriptRunner.Output, Never>) in
+                        DispatchQueue.global(qos: .utility).async {
+                            c.resume(returning: AppleScriptRunner.run(self.source(for: i)))
+                        }
+                    }
+                    XCTAssertEqual(output.stringValue, self.expected(for: i))
+                }
+            }
+            await group.waitForAll()
+        }
+
+        XCTAssertEqual(AppleScriptRunner.peakConcurrentExecutions, 1,
+                       "two AppleScripts compiled at once — this is the torn-lexer crash of 2026-07-12")
+    }
+
+    /// The defect `offMain` was added to fix: a main-actor caller used to
+    /// `queue.sync` and so waited out everything already queued — the per-window
+    /// mode polls, a 1-3s subtitle fetch, or a script wedged on an unresponsive
+    /// terminal. Occupy the queue, then check the main actor still gets to run.
+    @MainActor
+    func test_offMain_doesNotParkTheMainActorBehindAQueuedScript() async {
+        let queueOccupied = expectation(description: "the slow background script finished")
+        DispatchQueue.global(qos: .utility).async {
+            _ = AppleScriptRunner.run("delay 0.6\nreturn \"slow\"")
+            queueOccupied.fulfill()
+        }
+        // Give it time to actually be the one in flight.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+
+        let startedWaiting = Date()
+        async let queued = AppleScriptRunner.offMain { AppleScriptRunner.run(self.source(for: 1)) }
+
+        // The main actor is back here immediately. `run` in this position would
+        // have held it for the remainder of the 0.6s script.
+        XCTAssertLessThan(Date().timeIntervalSince(startedWaiting), 0.2,
+                          "the main actor must not block on the AppleScript queue")
+
+        let output = await queued
+        XCTAssertEqual(output.stringValue, expected(for: 1), "and it still gets its result")
+        await fulfillment(of: [queueOccupied], timeout: 10)
+    }
+
+    /// A poller asks before it enqueues, because a serial queue has no priority:
+    /// a mode poll that queues ahead of a keystroke delays a person who is
+    /// waiting on it, and the poll runs again in 2s regardless.
+    @MainActor
+    func test_isUserScriptPending_isTrueWhileAUserInitiatedScriptIsOutstanding() async {
+        XCTAssertFalse(AppleScriptRunner.isUserScriptPending, "nothing outstanding at rest")
+
+        async let running = AppleScriptRunner.offMain { AppleScriptRunner.run("delay 0.4\nreturn \"busy\"") }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(AppleScriptRunner.isUserScriptPending,
+                      "a poller must be able to see that a user-initiated script is in the way")
+
+        _ = await running
+        XCTAssertFalse(AppleScriptRunner.isUserScriptPending, "and that it has cleared")
+    }
 }
 
 /// Thread-safe collector — `concurrentPerform` writes from every thread at once.

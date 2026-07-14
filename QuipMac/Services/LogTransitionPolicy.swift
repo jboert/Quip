@@ -154,6 +154,27 @@ final class LogTransitionGate<Key: Hashable & Sendable>: @unchecked Sendable {
         forgetLocked(key)
     }
 
+    /// Forget every failing key whose subject is no longer in `live`.
+    ///
+    /// Required for correctness — not just hygiene — whenever the key space is
+    /// RECYCLED. `pid_t` is: quit the iTerm2 that failed AX focus on pid 500 and
+    /// macOS will hand pid 500 to some other process soon enough. Its first
+    /// failure — the one line this whole type exists to guarantee — then reads
+    /// as a repeat of the dead process's and is suppressed forever. A caller
+    /// that can see the live subjects reconciles here and the stale entry dies
+    /// with its subject.
+    ///
+    /// (`CGWindowID` keys don't need this: CG never reuses a window id, so a
+    /// stale entry can only cost bytes, and the capacity bound covers that.)
+    func retainOnly(_ live: Set<Key>) {
+        lock.lock()
+        defer { lock.unlock() }
+        for key in order where !live.contains(key) {
+            reported.removeValue(forKey: key)
+        }
+        order.removeAll { !live.contains($0) }
+    }
+
     private func forgetLocked(_ key: Key) {
         guard reported.removeValue(forKey: key) != nil else { return }
         order.removeAll { $0 == key }

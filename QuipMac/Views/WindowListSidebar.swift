@@ -396,10 +396,11 @@ struct WindowListSidebar: View {
             """
         }
 
-        _ = AppleScriptRunner.run(script)
-
-        // Refresh after a brief delay to pick up the new window
+        // Await, never block: this is a SwiftUI action on the main actor, and the
+        // shared AppleScript queue can be several polls deep (see AppleScriptRunner).
         Task {
+            _ = await AppleScriptRunner.runOffMain(script)
+            // Refresh after a brief delay to pick up the new window
             try? await Task.sleep(for: .seconds(1))
             windowManager.refreshWindowList()
         }

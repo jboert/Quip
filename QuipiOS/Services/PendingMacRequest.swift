@@ -27,11 +27,11 @@ final class PendingMacRequest: ObservableObject {
     private let now: @Sendable () -> TimeInterval
     private var watchdog: Task<Void, Never>?
 
-    /// - Parameter now: monotonic clock, injected so tests can trip a deadline
-    ///   without sleeping through it. `systemUptime` (not `Date`) so a wall-clock
-    ///   adjustment mid-flight cannot retire the deadline early or late.
+    /// - Parameter now: the deadline clock, injected so tests can trip a deadline
+    ///   without sleeping through it. It has to be the clock `Task.sleep` runs
+    ///   on or the watchdog's two halves disagree — see `MonotonicClock`.
     init(deadline: TimeInterval,
-         now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+         now: @escaping @Sendable () -> TimeInterval = { MonotonicClock.now }) {
         self.deadline = deadline
         self.now = now
         self.action = InFlightAction(deadline: deadline)
@@ -58,15 +58,35 @@ final class PendingMacRequest: ObservableObject {
         action.start(at: now())
         state = action.state
         watchdog?.cancel()
-        // A hair past the deadline: Task.sleep guarantees *at least* its
-        // duration, but the slack keeps a same-instant wake from reading as
-        // "not yet expired" and leaving the request in flight with no watchdog.
-        let nanos = UInt64(deadline * 1_000_000_000) + 10_000_000
+        // Sleep → tick → sleep again until the tick actually trips. ONE sleep and
+        // ONE tick is what stranded requests: a wake that finds the deadline not
+        // yet reached returned false and left nothing armed behind it, and the
+        // wake that finds that is not exotic — it is every backgrounded phone
+        // (see `MonotonicClock` for why the two halves used to disagree). Now an
+        // early wake costs one more sleep, and the only way out of `.inFlight` is
+        // a reply, a reset, or the deadline.
+        //
+        // `self` is re-acquired weakly on each pass and never held across the
+        // sleep, so a dismissed sheet's request deallocates on schedule and its
+        // watchdog exits on the next wake instead of resurrecting it.
         watchdog = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: nanos)
-            guard !Task.isCancelled else { return }
-            self?.tick()
+            while let nanos = self?.nanosUntilDeadline() {
+                try? await Task.sleep(nanoseconds: nanos)
+                guard !Task.isCancelled else { return }
+                self?.tick()
+            }
         }
+    }
+
+    /// How long the watchdog should sleep before its next tick, or nil once the
+    /// request is no longer in flight (which is the watchdog's exit condition).
+    ///
+    /// The slack is because `Task.sleep` guarantees *at least* its duration:
+    /// without it a same-instant wake reads as "not yet expired" and buys another
+    /// whole pass for nothing.
+    private func nanosUntilDeadline() -> UInt64? {
+        guard let remaining = action.remaining(now: now()) else { return nil }
+        return UInt64(max(remaining, 0) * 1_000_000_000) + 10_000_000
     }
 
     /// Arm a request and hand the frame to the transport, resolving to a stated

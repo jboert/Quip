@@ -200,6 +200,74 @@ final class LogTransitionPolicyTests: XCTestCase {
         XCTAssertEqual(gate.reportedCause("a"), "boom")
     }
 
+    // MARK: - Recycled keys (WindowManager.axFocusGate is keyed by pid_t)
+
+    /// The bug, stated as a failing sequence: macOS RECYCLES pids. iTerm2 on pid
+    /// 500 fails AX focus, the user quits it, and some unrelated app is handed
+    /// pid 500 later. Its FIRST failure — the single line the gate exists to
+    /// guarantee — is then indistinguishable from a repeat of the dead app's and
+    /// is swallowed. Silently, forever, and precisely on the diagnostic path
+    /// (a revoked Accessibility grant) that Quip loses on every rebuild.
+    func testRecycledPidWithNoReconcileSuppressesTheNewProcessesFirstFailure() {
+        let gate = LogTransitionGate<pid_t>()
+        let axDenied = "ax-windows-failed(-25204)"
+
+        XCTAssertEqual(gate.evaluate(500, cause: axDenied), .report,
+                       "iTerm2's first focus failure is reported")
+        XCTAssertEqual(gate.evaluate(500, cause: axDenied), .stayQuiet,
+                       "and its repeats are correctly suppressed")
+
+        // iTerm2 quits. Nobody tells the gate. A different process gets pid 500
+        // and fails the same way.
+        XCTAssertEqual(gate.evaluate(500, cause: axDenied), .stayQuiet,
+                       "THE BUG: a new process's first failure is suppressed as a duplicate of a dead one's")
+    }
+
+    /// The fix: the window snapshot is the lifecycle event that says a pid is
+    /// dead to Quip, so it reconciles the gate against the pids that are live.
+    /// The recycled pid then looks like what it is — new.
+    func testReconcilingAgainstLivePidsRestoresTheNewProcessesFirstFailure() {
+        let gate = LogTransitionGate<pid_t>()
+        let axDenied = "ax-windows-failed(-25204)"
+
+        XCTAssertEqual(gate.evaluate(500, cause: axDenied), .report)
+        XCTAssertEqual(gate.evaluate(500, cause: axDenied), .stayQuiet)
+
+        // The next window snapshot no longer contains pid 500 — iTerm2 is gone.
+        gate.retainOnly([742])
+        XCTAssertEqual(gate.failingKeyCount, 0)
+
+        XCTAssertEqual(gate.evaluate(500, cause: axDenied), .report,
+                       "the process now on pid 500 gets the first-failure line it is owed")
+        XCTAssertEqual(gate.evaluate(500, cause: axDenied), .stayQuiet,
+                       "and is then deduped on its own account")
+    }
+
+    /// Reconciling must not disturb keys whose subjects are still alive — a
+    /// still-failing pid keeps suppressing, or the reconcile becomes the flood.
+    func testReconcileKeepsLivePidsSuppressed() {
+        let gate = LogTransitionGate<pid_t>()
+        XCTAssertEqual(gate.evaluate(500, cause: "boom"), .report)
+        XCTAssertEqual(gate.evaluate(742, cause: "boom"), .report)
+
+        gate.retainOnly([500, 742, 901])
+
+        XCTAssertEqual(gate.failingKeyCount, 2, "no live subject is forgotten")
+        XCTAssertEqual(gate.evaluate(500, cause: "boom"), .stayQuiet)
+        XCTAssertEqual(gate.evaluate(742, cause: "boom"), .stayQuiet)
+    }
+
+    /// Reconciling is not a recovery: dropping a dead key must not claim the
+    /// subject got better (it didn't — it died).
+    func testReconcileDoesNotReportRecoveryForForgottenKeys() {
+        let gate = LogTransitionGate<pid_t>()
+        _ = gate.evaluate(500, cause: "boom")
+        gate.retainOnly([])
+        XCTAssertNil(gate.reportedCause(500))
+        XCTAssertEqual(gate.evaluate(500, cause: nil), .stayQuiet,
+                       "a forgotten key is healthy-by-default, not recovered")
+    }
+
     /// One PTT press = one drifted stream = many chunks, all failing the same
     /// way. That is one line, and a second press is a second session.
     func testAudioChunkStreamCostsOneLinePerSession() {

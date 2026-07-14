@@ -122,16 +122,18 @@ final class SwrmStoryCoordinator {
         }
 
         let notice = Self.noticeLine(title: title, taskId: taskId)
-        let result = keystrokeInjector.sendText(
-            notice, to: window.id, pressReturn: false, terminalApp: .iterm2,
-            windowName: window.name, cgWindowNumber: window.windowNumber,
-            iterm2SessionId: sessionId)
-        if result.success {
-            SwrmEventTailer.globalLog(
-                "inject: notice into \(window.id) at \(rootPath) for task=\(taskId)")
-        } else {
-            SwrmEventTailer.globalLog(
-                "inject: FAILED into \(window.id) at \(rootPath): \(result.error ?? "unknown")")
+        Task {
+            let result = await keystrokeInjector.sendText(
+                notice, to: window.id, pressReturn: false, terminalApp: .iterm2,
+                windowName: window.name, cgWindowNumber: window.windowNumber,
+                iterm2SessionId: sessionId)
+            if result.success {
+                SwrmEventTailer.globalLog(
+                    "inject: notice into \(window.id) at \(rootPath) for task=\(taskId)")
+            } else {
+                SwrmEventTailer.globalLog(
+                    "inject: FAILED into \(window.id) at \(rootPath): \(result.error ?? "unknown")")
+            }
         }
     }
 

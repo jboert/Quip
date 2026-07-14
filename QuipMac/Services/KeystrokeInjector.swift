@@ -149,7 +149,7 @@ final class KeystrokeInjector {
     ///   - windowIndex: 1-based window index in the terminal app (default: 1)
     /// - Returns: Result indicating success or failure
     @discardableResult
-    func sendText(_ text: String, to windowId: String, pressReturn: Bool, terminalApp: TerminalApp, windowName: String? = nil, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> InjectionResult {
+    func sendText(_ text: String, to windowId: String, pressReturn: Bool, terminalApp: TerminalApp, windowName: String? = nil, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) async -> InjectionResult {
         let escapedText = escapeForAppleScript(text)
         let textToSend = escapedText
 
@@ -185,7 +185,7 @@ final class KeystrokeInjector {
                 end tell
             end tell
             """
-            return executeAppleScript(pasteScript, context: "sendText to \(windowId) [Claude Desktop paste]")
+            return await executeAppleScriptOffMain(pasteScript, context: "sendText to \(windowId) [Claude Desktop paste]")
 
         case .terminal:
             // Always use System Events keystrokes for Terminal.app to avoid
@@ -264,7 +264,7 @@ final class KeystrokeInjector {
             """
         }
 
-        return executeAppleScript(script, context: "sendText to \(windowId)")
+        return await executeAppleScriptOffMain(script, context: "sendText to \(windowId)")
     }
 
     // MARK: - Paste Image (Codex CLI path)
@@ -285,7 +285,7 @@ final class KeystrokeInjector {
     /// trusts AppleScript (same as `sendText`'s iTerm2 path).
     @discardableResult
     func pasteImage(at imageURL: URL, to windowId: String, terminalApp: TerminalApp,
-                    iterm2SessionId: String?) -> InjectionResult {
+                    iterm2SessionId: String?) async -> InjectionResult {
         guard let image = NSImage(contentsOf: imageURL) else {
             return InjectionResult(success: false, error: "couldn't load image at \(imageURL.path)")
         }
@@ -345,7 +345,7 @@ final class KeystrokeInjector {
                 end tell
             end tell
             """
-            return executeAppleScript(script, context: "pasteImage to \(windowId) [iTerm2]")
+            return await executeAppleScriptOffMain(script, context: "pasteImage to \(windowId) [iTerm2]")
 
         case .terminal:
             // Terminal.app doesn't support image paste (text-only); the
@@ -380,6 +380,10 @@ final class KeystrokeInjector {
     /// pasted blob and submits on Enter (key code 36). Cmd+Enter is the
     /// "send and keep composer open" variant; we use plain Enter to match
     /// the existing `pressReturn` semantics in `sendText`.
+    ///
+    /// Synchronous, and therefore OFF-MAIN ONLY — its caller is
+    /// `pasteInjectQueue`. A @MainActor caller takes the `async` overload below,
+    /// which is the same work with the wait moved off main.
     @discardableResult
     nonisolated func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
                                terminalApp: TerminalApp, iterm2SessionId: String?) -> InjectionResult {
@@ -412,6 +416,20 @@ final class KeystrokeInjector {
             // + Cmd+V — that path is tuned for Electron quirks, don't
             // duplicate here.
             return InjectionResult(success: false, error: "Claude Desktop uses sendText paste path")
+        }
+    }
+
+    /// `pasteText` for @MainActor callers — the paste still runs on the one
+    /// serial AppleScript queue, but main awaits it instead of blocking behind
+    /// whatever is already queued. Overload, not a rename, so the off-main paste
+    /// queue keeps calling the synchronous one (a non-async context can only
+    /// resolve to it).
+    @discardableResult
+    func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
+                   terminalApp: TerminalApp, iterm2SessionId: String?) async -> InjectionResult {
+        await AppleScriptRunner.offMain {
+            self.pasteText(text, to: windowId, pressReturn: pressReturn,
+                           terminalApp: terminalApp, iterm2SessionId: iterm2SessionId)
         }
     }
 
@@ -476,7 +494,7 @@ final class KeystrokeInjector {
     /// approach), which relies on `windowManager.focusWindow(windowId)` having
     /// raised the correct window before the AppleScript runs.
     @discardableResult
-    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1, iterm2SessionId: String? = nil) -> InjectionResult {
+    func sendKeystroke(_ key: String, to windowId: String, terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, windowIndex: Int = 1, iterm2SessionId: String? = nil) async -> InjectionResult {
         // iTerm2: use native write-text. Byte-identical to typing the key into an
         // iTerm2 session, reliable because write text targets a session by object
         // address rather than by keyboard focus.
@@ -528,7 +546,7 @@ final class KeystrokeInjector {
                 end if
             end tell
             """
-            return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, expr=\(writeExpr)]")
+            return await executeAppleScriptOffMain(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, expr=\(writeExpr)]")
         }
 
         // Terminal.app: legacy System Events keystroke path.
@@ -606,7 +624,7 @@ final class KeystrokeInjector {
             return InjectionResult(success: false, error: "Unknown key: \(key)")
         }
 
-        return executeAppleScript(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
+        return await executeAppleScriptOffMain(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
     }
 
     /// Map a key descriptor to an AppleScript expression suitable as the
@@ -684,7 +702,7 @@ final class KeystrokeInjector {
     @discardableResult
     func iterm2Scroll(_ direction: ScrollDirection,
                       to windowId: String,
-                      iterm2SessionId: String?) -> InjectionResult {
+                      iterm2SessionId: String?) async -> InjectionResult {
         guard let sessionId = iterm2SessionId else {
             return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
         }
@@ -724,7 +742,7 @@ final class KeystrokeInjector {
             end tell
         end tell
         """
-        return executeAppleScript(script, context: "iterm2Scroll(\(direction.rawValue)) to \(windowId)")
+        return await executeAppleScriptOffMain(script, context: "iterm2Scroll(\(direction.rawValue)) to \(windowId)")
     }
 
     // MARK: - Spawn Terminal
@@ -735,7 +753,7 @@ final class KeystrokeInjector {
     ///   - terminalApp: Which terminal to open
     /// - Returns: Result indicating success or failure
     @discardableResult
-    func spawnTerminal(in directory: String, terminalApp: TerminalApp) -> InjectionResult {
+    func spawnTerminal(in directory: String, terminalApp: TerminalApp) async -> InjectionResult {
         let escapedDir = escapeForAppleScript(directory)
         let script: String
 
@@ -763,7 +781,7 @@ final class KeystrokeInjector {
             """
         }
 
-        return executeAppleScript(script, context: "spawnTerminal in \(directory)")
+        return await executeAppleScriptOffMain(script, context: "spawnTerminal in \(directory)")
     }
 
     /// Open a new iTerm2 window (not tab), `cd` to the given directory, and
@@ -781,7 +799,7 @@ final class KeystrokeInjector {
     ///   - terminalApp: Must be `.iterm2` — returns an error for `.terminal`.
     /// - Returns: Result indicating success or failure.
     @discardableResult
-    func spawnWindow(in directory: String, command: String, terminalApp: TerminalApp) -> InjectionResult {
+    func spawnWindow(in directory: String, command: String, terminalApp: TerminalApp) async -> InjectionResult {
         guard terminalApp == .iterm2 else {
             return InjectionResult(
                 success: false,
@@ -812,7 +830,7 @@ final class KeystrokeInjector {
         end tell
         """
 
-        return executeAppleScript(script, context: "spawnWindow in \(directory), cmd=\(command)")
+        return await executeAppleScriptOffMain(script, context: "spawnWindow in \(directory), cmd=\(command)")
     }
 
     /// Destructively close an iTerm2 window whose title matches `windowName`.
@@ -836,7 +854,7 @@ final class KeystrokeInjector {
     ///   - terminalApp: Must be `.iterm2` — returns an error for `.terminal`.
     /// - Returns: Result indicating success or failure.
     @discardableResult
-    func closeWindow(windowName: String, terminalApp: TerminalApp) -> InjectionResult {
+    func closeWindow(windowName: String, terminalApp: TerminalApp) async -> InjectionResult {
         guard terminalApp == .iterm2 else {
             return InjectionResult(
                 success: false,
@@ -858,12 +876,18 @@ final class KeystrokeInjector {
         end tell
         """
 
-        return executeAppleScript(script, context: "closeWindow \(windowName)")
+        return await executeAppleScriptOffMain(script, context: "closeWindow \(windowName)")
     }
 
     // MARK: - Read Terminal Content
 
     /// Read the visible/recent text content from a terminal window via AppleScript.
+    ///
+    /// Synchronous, and therefore OFF-MAIN ONLY — every caller (the mode poll,
+    /// the TTS/prompt scrapes, the request_content handler) already dispatches to
+    /// a background queue, which is what makes this safe. It is also the script
+    /// Quip runs most often: one per tracked window every 2s. Calling it on main
+    /// would put the UI behind all of them.
     nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> String? {
         let script: String
         switch terminalApp {
@@ -910,7 +934,7 @@ final class KeystrokeInjector {
         }
 
         let result = AppleScriptRunner.run(script)
-        if result.error != nil { return nil }
+        if result.failed { return nil }
         return result.stringValue
     }
 
@@ -1137,7 +1161,12 @@ final class KeystrokeInjector {
             .replacingOccurrences(of: "`", with: "\\`")
     }
 
-    /// Execute an AppleScript and return the result
+    /// Execute an AppleScript and return the result.
+    ///
+    /// Synchronous, and therefore OFF-MAIN ONLY (`AppleScriptRunner.run` blocks
+    /// on the shared serial queue). `pasteText` is the one caller that qualifies
+    /// — it is nonisolated and runs on `pasteInjectQueue`. Everything reachable
+    /// from the main actor goes through `executeAppleScriptOffMain`.
     nonisolated private func executeAppleScript(_ source: String, context: String) -> InjectionResult {
         let result = AppleScriptRunner.run(source)
 
@@ -1148,5 +1177,18 @@ final class KeystrokeInjector {
         }
 
         return InjectionResult(success: true, error: nil)
+    }
+
+    /// `executeAppleScript` for @MainActor callers — same script, same serial
+    /// queue, but main *awaits* rather than blocks. Everything the phone can
+    /// trigger (send_text, quick actions, spawn/close, scroll) lands here, and
+    /// all of it is latency-critical: the person who tapped is watching. If main
+    /// blocked instead, it would wait out every mode poll already on the queue,
+    /// and — when the target terminal is wedged, or the Automation consent dialog
+    /// is up and unanswered — the whole AppleEvent timeout with it.
+    nonisolated private func executeAppleScriptOffMain(_ source: String, context: String) async -> InjectionResult {
+        await AppleScriptRunner.offMain {
+            self.executeAppleScript(source, context: context)
+        }
     }
 }

@@ -184,6 +184,61 @@ final class PendingMacRequestTests: XCTestCase {
         XCTAssertEqual(request.state, .succeeded)
     }
 
+    // MARK: - The watchdog must survive a wake that finds the deadline unmet
+
+    /// The stranding bug, reproduced: the watchdog used to arm exactly ONE sleep
+    /// and take exactly ONE tick, so a single wake that found the deadline not
+    /// yet reached disarmed it permanently — nothing re-armed, nothing else ever
+    /// called `tick()`, and the request sat `.inFlight` with no watchdog behind
+    /// it for the rest of the process's life. The refresh button stayed
+    /// `.disabled(isInFlight)` and the spinner never stopped.
+    ///
+    /// That wake is not exotic — it is every backgrounded phone. `Task.sleep`
+    /// counts continuous time (it keeps running while the device is asleep) and
+    /// the deadline was measured in `systemUptime`, which counts only time the
+    /// system has been AWAKE. Lock the phone one second into a 10s request, sleep
+    /// 30s, and the sleep is long over on wake while "elapsed" reads ~1.5s.
+    ///
+    /// The clock here is frozen for exactly that reason: it stands in for a
+    /// deadline clock that has moved far less than the sleep did.
+    func test_wakeBeforeTheDeadline_rearmsTheWatchdogInsteadOfDisarmingIt() async throws {
+        let clock = FakeClock()
+        let request = PendingMacRequest(deadline: 0.05, now: { [clock] in clock.read() })
+        request.start()
+
+        // Several sleeps' worth of real time passes. On the request's own clock
+        // almost nothing has: every wake finds the deadline unmet.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(request.isInFlight, "sanity: not yet expired on the deadline clock")
+
+        // Now the deadline genuinely passes. Nobody drives tick() — if the early
+        // wakes disarmed the watchdog, nothing ever will again.
+        clock.advance(by: 1)
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertFalse(request.isInFlight,
+                       "an early wake must re-arm the watchdog; a stranded .inFlight is the spinner-forever bug")
+        guard case .failed = request.state else {
+            return XCTFail("expected .failed once the deadline passed, got \(request.state)")
+        }
+    }
+
+    /// The re-arming loop must still stop on a reply — it must not keep ticking
+    /// behind a request that already landed, nor hold the object alive.
+    func test_rearmingWatchdog_stopsOnReply() async throws {
+        let clock = FakeClock()
+        let request = PendingMacRequest(deadline: 0.05, now: { [clock] in clock.read() })
+        request.start()
+        try await Task.sleep(nanoseconds: 150_000_000)   // a few early wakes
+
+        request.resolve(.succeeded)
+        clock.advance(by: 100)                            // long past the deadline now
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(request.state, .succeeded,
+                       "the watchdog must not trip a request that already succeeded")
+    }
+
     /// The Mac finally answers, long after the user was told it had timed out.
     /// The answer must not silently flip the UI back to "fine".
     func test_lateReply_afterTimeout_doesNotClearTheFailure() {

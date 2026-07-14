@@ -132,4 +132,28 @@ final class InFlightActionTests: XCTestCase {
         XCTAssertFalse(action.tick(now: 100), "tick() before start() must never trip")
         XCTAssertEqual(action.state, .idle)
     }
+
+    // MARK: - remaining(now:) — the watchdog sleeps for exactly this
+
+    /// The watchdog derives its sleep from `remaining` and its trip from `tick`,
+    /// both off the same clock. They must agree, or an early wake strands the
+    /// request: `remaining <= 0` has to mean `tick` trips, and nothing else.
+    func test_remaining_agreesWithTick_onTheSameClock() {
+        var action = InFlightAction(deadline: 10)
+        XCTAssertNil(action.remaining(now: 0), "no live deadline before start()")
+
+        action.start(at: 0)
+        XCTAssertEqual(action.remaining(now: 0), 10)
+        XCTAssertEqual(action.remaining(now: 4), 6)
+
+        // Positive remaining ⇒ tick must not trip.
+        XCTAssertEqual(action.remaining(now: 9), 1)
+        XCTAssertFalse(action.tick(now: 9))
+
+        // Non-positive remaining ⇒ tick must trip. (Same instant, same clock.)
+        XCTAssertEqual(action.remaining(now: 10), 0)
+        XCTAssertTrue(action.tick(now: 10))
+
+        XCTAssertNil(action.remaining(now: 11), "a terminal action owes no more time")
+    }
 }
