@@ -288,9 +288,38 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
     @State private var servicesStarted = false
 
+    /// Held for the process lifetime. Dropping it would hand the session to a
+    /// second Quip while this one is still running — see SingleInstanceGuard.
+    nonisolated(unsafe) private static var instanceLock: InstanceLock?
+
     private func startServicesOnce() {
         guard !servicesStarted else { return }
         servicesStarted = true
+
+        // Refuse to be the second Quip. The login item and CrashRecoveryAgent's
+        // LaunchAgent both start us at login and neither knows about the other,
+        // so without this the user gets two menu-bar icons and two servers
+        // fighting over port 8765. Runs before the server binds.
+        if !SingleInstanceGuard.isRunningTests {
+            switch SingleInstanceGuard.claim(at: SingleInstanceGuard.defaultLockURL) {
+            case .acquired(let lock):
+                Self.instanceLock = lock
+            case .alreadyRunning:
+                QuipLog.write(severity: .info, subsystem: "launch",
+                              message: "another Quip already owns this login session — quitting this copy",
+                              to: LogPaths.webSocketPath)
+                // Hand the user to the Quip that won, then exit 0. The zero
+                // matters: the LaunchAgent's KeepAlive is SuccessfulExit=false,
+                // so a clean exit is what stops launchd relaunching us forever.
+                NSApp.terminate(nil)
+                return
+            case .unavailable(let reason):
+                // Fail open — a duplicate instance beats not launching at all.
+                QuipLog.write(severity: .warn, subsystem: "launch",
+                              message: "single-instance lock unavailable (\(reason)); starting anyway",
+                              to: LogPaths.webSocketPath)
+            }
+        }
 
         // One-time migration from legacy localOnlyMode bool to networkMode enum.
         // `migrateNetworkModeIfNeeded` writes directly to UserDefaults; @AppStorage
