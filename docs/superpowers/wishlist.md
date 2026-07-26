@@ -1268,10 +1268,11 @@ autosuggesting prompt. `/prd`-able as a small 2-3 story feature (add key to voca
 
 Pack merge (`af82c77`) verified end-to-end (sim → live Mac); items surfaced:
 
-- **DECISION (USER):** delete the 23 stale Stream Deck flat imports
-  (`00-rules.txt`, `07-audit-security.txt`, … Jun 3 vintage — preamble baked in,
-  no badge)? They now near-duplicate the `vibecut__*` inherited set; library
-  shows 47 rows.
+- **DECISION (USER) — RESOLVED 2026-07-26:** user chose delete. The 17 remaining
+  Jun-3-vintage flat imports (`00-rules.txt` … `42-spawn-agents.txt`) removed from
+  `~/Library/Application Support/Quip/prompts`; newer personal flats (`next`,
+  `ralph-prd`, `KAIZEN`, `44-prd-enforce`, `45-rm-stale`, `code-review`) and the
+  `vibecut__*` inherited set kept. Library now 32 rows.
 - **Security check (USER confirm intent):** Mac runs "no auth required" —
   unauthenticated WS clients receive full window layout + prompt library.
   Pre-existing, not af82c77. Re-enable PIN gate or bless the mode explicitly.
