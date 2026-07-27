@@ -83,9 +83,22 @@ enum PINStore {
         UserDefaults.standard.removeObject(forKey: migrationDoneKey)
     }
 
+    // MARK: - Test backing
+
+    /// In-memory stand-in for the Keychain under XCTest. On a dev Mac the
+    /// UNSIGNED test host querying the SIGNED app's keychain item blocks forever
+    /// on securityd consent (headless — nobody clicks "Allow"); sampled hang:
+    /// App.init → PINManager.init → PINStore.read → SecItemCopyMatching. The
+    /// migration logic above still runs for real against UserDefaults — only the
+    /// SecItem primitives are swapped, so PINStoreTests keep exercising the
+    /// actual migration path.
+    nonisolated(unsafe) private static var testBacking: String?
+    private static var useTestBacking: Bool { SingleInstanceGuard.isRunningTests }
+
     // MARK: - Keychain primitives
 
     private static func read() -> String? {
+        if useTestBacking { return testBacking }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -106,6 +119,7 @@ enum PINStore {
 
     @discardableResult
     private static func write(value: String) -> Bool {
+        if useTestBacking { testBacking = value; return true }
         let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -130,6 +144,7 @@ enum PINStore {
     }
 
     private static func delete() {
+        if useTestBacking { testBacking = nil; return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

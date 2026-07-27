@@ -19,6 +19,10 @@ final class PINManager {
     static let pinDigits = 8
 
     init() {
+        // Safe under XCTest: PINStore swaps its SecItem primitives for an
+        // in-memory backing when tests run (see PINStore.testBacking), so this
+        // init — which executes inside QuipMacApp.init(), BEFORE the test
+        // runner's handshake — can no longer block on securityd consent.
         if let stored = PINStore.pin, !stored.isEmpty {
             pin = stored
         } else {
