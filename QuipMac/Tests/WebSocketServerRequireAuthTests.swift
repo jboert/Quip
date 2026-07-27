@@ -24,6 +24,20 @@ final class WebSocketServerRequireAuthTests: XCTestCase {
                       "Default must be fail-safe — unset server requires auth")
     }
 
+    // Secure-by-default (wishlist security check): an install that never touched the
+    // "Require PIN for local connections" toggle must REQUIRE auth. Only an explicit
+    // stored `false` (the user opting out in Settings) disables the gate — the old
+    // `UserDefaults.bool(forKey:)` read silently mapped "unset" to false, shipping
+    // every fresh install with an open WS serving window layout + prompt library.
+    func test_resolveRequirePIN_unsetDefaultsSecure() {
+        XCTAssertTrue(WebSocketServer.resolveRequirePIN(stored: nil),
+                      "unset toggle must require PIN")
+        XCTAssertFalse(WebSocketServer.resolveRequirePIN(stored: false),
+                       "explicit opt-out is respected")
+        XCTAssertTrue(WebSocketServer.resolveRequirePIN(stored: true),
+                      "explicit opt-in stays on")
+    }
+
     @MainActor
     func test_requireAuth_setterRoundTrips() {
         let server = WebSocketServer()

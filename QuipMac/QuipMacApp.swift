@@ -332,7 +332,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         webSocketServer.pinManager = pinManager
         webSocketServer.connectionLog = connectionLog
-        let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
+        // Secure default: unset toggle -> require PIN (resolveRequirePIN). The old
+        // bool(forKey:) read treated "never touched Settings" as an opt-out.
+        let requirePIN = WebSocketServer.resolveRequirePIN(
+            stored: UserDefaults.standard.object(forKey: "requirePINForLocal") as? Bool)
         webSocketServer.requireAuth = requirePIN
 
         // swrm board integration: route every tailer's events through the
@@ -750,7 +753,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// idempotent on its own dependencies.
     @MainActor
     private func applyNetworkMode() {
-        let requirePIN = UserDefaults.standard.bool(forKey: "requirePINForLocal")
+        let requirePIN = WebSocketServer.resolveRequirePIN(
+            stored: UserDefaults.standard.object(forKey: "requirePINForLocal") as? Bool)
         webSocketServer.requireAuth = requirePIN
 
         switch networkMode {

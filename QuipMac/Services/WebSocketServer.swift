@@ -45,6 +45,17 @@ final class WebSocketServer {
         set { requireAuthLock.withLock { $0 = newValue } }
     }
 
+    /// Resolve the "Require PIN for local connections" toggle SECURELY: an unset
+    /// key means the user never made a choice, and the fail-safe answer is to
+    /// require auth — `UserDefaults.bool(forKey:)` would silently map "unset" to
+    /// `false`, shipping every fresh install with an open WS that serves window
+    /// layout + the prompt library to anyone on the LAN. Only an explicit stored
+    /// `false` (the Settings opt-out) disables the gate. Callers read the raw
+    /// optional via `object(forKey:) as? Bool` and pass it here.
+    nonisolated static func resolveRequirePIN(stored: Bool?) -> Bool {
+        stored ?? true
+    }
+
     private var listener: NWListener?
     private var clients: [ClientConnection] = []
     /// App-level heartbeat dispatcher. Fires every `heartbeatInterval` and

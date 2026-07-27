@@ -1182,7 +1182,9 @@ private struct ConnectionTab: View {
     @AppStorage("bonjourServiceName") private var serviceName: String = "Quip"
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
     @AppStorage("tailscaleHostnameOverride") private var tailscaleOverride: String = ""
-    @AppStorage("requirePINForLocal") private var requirePINForLocal = false
+    // Default TRUE (secure): mirrors WebSocketServer.resolveRequirePIN — an unset
+    // key requires PIN; only this toggle's explicit opt-out stores false.
+    @AppStorage("requirePINForLocal") private var requirePINForLocal = true
     @AppStorage("spawnCommand") private var spawnCommand: String = "claude"
 
     private var networkMode: NetworkMode {
