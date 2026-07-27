@@ -1276,10 +1276,12 @@ Pack merge (`af82c77`) verified end-to-end (sim → live Mac); items surfaced:
 - **Security check (USER confirm intent):** Mac runs "no auth required" —
   unauthenticated WS clients receive full window layout + prompt library.
   Pre-existing, not af82c77. Re-enable PIN gate or bless the mode explicitly.
-- **UX (small, /prd-able):** sync icon `arrow.triangle.2.circlepath` unlabeled →
-  hard to discover as "Sync from VibeCut"; "N synced" ack clears after 3s;
-  corrupt packs skipped with zero user feedback (maybe "N synced, M packs
-  skipped"); empty state (missing vibecut repo / empty packs) untested.
+- **UX (small, /prd-able) — RESOLVED (verified in code 2026-07-26):** all three
+  gaps are implemented in QuipiOS/QuipApp.swift: skipped feedback = "N synced ·
+  M pack file(s) skipped" (`handleSyncAck`), error/missing-repo acks show the
+  reader's reason string in orange, sync has an 8s timeout + 3s result clear,
+  and the ⟳ button carries "Sync from VibeCut" a11y label + footer hint.
+  Remaining: the physical-device acceptance pass below.
 - **Acceptance flow (physical <your-iphone>):** Settings → Prompts → sync icon →
   expect green "N synced", VibeCut badge rows at list bottom. Same code path as
   sim; 5-minute confirm.
