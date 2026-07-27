@@ -780,12 +780,12 @@ private struct PromptsTab: View {
         .formStyle(.grouped)
         .sheet(isPresented: $creatingPrompt) {
             PromptEditorSheet(initial: nil) { id, label, body in
-                _ = library.put(id: id, label: label, body: body)
+                library.put(id: id, label: label, body: body) != nil
             }
         }
         .sheet(item: $editingPrompt) { entry in
             PromptEditorSheet(initial: entry) { id, label, body in
-                _ = library.put(id: id, label: label, body: body)
+                library.put(id: id, label: label, body: body) != nil
             }
         }
     }
@@ -1917,12 +1917,13 @@ private struct PromptRow: View {
 
 private struct PromptEditorSheet: View {
     let initial: PromptEntry?
-    let onSave: (_ id: String, _ label: String, _ body: String) -> Void
+    let onSave: (_ id: String, _ label: String, _ body: String) -> Bool
     @Environment(\.dismiss) private var dismiss
 
     @State private var idText: String = ""
     @State private var labelText: String = ""
     @State private var bodyText: String = ""
+    @State private var saveError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1971,6 +1972,14 @@ private struct PromptEditorSheet: View {
                 Text("Sent verbatim to the active terminal when the row is tapped on the phone. No template expansion.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+
+                if let saveError {
+                    Label(saveError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Save failed: \(saveError)")
+                }
             }
 
             HStack {
@@ -2003,7 +2012,11 @@ private struct PromptEditorSheet: View {
         let label = labelText.trimmingCharacters(in: .whitespaces)
         let body = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty, !body.isEmpty else { return }
-        onSave(id, label.isEmpty ? id : label, body)
+        saveError = nil
+        guard onSave(id, label.isEmpty ? id : label, body) else {
+            saveError = "Quip couldn't save this prompt. Check that the prompts folder is writable, then try again."
+            return
+        }
         dismiss()
     }
 }
