@@ -84,7 +84,13 @@ final class AppleScriptRunnerConcurrencyTests: XCTestCase {
     /// A script that fails to compile must surface an error, not take the queue
     /// down with it — the serial queue is shared by every AppleScript in the app.
     func test_malformedScript_returnsErrorAndQueueKeepsWorking() {
-        let bad = AppleScriptRunner.run("tell application \"iTerm2\" to this is not applescript")
+        // Malformed WITHOUT naming an application: compiling `tell application
+        // "iTerm2"` makes OSA resolve the app, and on a machine without iTerm
+        // (every CI runner) that raises the modal "Where is iTerm2?" picker —
+        // headless, nobody answers, and the suite hangs to the job timeout
+        // (observed: 28 minutes stuck in this test before cancellation). The
+        // file's header rule applies: no app references, parser work only.
+        let bad = AppleScriptRunner.run("this is not applescript at all —")
         XCTAssertNotNil(bad.errorMessage, "a malformed script should report an error")
 
         let good = AppleScriptRunner.run(source(for: 3))
