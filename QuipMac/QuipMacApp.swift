@@ -296,6 +296,14 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         guard !servicesStarted else { return }
         servicesStarted = true
 
+        // Under XCTest the app is only a TEST HOST — it must not bind the WS port,
+        // spawn cloudflared, start tailers, or register login items. Starting the
+        // real stack hung every suite run: cloudflared dies instantly in CI, its
+        // 3s auto-restart loop spins on the main path, and the test runner times
+        // out "before establishing connection" (1058 restart lines in one 30-min
+        // cancelled job). Unit tests build their own objects; they need none of this.
+        if SingleInstanceGuard.isRunningTests { return }
+
         // Refuse to be the second Quip. The login item and CrashRecoveryAgent's
         // LaunchAgent both start us at login and neither knows about the other,
         // so without this the user gets two menu-bar icons and two servers
