@@ -26,7 +26,11 @@ enum DiagnosticsBundle {
     /// `maxBytes` defaults to nil (no cap). The WS path passes 4 MiB so
     /// the round-trip stays well under the 16 MiB WebSocket payload cap
     /// even after base64 inflation.
-    static func makeZip(maxBytes: Int? = nil) throws -> URL {
+    /// `sources` defaults to the real LogPaths; tests inject small fixture
+    /// files — zipping a dev machine's months of live logs made the two
+    /// makeZip tests take 5+ minutes each locally.
+    static func makeZip(maxBytes: Int? = nil,
+                        sources: [String] = [LogPaths.webSocketPath, LogPaths.pushPath, LogPaths.kokoroPath]) throws -> URL {
         let timestamp = filenameTimestamp()
         let filename = "Quip-diagnostics-\(timestamp).zip"
         let tmpRoot = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -42,7 +46,6 @@ enum DiagnosticsBundle {
         // Each log is run through `LogRedactor` first so LAN / Tailscale
         // IPv4s and the host's name don't leave the machine.
         let hostname = Host.current().localizedName ?? ""
-        let sources = [LogPaths.webSocketPath, LogPaths.pushPath, LogPaths.kokoroPath]
         for srcPath in sources {
             guard FileManager.default.fileExists(atPath: srcPath) else { continue }
             let srcURL = URL(fileURLWithPath: srcPath)

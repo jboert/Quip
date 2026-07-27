@@ -4,12 +4,29 @@ import Foundation
 
 final class DiagnosticsBundleTests: XCTestCase {
 
+    /// Small fixture logs, NOT the real LogPaths: on a dev machine the live
+    /// logs are months of appends, and zipping them made each makeZip test
+    /// take 5+ minutes (312s observed). The zip pipeline (redact → stage →
+    /// zip → cap) is identical either way; only the input bytes shrink.
+    private func fixtureSources() throws -> [String] {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("diag-fixture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return try ["ws.log", "push.log"].map { name in
+            let f = dir.appendingPathComponent(name)
+            try String(repeating: "2026-07-27 quip log line 192.168.1.20\n", count: 200)
+                .write(to: f, atomically: true, encoding: .utf8)
+            return f.path
+        }
+    }
+
     /// makeZip writes a non-empty zip to NSTemporaryDirectory, named
     /// `Quip-diagnostics-YYYYMMDD-HHMMSS.zip`. The zip contains at
     /// minimum the system-info.txt entry (logs may or may not exist
     /// depending on whether the app has run before this test).
     func test_makeZip_writesValidZipToTmp() throws {
-        let url = try DiagnosticsBundle.makeZip()
+        let url = try DiagnosticsBundle.makeZip(sources: fixtureSources())
         defer { try? FileManager.default.removeItem(at: url) }
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
@@ -59,8 +76,9 @@ final class DiagnosticsBundleTests: XCTestCase {
 
     /// makeZip respects an absurdly small cap — should throw .overSizeCap
     /// rather than ship a partial zip.
-    func test_makeZip_respectsSizeCap() {
-        XCTAssertThrowsError(try DiagnosticsBundle.makeZip(maxBytes: 1)) { error in
+    func test_makeZip_respectsSizeCap() throws {
+        let sources = try fixtureSources()
+        XCTAssertThrowsError(try DiagnosticsBundle.makeZip(maxBytes: 1, sources: sources)) { error in
             guard case DiagnosticsBundleError.overSizeCap = error else {
                 return XCTFail("expected .overSizeCap, got \(error)")
             }
