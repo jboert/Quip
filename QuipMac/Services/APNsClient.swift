@@ -51,13 +51,20 @@ actor APNsClient {
 
     /// Throws APNsError.invalidKey if the stored .p8 can't be parsed.
     /// Throws APNsError.missingKey if no key is stored yet.
-    init(keyId: String, teamId: String, bundleId: String, session: URLSession = .shared) throws {
+    ///
+    /// `keyPEM` defaults to the Keychain-stored key; tests inject a PEM
+    /// directly so the suite never touches the real Keychain — a
+    /// SecItemCopyMatching under XCTest raises a GUI authorization prompt
+    /// that hung the whole Mac suite ~57 min (wishlist 2026-07-13; the old
+    /// workaround was `-skip-testing:QuipMacTests/APNsJWTTests`).
+    init(keyId: String, teamId: String, bundleId: String, session: URLSession = .shared,
+         keyPEM: Data? = APNsKeyStore.get()) throws {
         self.keyId = keyId
         self.teamId = teamId
         self.bundleId = bundleId
         self.session = session
 
-        guard let pemData = APNsKeyStore.get() else {
+        guard let pemData = keyPEM else {
             self.privateKey = nil
             throw APNsError.missingKey
         }

@@ -7,39 +7,37 @@ import CryptoKit
 /// private key we signed with.
 ///
 /// We can't use a real Apple-provisioned .p8 in tests (secret-by-nature),
-/// so we generate a fresh P256 keypair, install its PEM into
-/// APNsKeyStore, run the client, then clear. The `setUp`/`tearDown`
-/// guard against leaving test keys in the real Mac Keychain.
+/// so we generate a fresh P256 keypair and inject its PEM straight into
+/// APNsClient via `keyPEM:`. The suite must NEVER touch APNsKeyStore /
+/// the real Keychain: SecItemCopyMatching under XCTest raises a GUI
+/// authorization prompt that hung the whole Mac suite ~57 min
+/// (wishlist 2026-07-13).
 @MainActor
 final class APNsJWTTests: XCTestCase {
 
-    private var originalKey: Data?
     private var testPrivateKey: P256.Signing.PrivateKey!
 
+    private var testPEM: Data {
+        testPrivateKey.pemRepresentation.data(using: .utf8)!
+    }
+
     override func setUpWithError() throws {
-        originalKey = APNsKeyStore.get()
         testPrivateKey = P256.Signing.PrivateKey()
-        let pem = testPrivateKey.pemRepresentation.data(using: .utf8)!
-        XCTAssertTrue(APNsKeyStore.set(pem))
     }
 
     override func tearDownWithError() throws {
-        APNsKeyStore.clear()
-        if let originalKey {
-            _ = APNsKeyStore.set(originalKey)
-        }
         testPrivateKey = nil
     }
 
     func test_makeJWT_producesThreeSegmentToken() async throws {
-        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
+        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example", keyPEM: testPEM)
         let jwt = try await client.makeJWT()
         let parts = jwt.components(separatedBy: ".")
         XCTAssertEqual(parts.count, 3, "JWT must be header.payload.signature")
     }
 
     func test_makeJWT_headerContainsExpectedFields() async throws {
-        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
+        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example", keyPEM: testPEM)
         let jwt = try await client.makeJWT()
         let headerB64 = jwt.components(separatedBy: ".")[0]
         let headerData = try decodeB64URL(headerB64)
@@ -49,7 +47,7 @@ final class APNsJWTTests: XCTestCase {
     }
 
     func test_makeJWT_payloadContainsIssAndRecentIat() async throws {
-        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
+        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example", keyPEM: testPEM)
         let before = Int(Date().timeIntervalSince1970)
         let jwt = try await client.makeJWT()
         let after = Int(Date().timeIntervalSince1970)
@@ -63,7 +61,7 @@ final class APNsJWTTests: XCTestCase {
     }
 
     func test_makeJWT_signatureVerifiesAgainstPublicKey() async throws {
-        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example")
+        let client = try APNsClient(keyId: "ABC123", teamId: "TEAM789", bundleId: "com.example", keyPEM: testPEM)
         let jwt = try await client.makeJWT()
         let parts = jwt.components(separatedBy: ".")
         let signingInput = "\(parts[0]).\(parts[1])".data(using: .utf8)!
@@ -75,16 +73,15 @@ final class APNsJWTTests: XCTestCase {
     }
 
     func test_makeJWT_rotatesAfterStaleness() async throws {
-        let client = try APNsClient(keyId: "K", teamId: "T", bundleId: "b")
+        let client = try APNsClient(keyId: "K", teamId: "T", bundleId: "b", keyPEM: testPEM)
         // Sign "now - 55 minutes" — older than the 50-min rotation threshold
         let stale = try await client.makeJWT(now: Date().addingTimeInterval(-55 * 60))
         let fresh = try await client.makeJWT(now: Date())
         XCTAssertNotEqual(stale, fresh, "New timestamp must produce a different JWT")
     }
 
-    func test_init_throwsMissingKey_whenKeychainEmpty() {
-        APNsKeyStore.clear()
-        XCTAssertThrowsError(try APNsClient(keyId: "K", teamId: "T", bundleId: "b")) { error in
+    func test_init_throwsMissingKey_whenNoKeyAvailable() {
+        XCTAssertThrowsError(try APNsClient(keyId: "K", teamId: "T", bundleId: "b", keyPEM: nil)) { error in
             XCTAssertEqual(error as? APNsError, .missingKey)
         }
     }
