@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Quip
 
@@ -22,20 +23,23 @@ import XCTest
 /// variant gated on an env var.
 final class ITermVerbSmokeTests: XCTestCase {
 
+    /// NSRunningApplication, deliberately NOT AppleScript: the old System Events
+    /// probe sent Apple events (TCC-gated, headless-fragile), and compiling any
+    /// `tell application "iTerm2"` line on a machine without iTerm raises OSA's
+    /// modal "Where is iTerm2?" picker — on CI nobody answers and the job hangs
+    /// to its timeout.
     private var iTermAvailable: Bool {
-        let src = """
-        tell application "System Events"
-            set p to (count of (every process whose bundle identifier is "com.googlecode.iterm2"))
-            return p
-        end tell
-        """
-        return runAndExtractInt(src).map { $0 > 0 } ?? false
+        !NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.googlecode.iterm2").isEmpty
     }
 
-    override func setUp() {
-        super.setUp()
-        try? XCTSkipUnless(iTermAvailable,
-                           "iTerm2 is not running — smoke test skipped.")
+    /// setUpWithError, NOT `try? XCTSkipUnless` in setUp: XCTSkip works by
+    /// THROWING, so `try?` swallowed the skip and every test ran anyway on
+    /// iTerm-less machines — this suite then hung the whole CI job (observed:
+    /// cancelled at the 30-minute timeout inside the first window probe).
+    override func setUpWithError() throws {
+        try XCTSkipUnless(iTermAvailable,
+                          "iTerm2 is not running — smoke test skipped.")
     }
 
     // MARK: - Window enumeration
