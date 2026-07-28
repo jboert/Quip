@@ -82,9 +82,32 @@ QuipiOS/Info.plist
 .build/
 .swiftpm/
 
+# Xcode build/test output bundles — result bundles from `-resultBundlePath`,
+# archives from Product > Archive, exported apps and debug symbols.
+*.xcresult
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+
 # Coverage / profiling artifacts
 *.profraw
 *.profdata
+
+# Editor droppings — vim swaps, backups, patch/merge leftovers, IDE state
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+.idea/
+.vscode/
+
+# Local MCP server config — may carry tokens/credentials
+.mcp.json
+
+# JS tooling (docs/scripts) — never commit dependency trees
+node_modules/
 
 # Runtime logs — Mac/iOS Quip writes to ~/Library/Logs/Quip/ which is
 # already outside the repo, but cover any log files that ever land
