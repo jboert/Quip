@@ -73,6 +73,28 @@ final class TerminalStateDetector {
     /// Known child PIDs per window, used to detect new/exited children
     private var knownChildren: [String: Set<pid_t>] = [:]
 
+    // MARK: - Main-Thread Spawn Instrumentation
+
+    /// Number of times we forked a subprocess (`ps`) while on the main thread.
+    ///
+    /// Blocking `Process.run()` + `readDataToEndOfFile()` on main is what
+    /// produced the 913-second hang in `Quip_2026-08-01-131028.hang`. This
+    /// counter is the regression oracle: it must stay at zero for every code
+    /// path reachable from the MainActor. `nonisolated(unsafe)` because the
+    /// spawn sites are `nonisolated` and the counter is only ever incremented
+    /// from the main thread — a racing off-main spawn never touches it.
+    nonisolated(unsafe) private(set) static var mainThreadProcessSpawns = 0
+
+    /// Test-only reset so each case starts from a known count.
+    nonisolated static func resetMainThreadProcessSpawnCount() {
+        mainThreadProcessSpawns = 0
+    }
+
+    /// Call at every `Process()` launch site. No-op off main.
+    nonisolated static func noteProcessSpawn() {
+        if Thread.isMainThread { mainThreadProcessSpawns += 1 }
+    }
+
     // MARK: - Start / Stop Monitoring
 
     /// Begin periodic polling of tracked terminal windows
@@ -176,6 +198,7 @@ final class TerminalStateDetector {
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        noteProcessSpawn()
         do { try task.run() } catch { return nil }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
@@ -539,6 +562,7 @@ final class TerminalStateDetector {
         task.standardOutput = pipe
         task.standardError = FileHandle(forWritingAtPath: "/dev/null")
 
+        noteProcessSpawn()
         do {
             try task.run()
         } catch {
