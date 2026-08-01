@@ -8,6 +8,28 @@
 
 **Tech Stack:** Swift 6 (app target), XCTest, XcodeGen, GCD (`DispatchQueue`, `DispatchSourceProcess`), `NSLock`.
 
+## Status — implemented 2026-08-01
+
+All ten tasks are done and committed. Suite went 636 → 663 tests, 0 failures.
+
+| Task | Commit | Notes |
+|---|---|---|
+| 1 — spawn instrumentation + failing test | `c6631ef` | Red state observed: `("1") is not equal to ("0")` |
+| 2, 3, 5 — snapshot cache, exit handler, dead code | `f4f15ae` | |
+| 4, 6 — off-main TCC probe, Settings tab | `0d78a39` | |
+| 7 — log rotation | `23efb93` | |
+| 8 — frontmost AX poll | `370f6bc` | |
+| 9, 10 — cloudflared log + orphan sweep | `13fdb41` | |
+
+Deviations from the plan as written, both recorded in the relevant commit message:
+
+- **Task 9 Step 3** called for a hard cap on the polling window. Skipped: with incremental reads the log is read once in total, so the cap adds a failure mode (killing a legitimately slow tunnel) for no saving. The existing 30s stall watchdog already covers a tunnel that never resolves.
+- **Task 10 Step 1** called for moving the cloudflared `Process.run()` off main as well. Only the `pgrep` orphan sweep moved. The cloudflared spawn is one `posix_spawn` on an explicit user action rather than a timer, and moving it would spread the process handle and `terminationHandler` wiring across threads.
+
+Not done, by design — the "Noted, not scheduled" list at the end of Tier 2 is still open.
+
+**Remaining verification is the user's:** the new build has not been installed. Installing costs the Accessibility and Screen Recording TCC grants, so that call is theirs. The "no new hang reports under load" check below is unrun until then.
+
 ## Evidence (why these files)
 
 macOS hang reports in `/Library/Logs/DiagnosticReports/`:
