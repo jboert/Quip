@@ -73,6 +73,15 @@ final class TerminalStateDetector {
     /// Known child PIDs per window, used to detect new/exited children
     private var knownChildren: [String: Set<pid_t>] = [:]
 
+    /// Newest snapshot published by the poll loop. Read by main-thread
+    /// callers so they never fork `ps` themselves.
+    private let snapshotCache = SnapshotCache()
+
+    /// Test seam: has the poll loop published a snapshot recently enough?
+    func hasFreshSnapshot(maxAge: TimeInterval) -> Bool {
+        snapshotCache.read(maxAge: maxAge, now: Date()) != nil
+    }
+
     // MARK: - Main-Thread Spawn Instrumentation
 
     /// Number of times we forked a subprocess (`ps`) while on the main thread.
@@ -123,6 +132,7 @@ final class TerminalStateDetector {
                 // Collect child PIDs off main (spawns ps processes)
                 var childPidsByWindow: [String: Set<pid_t>] = [:]
                 let processSnapshot = Self.captureProcessSnapshot()
+                self.snapshotCache.store(processSnapshot, at: Date())
                 for (windowId, shellPid) in tracked {
                     if sttWindows.contains(windowId) { continue }
                     let (detected, hasClaude, cli, resolvedPid, children) = self.detectState(
@@ -274,13 +284,7 @@ final class TerminalStateDetector {
         let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
         source.setEventHandler { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                // The watched process has exited — cancel and drop the source
-                // before handling the event, so we don't leak kqueue entries.
-                if let src = self.processSources[windowId]?.removeValue(forKey: pid) {
-                    src.cancel()
-                }
-                self.handleProcessEvent(windowId: windowId)
+                self?.handleProcessExit(windowId: windowId, pid: pid)
             }
         }
         source.setCancelHandler {} // prevent crashes on dealloc
@@ -288,24 +292,26 @@ final class TerminalStateDetector {
         processSources[windowId, default: [:]][pid] = source
     }
 
-    /// Called when a watched process exits — re-detect state but DO NOT transition immediately.
-    /// The debounce in pollAllWindows will confirm it over the next couple polls.
-    private func handleProcessEvent(windowId: String) {
-        guard let shellPid = trackedWindows[windowId] else { return }
-        refreshChildWatches(windowId: windowId, shellPid: shellPid)
-    }
-
-    /// Discover current children and install kqueue watches on any new ones
-    private func refreshChildWatches(windowId: String, shellPid: pid_t) {
-        guard let children = getChildProcesses(of: shellPid) else { return }
-        let currentPids = Set(children.map(\.pid))
-        let known = knownChildren[windowId] ?? []
-        let newPids = currentPids.subtracting(known)
-        knownChildren[windowId] = currentPids
-
-        for pid in newPids {
-            installProcessSource(windowId: windowId, pid: pid)
+    /// A watched child exited. Drop its kqueue source and stop — deliberately
+    /// no I/O here.
+    ///
+    /// This used to call `refreshChildWatches`, which ran a full system-wide
+    /// `ps -ax` synchronously **on the main thread, once per exit**. A Claude
+    /// session spawns short-lived children constantly, so a burst of exits
+    /// serialized into a burst of blocking forks: that is the stack in
+    /// `Quip_2026-08-01-131028.hang` (913 seconds unresponsive) and the cause
+    /// of the 95%-CPU `cpu_resource.diag` reports.
+    ///
+    /// Nothing is lost by removing it. The 0.25s poll loop reconciles
+    /// `knownChildren` wholesale and installs sources for new PIDs (see
+    /// `startMonitoring`), and state transitions require 2 agreeing polls
+    /// (`debounceThreshold`) regardless — so an immediate re-poll could never
+    /// have shortened the transition latency it was written to shorten.
+    func handleProcessExit(windowId: String, pid: pid_t) {
+        if let source = processSources[windowId]?.removeValue(forKey: pid) {
+            source.cancel()
         }
+        knownChildren[windowId]?.remove(pid)
     }
 
     private func cancelProcessSources(for windowId: String) {
@@ -353,30 +359,6 @@ final class TerminalStateDetector {
         }
     }
 
-    private func pollAllWindows() {
-        let processSnapshot = Self.captureProcessSnapshot()
-        for (windowId, shellPid) in trackedWindows {
-            if windowStates[windowId] == .sttActive { continue }
-            let (detected, hasClaude, cli, resolvedPid, _) = detectState(
-                shellPid: shellPid,
-                tty: trackedTty[windowId],
-                cpuThreshold: cpuIdleThreshold,
-                snapshot: processSnapshot
-            )
-            if let resolvedPid {
-                trackedWindows[windowId] = resolvedPid
-                installProcessSource(windowId: windowId, pid: resolvedPid)
-            }
-            applyPollResults([(windowId, detected)])
-            if hasClaude {
-                windowsWithClaudeProcess.insert(windowId)
-            } else {
-                windowsWithClaudeProcess.remove(windowId)
-            }
-            windowCLIKind[windowId] = cli
-        }
-    }
-
     /// Synchronous one-window refresh for command handlers that are about to
     /// route input. The periodic poll loop normally keeps `windowCLIKind`
     /// fresh, but image upload needs a just-in-time answer because Codex uses
@@ -391,12 +373,22 @@ final class TerminalStateDetector {
             return windowCLIKind[windowId] ?? .shell
         }
 
-        let processSnapshot = Self.captureProcessSnapshot()
+        // Read the poll loop's snapshot (≤250ms old) instead of forking `ps`
+        // here — this runs on the main thread from the press_return and
+        // image_upload handlers, and a blocking fork here is what froze the
+        // app. maxAge is 4x the poll interval so a single slow poll doesn't
+        // strand us.
+        guard let processSnapshot = snapshotCache.read(maxAge: 1.0, now: Date()) else {
+            let cached = windowCLIKind[windowId] ?? .shell
+            appendClassifyLog("refresh window=\(windowId) no-fresh-snapshot cached=\(cached.rawValue)")
+            return cached
+        }
         let (detected, hasClaude, cli, resolvedPid, children) = detectState(
             shellPid: shellPid,
             tty: trackedTty[windowId],
             cpuThreshold: cpuIdleThreshold,
-            snapshot: processSnapshot
+            snapshot: processSnapshot,
+            allowBlockingTTYResolve: false
         )
         if let resolvedPid {
             let oldPid = trackedWindows[windowId] ?? 0
@@ -444,7 +436,8 @@ final class TerminalStateDetector {
         shellPid: pid_t,
         tty: String?,
         cpuThreshold: Double,
-        snapshot: ProcessSnapshot? = nil
+        snapshot: ProcessSnapshot? = nil,
+        allowBlockingTTYResolve: Bool = true
     ) -> (TerminalState, Bool, CLIKind, pid_t?, [ProcessInfo]) {
         var resolvedPid: pid_t? = nil
         var children = childProcesses(of: shellPid, snapshot: snapshot)
@@ -452,7 +445,12 @@ final class TerminalStateDetector {
         // Empty descendants for an iTerm2 window with a known TTY usually
         // means the original shell has exited and a new shell now owns the
         // session. Re-resolve via the stable TTY and try once more.
-        if children.isEmpty, let tty, !tty.isEmpty,
+        //
+        // `shellPidForTTY` forks `ps -t`, so callers already on the main
+        // thread pass `allowBlockingTTYResolve: false` — a stale PID for one
+        // poll cycle is strictly better than a main-thread fork.
+        if allowBlockingTTYResolve,
+           children.isEmpty, let tty, !tty.isEmpty,
            let liveShell = Self.shellPidForTTY(tty), liveShell != shellPid {
             resolvedPid = liveShell
             children = childProcesses(of: liveShell, snapshot: snapshot)
@@ -530,6 +528,34 @@ final class TerminalStateDetector {
                 guard let proc = processByPid[pid] else { return nil }
                 return ProcessInfo(pid: proc.pid, cpuPercent: proc.cpu, command: proc.command)
             }
+        }
+    }
+
+    /// Thread-safe holder for the newest `ps` snapshot.
+    ///
+    /// The poll loop captures one every 250 ms on `pollQueue`; main-thread
+    /// callers read it instead of forking their own `ps`. `@unchecked
+    /// Sendable` is sound because every access goes through `lock`.
+    private final class SnapshotCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var snapshot: ProcessSnapshot?
+        private var capturedAt: Date?
+
+        func store(_ snapshot: ProcessSnapshot?, at date: Date) {
+            lock.lock()
+            defer { lock.unlock() }
+            // A nil capture means ps failed; keep the previous good snapshot
+            // rather than blanking the cache and forcing callers to guess.
+            guard let snapshot else { return }
+            self.snapshot = snapshot
+            self.capturedAt = date
+        }
+
+        func read(maxAge: TimeInterval, now: Date) -> ProcessSnapshot? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let capturedAt, now.timeIntervalSince(capturedAt) <= maxAge else { return nil }
+            return snapshot
         }
     }
 
