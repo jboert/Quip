@@ -31,6 +31,19 @@ final class CloudflareTunnel {
 
     private var process: Process?
     private var pollTimer: Timer?
+
+    /// Byte offset into the cloudflared log already scanned for the tunnel URL.
+    /// Reset to 0 when the file shrinks (cloudflared truncated or recreated it).
+    private var logScanOffset: UInt64 = 0
+
+    /// True while an off-main log read is outstanding, so a slow disk can't let
+    /// the 1s poll ticks pile up.
+    private var logScanInFlight = false
+
+    /// True between `start()` and the resumed `launchTunnel()`. Drops a second
+    /// start issued while the orphan sweep is still running, rather than
+    /// queueing two cloudflared launches.
+    private var startInFlight = false
     private var healthTimer: Timer?
     private var proxyListener: NWListener?
     private let proxyPort: UInt16 = 8766
@@ -144,6 +157,9 @@ final class CloudflareTunnel {
     /// own 3s restart so we control the cadence here.
     private func restartTunnel() {
         connectingStartedAt = Date()  // reset the clock for the new attempt
+        // The next cloudflared run truncates the log; rescan from the top so a
+        // stale cursor can't skip past the new URL line.
+        logScanOffset = 0
         pollTimer?.invalidate()
         pollTimer = nil
         healthTimer?.invalidate()
@@ -184,6 +200,7 @@ final class CloudflareTunnel {
 
     func start(localPort: UInt16 = 8765) {
         guard !isRunning else { return }
+        guard !startInFlight else { return }
         stoppedIntentionally = false
         logEvent("start() invoked")
         startStuckWatchdog()
@@ -191,8 +208,26 @@ final class CloudflareTunnel {
         // Kill any orphaned cloudflared processes from previous app sessions.
         // When the app is force-quit, cloudflared gets reparented to PID 1 and
         // lives forever with stale edge connections, blocking new tunnels.
-        killOrphanedCloudflared()
+        //
+        // Off main: this spawns pgrep and reads its stdout to EOF, so it waits
+        // on a full process-table scan. It ran on the MainActor from the 60s
+        // health timer's restart branch, the termination auto-restart, the
+        // stall watchdog, and every network-mode change.
+        startInFlight = true
+        DispatchQueue.global(qos: .utility).async {
+            Self.killOrphanedCloudflared()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.startInFlight = false
+                    guard !self.stoppedIntentionally, !self.isRunning else { return }
+                    self.launchTunnel(localPort: localPort)
+                }
+            }
+        }
+    }
 
+    /// Second half of `start()`, resumed on main once the orphan sweep is done.
+    private func launchTunnel(localPort: UInt16) {
         // Start the tunnel proxy — handles WebSocket framing that cloudflared strips
         startProxy()
 
@@ -309,15 +344,68 @@ final class CloudflareTunnel {
         webSocketURL = ""
     }
 
+    /// Read `path` from `offset` to EOF, returning the complete lines found and
+    /// the offset to resume from (the last newline boundary — a trailing
+    /// partial line is left for the next pass rather than being mis-parsed).
+    ///
+    /// Returns offset 0 when the file has shrunk below our cursor, which means
+    /// cloudflared truncated or recreated it; we rescan from the top.
+    nonisolated static func readLogTail(path: String, from offset: UInt64) -> (lines: String, nextOffset: UInt64) {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return ("", offset) }
+        defer { try? handle.close() }
+
+        let size = (try? handle.seekToEnd()) ?? 0
+        // File shrank below our cursor: cloudflared truncated or recreated it.
+        // Rescan from the top on the next tick rather than reading garbage.
+        if size < offset { return ("", 0) }
+        guard size > offset else { return ("", offset) }
+
+        try? handle.seek(toOffset: offset)
+        guard let data = try? handle.readToEnd(), !data.isEmpty,
+              let chunk = String(data: data, encoding: .utf8) else { return ("", offset) }
+
+        guard let lastNewline = chunk.lastIndex(of: "\n") else {
+            // No complete line yet — leave the cursor put and try again next tick.
+            return ("", offset)
+        }
+        let complete = String(chunk[chunk.startIndex...lastNewline])
+        return (complete, offset + UInt64(complete.utf8.count))
+    }
+
+    /// First `*.trycloudflare.com` URL in a block of log lines, if any. Pure.
+    nonisolated static func firstTunnelURL(inLines lines: String) -> String? {
+        for raw in lines.split(separator: "\n", omittingEmptySubsequences: true) {
+            if let url = extractTunnelURL(from: String(raw)) { return url }
+        }
+        return nil
+    }
+
+    /// Scan the cloudflared log for the tunnel URL.
+    ///
+    /// Reads incrementally from a stored byte offset, on a utility queue. This
+    /// used to slurp and split the *entire* log into a String on the main
+    /// thread, once per second, against a file that keeps growing — and the
+    /// timer only stops once a URL resolves, so a tunnel that never came up
+    /// re-read an ever-larger file on main forever.
     private func checkLogForURL() {
-        guard let content = try? String(contentsOfFile: Self.logPath, encoding: .utf8) else { return }
-        for raw in content.split(separator: "\n", omittingEmptySubsequences: true) {
-            if let url = Self.extractTunnelURL(from: String(raw)) {
-                publicURL = url
-                webSocketURL = url.replacingOccurrences(of: "https://", with: "wss://")
-                connectingStartedAt = nil  // disarm stall watchdog — URL resolved
-                logEvent("publicURL resolved: \(url)")
-                return
+        guard !logScanInFlight else { return }
+        logScanInFlight = true
+        let path = Self.logPath
+        let offset = logScanOffset
+
+        DispatchQueue.global(qos: .utility).async {
+            let (lines, nextOffset) = Self.readLogTail(path: path, from: offset)
+            let url = Self.firstTunnelURL(inLines: lines)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.logScanInFlight = false
+                    self.logScanOffset = nextOffset
+                    guard let url else { return }
+                    self.publicURL = url
+                    self.webSocketURL = url.replacingOccurrences(of: "https://", with: "wss://")
+                    self.connectingStartedAt = nil  // disarm stall watchdog — URL resolved
+                    self.logEvent("publicURL resolved: \(url)")
+                }
             }
         }
     }
@@ -329,7 +417,7 @@ final class CloudflareTunnel {
     /// regress when bundling a different binary. The host must strictly end in
     /// `.trycloudflare.com` (not just contain it) so an upstream log line
     /// quoting `https://attacker.com/?ref=foo.trycloudflare.com` can't fool us.
-    static func extractTunnelURL(from line: String) -> String? {
+    nonisolated static func extractTunnelURL(from line: String) -> String? {
         // JSON path first.
         if let data = line.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -341,7 +429,7 @@ final class CloudflareTunnel {
         return matchTunnelURL(in: line)
     }
 
-    private static func matchTunnelURL(in haystack: String) -> String? {
+    private nonisolated static func matchTunnelURL(in haystack: String) -> String? {
         guard let range = haystack.range(of: "https://[a-zA-Z0-9\\-]+\\.trycloudflare\\.com",
                                          options: .regularExpression) else {
             return nil
@@ -356,7 +444,8 @@ final class CloudflareTunnel {
         return candidate
     }
 
-    private func killOrphanedCloudflared() {
+    /// Spawns `pgrep` and reads to EOF — blocking. Never call on main.
+    private nonisolated static func killOrphanedCloudflared() {
         let pipe = Pipe()
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
