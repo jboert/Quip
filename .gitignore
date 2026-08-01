@@ -127,3 +127,6 @@ tasks/
 # per task. Not product code; keep them out of commits (same class as .swrm/).
 /prd.json
 /progress.txt
+
+# Tool droppings (claude-flow / ruflo scratch state)
+.claude-flow/
