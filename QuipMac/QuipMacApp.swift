@@ -270,6 +270,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // to open it via the replaced .appSettings command below.
         Window("Settings", id: quipSettingsWindowID) {
             SettingsView()
+                .environment(permissionsStore)
                 .environment(windowManager)
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
@@ -699,7 +700,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // client authenticates — keeps the timer's "skip on equality" path
         // from suppressing the very first send.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.broadcastPermissions(force: true)
+            self.broadcastPermissions(force: true) {
             // Rebuild-aware re-grant nudge (US-002, GH #33). Every `QuipMac/`
             // rebuild bumps the binary's cdhash, and macOS TCC revokes
             // Accessibility / Screen Recording / Automation on the change even
@@ -712,22 +713,37 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // since last launch) AND a permission actually preflights false, raise
             // the quiet `permissionsNeedAttention` signal that lights the menubar
             // glyph + 'Fix Permissions…' (US-003). We NEVER open a pane on launch
-            // — the user re-grants on their own terms. The probe just ran
-            // (force:true above), so `permissionsStore` holds the fresh snapshot.
+            // — the user re-grants on their own terms. This runs in the
+            // `then:` callback, i.e. after the off-main probe has landed and
+            // `permissionsStore` holds the fresh snapshot.
             // `didCodeIdentityChangeSinceLastLaunch` has a store side effect, so
             // call it exactly once per launch.
             if CodeIdentity.didCodeIdentityChangeSinceLastLaunch(),
                self.permissionsStore.deniedCount > 0 {
                 self.permissionsStore.permissionsNeedAttention = true
             }
+            }
         }
     }
 
     /// Probe + broadcast permissions. `force` skips the equality check (used at
     /// client-auth time so a freshly-connected phone always gets the current state).
+    ///
+    /// The probe runs off main — `AEDeterminePermissionToAutomateTarget` blocks
+    /// on an Apple Events round-trip to iTerm2 and tccd, and froze the UI for
+    /// 6.3 seconds when it ran inline here (`Quip_2026-07-30-091540.hang`).
+    /// `then` runs on main after the snapshot has been applied, for callers
+    /// that used to rely on the probe having completed synchronously.
     @MainActor
-    private func broadcastPermissions(force: Bool) {
-        let snapshot = permissionProbe.probe()
+    private func broadcastPermissions(force: Bool, then: (@MainActor () -> Void)? = nil) {
+        permissionProbe.refresh { snapshot in
+            applyPermissionsSnapshot(snapshot, force: force)
+            then?()
+        }
+    }
+
+    @MainActor
+    private func applyPermissionsSnapshot(_ snapshot: MacPermissionsMessage, force: Bool) {
         // Keep the quiet attention signal (US-002) truthful as grants change
         // mid-session, WITHOUT ever opening a pane: a grant dropped (denied count
         // rose vs the last snapshot) lights it; everything re-granted clears it so

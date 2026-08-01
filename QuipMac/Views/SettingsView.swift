@@ -795,6 +795,7 @@ private struct PromptsTab: View {
 
 private struct GeneralTab: View {
     @Environment(WhisperStatusStore.self) private var whisperStatus
+    @Environment(MacPermissionsStore.self) private var permissionsStore
     @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.iterm2.rawValue
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("showInMenuBar") private var showInMenuBar = true
@@ -802,12 +803,6 @@ private struct GeneralTab: View {
     @AppStorage("mirrorDesktop") private var mirrorDesktop = false
     @AppStorage("crashRecoveryEnabled") private var crashRecoveryEnabled = false
     @State private var crashRecoveryError: String?
-
-    /// Re-probe TCC perms every 3s while this tab is visible so the row
-    /// status flips green within seconds of the user granting in System
-    /// Settings — without forcing the user to bounce back into Quip to
-    /// see it. TimelineView is the cheapest reactive timer in SwiftUI.
-    private let permissionProbe = PermissionProbeService()
 
     var body: some View {
         // Ordered by why you open General: permissions first (the actionable
@@ -817,12 +812,16 @@ private struct GeneralTab: View {
         // Refresh" FYI section was dropped.
         Form {
             Section("Permissions") {
-                TimelineView(.periodic(from: .now, by: 3.0)) { _ in
-                    let perms = permissionProbe.probe()
-                    macPermRow(name: "Accessibility", granted: perms.accessibility, pane: .accessibility)
-                    macPermRow(name: "Automation (iTerm)", granted: perms.appleEvents, pane: .automation)
-                    macPermRow(name: "Screen Recording", granted: perms.screenRecording, pane: .screenRecording)
-                }
+                // Rows track `permissionsStore`, which the app refreshes every
+                // 5s off the main thread. Probing here instead ran a blocking
+                // Apple Events round-trip inside a SwiftUI body on main, every
+                // 3s while this tab was open — see Quip_2026-07-30-091540.hang.
+                // Unknown (pre-first-probe) reads as granted, same as the
+                // probe's own can't-tell default.
+                let perms = permissionsStore.snapshot
+                macPermRow(name: "Accessibility", granted: perms?.accessibility ?? true, pane: .accessibility)
+                macPermRow(name: "Automation (iTerm)", granted: perms?.appleEvents ?? true, pane: .automation)
+                macPermRow(name: "Screen Recording", granted: perms?.screenRecording ?? true, pane: .screenRecording)
                 Text("If System Settings already shows Quip enabled but the row stays red, turn Quip off and back on there. Screen Recording changes may require relaunching Quip.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
