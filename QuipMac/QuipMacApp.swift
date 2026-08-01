@@ -210,6 +210,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// otherwise the first broadcast at launch is suppressed when the
     /// frontmost happens to be untracked. (wishlist §B16.)
     @State private var lastBroadcastFrontmostWindowId: String? = nil
+
+    /// True while an off-main frontmost AX probe is outstanding. Suppresses
+    /// the next 0.4s tick so a wedged foreign app can't let probes pile up.
+    @State private var frontmostProbeInFlight = false
     @State private var hasBroadcastFrontmostOnce: Bool = false
 
     var body: some Scene {
@@ -3240,9 +3244,21 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// then leaves `selectedWindowId` alone instead of blanking it, so the
     /// user's last terminal stays the target until focus returns to a
     /// tracked window. (wishlist §B16.)
-    private func currentFrontmostManagedWindowId() -> String? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let pid = app.processIdentifier
+    /// One tracked window reduced to what the frontmost match needs. Plain
+    /// values so the matcher can run off the MainActor.
+    struct FrontmostCandidate: Sendable {
+        let id: String
+        let origin: CGPoint
+    }
+
+    /// Ask the Accessibility API where the frontmost app's focused window is.
+    ///
+    /// Two synchronous AX round-trips **into a foreign process**. If that app
+    /// is wedged, each blocks until the AX timeout — seconds. Never call this
+    /// on the main thread; it ran there on a 0.4s timer for the life of the
+    /// app, 2.5 times a second, into whatever the user happened to have
+    /// focused.
+    nonisolated static func focusedWindowOrigin(pid: pid_t) -> CGPoint? {
         let appElement = AXUIElementCreateApplication(pid)
         var windowRef: CFTypeRef?
         let attrResult = AXUIElementCopyAttributeValue(
@@ -3255,32 +3271,74 @@ private static let recentScrapeTTL: TimeInterval = 0.75
               let posValue = posRef else { return nil }
         var axPos = CGPoint.zero
         AXValueGetValue(posValue as! AXValue, .cgPoint, &axPos)
-        let candidates = windowManager.windows.filter { $0.pid == pid }
-        guard !candidates.isEmpty else { return nil }
-        // 50pt origin tolerance — CG and AX coords are both top-left, so
-        // typical drift is sub-pixel. A larger gap means we matched the
-        // wrong window (e.g. position-tying close on overlapping windows
-        // would still pick *a* candidate, but past 50pt that's a guess and
-        // we'd rather send nil than mis-route).
-        var best: (window: ManagedWindow, distSq: CGFloat)? = nil
-        for w in candidates {
-            let dx = w.bounds.origin.x - axPos.x
-            let dy = w.bounds.origin.y - axPos.y
+        return axPos
+    }
+
+    /// Pick the tracked window nearest the AX origin, or nil when nothing is
+    /// close enough.
+    ///
+    /// 50pt origin tolerance — CG and AX coords are both top-left, so typical
+    /// drift is sub-pixel. A larger gap means we matched the wrong window
+    /// (position-tying close on overlapping windows would still pick *a*
+    /// candidate, but past 50pt that's a guess and we'd rather send nil than
+    /// mis-route). Pure, so the tolerance is under test.
+    nonisolated static func matchFrontmost(
+        origin: CGPoint?,
+        candidates: [FrontmostCandidate]
+    ) -> String? {
+        guard let origin, !candidates.isEmpty else { return nil }
+        var best: (id: String, distSq: CGFloat)? = nil
+        for candidate in candidates {
+            let dx = candidate.origin.x - origin.x
+            let dy = candidate.origin.y - origin.y
             let d = dx * dx + dy * dy
             if best == nil || d < best!.distSq {
-                best = (w, d)
+                best = (candidate.id, d)
             }
         }
         guard let pick = best, pick.distSq <= 2500 else { return nil }
-        return pick.window.id
+        return pick.id
     }
 
-    /// Compute the current frontmost ManagedWindow.id and broadcast a
-    /// `frontmost_changed` frame iff it differs from the last value we
-    /// sent. Cheap to call on a tight cadence — the AX query is the only
-    /// real cost. (wishlist §B16.)
+    /// Resolve the OS's currently-focused window to a ManagedWindow.id and
+    /// broadcast a `frontmost_changed` frame iff it differs from the last
+    /// value we sent. (wishlist §B16.)
+    ///
+    /// The AX query runs off main. A probe still outstanding suppresses the
+    /// next one, so a wedged foreign app can't let 0.4s ticks pile up.
+    ///
+    /// Returns nil when frontmost is e.g. Finder/Mail/Safari — the phone then
+    /// leaves `selectedWindowId` alone instead of blanking it, so the user's
+    /// last terminal stays the target until focus returns to a tracked window.
     private func broadcastFrontmostIfChanged() {
-        let current = currentFrontmostManagedWindowId()
+        guard !frontmostProbeInFlight else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            applyFrontmost(nil)
+            return
+        }
+        let pid = app.processIdentifier
+        let candidates = windowManager.windows
+            .filter { $0.pid == pid }
+            .map { FrontmostCandidate(id: $0.id, origin: $0.bounds.origin) }
+        guard !candidates.isEmpty else {
+            applyFrontmost(nil)
+            return
+        }
+
+        frontmostProbeInFlight = true
+        DispatchQueue.global(qos: .utility).async {
+            let origin = Self.focusedWindowOrigin(pid: pid)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.frontmostProbeInFlight = false
+                    self.applyFrontmost(Self.matchFrontmost(origin: origin, candidates: candidates))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func applyFrontmost(_ current: String?) {
         if hasBroadcastFrontmostOnce && current == lastBroadcastFrontmostWindowId { return }
         lastBroadcastFrontmostWindowId = current
         hasBroadcastFrontmostOnce = true
