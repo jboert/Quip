@@ -16,6 +16,7 @@ fileprivate func appendPushDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.pushPath
+        LogPaths.rotateIfNeeded(path: path)
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)
@@ -35,6 +36,7 @@ fileprivate func appendLatency(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.latencyPath
+        LogPaths.rotateIfNeeded(path: path)
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)
@@ -51,6 +53,7 @@ fileprivate func appendImageUploadDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.imageUploadPath
+        LogPaths.rotateIfNeeded(path: path)
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)
@@ -1010,6 +1013,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let ts = ISO8601DateFormatter().string(from: Date())
         let line = "[\(ts)] \(msg)\n"
         let path = LogPaths.qaModePath
+        LogPaths.rotateIfNeeded(path: path)
         if let fh = FileHandle(forWritingAtPath: path) {
             fh.seekToEndOfFile()
             fh.write(Data(line.utf8))
