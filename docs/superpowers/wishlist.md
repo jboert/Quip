@@ -1345,3 +1345,80 @@ assumed.
   a lot (mode poll is 91ms × N every 2s) this gets worse — at that point move
   the pollers to `osascript` subprocesses (process isolation, no shared lexer,
   main never waits) and keep in-process AppleScript for injection only.
+
+---
+
+## Main-thread hangs — fixed 2026-08-01, tail open
+
+**What it was:** the app never crashed. Zero `.ips` reports for Quip, ever. Five
+`Quip_*.hang` reports in `/Library/Logs/DiagnosticReports/` (913s, 85s, 39s,
+6.3s, 3.2s) plus three `cpu_resource.diag` ("95% cpu average"). The app froze,
+got force-quit, and that read as a crash. **When the user says "Quip crashed",
+look for `*.hang`, not `*.ips`.**
+
+Every stack was one defect: a blocking system call on the MainActor. The trap is
+that `nonisolated` does NOT hop off the actor — a synchronous `nonisolated` func
+called from `@MainActor` code runs inline on the main thread.
+
+Plan: `docs/superpowers/plans/2026-08-01-main-thread-hang-fixes.md`.
+Commits `c6631ef`..`e451f57`. Suite 636 → 663 tests.
+
+**Regression oracle:** `TerminalStateDetector.mainThreadProcessSpawns` — counts
+`Process()` launches where `Thread.isMainThread`. Tests assert it stays 0. Reuse
+it for any new spawn site rather than inventing a second mechanism.
+
+### Still open — same defect class, no hang report yet
+
+Found by a full `QuipMac/` sweep, ranked by exposure. None are speculative; each
+is a named blocking call on a confirmed MainActor path.
+
+- `WhisperDictationService.ingest(_:)` (`:66`) — base64 PCM decode + `queue.sync`
+  on main, **once per audio chunk of every PTT stream** (`QuipMacApp.swift:1969`).
+  Highest remaining frequency. Fix shape: decode off main, drop the `queue.sync`.
+- `PINStore.read()` (`:110`) — synchronous `SecItemCopyMatching` during
+  `App.init` on main. The file's own comment at `:88-92` already records a
+  sampled hang on this exact stack. Fix shape: async first read, or accept the
+  cached value and refresh in background.
+- `ImageUploadHandler.save(message:)` (`:97`, `:129`) — full base64 decode plus
+  an atomic disk write of an arbitrarily large image, on main
+  (`QuipMacApp.swift:1454`). Ties into the "photo upload spins forever" list in
+  CLAUDE.md.
+- `WebSocketServer.broadcast<T>` (`:631`) — `JSONEncoder().encode` on main for
+  payloads up to 4 MiB (`TTSAudioMessage` 300-700 KB per chunk, screenshot
+  `TerminalContentMessage`, `DiagnosticsBundleMessage`).
+- `PromptLibrary.rescan()` (`:224-252`) and `VibeCutPromptReader.read()`
+  (`:70`, `:91`) — serial whole-directory file reads on main.
+- `QuipMacApp.windowIndexForWindow(_:terminalApp:)` (`:3275-3313`) — AX title
+  walk, no callers. Dead code with a live defect; delete it.
+
+### Deliberate deviations from the plan (do not "fix" without reading why)
+
+- **No cap on the cloudflared poll window.** With incremental reads the log is
+  read once in total, so a cap only adds a way to kill a legitimately slow
+  tunnel. The 30s stall watchdog already covers never-resolves.
+- **The cloudflared `Process.run()` itself still spawns on main.** One
+  `posix_spawn` on an explicit user action, not a timer. Moving it would spread
+  the process handle and `terminationHandler` wiring across threads.
+
+### Signing flags noticed during the install (not acted on)
+
+- `com.apple.security.get-task-allow = true` is present in the **Release**
+  build. Harmless for local install; would block notarization if Quip is ever
+  distributed. Untouched because changing signing config mid-install was out of
+  scope.
+- `CFBundleVersion` is still `1` while `CFBundleShortVersionString` is `1.5.5`.
+  Bump it if you ever need to tell two installs apart.
+
+### Acceptance test — the only real proof
+
+Tests pin the mechanism; they cannot prove the freeze is gone. Run a Claude Code
+session that spawns many short-lived children in a tracked terminal window, with
+the Settings → General tab open, for a few days of normal use. Then:
+
+```bash
+ls -lt /Library/Logs/DiagnosticReports/ | grep -i quip
+```
+
+Baseline to beat: 5 hangs + 3 cpu_resource reports between 2026-07-27 and
+2026-08-01. **Any new `Quip_*.hang` — read its main-thread stack before
+assuming it is one of the six open items above.**
