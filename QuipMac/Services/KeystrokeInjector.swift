@@ -935,7 +935,27 @@ final class KeystrokeInjector {
 
         let result = AppleScriptRunner.run(script)
         if result.failed { return nil }
-        return result.stringValue
+        return result.stringValue.map(Self.trimTrailingBlankLines)
+    }
+
+    /// Drop the blank lines a terminal pads its buffer with below the last
+    /// painted row.
+    ///
+    /// This is not cosmetic. Both terminals return the FULL window height, so a
+    /// prompt drawn near the top of a tall window sits dozens of blank lines
+    /// above the end of the string — past `NumberedPromptDetector.scanLineLimit`,
+    /// which only ever looks at the trailing lines. Every detector then reports
+    /// "no prompt": one-tap answers got dropped as "Prompt changed — not sent"
+    /// (the phone hashes the TRIMMED content it was sent, the Mac re-hashed the
+    /// padded one and got nil) and multi-select fell through to the typed-text
+    /// path. Trimming here — the single choke point every reader goes through —
+    /// keeps all consumers looking at the same shape the phone does.
+    nonisolated static func trimTrailingBlankLines(_ content: String) -> String {
+        var lines = content.components(separatedBy: "\n")
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Capture Window Screenshot

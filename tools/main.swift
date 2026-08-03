@@ -144,6 +144,121 @@ eq(MultiSelectSync.initialPicks(liveContent: noPrompt), Set<Int>(),
 eq(MultiSelectSync.initialPicks(liveContent: taskList), Set<Int>(),
    "task list (no choice cue) initialPicks == {}")
 
+// MARK: - Live Claude Code widget (captured 2026-08-03, Claude Code v2.1.220)
+
+// Verbatim capture of a REAL AskUserQuestion multi-select, read straight off an
+// iTerm2 session (trailing spaces stripped; every detector collapses whitespace).
+// The fixtures above were hand-written and got three things wrong that this one
+// gets right, each of which broke multi-select on a device:
+//   • the checked box renders `[✔]` (U+2714), not `[✓]` / `[x]`
+//   • options carry description lines between them
+//   • the widget commits via an unnumbered "Submit" ROW — Return on an option
+//     row TOGGLES that option (footer: "Enter to select"), it does not submit.
+let liveWidget = """
+←  ☒ Fruit  ✔ Submit  →
+
+Which fruits do you want?
+
+❯ 1. [✔] Apple
+  Crisp, common, keeps well.
+  2. [ ] Banana
+  Soft, sweet, no peel tools needed.
+  3. [ ] Cherry
+  Small, tart-sweet, has pits.
+  4. [ ] Durian
+  Strong smell, custard texture, divisive.
+  5. [ ] Type something
+     Submit
+──────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+"""
+
+// The review step the widget shows after Submit. The Mac presses Return again
+// only when it can SEE this screen.
+let liveConfirm = """
+Review your answers
+
+ ● Which fruits do you want?
+   → Apple, Cherry
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+"""
+
+print("Live widget: detection")
+eq(NumberedPromptDetector.detect(in: liveWidget).map { Set($0) }, Set([1, 2, 3, 4, 5]),
+   "live widget detect == [1...5] (description lines don't split the run)")
+eq(NumberedPromptDetector.checkedOptions(in: liveWidget), Set([1]),
+   "live widget checkedOptions == {1} — `[✔]` U+2714 counts as checked")
+eq(NumberedPromptDetector.cursorOption(in: liveWidget), 1,
+   "live widget cursorOption == 1")
+check(NumberedPromptDetector.isMultiSelect(in: liveWidget),
+      "live widget isMultiSelect")
+check(NumberedPromptDetector.isInteractiveMultiSelect(in: liveWidget),
+      "live widget isInteractiveMultiSelect")
+check(NumberedPromptDetector.hasSubmitRow(in: liveWidget),
+      "live widget hasSubmitRow (unnumbered Submit under option 5)")
+check(!NumberedPromptDetector.hasSubmitRow(in: screenshot),
+      "plain dialect has no Submit row — Return still confirms in place")
+check(!NumberedPromptDetector.isSubmitConfirmPrompt(in: liveWidget),
+      "widget screen is not the confirm step")
+check(NumberedPromptDetector.isSubmitConfirmPrompt(in: liveConfirm),
+      "review screen is the confirm step (cursor on 'Submit answers')")
+
+// The blank padding a terminal returns below the last painted row pushes the
+// prompt out of the detector's trailing scan window entirely. This is why the
+// Mac trims it at the single read choke point (KeystrokeInjector.readContent) —
+// without that, EVERY fingerprint re-validation fails and answers are dropped
+// as "Prompt changed — not sent".
+let paddedWidget = liveWidget + String(repeating: "\n", count: 30)
+check(NumberedPromptDetector.detect(in: paddedWidget) == nil,
+      "blank-padded content detects nothing — readContent MUST trim it")
+
+print("Live widget: keystrokes")
+// Verified live: from cursor 1 with {1} checked, desired {1,3} walks to 3,
+// toggles it, then walks past option 5 onto Submit and confirms. Injecting this
+// exact sequence into the real widget produced "→ Apple, Cherry".
+eq(MultiSelectSync.keystrokes(desired: Set([1, 3]), liveContent: liveWidget),
+   ["down", "down", "space", "down", "down", "down", "return"],
+   "live widget {1,3}: toggle 3, then walk to Submit and Return")
+// Even a no-op diff must still reach Submit — the old code's bare Return would
+// have toggled option 1 back OFF and left the prompt open.
+eq(MultiSelectSync.keystrokes(desired: Set([1]), liveContent: liveWidget),
+   ["down", "down", "down", "down", "down", "return"],
+   "live widget no-op diff still walks to Submit (bare Return would untoggle)")
+
+// Replay against a model of the REAL widget: Return on an option row toggles;
+// only Return on the Submit row (one past the last option) commits.
+func replayLive(_ keys: [String], startCursor: Int, checked: Set<Int>,
+                optionCount: Int) -> (checked: Set<Int>, submitted: Bool) {
+    let submitRow = optionCount + 1
+    var cur = startCursor
+    var set = checked
+    var submitted = false
+    for k in keys {
+        switch k {
+        case "down":  cur = min(submitRow, cur + 1)
+        case "up":    cur = max(1, cur - 1)
+        case "space": if set.contains(cur) { set.remove(cur) } else { set.insert(cur) }
+        case "return":
+            if cur == submitRow { submitted = true }
+            else if set.contains(cur) { set.remove(cur) } else { set.insert(cur) }
+        default: break
+        }
+    }
+    return (set, submitted)
+}
+for desired in [Set([1]), Set([1, 3]), Set([2, 4]), Set([3]), Set([1, 2, 3, 4])] {
+    let keys = MultiSelectSync.keystrokes(desired: desired, liveContent: liveWidget)
+    let out = replayLive(keys, startCursor: 1, checked: Set([1]), optionCount: 5)
+    eq(out.checked, desired, "live replay reaches desired \(desired.sorted())")
+    check(out.submitted, "live replay submits for desired \(desired.sorted())")
+}
+
 // MARK: - Summary
 
 print("")

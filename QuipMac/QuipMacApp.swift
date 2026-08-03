@@ -1692,12 +1692,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer] in
                         let redacted: String
                         if isTerminal {
+                            // readContent already drops the terminal's trailing
+                            // blank padding (see trimTrailingBlankLines) — the
+                            // phone and the Mac's own detectors must reason over
+                            // the same shape.
                             let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? ""
-                            var lines = content.components(separatedBy: "\n")
-                            while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-                                lines.removeLast()
-                            }
-                            let trimmed = lines.suffix(200).joined(separator: "\n")
+                            let trimmed = content.components(separatedBy: "\n").suffix(200).joined(separator: "\n")
                             redacted = SecretRedactor.redact(trimmed)
                         } else {
                             redacted = "[non-terminal window — screenshot requires Screen Recording permission for Quip]"
@@ -2687,6 +2687,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         Task { @MainActor in
                             await self.injectKeystrokeSequence(keys, to: wid, sessionId: sessionId,
                                                                termApp: termApp, cgWindowNumber: wn)
+                            // Claude Code answers Submit with a review step
+                            // ("Ready to submit your answers? ❯ 1. Submit
+                            // answers / 2. Cancel"). The user already committed
+                            // by tapping Submit on the phone, so finish it —
+                            // but only after SEEING that screen, never by
+                            // firing a blind extra Return.
+                            await self.confirmSubmitIfShown(windowId: wid, sessionId: sessionId,
+                                                            termApp: termApp, cgWindowNumber: wn,
+                                                            isTerminal: isTerminal)
                         }
                     }
                     if delay == 0 { fire() }
@@ -2733,6 +2742,32 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// toggles in the order `MultiSelectSync` computed them or not at all. (The
     /// gap now sits BETWEEN completions rather than between scheduled starts —
     /// same choreography, and it can no longer compress if a key runs slow.)
+    /// Re-read the window and, if it now shows the multi-select review step with
+    /// the cursor on "Submit answers", press Return once to commit. Reads on a
+    /// background queue (AppleScript off the main thread) and no-ops for any
+    /// other screen — a mis-timed Return here would answer whatever prompt
+    /// happened to be up. (§18.2)
+    @MainActor
+    private func confirmSubmitIfShown(windowId: String, sessionId: String?,
+                                      termApp: TerminalApp, cgWindowNumber: CGWindowID,
+                                      isTerminal: Bool) async {
+        guard isTerminal else { return }
+        // The review screen replaces the widget one render after Return; give
+        // Ink a beat to paint it before looking.
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let injector = keystrokeInjector
+        let content: String = await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: injector.readContent(terminalApp: termApp,
+                                                            cgWindowNumber: cgWindowNumber,
+                                                            iterm2SessionId: sessionId) ?? "")
+            }
+        }
+        guard NumberedPromptDetector.isSubmitConfirmPrompt(in: content) else { return }
+        _ = await injector.sendKeystroke("return", to: windowId, terminalApp: termApp,
+                                         cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
+    }
+
     @MainActor
     private func injectKeystrokeSequence(_ keys: [String],
                                          to windowId: String, sessionId: String?,

@@ -1422,3 +1422,46 @@ ls -lt /Library/Logs/DiagnosticReports/ | grep -i quip
 Baseline to beat: 5 hangs + 3 cpu_resource reports between 2026-07-27 and
 2026-08-01. **Any new `Quip_*.hang` — read its main-thread stack before
 assuming it is one of the six open items above.**
+
+## §18.2 multi-select — fixed 2026-08-03, plus what it exposed
+
+Three defects, all found by driving a REAL Claude Code v2.1.220 AskUserQuestion
+multi-select widget (not a hand-written fixture) and injecting keystrokes into
+it. Fixed; the live captures are now regression fixtures in `tools/main.swift`.
+
+1. **Return on an option row TOGGLES it, it does not submit.** The widget's
+   footer says "Enter to select". The old choreography ended in a bare
+   `"return"`, which flipped the last pick back OFF and left the prompt open —
+   the "it only selects one at a time" report. Real submit = walk one row past
+   the last option onto the unnumbered **Submit** row, Return there, then a
+   review step ("Ready to submit your answers? ❯ 1. Submit answers / 2. Cancel").
+2. **The checked box renders `[✔]` (U+2714)**, which no detector matched. A
+   checked line stopped counting as a checkbox line (corrupting the option run)
+   and `checkedOptions` came back empty (so the toggle diff flipped correct
+   boxes).
+3. **Terminals return the full window height**, so a prompt drawn near the top
+   sits below dozens of blank lines — past `scanLineLimit`. Only the phone-facing
+   broadcast trimmed them, so the Mac re-hashed padded content, got nil, and
+   dropped every fingerprinted answer as "Prompt changed — not sent". Trim now
+   lives in `KeystrokeInjector.readContent`, the single read choke point.
+
+### Noticed while in there — NOT fixed
+
+- **`readContent` for Terminal.app reads `contents of front window`**, not the
+  targeted window. With two Terminal.app windows open, re-validation can hash a
+  different window than the one being answered. iTerm2 targets by session id and
+  is unaffected. Same class of bug as the one sendText already guards against.
+- **Fingerprint asymmetry.** The phone hashes content that went through
+  `SecretRedactor.redact`; the Mac re-hashes unredacted content. A prompt that
+  contains anything the redactor rewrites will never re-validate.
+- **The widget's meta rows are offered as picks.** `detect` returns option 5
+  ("Type something", opens a text field) alongside the real choices, and after a
+  box is checked option 6 ("Chat about this") can join the run. Tapping either
+  from the phone does something the user did not mean.
+
+### Acceptance test
+
+From the phone: open a Claude Code multi-select, tap 2+ options, Submit. The
+terminal must show every pick in "Review your answers" and land on
+`⏺ User answered Claude's questions`. Verified by direct injection on
+2026-08-03; the phone→Mac leg still wants one hands-on run.

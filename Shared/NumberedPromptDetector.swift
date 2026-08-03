@@ -78,19 +78,28 @@ enum NumberedPromptDetector {
         return false
     }
 
-    /// A `[ ]` / `[x]` / `[X]` / `[✓]` checkbox token anywhere on the line —
-    /// the signature of an interactive multi-select option.
+    /// The CHECKED-box tokens a live widget can render. `[✔]` (U+2714 HEAVY
+    /// CHECK MARK) is what Claude Code v2.1.x actually paints — captured off a
+    /// live AskUserQuestion multi-select — and its absence here used to break
+    /// detection twice over: the checked line stopped counting as a checkbox
+    /// line (truncating/corrupting the option run) and `checkedOptions` reported
+    /// an empty pre-checked set (so the toggle diff flipped correct boxes).
+    /// `[✓]` (U+2713) stays for widgets that render the light check.
+    private static let checkedBoxTokens = ["[x]", "[X]", "[✓]", "[✔]"]
+
+    /// A `[ ]` / `[x]` / `[X]` / `[✓]` / `[✔]` checkbox token anywhere on the
+    /// line — the signature of an interactive multi-select option.
     static func lineHasCheckbox(_ line: String) -> Bool {
         let s = stripANSI(line)
-        return s.contains("[ ]") || s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
+        return s.contains("[ ]") || checkedBoxTokens.contains(where: s.contains)
     }
 
-    /// A CHECKED checkbox token (`[x]` / `[X]` / `[✓]`) anywhere on the line —
-    /// distinct from an unchecked `[ ]`. Reads which options Claude has
+    /// A CHECKED checkbox token (`[x]` / `[X]` / `[✓]` / `[✔]`) anywhere on the
+    /// line — distinct from an unchecked `[ ]`. Reads which options Claude has
     /// PRE-CHECKED in an interactive multi-select widget. (US-001)
     static func lineHasCheckedBox(_ line: String) -> Bool {
         let s = stripANSI(line)
-        return s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
+        return checkedBoxTokens.contains(where: s.contains)
     }
 
     /// The option numbers in the detected prompt (`bestRun`) whose line renders
@@ -115,6 +124,59 @@ enum NumberedPromptDetector {
     /// DOWN to each option it must toggle. (US-001)
     static func cursorOption(in content: String) -> Int? {
         bestRun(in: content)?.first(where: \.hasMarker)?.number
+    }
+
+    /// The last option number in the detected run — the row the cursor must pass
+    /// on its way to a trailing Submit row.
+    static func lastOption(in content: String) -> Int? {
+        bestRun(in: content)?.last?.number
+    }
+
+    /// True when the widget renders an unnumbered, navigable **Submit** row
+    /// directly under the option list, e.g. Claude Code's AskUserQuestion
+    /// multi-select:
+    ///
+    ///     ❯ 1. [ ] Apple
+    ///       …
+    ///       5. [ ] Type something
+    ///          Submit          ← this row
+    ///
+    /// Captured off a live widget: in it, Return does NOT submit — it TOGGLES
+    /// the highlighted checkbox (the footer's "Enter to select"). The only way
+    /// to commit is to walk the cursor one row past the last option onto Submit
+    /// and press Return there. Widgets without this row keep the plain
+    /// "toggle then Return" contract. (§18.2)
+    static func hasSubmitRow(in content: String) -> Bool {
+        guard let run = bestRun(in: content), let last = run.last else { return false }
+        let tail = Array(content.components(separatedBy: "\n").suffix(scanLineLimit))
+        // Scan the lines after the last option; a Submit row sits within the
+        // option block's body, before any following numbered option.
+        for idx in (last.lineIndex + 1)..<tail.count {
+            let line = tail[idx]
+            if parseNumberedLine(line) != nil { return false }
+            if isSubmitRowLine(line) { return true }
+        }
+        return false
+    }
+
+    /// A standalone Submit row: the word "Submit" alone on the line, modulo an
+    /// optional cursor marker (`❯ Submit` when highlighted) and indentation.
+    /// Excludes lines that merely mention submitting ("Ready to submit your
+    /// answers?") and the widget's header tab strip (`← ☐ Fruit ✔ Submit →`).
+    private static func isSubmitRowLine(_ line: String) -> Bool {
+        var s = stripANSI(line).trimmingCharacters(in: .whitespaces)
+        if let marker = promptMarkerPrefix(in: s) { s.removeFirst(marker.count) }
+        return s.trimmingCharacters(in: .whitespaces).lowercased() == "submit"
+    }
+
+    /// True when the live screen is the multi-select CONFIRM step Claude Code
+    /// shows after Submit ("Ready to submit your answers? ❯ 1. Submit answers /
+    /// 2. Cancel") with the cursor already on the submit option — so a single
+    /// Return commits. Lets the Mac finish the choreography only when it can see
+    /// that exact screen, never blind-firing a Return. (§18.2)
+    static func isSubmitConfirmPrompt(in content: String) -> Bool {
+        guard let run = bestRun(in: content), let first = run.first, first.hasMarker else { return false }
+        return first.normalized.lowercased().contains("submit answer")
     }
 
     /// Tokens that anchor an inline bracketed choice as a real prompt (vs prose
