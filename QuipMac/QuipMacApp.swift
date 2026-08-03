@@ -1692,13 +1692,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer] in
                         let redacted: String
                         if isTerminal {
-                            // readContent already drops the terminal's trailing
-                            // blank padding (see trimTrailingBlankLines) — the
-                            // phone and the Mac's own detectors must reason over
-                            // the same shape.
+                            // readContent is the canonical form: trailing blank
+                            // padding already dropped and secrets already
+                            // redacted, so the phone and the Mac's own detectors
+                            // reason over identical bytes (see readContent).
                             let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? ""
-                            let trimmed = content.components(separatedBy: "\n").suffix(200).joined(separator: "\n")
-                            redacted = SecretRedactor.redact(trimmed)
+                            redacted = content.components(separatedBy: "\n").suffix(200).joined(separator: "\n")
                         } else {
                             redacted = "[non-terminal window — screenshot requires Screen Recording permission for Quip]"
                         }
@@ -2638,7 +2637,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 return nil
             }
         }() else { return }
+        // Terminal.app has no per-window read handle: `readContent` asks for
+        // "contents of front window", and System Events types into whatever is
+        // frontmost too. Raise the target FIRST so the screen we validate is the
+        // same screen we then answer — otherwise, with two Terminal windows
+        // open, we would hash window A and inject into window B. iTerm2 targets
+        // by session id at both ends and needs no raise.
+        let raiseBeforeRead = isTerminal && termApp == .terminal
+        if raiseBeforeRead { windowManager.focusWindow(wid) }
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer, windowManager] in
+            // Give the AX raise time to land before reading the "front" window.
+            if raiseBeforeRead { Thread.sleep(forTimeInterval: 0.15) }
             let content = isTerminal
                 ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
                 : ""
@@ -2702,8 +2711,20 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     else { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { fire() } }
                     return
                 }
+                // An INTERACTIVE picker (one carrying a cursor marker) acts on the
+                // digit the instant it arrives — verified live on both dialects:
+                // typing "2" into Claude's single-select answered the question
+                // outright, and typing "3" into Codex's `/model` picker selected
+                // that model AND advanced to its next step. An unconditional
+                // trailing Return therefore lands in whatever screen came next,
+                // where it silently confirmed Codex's default reasoning level.
+                // So: type the digit alone here, then decide what (if anything)
+                // still needs a Return by LOOKING at the screen.
+                let interactivePick = Self.selectedOptionNumber(from: action) != nil
+                    && NumberedPromptDetector.cursorOption(in: content) != nil
                 let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sid in
-                    await keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
+                    await keystrokeInjector.sendText(text, to: wid, pressReturn: !interactivePick,
+                                                     terminalApp: termApp,
                                                      windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
                 }
                 let injectWithSelfHeal: @MainActor () async -> Void = {
@@ -2721,6 +2742,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     if !r.success {
                         let reason = r.error ?? "unknown injection failure"
                         webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
+                        return
+                    }
+                    if interactivePick {
+                        await self.commitPickIfNeeded(windowId: wid, sessionId: sessionId,
+                                                      termApp: termApp, cgWindowNumber: wn,
+                                                      isTerminal: isTerminal,
+                                                      expectedFingerprint: expectedFingerprint)
                     }
                 }
                 if delay == 0 { Task { await injectWithSelfHeal() } }
@@ -2742,6 +2770,44 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// toggles in the order `MultiSelectSync` computed them or not at all. (The
     /// gap now sits BETWEEN completions rather than between scheduled starts —
     /// same choreography, and it can no longer compress if a key runs slow.)
+    /// Finish a single-option pick after the digit was typed WITHOUT a Return.
+    /// Re-reads the screen and presses Return only when it still needs one:
+    ///
+    ///  • the same prompt is still up (its fingerprint is unchanged) — a menu
+    ///    that wants the digit typed and entered, so commit it;
+    ///  • Claude's review step appeared — commit that.
+    ///
+    /// Anything else means the digit already answered (both interactive dialects
+    /// act on it immediately) and a Return here would answer the NEXT prompt.
+    @MainActor
+    private func commitPickIfNeeded(windowId: String, sessionId: String?,
+                                    termApp: TerminalApp, cgWindowNumber: CGWindowID,
+                                    isTerminal: Bool, expectedFingerprint: String) async {
+        guard isTerminal else { return }
+        guard let content = await readContentOffMain(termApp: termApp, cgWindowNumber: cgWindowNumber,
+                                                     sessionId: sessionId) else { return }
+        let stillSamePrompt = NumberedPromptDetector.fingerprint(in: content) == expectedFingerprint
+        guard stillSamePrompt || NumberedPromptDetector.isSubmitConfirmPrompt(in: content) else { return }
+        _ = await keystrokeInjector.sendKeystroke("return", to: windowId, terminalApp: termApp,
+                                                  cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
+    }
+
+    /// Re-read a terminal window's live content after giving the TUI a beat to
+    /// repaint. AppleScript stays off the main thread.
+    @MainActor
+    private func readContentOffMain(termApp: TerminalApp, cgWindowNumber: CGWindowID,
+                                    sessionId: String?) async -> String? {
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let injector = keystrokeInjector
+        return await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: injector.readContent(terminalApp: termApp,
+                                                            cgWindowNumber: cgWindowNumber,
+                                                            iterm2SessionId: sessionId))
+            }
+        }
+    }
+
     /// Re-read the window and, if it now shows the multi-select review step with
     /// the cursor on "Submit answers", press Return once to commit. Reads on a
     /// background queue (AppleScript off the main thread) and no-ops for any
@@ -2752,20 +2818,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                       termApp: TerminalApp, cgWindowNumber: CGWindowID,
                                       isTerminal: Bool) async {
         guard isTerminal else { return }
-        // The review screen replaces the widget one render after Return; give
-        // Ink a beat to paint it before looking.
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        let injector = keystrokeInjector
-        let content: String = await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                cont.resume(returning: injector.readContent(terminalApp: termApp,
-                                                            cgWindowNumber: cgWindowNumber,
-                                                            iterm2SessionId: sessionId) ?? "")
-            }
-        }
-        guard NumberedPromptDetector.isSubmitConfirmPrompt(in: content) else { return }
-        _ = await injector.sendKeystroke("return", to: windowId, terminalApp: termApp,
-                                         cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
+        // The review screen replaces the widget one render after Return, so the
+        // read waits a beat (readContentOffMain) before looking.
+        guard let content = await readContentOffMain(termApp: termApp, cgWindowNumber: cgWindowNumber,
+                                                     sessionId: sessionId),
+              NumberedPromptDetector.isSubmitConfirmPrompt(in: content) else { return }
+        _ = await keystrokeInjector.sendKeystroke("return", to: windowId, terminalApp: termApp,
+                                                  cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
     }
 
     @MainActor

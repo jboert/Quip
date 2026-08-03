@@ -1445,19 +1445,41 @@ it. Fixed; the live captures are now regression fixtures in `tools/main.swift`.
    dropped every fingerprinted answer as "Prompt changed — not sent". Trim now
    lives in `KeystrokeInjector.readContent`, the single read choke point.
 
+### Found in the same pass — also fixed
+
+4. **A single-option tap typed the digit AND a Return.** Both interactive
+   dialects act on the digit the instant it lands (verified live: "2" answered
+   Claude's single-select outright; "3" picked a model in Codex's `/model` AND
+   advanced to its next step), so the trailing Return answered whatever screen
+   came next — it was silently confirming Codex's default reasoning level. The
+   digit now goes in alone and a Return follows only when the screen still shows
+   the same prompt, or shows Claude's review step.
+5. **Terminal.app has no per-window read handle** — `readContent` asks for
+   "contents of front window" and System Events types into whatever is frontmost.
+   With two Terminal.app windows open, re-validation could hash window A and
+   answer window B. The target is now raised BEFORE the read so both ends agree.
+   iTerm2 targets by session id at both ends and was never affected.
+6. **Fingerprint asymmetry.** The phone could only ever hash redacted content
+   while the Mac re-hashed the raw buffer, so any prompt containing something
+   `SecretRedactor` rewrites could never re-validate. Redaction moved into
+   `readContent`, making it the one canonical form both peers hash.
+
 ### Noticed while in there — NOT fixed
 
-- **`readContent` for Terminal.app reads `contents of front window`**, not the
-  targeted window. With two Terminal.app windows open, re-validation can hash a
-  different window than the one being answered. iTerm2 targets by session id and
-  is unaffected. Same class of bug as the one sendText already guards against.
-- **Fingerprint asymmetry.** The phone hashes content that went through
-  `SecretRedactor.redact`; the Mac re-hashes unredacted content. A prompt that
-  contains anything the redactor rewrites will never re-validate.
 - **The widget's meta rows are offered as picks.** `detect` returns option 5
-  ("Type something", opens a text field) alongside the real choices, and after a
-  box is checked option 6 ("Chat about this") can join the run. Tapping either
-  from the phone does something the user did not mean.
+  ("Type something", opens a text field) alongside the real choices. Tapping it
+  from the phone does something the user did not mean. Filtering it would mean
+  matching on English label text, which is why it is still open.
+- **Terminal.app passive detection is still window-blind.** The fix above only
+  covers the answer path, where raising the target is expected. The background
+  prompt scrapes that drive push notifications still read the front window, so
+  with several Terminal.app windows the "waiting for input" signal can come from
+  the wrong one. Proper targeting needs a per-window handle (tty, or Terminal's
+  AppleScript window id) plumbed into `ManagedWindow`.
+- **Codex has no checkbox multi-select at all** (checked on codex-cli 0.146.0:
+  `/model` and approvals are single-select numbered pickers, correctly detected
+  with cursor + fingerprint). A Codex prompt that "wouldn't submit" was defect 3
+  or 4 above, not a missing multi-select path.
 
 ### Acceptance test
 

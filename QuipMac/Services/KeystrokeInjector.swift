@@ -935,7 +935,17 @@ final class KeystrokeInjector {
 
         let result = AppleScriptRunner.run(script)
         if result.failed { return nil }
-        return result.stringValue.map(Self.trimTrailingBlankLines)
+        // Redact HERE, not at the broadcast, so the Mac reasons over exactly the
+        // bytes the phone was shown. Prompt fingerprints are hashes of on-screen
+        // text: the phone can only ever hash redacted content, so if the Mac
+        // re-hashed the raw buffer, any prompt containing something the redactor
+        // rewrites would never re-validate and every answer to it would be
+        // dropped as "Prompt changed — not sent". One canonical form removes the
+        // whole class. `redact` is a fixed set of regex substitutions — same
+        // input, same output — so hashes stay stable.
+        return result.stringValue
+            .map(Self.trimTrailingBlankLines)
+            .map(SecretRedactor.redact)
     }
 
     /// Drop the blank lines a terminal pads its buffer with below the last
