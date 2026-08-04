@@ -2599,6 +2599,24 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         return true  // press_y / press_n — fingerprint match is sufficient
     }
 
+    /// Pure decision: after typing a single option's digit (with NO Return),
+    /// does the screen still need a Return?
+    ///
+    /// Interactive pickers act on the digit the moment it lands — a live probe
+    /// had "2" answer Claude's single-select outright and "3" pick a model in
+    /// Codex's `/model` AND advance to its next step — so an unconditional
+    /// Return would answer whatever came next (it was quietly confirming Codex's
+    /// default reasoning level). Return is warranted in exactly two cases:
+    ///
+    ///  • the same prompt is still on screen (`expectedFingerprint` still
+    ///    matches) — a menu that wants the digit typed and entered;
+    ///  • Claude's review step is up, which the user's tap already committed to.
+    nonisolated static func shouldPressReturnAfterPick(liveContent: String,
+                                                       expectedFingerprint: String) -> Bool {
+        if NumberedPromptDetector.fingerprint(in: liveContent) == expectedFingerprint { return true }
+        return NumberedPromptDetector.isSubmitConfirmPrompt(in: liveContent)
+    }
+
     /// Re-scrape the window (background, AppleScript), and inject the answer
     /// only if `answerStillValid`; otherwise tell the phone the prompt
     /// changed. (§3.2)
@@ -2637,17 +2655,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 return nil
             }
         }() else { return }
-        // Terminal.app has no per-window read handle: `readContent` asks for
-        // "contents of front window", and System Events types into whatever is
-        // frontmost too. Raise the target FIRST so the screen we validate is the
-        // same screen we then answer — otherwise, with two Terminal windows
-        // open, we would hash window A and inject into window B. iTerm2 targets
-        // by session id at both ends and needs no raise.
-        let raiseBeforeRead = isTerminal && termApp == .terminal
-        if raiseBeforeRead { windowManager.focusWindow(wid) }
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer, windowManager] in
-            // Give the AX raise time to land before reading the "front" window.
-            if raiseBeforeRead { Thread.sleep(forTimeInterval: 0.15) }
+            // Reads target the exact window on both terminals now (Terminal.app
+            // by CGWindowID, iTerm2 by session id), so what gets validated here
+            // is the same window `focusWindow` raises below before injecting.
             let content = isTerminal
                 ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
                 : ""
@@ -2785,9 +2796,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                     isTerminal: Bool, expectedFingerprint: String) async {
         guard isTerminal else { return }
         guard let content = await readContentOffMain(termApp: termApp, cgWindowNumber: cgWindowNumber,
-                                                     sessionId: sessionId) else { return }
-        let stillSamePrompt = NumberedPromptDetector.fingerprint(in: content) == expectedFingerprint
-        guard stillSamePrompt || NumberedPromptDetector.isSubmitConfirmPrompt(in: content) else { return }
+                                                     sessionId: sessionId),
+              Self.shouldPressReturnAfterPick(liveContent: content,
+                                              expectedFingerprint: expectedFingerprint) else { return }
         _ = await keystrokeInjector.sendKeystroke("return", to: windowId, terminalApp: termApp,
                                                   cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
     }

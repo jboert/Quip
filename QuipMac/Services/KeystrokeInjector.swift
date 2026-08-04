@@ -894,7 +894,28 @@ final class KeystrokeInjector {
         case .claudeDesktop:
             return nil
         case .terminal:
-            script = """
+            // Terminal.app's AppleScript `id of window` IS the CGWindowID —
+            // verified against CGWindowListCopyWindowInfo (ids 72 and 968 matched
+            // exactly on two live windows). That makes an exact per-window read
+            // possible, and it reads a window that isn't frontmost just fine.
+            //
+            // It matters because the old `contents of front window` made every
+            // Terminal.app read window-blind: with two windows open, the prompt
+            // scrape that drives push notifications, the mode poll, and answer
+            // re-validation could all be looking at a different window than the
+            // one they were asked about. (iTerm2 has targeted by session id all
+            // along — this closes the same hole for Terminal.app.)
+            //
+            // `front window` stays as the fallback for a caller that has no
+            // window number, which is what every caller used to get anyway.
+            script = cgWindowNumber != 0 ? """
+            tell application "Terminal"
+                if (exists window id \(cgWindowNumber)) then
+                    return contents of window id \(cgWindowNumber)
+                end if
+                return contents of front window
+            end tell
+            """ : """
             tell application "Terminal"
                 return contents of front window
             end tell

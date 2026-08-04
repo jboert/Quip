@@ -1454,11 +1454,16 @@ it. Fixed; the live captures are now regression fixtures in `tools/main.swift`.
    came next — it was silently confirming Codex's default reasoning level. The
    digit now goes in alone and a Return follows only when the screen still shows
    the same prompt, or shows Claude's review step.
-5. **Terminal.app has no per-window read handle** — `readContent` asks for
-   "contents of front window" and System Events types into whatever is frontmost.
-   With two Terminal.app windows open, re-validation could hash window A and
-   answer window B. The target is now raised BEFORE the read so both ends agree.
-   iTerm2 targets by session id at both ends and was never affected.
+5. **Terminal.app read the wrong window.** `readContent` asked for "contents of
+   front window", so with two Terminal.app windows the answer re-validation, the
+   mode poll, and the prompt scrape behind push notifications could all be
+   looking at a different window than the one they were asked about. It turns out
+   **Terminal.app's AppleScript `id of window` IS the CGWindowID** — verified
+   against `CGWindowListCopyWindowInfo` on two live windows (72 and 968 matched)
+   — so reads now target `window id <cgWindowNumber>` exactly, and read a
+   non-frontmost window fine. iTerm2 has targeted by session id all along.
+   (Injection still goes through the frontmost window via System Events, which is
+   why `focusWindow` still runs before typing.)
 6. **Fingerprint asymmetry.** The phone could only ever hash redacted content
    while the Mac re-hashed the raw buffer, so any prompt containing something
    `SecretRedactor` rewrites could never re-validate. Redaction moved into
@@ -1470,12 +1475,6 @@ it. Fixed; the live captures are now regression fixtures in `tools/main.swift`.
   ("Type something", opens a text field) alongside the real choices. Tapping it
   from the phone does something the user did not mean. Filtering it would mean
   matching on English label text, which is why it is still open.
-- **Terminal.app passive detection is still window-blind.** The fix above only
-  covers the answer path, where raising the target is expected. The background
-  prompt scrapes that drive push notifications still read the front window, so
-  with several Terminal.app windows the "waiting for input" signal can come from
-  the wrong one. Proper targeting needs a per-window handle (tty, or Terminal's
-  AppleScript window id) plumbed into `ManagedWindow`.
 - **Codex has no checkbox multi-select at all** (checked on codex-cli 0.146.0:
   `/model` and approvals are single-select numbered pickers, correctly detected
   with cursor + fingerprint). A Codex prompt that "wouldn't submit" was defect 3
