@@ -284,6 +284,43 @@ final class KeystrokeInjector {
     /// Returns failure if the image can't be loaded; success codepath
     /// trusts AppleScript (same as `sendText`'s iTerm2 path).
     @discardableResult
+    /// Put an image on `pasteboard` in every representation a paste target is
+    /// likely to ask for, as ONE item.
+    ///
+    /// `writeObjects([NSImage])` alone offers only `public.tiff`, so a target
+    /// that reads PNG (or wants a file rather than raw bytes) finds nothing and
+    /// the paste silently does nothing. TIFF is still written first and stays
+    /// the primary representation — it is what the proven iTerm2 + Codex path
+    /// consumes today — and PNG plus the file URL are added alongside it, so
+    /// this can only widen what a target can accept, never narrow it.
+    ///
+    /// One item with several types (not several items): a multi-item pasteboard
+    /// reads as a multi-file paste to some targets.
+    nonisolated static func writeImagePayload(_ image: NSImage, fileURL: URL,
+                                              to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        var wroteAnyBytes = false
+        if let tiff = image.tiffRepresentation {
+            item.setData(tiff, forType: .tiff)
+            wroteAnyBytes = true
+            // PNG is derived from the same bitmap so the two always agree.
+            if let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                item.setData(png, forType: .png)
+            }
+        }
+        // Lets a target treat this as "a file was pasted" — how editors and
+        // several TUIs prefer to attach an image.
+        item.setString(fileURL.absoluteString, forType: .fileURL)
+        pasteboard.writeObjects([item])
+        // Belt and braces: if the image had no bitmap to hand (vector-only, or
+        // a load that produced no representation), fall back to the old call so
+        // the pasteboard is never left with just a URL.
+        if !wroteAnyBytes {
+            pasteboard.writeObjects([image])
+        }
+    }
+
     func pasteImage(at imageURL: URL, to windowId: String, terminalApp: TerminalApp,
                     iterm2SessionId: String?) async -> InjectionResult {
         guard let image = NSImage(contentsOf: imageURL) else {
@@ -298,8 +335,7 @@ final class KeystrokeInjector {
         // Shared coordinator: restore once after the burst even if a text
         // paste overlaps this image paste (both touch NSPasteboard.general).
         Self.beginClipboardInjection()
-        pb.clearContents()
-        pb.writeObjects([image])
+        Self.writeImagePayload(image, fileURL: imageURL, to: pb)
         // 0.6s: floor before Cmd+V lands; iTerm2 paste-confirm may extend past it.
         defer { Self.endClipboardInjection(after: 0.6) }
 

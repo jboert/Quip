@@ -50,7 +50,13 @@ Tailscale IP does not work). Needs a cable or same-Wi-Fi + unlock. iOS build is 
   codex-cli 0.146.0: given a bare absolute path, Codex opens the file itself
   ("Viewed Image └ …" then described the picture), so Terminal.app now takes the
   same typed-path route every other CLI uses. iTerm2 + Codex still pastes bytes.
-- **Image paste puts only `public.tiff` on the clipboard** — some targets want PNG/JPEG.
+- ~~**Image paste puts only `public.tiff` on the clipboard**~~ **FIXED 2026-08-03.**
+  `writeImagePayload` now offers TIFF + PNG + the file URL as ONE pasteboard
+  item. TIFF stays the primary representation (it is what the proven iTerm2 +
+  Codex paste consumes), so this only widens what a target can accept. NOTE: the
+  live paste itself is still unverified from a dev shell — System Events
+  keystrokes need an Accessibility grant the shell does not have, so only Quip
+  can exercise it. Covered by unit tests against a private pasteboard.
 - ~~**`APNsJWTTests` hangs the whole Mac suite**~~ **RESOLVED — re-measured
   2026-08-03.** The tests already inject the PEM (`keyPEM:`) and no longer reach
   `APNsKeyStore.get()`, so the Keychain prompt never fires: the class runs
