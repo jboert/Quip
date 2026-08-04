@@ -878,7 +878,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// verified the response is present (e.g. the pending-input polling path).
     @MainActor
     private func triggerTTSFor(windowId: String, skipStableWait: Bool = false) {
-        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else { return }
+        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
+            // Usually benign — the window closed between the state transition
+            // and this call. But it also fires when the snapshot is merely
+            // stale, and then a response that should have been spoken is lost
+            // for good with nothing recorded. Cheap to say, and it is the line
+            // that distinguishes "you closed it" from "we lost track of it".
+            KokoroTTSDebug.log("TTS DROPPED for \(windowId): window id no longer in the snapshot "
+                               + "(closed, or the snapshot has not caught up yet)")
+            return
+        }
         let termApp = terminalAppForWindow(window)
         let wn = window.windowNumber
         let name = window.name
@@ -900,7 +909,19 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
 
         waitForStableContent(termApp: termApp, windowNumber: wn, iterm2SessionId: window.iterm2SessionId) { stableContent in
-            guard let content = stableContent else { return }
+            guard let content = stableContent else {
+                // nil here does NOT mean "the window was quiet" — it means every
+                // read across the whole settle deadline came back empty, i.e.
+                // the AppleScript/CG read itself failed. That is the difference
+                // between "nothing to say" and "we could not look", and until
+                // now both ended the same silent way: TTS simply never spoke.
+                KokoroTTSDebug.log(
+                    "TTS DROPPED for \(windowId): window content read empty for the whole "
+                    + "settle window — the terminal read failed, not the agent staying quiet. "
+                    + "Suspect a revoked Automation/Accessibility grant or a closed window."
+                )
+                return
+            }
             DispatchQueue.main.async { [self] in
                 doTriggerTTSBody(windowId: windowId, name: name, content: content)
             }

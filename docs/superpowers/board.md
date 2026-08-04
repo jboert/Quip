@@ -17,7 +17,6 @@ _(none)_
 | ID | Title | Why it matters |
 |----|-------|----------------|
 | Q-6b | "Type something" is still offered as a chip | It sits ABOVE the divider, inside the real option list, so the structural rule that removed "Chat about this" cannot reach it. Tapping it opens a text field the phone has no way to fill. Needs a different signal than label text. |
-| Q-7 | ~16 remaining swallowed errors | Listed with risk notes in `docs/superpowers/plans/2026-07-13-swallowed-errors-audit.md`. |
 
 ## Blocked
 
@@ -38,7 +37,8 @@ _(none)_
 | Q-5 | `APNsJWTTests` hang retired — re-measured, no longer reproduces; latent default-argument hazard documented | `7c7fcba` |
 | Q-3 | Codex image upload under Terminal.app falls back to the typed path instead of hard-failing | `7cf350a` |
 | Q-4 | Image paste offers TIFF + PNG + file URL instead of TIFF alone | `e6c1d90` |
-| Q-6a | A divider under the options closes the menu — "Chat about this" is no longer a chip | this commit |
+| Q-6a | A divider under the options closes the menu — "Chat about this" is no longer a chip | `ec9308b` |
+| Q-7 | All 10 open swallowed-error sites closed (8 fixed, 2 already fixed and the audit was stale) | this commit |
 
 ## Branch policy
 

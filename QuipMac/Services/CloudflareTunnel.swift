@@ -245,7 +245,18 @@ final class CloudflareTunnel {
         let logDir = (Self.logPath as NSString).deletingLastPathComponent
         let fm = FileManager.default
         if !fm.fileExists(atPath: logDir) {
-            try? fm.createDirectory(atPath: logDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            do {
+                try fm.createDirectory(atPath: logDir, withIntermediateDirectories: true,
+                                       attributes: [.posixPermissions: 0o700])
+            } catch {
+                // Worth saying out loud: cloudflared's `--logfile` is the ONLY
+                // channel we learn the tunnel URL from. Without this directory
+                // the log never materialises, `checkLogForURL()` reads nothing
+                // forever, and the sole visible symptom is the stall watchdog
+                // restarting the tunnel in a loop with no stated cause.
+                logEvent("log directory could not be created at \(logDir): \(error.localizedDescription) — "
+                         + "the tunnel URL cannot be read and start will stall")
+            }
         }
 
         // Clear old log with private permissions

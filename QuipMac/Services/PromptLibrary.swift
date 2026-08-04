@@ -341,7 +341,20 @@ final class PromptLibrary {
     private func startWatching() {
         let path = Self.directory.path
         let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            // Silent until now, and the symptom is a feature that looks dead
+            // rather than broken: without this descriptor the FS watcher never
+            // starts, so edits to the prompts directory stop broadcasting to
+            // paired phones and nothing anywhere says why.
+            QuipLog.write(
+                severity: .error, subsystem: "prompts",
+                message: "prompt watcher NOT started: open(O_EVTONLY) failed for \(path) "
+                       + "(errno \(errno): \(String(cString: strerror(errno)))). "
+                       + "Prompt edits will not broadcast to phones until Quip restarts.",
+                to: LogPaths.webSocketPath
+            )
+            return
+        }
         watcherFD = fd
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,

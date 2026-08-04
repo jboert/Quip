@@ -144,23 +144,30 @@ backs site #3.
 by the grep today — they appear in §1.6 as "real shape, now reported". The other
 15 became `do/catch` and left the grep's reach entirely.
 
-## 1.3 REAL swallows — STILL OPEN (10)
+## 1.3 REAL swallows — CLOSED 2026-08-04 (was 10)
 
-Not fixed. Listed with a one-line risk note each. **No code was written for these**
-— a follow-up decides what to fix.
+All ten are now accounted for. Two had already been fixed by later work and this
+list never caught up; the other eight were fixed in the 2026-08-04 pass. The
+table keeps the original risk notes so the reasoning stays readable, with what
+happened to each appended.
+
+**Nothing here is silent any more.** Where a failure repeats on every attempt
+(unicast drops), the line is gated through `LogTransitionGate` — one line when it
+starts failing, one when it recovers, nothing in between — so the signal is not
+buried by its own volume.
 
 | Site | Risk if it fires |
 |---|---|
-| `QuipMac/Services/WindowManager.swift:352` | `focusWindow` aborts on a failed `AXUIElementCopyAttributeValue` with **zero output**, while the near-identical guard in `moveWindow:418` prints "Failed to get AX windows for pid … Check Accessibility permission." **A revoked Accessibility grant makes focus silently do nothing** — and this repo re-loses that grant on every Mac rebuild. **Highest-value open item.** |
-| `QuipMac/Services/AuditLogger.swift:58` | `guard let handle = try? FileHandle(forWritingTo: url) else { return }` — a **security-relevant audit entry is dropped** with no fallback and no trace. `QuipLog.swift:55` at least retries with `createFile`; this doesn't. An audit log that silently stops auditing is worse than none. |
-| `QuipMac/Services/PromptLibrary.swift:344` | `guard fd >= 0 else { return }` — a failed `open(O_EVTONLY)` leaves the prompts FS-watcher **silently un-started**. Prompt edits stop broadcasting to paired phones with no breadcrumb; the feature looks dead. |
-| `QuipMac/Services/PromptLibrary.swift:81` | `put()` returns `nil` on a rejected id, but both call sites (`SettingsView:783`, `:788`) do `_ = library.put(...)` and dismiss the sheet — **a rejected save looks exactly like a successful one.** |
-| `QuipMac/Services/SwrmProjectStore.swift:46` | `try? decode([String])` — a corrupt blob **silently forgets every configured swrm project root**. The paired writer `persist()` logs its errors; the reader doesn't. |
-| `QuipMac/Services/SwrmEventTailer.swift:276` | `try? decode(SwrmCursor)` — a corrupt cursor silently resets to `.zero`, causing a **full event replay**. `save()` logs; `load()` doesn't. |
-| `QuipMac/Services/CloudflareTunnel.swift:213` | `try? fm.createDirectory(...)` for the cloudflared log dir. If it fails, the `--logfile` never materializes, `checkLogForURL()` reads nothing **forever**, and the only symptom is the stall watchdog restarting the tunnel in a loop. |
-| `QuipMac/Services/WebSocketServer.swift:587` | `sendToClient` drops a unicast when the client is missing or unauthenticated, silently. The encode failure 8 lines above it logs; this drop doesn't. (The adjacent backpressure drop at `:588` is silent too — same function, outside the grep set.) |
-| `QuipMac/QuipMacApp.swift:817` | TTS trigger dropped when the window id no longer resolves. The nearly identical lookup at `:762` treats the same condition as transient and reschedules; this one just returns. |
-| `QuipMac/QuipMacApp.swift:839` | `waitForStableContent` returns `nil` only when the window read produced empty text through the whole 2.5 s deadline — i.e. an AppleScript/CG **read failure** — and that failure is discarded. TTS silently doesn't speak. |
+| ~~`WindowManager.swift:352`~~ **was already fixed** — gated per-pid AX failure log | `focusWindow` aborts on a failed `AXUIElementCopyAttributeValue` with **zero output**, while the near-identical guard in `moveWindow:418` prints "Failed to get AX windows for pid … Check Accessibility permission." **A revoked Accessibility grant makes focus silently do nothing** — and this repo re-loses that grant on every Mac rebuild. **Highest-value open item.** |
+| ~~`AuditLogger.swift:58`~~ **was already fixed** — do/catch with a fallback trace | `guard let handle = try? FileHandle(forWritingTo: url) else { return }` — a **security-relevant audit entry is dropped** with no fallback and no trace. `QuipLog.swift:55` at least retries with `createFile`; this doesn't. An audit log that silently stops auditing is worse than none. |
+| ~~`PromptLibrary.swift:344`~~ **fixed 2026-08-04** — logs errno and says prompt edits will not broadcast until restart | `guard fd >= 0 else { return }` — a failed `open(O_EVTONLY)` leaves the prompts FS-watcher **silently un-started**. Prompt edits stop broadcasting to paired phones with no breadcrumb; the feature looks dead. |
+| ~~`PromptLibrary.swift:81`~~ **was already fixed** — both sheets now gate dismissal on `put(...) != nil` | `put()` returns `nil` on a rejected id, but both call sites (`SettingsView:783`, `:788`) do `_ = library.put(...)` and dismiss the sheet — **a rejected save looks exactly like a successful one.** |
+| ~~`SwrmProjectStore.swift:46`~~ **fixed 2026-08-04** — decode failure logged; the unreadable blob is left recoverable | `try? decode([String])` — a corrupt blob **silently forgets every configured swrm project root**. The paired writer `persist()` logs its errors; the reader doesn't. |
+| ~~`SwrmEventTailer.swift:276`~~ **fixed 2026-08-04** — absent cursor stays quiet, unreadable one logs the full replay it causes | `try? decode(SwrmCursor)` — a corrupt cursor silently resets to `.zero`, causing a **full event replay**. `save()` logs; `load()` doesn't. |
+| ~~`CloudflareTunnel.swift:213`~~ **fixed 2026-08-04** — names the log dir as the reason start will stall | `try? fm.createDirectory(...)` for the cloudflared log dir. If it fails, the `--logfile` never materializes, `checkLogForURL()` reads nothing **forever**, and the only symptom is the stall watchdog restarting the tunnel in a loop. |
+| ~~`WebSocketServer.swift:587`~~ **fixed 2026-08-04** — both drops (unauthenticated, backpressure) gated per message type | `sendToClient` drops a unicast when the client is missing or unauthenticated, silently. The encode failure 8 lines above it logs; this drop doesn't. (The adjacent backpressure drop at `:588` is silent too — same function, outside the grep set.) |
+| ~~`QuipMacApp.swift:817`~~ **fixed 2026-08-04** — distinguishes a closed window from a stale snapshot | TTS trigger dropped when the window id no longer resolves. The nearly identical lookup at `:762` treats the same condition as transient and reschedules; this one just returns. |
+| ~~`QuipMacApp.swift:839`~~ **fixed 2026-08-04** — says the read failed rather than letting TTS go quiet | `waitForStableContent` returns `nil` only when the window read produced empty text through the whole 2.5 s deadline — i.e. an AppleScript/CG **read failure** — and that failure is discarded. TTS silently doesn't speak. |
 
 ## 1.4 Grep artifacts (5) — not swallow sites at all
 

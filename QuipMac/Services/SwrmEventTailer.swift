@@ -272,10 +272,18 @@ enum SwrmCursorStore {
 
     static func load(forRootPath rootPath: String) -> SwrmCursor {
         let url = cursorURL(forRootPath: rootPath)
-        guard let data = try? Data(contentsOf: url),
-              let cursor = try? JSONDecoder().decode(SwrmCursor.self, from: data)
-        else { return .zero }
-        return cursor
+        // No file is the normal first-launch case (`exists` above is what the
+        // policy actually keys on), so absence stays quiet. A file that IS
+        // there but won't decode is different: falling back to `.zero` replays
+        // the entire event history, and until now it did that without a word.
+        guard FileManager.default.fileExists(atPath: url.path) else { return .zero }
+        do {
+            return try JSONDecoder().decode(SwrmCursor.self, from: Data(contentsOf: url))
+        } catch {
+            SwrmEventTailer.globalLog("cursor load failed for \(rootPath): \(error.localizedDescription) — "
+                      + "resetting to .zero, which REPLAYS the full event history for this root")
+            return .zero
+        }
     }
 
     static func save(_ cursor: SwrmCursor, forRootPath rootPath: String) {

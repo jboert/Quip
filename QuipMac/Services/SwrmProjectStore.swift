@@ -42,10 +42,21 @@ final class SwrmProjectStore {
     // MARK: persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
-              let decoded = try? JSONDecoder().decode([String].self, from: data)
-        else { return }
-        roots = decoded
+        guard let data = UserDefaults.standard.data(forKey: Self.storageKey) else { return }
+        // No stored blob is normal (first launch). A blob that fails to decode
+        // is NOT: it silently forgets every configured project root, and the
+        // user sees an empty list with no hint that their config still exists
+        // and is unreadable. `persist()` above has always logged its failures;
+        // this side never did.
+        do {
+            roots = try JSONDecoder().decode([String].self, from: data)
+        } catch {
+            SwrmEventTailer.globalLog(
+                "SwrmProjectStore LOAD FAILED: \(error.localizedDescription) — "
+                + "\(data.count) stored bytes could not be decoded, starting with NO project roots. "
+                + "The stored value is left untouched so it can still be recovered."
+            )
+        }
     }
 
     private func persist() {

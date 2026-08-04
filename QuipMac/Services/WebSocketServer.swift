@@ -583,6 +583,35 @@ final class WebSocketServer {
         print("[WebSocketServer] Tunnel client unregistered. \(count) tunnel client(s)")
     }
 
+    /// Keyed by message type, not by connection: the same kind of message
+    /// failing for the same reason is one story regardless of which client it
+    /// was headed for, and the phone reconnects often enough that a
+    /// per-connection key would report the same fault on every new socket.
+    nonisolated private static let unicastDropGate = LogTransitionGate<String>()
+
+    /// One line when a unicast starts being dropped, one when it recovers, and
+    /// nothing in between. `cause == nil` means this send went through.
+    nonisolated private static func reportUnicastDrop(kind: String, cause: String?, bytes: Int) {
+        switch unicastDropGate.evaluate(kind, cause: cause) {
+        case .stayQuiet:
+            return
+        case .report:
+            guard let cause else { return }  // unreachable: .report implies a cause
+            QuipLog.write(
+                severity: .warn, subsystem: "ws",
+                message: "unicast \(kind) (\(bytes) bytes) DROPPED: \(cause). "
+                       + "The phone will not receive this update.",
+                to: LogPaths.webSocketPath
+            )
+        case .reportRecovery:
+            QuipLog.write(
+                severity: .info, subsystem: "ws",
+                message: "unicast \(kind) is being delivered again.",
+                to: LogPaths.webSocketPath
+            )
+        }
+    }
+
     /// Send a `LayoutUpdate` (or any other message) to a specific
     /// authenticated connection. Used by `broadcastLayout` when at least
     /// one phone is in QA mode and each client needs a per-pair filtered
@@ -599,9 +628,26 @@ final class WebSocketServer {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
         let payloadSize = data.count
+        // Both drops below used to be silent, while the encode failure eight
+        // lines up logged — so a unicast that never arrived looked identical to
+        // one that was never attempted. Gated per reason: a client stuck
+        // unauthenticated or wedged behind backpressure fails EVERY send, and an
+        // unthrottled line would bury the signal it exists to give.
         guard let idx = clients.firstIndex(where: { $0.connection === connection }),
-              clients[idx].isAuthenticated else { return }
-        if clients[idx].pendingBytes + payloadSize > ClientConnection.maxPendingBytes { return }
+              clients[idx].isAuthenticated else {
+            Self.reportUnicastDrop(kind: String(describing: T.self),
+                                   cause: "no authenticated client for this connection",
+                                   bytes: payloadSize)
+            return
+        }
+        if clients[idx].pendingBytes + payloadSize > ClientConnection.maxPendingBytes {
+            Self.reportUnicastDrop(kind: String(describing: T.self),
+                                   cause: "backpressure — client is over the in-flight cap "
+                                        + "of \(ClientConnection.maxPendingBytes) bytes",
+                                   bytes: payloadSize)
+            return
+        }
+        Self.reportUnicastDrop(kind: String(describing: T.self), cause: nil, bytes: payloadSize)
         clients[idx].pendingBytes += payloadSize
         let conn = connection
         conn.send(content: data, contentContext: context, isComplete: true,
