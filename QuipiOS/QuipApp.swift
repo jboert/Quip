@@ -5621,7 +5621,11 @@ struct InlineTerminalContent: View {
             // detector finds an agent CLI's numeric choice menu, render one
             // in-app button per detected option so Codex/Claude prompts with
             // 1...N choices are answerable without typing.
-            if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
+            // `answerableOptions`, not `detect`: the widget appends a free-text
+            // "Type something" row after the real options, and a chip for it
+            // opens an editor the phone cannot type into. Keystroke generation
+            // still sees the full run, so the walk to Submit is unaffected.
+            if let options = NumberedPromptDetector.answerableOptions(in: content), options.count >= 2 {
                 let fingerprint = NumberedPromptDetector.fingerprint(in: content)
                 if NumberedPromptDetector.isMultiSelect(in: content) {
                     // §18.2 — checkbox (multi-select) menu: accumulate picks on

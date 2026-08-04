@@ -293,6 +293,55 @@ Which one?
 eq(NumberedPromptDetector.detect(in: dashInBody).map { Set($0) }, Set([1, 2]),
    "a short dash run in an option body is not a divider")
 
+print("Live widget: the free-text row is not answerable")
+// Straight out of the shipped CLI (v2.1.221): every AskUserQuestion menu
+// appends `{type:"input", value:"__other__", placeholder: multiSelect ?
+// "Type something" : "Type something."}` after the real options. A chip for it
+// opens an editor the phone cannot type into.
+eq(NumberedPromptDetector.freeTextOption(in: liveWidget), 5,
+   "multi-select free-text row is option 5 (placeholder has no trailing period)")
+eq(NumberedPromptDetector.freeTextOption(in: liveSingleSelect), 4,
+   "single-select free-text row is option 4 (placeholder DOES carry the period)")
+eq(NumberedPromptDetector.answerableOptions(in: liveWidget).map { Set($0) }, Set([1, 2, 3, 4]),
+   "multi-select offers 1...4 — 'Type something' is not a chip")
+eq(NumberedPromptDetector.answerableOptions(in: liveSingleSelect).map { Set($0) }, Set([1, 2, 3]),
+   "single-select offers 1...3 — neither 'Type something.' nor 'Chat about this'")
+
+// The row must still be COUNTED for navigation. Dropping it from the run would
+// make the walk one row short, landing the cursor on the free-text row where
+// Return opens the editor instead of submitting.
+eq(NumberedPromptDetector.lastOption(in: liveWidget), 5,
+   "lastOption still counts the free-text row (the cursor must step over it)")
+eq(MultiSelectSync.keystrokes(desired: Set([1, 3]), liveContent: liveWidget),
+   ["down", "down", "space", "down", "down", "down", "return"],
+   "keystrokes unchanged: the Submit walk still passes the free-text row")
+
+// Position is half the rule: the same literal NOT in last place is a real
+// option, and a last option that isn't the literal stays answerable.
+let freeTextNotLast = """
+Which one?
+❯ 1. Type something
+  2. Alpha
+  3. Beta
+"""
+eq(NumberedPromptDetector.freeTextOption(in: freeTextNotLast), nil,
+   "the literal in a non-final row is a real option, not the widget's editor")
+eq(NumberedPromptDetector.answerableOptions(in: freeTextNotLast).map { Set($0) }, Set([1, 2, 3]),
+   "…so all three stay answerable")
+eq(NumberedPromptDetector.freeTextOption(in: screenshot), nil,
+   "a plain menu has no free-text row")
+eq(NumberedPromptDetector.answerableOptions(in: screenshot),
+   NumberedPromptDetector.detect(in: screenshot),
+   "…and answerableOptions leaves it exactly as detect found it")
+
+// Nothing to offer once the editor row is removed → nil, not an empty list.
+let onlyFreeText = """
+Which one?
+❯ 1. Type something.
+"""
+eq(NumberedPromptDetector.answerableOptions(in: onlyFreeText), nil,
+   "a menu whose only row is the editor offers nothing at all")
+
 // MARK: - Summary
 
 print("")

@@ -132,6 +132,61 @@ enum NumberedPromptDetector {
         bestRun(in: content)?.last?.number
     }
 
+    /// The placeholder Claude Code paints in the free-text row that every
+    /// AskUserQuestion menu appends after the question's real options. Read
+    /// verbatim out of the shipped CLI binary (v2.1.221), which builds the row
+    /// list as:
+    ///
+    ///     const label = multiSelect ? "Type something" : "Type something."
+    ///     const other = { type: "input", value: "__other__", placeholder: label, … }
+    ///     const chat  = showChat && !multiSelect ? [{ value: "__chat__", … }] : []
+    ///     rows = [...realOptions, other, ...chat]
+    ///
+    /// Three facts follow, and this code depends on all three: the label is a
+    /// fixed literal, there is exactly one such row, and it is always the LAST
+    /// row of the option run (the `__chat__` row sits under the rule, which
+    /// `bestRun` already cuts). Matching the literal ALONE would be exactly the
+    /// label-guessing that broke multi-select twice; requiring it to also be the
+    /// run's final row is what makes this structural rather than a guess.
+    private static let freeTextPlaceholders: Set<String> = ["type something", "type something."]
+
+    /// The option number of the widget's free-text ("Type something") row, or
+    /// nil when the run has no such row. See `freeTextPlaceholders`.
+    static func freeTextOption(in content: String) -> Int? {
+        guard let last = bestRun(in: content)?.last else { return nil }
+        return isFreeTextOptionLine(last.normalized) ? last.number : nil
+    }
+
+    /// The options a remote client can actually ANSWER: `detect` minus the
+    /// free-text row. Tapping that row opens a text field the phone has no way
+    /// to fill, so it must never be offered as a chip or a notification action.
+    ///
+    /// NAVIGATION still counts the row — `lastOption` / `hasSubmitRow` /
+    /// `MultiSelectSync.keystrokes` keep reading the full run, so the cursor
+    /// walk to the Submit row still steps over it. Narrowing those instead
+    /// would land the cursor ON the free-text row and Return would open the
+    /// editor. Returns nil when nothing answerable is left.
+    static func answerableOptions(in content: String) -> [Int]? {
+        guard let all = detect(in: content) else { return nil }
+        guard let free = freeTextOption(in: content) else { return all }
+        let kept = all.filter { $0 != free }
+        return kept.isEmpty ? nil : kept
+    }
+
+    /// True when a normalized option line's body is the free-text placeholder,
+    /// modulo its number, separator and (multi-select) checkbox token.
+    private static func isFreeTextOptionLine(_ normalized: String) -> Bool {
+        var rest = Substring(normalized)
+        while let c = rest.first, c.isNumber { rest = rest.dropFirst() }
+        guard rest.hasPrefix(". ") || rest.hasPrefix(") ") || rest.hasPrefix(": ") else { return false }
+        var body = String(rest.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        for token in ["[ ]"] + checkedBoxTokens where body.hasPrefix(token) {
+            body = String(body.dropFirst(token.count)).trimmingCharacters(in: .whitespaces)
+            break
+        }
+        return freeTextPlaceholders.contains(body.lowercased())
+    }
+
     /// True when the widget renders an unnumbered, navigable **Submit** row
     /// directly under the option list, e.g. Claude Code's AskUserQuestion
     /// multi-select:

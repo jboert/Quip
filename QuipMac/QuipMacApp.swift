@@ -575,7 +575,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             let content = keystrokeInjector.readContent(
                                 terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId
                             ) ?? ""
-                            let options = NumberedPromptDetector.detect(in: content)
+                            // Same rule as the phone's chips: never offer the
+                            // widget's free-text row as a notification action.
+                            let options = NumberedPromptDetector.answerableOptions(in: content)
                             let isYesNo = NumberedPromptDetector.detectYesNo(in: content)
                             let fingerprint = NumberedPromptDetector.fingerprint(in: content)
                             DispatchQueue.main.async {
@@ -2603,6 +2605,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return false
         }
         // For a multi-select submit, every picked option must still be offered.
+        // Deliberately the WIDE `detect`, not `answerableOptions`: a phone still
+        // running an older build offers the free-text row as a chip, and a pick
+        // of it should keep behaving as it does today rather than turn into a
+        // confusing "Prompt changed — not sent".
         if let ns = selectedOptionNumbers(from: action) {
             guard let offered = NumberedPromptDetector.detect(in: liveContent) else { return false }
             return ns.allSatisfy { offered.contains($0) }
@@ -2716,7 +2722,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // #3 — re-fire a fresh push with the now-current options so the
             // user just taps again. Recompute now (still on bg) so the main
             // hop has them ready.
-            let freshOptions = NumberedPromptDetector.detect(in: content)
+            let freshOptions = NumberedPromptDetector.answerableOptions(in: content)
             let freshIsYesNo = NumberedPromptDetector.detectYesNo(in: content)
             let freshFingerprint = NumberedPromptDetector.fingerprint(in: content)
             // Multi-select into Claude's INTERACTIVE checkbox widget must be

@@ -14,9 +14,7 @@ _(none)_
 
 ## Ready
 
-| ID | Title | Why it matters |
-|----|-------|----------------|
-| Q-6b | "Type something" is still offered as a chip | It sits ABOVE the divider, inside the real option list, so the structural rule that removed "Chat about this" cannot reach it. Tapping it opens a text field the phone has no way to fill. Needs a different signal than label text. |
+_(none)_
 
 ## Blocked
 
@@ -40,7 +38,8 @@ _(none)_
 | Q-6a | A divider under the options closes the menu — "Chat about this" is no longer a chip | `ec9308b` |
 | Q-7 | All 10 open swallowed-error sites closed (8 fixed, 2 already fixed and the audit was stale) | `01c7657` |
 | Q-8 | CI stops starting 10x-billed macOS runners for changes that cannot affect Swift | `f19760d` |
-| Q-9 | `tools/check.sh` — local gate runs only the suites a change can affect, sharing CI's mapping | this commit |
+| Q-9 | `tools/check.sh` — local gate runs only the suites a change can affect, sharing CI's mapping | `7e1c029` |
+| Q-6b | The widget's free-text row ("Type something") is no longer offered as a chip — rule read out of the shipped CLI binary, not guessed at | this commit |
 
 ## Branch policy
 

@@ -1492,14 +1492,30 @@ it. Fixed; the live captures are now regression fixtures in `tools/main.swift`.
    `SecretRedactor` rewrites could never re-validate. Redaction moved into
    `readContent`, making it the one canonical form both peers hash.
 
-### Noticed while in there — NOT fixed
+### Noticed while in there
 
-- **Half fixed 2026-08-03.** A horizontal rule under the options now closes the
-  menu, so the meta action below it ("Chat about this") is no longer rendered as
-  a chip — structural, so no label text in any language is involved. What
-  remains is "Type something", which sits ABOVE the rule inside the real option
-  list; the divider rule cannot reach it and label matching is still the wrong
-  tool. Tapping it opens a text field the phone has no way to fill.
+- **Meta rows are no longer offered as answers — done 2026-08-04.** Two rows,
+  two different rules:
+  - "Chat about this" sits BELOW the rule Claude draws under the options, so a
+    divider ends the menu. Structural; no label text in any language involved.
+  - "Type something" sits ABOVE the rule, inside the real option list, so the
+    divider rule cannot reach it. Rather than guess from the label — the class
+    of guess that broke this area twice — the rule came out of the shipped CLI
+    binary (`strings` on `claude` 2.1.221), which builds the row list as
+    `[...realOptions, {type:"input", value:"__other__", placeholder: multiSelect
+    ? "Type something" : "Type something."}, ...chatRow]`. Three facts follow:
+    the label is a fixed literal, there is exactly one such row, and it is
+    always LAST in the option run. `freeTextOption` requires the literal AND the
+    final position, so a real option that happens to carry that text stays
+    answerable.
+  - The row is dropped only from what gets OFFERED (`answerableOptions` — the
+    phone's chips, the Mac's notification actions). Navigation still counts it:
+    `lastOption` / `hasSubmitRow` / `MultiSelectSync.keystrokes` read the full
+    run, because a walk that skipped the row would land the cursor ON it and
+    Return would open the editor instead of submitting. Re-validation
+    (`answerStillValid`) also stays on the wide `detect`, so a phone running an
+    older build that still shows the chip keeps its current behaviour rather
+    than getting "Prompt changed — not sent".
 - **Codex has no checkbox multi-select at all** (checked on codex-cli 0.146.0:
   `/model` and approvals are single-select numbered pickers, correctly detected
   with cursor + fingerprint). A Codex prompt that "wouldn't submit" was defect 3

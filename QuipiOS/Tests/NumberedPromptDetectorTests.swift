@@ -853,4 +853,75 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertNil(NumberedPromptDetector.detect(in: padded))
         XCTAssertNil(NumberedPromptDetector.fingerprint(in: padded))
     }
+
+    // MARK: - The free-text row is not an answer
+
+    /// Every AskUserQuestion menu appends a free-text row after the question's
+    /// real options — read verbatim from the shipped CLI (v2.1.221):
+    ///
+    ///     const label = multiSelect ? "Type something" : "Type something."
+    ///     rows = [...realOptions, {type:"input", value:"__other__", placeholder: label}, ...chat]
+    ///
+    /// A chip for it opens an editor the phone has no way to type into, so it
+    /// must not be offered. Note the dialect difference the two fixtures pin:
+    /// the multi-select placeholder has no trailing period, the single-select
+    /// one does.
+    func test_freeTextRow_isFoundInBothDialects() {
+        XCTAssertEqual(NumberedPromptDetector.freeTextOption(in: liveMultiSelect), 5)
+        XCTAssertEqual(NumberedPromptDetector.freeTextOption(in: liveSingleSelect), 4)
+    }
+
+    func test_answerableOptions_dropsTheFreeTextRow() {
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: liveMultiSelect), [1, 2, 3, 4])
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: liveSingleSelect), [1, 2, 3])
+    }
+
+    /// NAVIGATION must still count the row. Removing it from the run would make
+    /// the cursor walk one step short and land on the free-text row, where
+    /// Return opens the editor rather than submitting — the failure this whole
+    /// area started with.
+    func test_freeTextRow_isStillCountedForNavigation() {
+        XCTAssertEqual(NumberedPromptDetector.lastOption(in: liveMultiSelect), 5)
+        XCTAssertTrue(NumberedPromptDetector.hasSubmitRow(in: liveMultiSelect))
+        XCTAssertEqual(
+            MultiSelectSync.keystrokes(desired: [1, 3], liveContent: liveMultiSelect),
+            ["down", "down", "space", "down", "down", "down", "return"]
+        )
+    }
+
+    /// Position is half the rule. Matching the literal alone would be the kind
+    /// of label guessing that broke this area twice; the row must ALSO be last.
+    func test_freeTextLiteral_inANonFinalRow_staysAnswerable() {
+        let content = """
+        Which one?
+        ❯ 1. Type something
+          2. Alpha
+          3. Beta
+        """
+        XCTAssertNil(NumberedPromptDetector.freeTextOption(in: content))
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: content), [1, 2, 3])
+    }
+
+    /// A menu from any other CLI passes through untouched.
+    func test_plainMenu_answerableOptionsMatchesDetect() {
+        let content = """
+        Which to delete?
+        ❯ 1. G1 caches
+          2. G2 backups
+        """
+        XCTAssertNil(NumberedPromptDetector.freeTextOption(in: content))
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: content),
+                       NumberedPromptDetector.detect(in: content))
+    }
+
+    /// Nothing left to offer reports nil, not an empty list — the chip bar's
+    /// `options.count >= 2` guard reads the same either way, but a caller that
+    /// force-unwraps a count should see "no prompt".
+    func test_menuOfNothingButTheEditor_offersNothing() {
+        let content = """
+        Which one?
+        ❯ 1. Type something.
+        """
+        XCTAssertNil(NumberedPromptDetector.answerableOptions(in: content))
+    }
 }
