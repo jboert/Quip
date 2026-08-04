@@ -46,9 +46,14 @@ Tailscale IP does not work). Needs a cable or same-Wi-Fi + unlock. iOS build is 
 - **`pasteImage` has no Terminal.app fallback** — hard-fails there (the same
   Terminal.app-vs-iTerm2 blind spot that caused `bf050c7`).
 - **Image paste puts only `public.tiff` on the clipboard** — some targets want PNG/JPEG.
-- **`APNsJWTTests` hangs the whole Mac suite** (~57 min observed) on a Keychain
-  authorization prompt in `APNsKeyStore.get()` (APNsKeyStore.swift:62). Workaround in use:
-  `-skip-testing:QuipMacTests/APNsJWTTests`. Real fix: inject the key store in tests.
+- ~~**`APNsJWTTests` hangs the whole Mac suite**~~ **RESOLVED — re-measured
+  2026-08-03.** The tests already inject the PEM (`keyPEM:`) and no longer reach
+  `APNsKeyStore.get()`, so the Keychain prompt never fires: the class runs
+  unskipped in 0.018s (7 tests), and the full suite is 669 tests in 24s with no
+  `-skip-testing`. Drop that flag if any script still passes it. The one live
+  hazard left is the *default argument* `keyPEM: Data? = APNsKeyStore.get()` —
+  it is evaluated per call site, so a future test that omits the parameter puts
+  the Keychain read back inside the test host. Called out at the initializer.
 - **Final whole-branch review** across this session's 28 commits was never run.
 
 ---
