@@ -259,6 +259,40 @@ for desired in [Set([1]), Set([1, 3]), Set([2, 4]), Set([3]), Set([1, 2, 3, 4])]
     check(out.submitted, "live replay submits for desired \(desired.sorted())")
 }
 
+print("Live widget: divider closes the menu")
+// Claude Code draws a rule between a question's real options and the meta
+// actions below it. Everything under the rule is a different kind of thing.
+let liveSingleSelect = """
+ ☐ Pick
+
+Which one you pick?
+
+❯ 1. Alpha
+     First option.
+  2. Beta
+     Second option.
+  3. Gamma
+     Third option.
+  4. Type something.
+──────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+"""
+eq(NumberedPromptDetector.detect(in: liveSingleSelect).map { Set($0) }, Set([1, 2, 3, 4]),
+   "divider ends the run — 'Chat about this' is not offered as a chip")
+eq(NumberedPromptDetector.detect(in: liveWidget).map { Set($0) }, Set([1, 2, 3, 4, 5]),
+   "multi-select is unchanged by the divider rule")
+// A short dash run inside an option's body must NOT end the menu.
+let dashInBody = """
+Which one?
+❯ 1. Alpha
+  --- notes ---
+  2. Beta
+"""
+eq(NumberedPromptDetector.detect(in: dashInBody).map { Set($0) }, Set([1, 2]),
+   "a short dash run in an option body is not a divider")
+
 // MARK: - Summary
 
 print("")

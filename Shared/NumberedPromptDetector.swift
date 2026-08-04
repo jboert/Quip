@@ -392,6 +392,18 @@ enum NumberedPromptDetector {
                 }
                 // else: numbered line, no run yet, n != 1 → out-of-order start, ignore.
             } else if !current.isEmpty {
+                if isDividerLine(line) {
+                    // A rule under the options closes the menu. Claude Code
+                    // draws one between a question's real choices and the meta
+                    // actions below ("Chat about this"), which the phone was
+                    // rendering as just another numbered chip — tapping it
+                    // started a chat instead of answering. Structural, so it
+                    // needs no guessing at label text in any language.
+                    flush()
+                    current = []
+                    gap = 0
+                    continue
+                }
                 // Body line under the current option. Tolerate up to
                 // maxBodyLinesBetweenOptions; only a longer gap ends the run
                 // (the prompt finished, or this was prose all along).
@@ -406,6 +418,19 @@ enum NumberedPromptDetector {
         flush()  // trailing run
 
         return best.isEmpty ? nil : best
+    }
+
+    /// Minimum run of rule characters before a line counts as a divider. Long
+    /// enough that a `---` in prose or an em-dash sentence can't end a menu.
+    private static let dividerMinLength = 8
+
+    /// A horizontal rule — a line of nothing but box-drawing/dash characters.
+    /// Widgets use it to separate a question's real options from the meta
+    /// actions underneath.
+    private static func isDividerLine(_ line: String) -> Bool {
+        let s = stripANSI(line).trimmingCharacters(in: .whitespaces)
+        guard s.count >= dividerMinLength else { return false }
+        return s.allSatisfy { "─━═-–—_=".contains($0) }
     }
 
     /// Normalize one option line to its stable identity: ANSI-stripped,

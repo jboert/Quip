@@ -807,6 +807,25 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: liveSingleSelect))
     }
 
+    /// The rule under the options closes the menu, so "Chat about this" — a meta
+    /// action, not an answer — is never rendered as a chip. Tapping it used to
+    /// start a chat instead of answering the question.
+    func test_liveSingleSelect_dividerEndsTheMenu() {
+        XCTAssertEqual(NumberedPromptDetector.detect(in: liveSingleSelect), [1, 2, 3, 4])
+    }
+
+    /// A short dash run inside an option's body is not a divider — the rule is
+    /// length-gated so prose can't truncate a real menu.
+    func test_shortDashRunInBody_doesNotEndTheMenu() {
+        let content = """
+        Which one?
+        ❯ 1. Alpha
+          --- notes ---
+          2. Beta
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
+    }
+
     /// The review step Claude shows after Submit. The Mac presses Return again
     /// only when it can see this screen, so the phone-side detector must agree
     /// on what it looks like.

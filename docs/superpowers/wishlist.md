@@ -1494,10 +1494,12 @@ it. Fixed; the live captures are now regression fixtures in `tools/main.swift`.
 
 ### Noticed while in there — NOT fixed
 
-- **The widget's meta rows are offered as picks.** `detect` returns option 5
-  ("Type something", opens a text field) alongside the real choices. Tapping it
-  from the phone does something the user did not mean. Filtering it would mean
-  matching on English label text, which is why it is still open.
+- **Half fixed 2026-08-03.** A horizontal rule under the options now closes the
+  menu, so the meta action below it ("Chat about this") is no longer rendered as
+  a chip — structural, so no label text in any language is involved. What
+  remains is "Type something", which sits ABOVE the rule inside the real option
+  list; the divider rule cannot reach it and label matching is still the wrong
+  tool. Tapping it opens a text field the phone has no way to fill.
 - **Codex has no checkbox multi-select at all** (checked on codex-cli 0.146.0:
   `/model` and approvals are single-select numbered pickers, correctly detected
   with cursor + fingerprint). A Codex prompt that "wouldn't submit" was defect 3
