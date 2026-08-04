@@ -100,14 +100,21 @@ Shipped on eb-branch (unpushed):
   rebuilt + installed (Mac Release Developer-ID, TCC survived; iOS to device).
   See [[project_smart_answer_multiselect_gap]].
 
-### OPEN — acceptance test (needs a live Claude checkbox prompt + user hands)
-- **Multi-select keystroke assumption is UNVERIFIED.** The Mac injects each
-  picked option *number* (no Return) to toggle its checkbox, then one Return to
-  submit — assuming Claude's TUI toggles on the number key. If it actually needs
-  ↑/↓ + Space, the chips appear but toggle the wrong rows. Fix point if so: the
-  `select_multi` branch of the `steps` builder in `revalidateAnswer`
-  (`QuipMac/QuipMacApp.swift`). Acceptance: on the cleanup-groups menu, tick
-  G1+G3 → Submit → exactly G1 and G3 checked, then submitted.
+### RESOLVED 2026-08-03 — the keystroke assumption was wrong, and now it is measured
+- The old note here guessed that Claude's TUI toggles a checkbox on the option's
+  number key. It does not. Probed live against Claude Code v2.1.220: **space**
+  toggles, **Return on an option row toggles that row too** (the footer says
+  "Enter to select"), and committing means walking onto an unnumbered `Submit`
+  row and then confirming a review step. The checked box is `[✔]` (U+2714). See
+  the 2026-08-03 section at the end of this file and
+  [[project_agent_cli_prompt_dialects]]. Fixed in `2c57768`; the live captures
+  are regression fixtures in `tools/main.swift`.
+- Still owed: the **phone→Mac leg**. Tap 2+ options in a Claude multi-select from
+  the phone and Submit; the terminal must list every pick under "Review your
+  answers" and land on `⏺ User answered Claude's questions`. The Mac-side
+  choreography is verified by direct injection; only the WebSocket hop between
+  them is untested, and it needs a paired phone (the Mac requires a PIN, so it
+  cannot be driven from a script here).
 
 ## Session log — 2026-06-15 (prompt-save crash + connection triage)
 
