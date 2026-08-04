@@ -39,7 +39,8 @@ _(none)_
 | Q-4 | Image paste offers TIFF + PNG + file URL instead of TIFF alone | `e6c1d90` |
 | Q-6a | A divider under the options closes the menu — "Chat about this" is no longer a chip | `ec9308b` |
 | Q-7 | All 10 open swallowed-error sites closed (8 fixed, 2 already fixed and the audit was stale) | `01c7657` |
-| Q-8 | CI stops starting 10x-billed macOS runners for changes that cannot affect Swift | this commit |
+| Q-8 | CI stops starting 10x-billed macOS runners for changes that cannot affect Swift | `f19760d` |
+| Q-9 | `tools/check.sh` — local gate runs only the suites a change can affect, sharing CI's mapping | this commit |
 
 ## Branch policy
 
