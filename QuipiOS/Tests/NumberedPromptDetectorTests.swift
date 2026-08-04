@@ -717,4 +717,121 @@ final class NumberedPromptDetectorTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Live Claude Code widgets (captured 2026-08-03, v2.1.220)
+
+    /// Verbatim capture of a real AskUserQuestion MULTI-select, read off a live
+    /// iTerm2 session (trailing spaces stripped — every detector collapses
+    /// whitespace). The hand-written fixtures above got three things wrong that
+    /// this one gets right, and the phone is the peer that renders chips from
+    /// this detector, so it locks the shape here too:
+    ///   • the checked box is `[✔]` (U+2714), not `[✓]` / `[x]`
+    ///   • options carry description lines between them
+    ///   • an unnumbered `Submit` row sits under the last option
+    private let liveMultiSelect = """
+    ←  ☒ Fruit  ✔ Submit  →
+
+    Which fruits do you want?
+
+    ❯ 1. [✔] Apple
+      Crisp, common, keeps well.
+      2. [ ] Banana
+      Soft, sweet, no peel tools needed.
+      3. [ ] Cherry
+      Small, tart-sweet, has pits.
+      4. [ ] Durian
+      Strong smell, custard texture, divisive.
+      5. [ ] Type something
+         Submit
+    ──────────────────────────────────────────────
+      6. Chat about this
+
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    """
+
+    /// The same widget in SINGLE-select form — no checkboxes, same meta rows.
+    private let liveSingleSelect = """
+     ☐ Pick
+
+    Which one you pick?
+
+    ❯ 1. Alpha
+         First option.
+      2. Beta
+         Second option.
+      3. Gamma
+         Third option.
+      4. Type something.
+    ──────────────────────────────────────────────
+      5. Chat about this
+
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    """
+
+    func test_liveMultiSelect_detectsCheckboxOptionsOnly() {
+        // 6 ("Chat about this") carries no checkbox and is below the divider, so
+        // it stays out of a checkbox run.
+        XCTAssertEqual(NumberedPromptDetector.detect(in: liveMultiSelect), [1, 2, 3, 4, 5])
+        XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: liveMultiSelect))
+        XCTAssertTrue(NumberedPromptDetector.isInteractiveMultiSelect(in: liveMultiSelect))
+    }
+
+    /// The U+2714 regression: before this was recognised, the checked line was
+    /// not even counted as a checkbox line, which broke the run AND made the
+    /// phone seed its picks from an empty set.
+    func test_liveMultiSelect_heavyCheckMarkCountsAsChecked() {
+        XCTAssertEqual(NumberedPromptDetector.checkedOptions(in: liveMultiSelect), [1])
+        XCTAssertEqual(MultiSelectSync.initialPicks(liveContent: liveMultiSelect), [1])
+        XCTAssertEqual(NumberedPromptDetector.cursorOption(in: liveMultiSelect), 1)
+    }
+
+    func test_liveMultiSelect_hasSubmitRow() {
+        XCTAssertTrue(NumberedPromptDetector.hasSubmitRow(in: liveMultiSelect))
+        XCTAssertEqual(NumberedPromptDetector.lastOption(in: liveMultiSelect), 5)
+    }
+
+    /// A checkbox menu with no Submit row keeps the plain contract (Return
+    /// confirms in place) — the two dialects must stay distinguishable.
+    func test_plainCheckboxMenu_hasNoSubmitRow() {
+        let content = """
+        Which to delete?
+        ❯ 1. [ ] G1 caches
+          2. [ ] G2 backups
+        """
+        XCTAssertFalse(NumberedPromptDetector.hasSubmitRow(in: content))
+    }
+
+    func test_liveSingleSelect_notMultiSelect() {
+        XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: liveSingleSelect) == false)
+        XCTAssertEqual(NumberedPromptDetector.cursorOption(in: liveSingleSelect), 1)
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: liveSingleSelect))
+    }
+
+    /// The review step Claude shows after Submit. The Mac presses Return again
+    /// only when it can see this screen, so the phone-side detector must agree
+    /// on what it looks like.
+    func test_liveConfirmStep_isSubmitConfirmPrompt() {
+        let review = """
+        Review your answers
+
+         ● Which fruits do you want?
+           → Apple, Cherry
+
+        Ready to submit your answers?
+
+        ❯ 1. Submit answers
+          2. Cancel
+        """
+        XCTAssertTrue(NumberedPromptDetector.isSubmitConfirmPrompt(in: review))
+        XCTAssertFalse(NumberedPromptDetector.isSubmitConfirmPrompt(in: liveMultiSelect))
+    }
+
+    /// Terminals pad the buffer to the full window height, which pushes the
+    /// prompt past the trailing scan window. The Mac trims that at the read
+    /// (KeystrokeInjector.readContent) — this pins WHY it has to.
+    func test_blankPaddedWidget_detectsNothing() {
+        let padded = liveMultiSelect + String(repeating: "\n", count: 30)
+        XCTAssertNil(NumberedPromptDetector.detect(in: padded))
+        XCTAssertNil(NumberedPromptDetector.fingerprint(in: padded))
+    }
 }
