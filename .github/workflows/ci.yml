@@ -13,12 +13,72 @@ concurrency:
 
 jobs:
   # --------------------------------------------------------------------------
+  # Which jobs actually need to run? GitHub bills macOS runners at 10x Linux,
+  # and `apple-mac` + `apple-ios` are the two most expensive jobs here — yet a
+  # docs-only or Linux-only change used to start both of them to compile code it
+  # could not have touched.
+  #
+  # This job is ubuntu (1x) and takes seconds. The mapping lives in
+  # .github/scripts/changed-scopes.sh so it can be unit-tested without a runner;
+  # see changed-scopes-test.sh. It FAILS OPEN — no usable diff means run
+  # everything, because a wasted runner costs money and a skipped one ships a
+  # regression.
+  # --------------------------------------------------------------------------
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      apple: ${{ steps.scopes.outputs.apple }}
+      rust: ${{ steps.scopes.outputs.rust }}
+      android: ${{ steps.scopes.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify the mapping still holds
+        run: bash .github/scripts/changed-scopes-test.sh
+
+      - name: Resolve changed scopes
+        id: scopes
+        # A branch name is attacker-controlled on a fork PR, so no `${{ }}`
+        # interpolation goes into the shell here — every value arrives as a
+        # quoted environment variable.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # An empty list means "unknown" to the script, which answers "run
+          # everything". That is the default for workflow_dispatch, a force
+          # push (before = all zeros), and a first push of a branch.
+          files=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF" >/dev/null 2>&1 || true
+            merge_base="$(git merge-base "origin/$BASE_REF" HEAD 2>/dev/null || true)"
+            [ -n "$merge_base" ] && files="$(git diff --name-only "$merge_base" HEAD)"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            case "$BEFORE_SHA" in
+              ''|0000000000000000000000000000000000000000) ;;
+              *) files="$(git diff --name-only "$BEFORE_SHA" "$HEAD_SHA" 2>/dev/null || true)" ;;
+            esac
+          fi
+          printf '%s\n' "$files" | .github/scripts/changed-scopes.sh >> "$GITHUB_OUTPUT"
+          echo "--- resolved scopes ---"
+          cat "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------------------------
   # QuipLinux — Rust + GTK4. whisper-rs builds whisper.cpp from source on the
   # first run, so we cache aggressively. Toolchain comes from the system; we
   # don't pin a Rust version yet (Cargo.toml already says edition 2021).
   # --------------------------------------------------------------------------
   rust-linux:
     name: cargo test (QuipLinux)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -57,6 +117,8 @@ jobs:
   # --------------------------------------------------------------------------
   apple-mac:
     name: xcodebuild test (QuipMac)
+    needs: changes
+    if: needs.changes.outputs.apple == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -79,18 +141,35 @@ jobs:
         working-directory: QuipMac
         run: xcodegen generate
 
+      # QuipMac depends on WhisperKit, which drags in swift-transformers and
+      # friends. Without this they are re-cloned and re-resolved on every run,
+      # on the runner GitHub bills at 10x. Keyed on the manifest that pins them,
+      # so a dependency bump misses the cache and everything else hits it.
+      - name: Cache Swift package checkouts
+        uses: actions/cache@v4
+        with:
+          path: .spm-cache
+          key: ${{ runner.os }}-spm-${{ hashFiles('QuipMac/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
       - name: Build & test
         run: |
           xcodebuild test \
             -project QuipMac/QuipMac.xcodeproj \
             -scheme QuipMac \
             -destination 'platform=macOS' \
+            -clonedSourcePackagesDirPath .spm-cache \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY=""
 
   apple-ios:
     name: xcodebuild test (QuipiOS)
+    needs: changes
+    if: needs.changes.outputs.apple == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -150,6 +229,8 @@ jobs:
   # --------------------------------------------------------------------------
   android:
     name: gradle test (QuipAndroid)
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

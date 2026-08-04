@@ -38,7 +38,8 @@ _(none)_
 | Q-3 | Codex image upload under Terminal.app falls back to the typed path instead of hard-failing | `7cf350a` |
 | Q-4 | Image paste offers TIFF + PNG + file URL instead of TIFF alone | `e6c1d90` |
 | Q-6a | A divider under the options closes the menu — "Chat about this" is no longer a chip | `ec9308b` |
-| Q-7 | All 10 open swallowed-error sites closed (8 fixed, 2 already fixed and the audit was stale) | this commit |
+| Q-7 | All 10 open swallowed-error sites closed (8 fixed, 2 already fixed and the audit was stale) | `01c7657` |
+| Q-8 | CI stops starting 10x-billed macOS runners for changes that cannot affect Swift | this commit |
 
 ## Branch policy
 
