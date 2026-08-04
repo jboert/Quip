@@ -279,6 +279,42 @@ final class AnswerRevalidationTests: XCTestCase {
             expectedFingerprint: "stale-hash"))
     }
 
+    // MARK: - imageInjectionRoute
+
+    /// Codex on iTerm2 keeps the proven clipboard-bytes route.
+    func test_imageRoute_codexOnITerm2_pastesBytes() {
+        XCTAssertEqual(QuipMacApp.imageInjectionRoute(cliKind: .codex, terminalApp: .iterm2),
+                       .pasteImage)
+    }
+
+    /// The regression this fixes: Codex under Terminal.app used to take the
+    /// paste route, which can only drive iTerm2, so the upload failed outright.
+    /// Codex reads a typed absolute path itself (measured on codex-cli 0.146.0).
+    func test_imageRoute_codexOnTerminalApp_fallsBackToTypedPath() {
+        XCTAssertEqual(QuipMacApp.imageInjectionRoute(cliKind: .codex, terminalApp: .terminal),
+                       .sendTextPath)
+    }
+
+    /// Every other CLI types the path on every host, as before.
+    func test_imageRoute_nonCodex_alwaysTypesPath() {
+        for kind in CLIKind.allCases where kind != .codex {
+            for app in [TerminalApp.iterm2, .terminal, .claudeDesktop] {
+                XCTAssertEqual(QuipMacApp.imageInjectionRoute(cliKind: kind, terminalApp: app),
+                               .sendTextPath, "\(kind)/\(app) must type the path")
+            }
+        }
+    }
+
+    /// pasteImage can only drive iTerm2, so no route may send another host to it.
+    func test_imageRoute_pasteOnlyEverTargetsITerm2() {
+        for kind in CLIKind.allCases {
+            for app in [TerminalApp.terminal, .claudeDesktop] {
+                XCTAssertNotEqual(QuipMacApp.imageInjectionRoute(cliKind: kind, terminalApp: app),
+                                  .pasteImage, "\(kind)/\(app) would paste into a host that can't")
+            }
+        }
+    }
+
     // MARK: - trimTrailingBlankLines
 
     /// Terminals pad the buffer to the full window height. Unless that padding

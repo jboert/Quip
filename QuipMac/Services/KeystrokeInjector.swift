@@ -348,8 +348,12 @@ final class KeystrokeInjector {
             return await executeAppleScriptOffMain(script, context: "pasteImage to \(windowId) [iTerm2]")
 
         case .terminal:
-            // Terminal.app doesn't support image paste (text-only); the
-            // caller should fall back to path-typing for this host.
+            // Terminal.app is text-only, so there is nothing for Cmd+V to
+            // deliver. Callers must not reach this — `imageInjectionRoute`
+            // sends Terminal.app windows down the typed-path route, which
+            // Codex handles by reading the file itself. Kept as a guard so a
+            // future caller that forgets fails loudly instead of silently
+            // pasting nothing.
             return InjectionResult(success: false, error: "Terminal.app does not accept pasted images")
 
         case .claudeDesktop:

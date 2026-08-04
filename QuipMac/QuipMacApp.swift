@@ -1522,15 +1522,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     )
                     let finishInjection: @MainActor () async -> Void = {
                         let tStart = Date()
-                        let route = cliKind == .codex ? "pasteImage" : "sendTextPath"
+                        let imageRoute = Self.imageInjectionRoute(cliKind: cliKind, terminalApp: termApp)
+                        let route = imageRoute.rawValue
                         let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sessionId in
-                            switch cliKind {
-                            case .codex:
+                            switch imageRoute {
+                            case .pasteImage:
                                 return await self.keystrokeInjector.pasteImage(
                                     at: savedURL, to: msg.windowId,
                                     terminalApp: termApp, iterm2SessionId: sessionId
                                 )
-                            case .claude, .shell, .cursor, .grok:
+                            case .sendTextPath:
                                 // Cursor's TUI takes a typed absolute path like
                                 // Claude Code (not pasted bytes like Codex).
                                 // Grok prompt text uses clipboard paste, but image
@@ -2597,6 +2598,34 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return NumberedPromptDetector.detectInlineOptions(in: liveContent)?.contains(String(n)) ?? false
         }
         return true  // press_y / press_n — fingerprint match is sufficient
+    }
+
+    /// How an uploaded image reaches a terminal window.
+    enum ImageInjectionRoute: String {
+        /// Put the image bytes on the clipboard and Cmd+V them in.
+        case pasteImage
+        /// Type the saved file's absolute path into the composer.
+        case sendTextPath
+    }
+
+    /// Pure decision: clipboard-paste the image, or type its path?
+    ///
+    /// Codex's composer takes pasted image BYTES, which is why it got its own
+    /// branch. But that route runs through `pasteImage`, and `pasteImage` can
+    /// only drive iTerm2 — under Terminal.app it returned "Terminal.app does not
+    /// accept pasted images" and the upload just failed, with the phone showing
+    /// an error for a picture that had already been saved to disk.
+    ///
+    /// Measured on codex-cli 0.146.0: given a bare absolute path, Codex reads
+    /// the file itself ("Viewed Image └ …/quip-test-image.png" → it described
+    /// the picture). So Terminal.app + Codex falls back to the same typed-path
+    /// route every other CLI uses instead of hard-failing. iTerm2 + Codex keeps
+    /// pasting real bytes — that path is proven, and it attaches the image
+    /// rather than relying on the model choosing to open the file.
+    nonisolated static func imageInjectionRoute(cliKind: CLIKind,
+                                                terminalApp: TerminalApp) -> ImageInjectionRoute {
+        guard cliKind == .codex, terminalApp == .iterm2 else { return .sendTextPath }
+        return .pasteImage
     }
 
     /// Pure decision: after typing a single option's digit (with NO Return),

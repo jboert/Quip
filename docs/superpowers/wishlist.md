@@ -43,8 +43,13 @@ Tailscale IP does not work). Needs a cable or same-Wi-Fi + unlock. iOS build is 
 ### OPEN — deferred, with reasons
 - **~16 remaining swallowed errors** — listed with risk notes in
   `docs/superpowers/plans/2026-07-13-swallowed-errors-audit.md`.
-- **`pasteImage` has no Terminal.app fallback** — hard-fails there (the same
-  Terminal.app-vs-iTerm2 blind spot that caused `bf050c7`).
+- ~~**`pasteImage` has no Terminal.app fallback**~~ **FIXED 2026-08-03.** Codex
+  under Terminal.app took the clipboard-bytes route, which only `pasteImage`
+  serves and `pasteImage` only drives iTerm2 — so the upload failed after the
+  photo had already been saved, and the phone showed an error. Measured on
+  codex-cli 0.146.0: given a bare absolute path, Codex opens the file itself
+  ("Viewed Image └ …" then described the picture), so Terminal.app now takes the
+  same typed-path route every other CLI uses. iTerm2 + Codex still pastes bytes.
 - **Image paste puts only `public.tiff` on the clipboard** — some targets want PNG/JPEG.
 - ~~**`APNsJWTTests` hangs the whole Mac suite**~~ **RESOLVED — re-measured
   2026-08-03.** The tests already inject the PEM (`keyPEM:`) and no longer reach
