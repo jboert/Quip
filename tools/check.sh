@@ -71,9 +71,18 @@ if [ "$apple" = "true" ]; then
         touched '^(QuipMac/|Shared/)' && run_mac=true
         touched '^(QuipiOS/|Shared/)' && run_ios=true
         touched '^(Shared/|tools/)'   && run_harness=true
-        # apple=true with no Swift directory matched means the scope came from
-        # something global — a .github change, which is CI itself. Mirror what
-        # CI does there and run everything rather than quietly running nothing.
+        # A .github/ change is CI itself, which the scope script answers with
+        # "run everything" — mirror that HERE, unconditionally. This used to be
+        # an `if nothing else matched` fallback, which quietly did the wrong
+        # thing whenever a CI edit shipped alongside a tools/ edit: the harness
+        # matched, so the fallback never fired, and a workflow change was
+        # verified by a 2-second swiftc run. Caught by reading this script's own
+        # output on the commit that fixed CI's fail-open.
+        if touched '^\.github/'; then
+            run_mac=true; run_ios=true; run_harness=true
+        fi
+        # apple=true with nothing matched at all: a Swift-scoped path this
+        # script does not recognise. Run everything rather than nothing.
         if [ "$run_mac" = "false" ] && [ "$run_ios" = "false" ] && [ "$run_harness" = "false" ]; then
             run_mac=true; run_ios=true; run_harness=true
         fi
