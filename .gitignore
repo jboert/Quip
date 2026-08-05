@@ -115,9 +115,14 @@ node_modules/
 *.log
 logs/
 
-# Machine-local / planning scripts — not for the public repo
-scripts/
-tasks/
+# Machine-local / planning scripts — not for the public repo.
+# ANCHORED with a leading slash: an unanchored `scripts/` matches a directory
+# at ANY depth, which silently swallowed .github/scripts/ — so the CI workflow
+# shipped referencing changed-scopes.sh and changed-scopes-test.sh while
+# neither file was ever committed, and every run failed at the first step.
+# `git status` said clean the whole time, because ignored files never show up.
+/scripts/
+/tasks/
 
 # swrm board-integration runtime/event dir — local state, not for the repo
 .swrm/
