@@ -1,0 +1,49 @@
+#!/bin/bash
+# Run the suites the STAGED change can affect, before the commit is made.
+#
+# This is the commit-time end of the same mapping CI uses: the staged paths go
+# through tools/check.sh, which routes them through
+# .github/scripts/changed-scopes.sh. A docs-only commit costs nothing; a
+# QuipMac-only commit pays for the Mac suite and not the simulator. So the
+# common case is free, and the expensive case is the one that would otherwise
+# have burned a 10x-billed macOS runner to tell you the same thing.
+#
+# Escape hatches, because a gate you cannot get past is a gate people delete:
+#   git commit --no-verify      # skip every hook
+#   QUIP_SKIP_CHECK=1 git commit
+#
+# CAVEAT, deliberately not worked around: the suites test the WORKING TREE, not
+# the index. If you stage a subset of your edits, what runs here is not what you
+# are committing. The usual fix is to stash the unstaged half around the run,
+# which is a well-known way to lose work when a hook is interrupted mid-stash —
+# not a trade worth making for a local convenience gate.
+
+if [ "${QUIP_SKIP_CHECK:-}" = "1" ]; then
+    echo "pre-commit: skipped (QUIP_SKIP_CHECK=1)"
+    exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+CHECK="$ROOT/tools/check.sh"
+
+# The hook lives in the repo it guards; if check.sh is gone (an old commit
+# checked out, a partial clone) let the commit through rather than block it.
+if [ ! -x "$CHECK" ]; then
+    echo "pre-commit: tools/check.sh not found or not executable — skipping"
+    exit 0
+fi
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+printf '%s\n' "$staged" | "$CHECK" --files -
+status=$?
+
+if [ "$status" -ne 0 ]; then
+    echo ""
+    echo "pre-commit: a suite this change can affect is failing — commit blocked."
+    echo "            re-run with 'QUIP_SKIP_CHECK=1 git commit' to override."
+fi
+exit "$status"

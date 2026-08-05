@@ -94,7 +94,10 @@ note_skip() { echo "── SKIPPED $1 — $2"; }
 if [ "$run_harness" = "true" ]; then
     echo "── swiftc harness (Shared)"
     ran=$((ran + 1))
-    bash tools/run-multiselect-tests.sh | tail -2 || failures=$((failures + 1))
+    # `| tail` means $? is TAIL's status, which is always 0 — a failing harness
+    # was reported green. Same PIPESTATUS[0] rule the two Xcode gates below use.
+    bash tools/run-multiselect-tests.sh | tail -2
+    [ "${PIPESTATUS[0]}" -eq 0 ] || failures=$((failures + 1))
     echo ""
 else
     note_skip "swiftc harness" "no Shared/ or tools/ change"
