@@ -66,9 +66,29 @@ jobs:
               *) files="$(git diff --name-only "$BEFORE_SHA" "$HEAD_SHA" 2>/dev/null || true)" ;;
             esac
           fi
-          printf '%s\n' "$files" | .github/scripts/changed-scopes.sh >> "$GITHUB_OUTPUT"
+          # FAIL OPEN, for real. This block has no `set -e`, and `cat` used to be
+          # its last command — so if changed-scopes.sh errored, the pipe wrote
+          # nothing, the step still exited 0, every output came back empty, and
+          # `needs.changes.outputs.apple == 'true'` went false. A broken mapper
+          # SKIPPED both macOS jobs: the exact inversion of the documented
+          # design. Note that `exit 1` here would be just as wrong — the
+          # dependent jobs would be skipped for a failed `needs` instead.
+          # The only correct answer to "I don't know what changed" is everything.
+          scopes=""
+          if scopes="$(printf '%s\n' "$files" | .github/scripts/changed-scopes.sh)"; then
+            : # mapper ran; still verify it actually said something, below
+          else
+            echo "changed-scopes.sh failed (status $?) — falling open"
+            scopes=""
+          fi
+          case "$scopes" in
+            *apple=*) ;;
+            *) echo "no usable scope output — falling open"
+               scopes=$'apple=true\nrust=true\nandroid=true' ;;
+          esac
+          printf '%s\n' "$scopes" >> "$GITHUB_OUTPUT"
           echo "--- resolved scopes ---"
-          cat "$GITHUB_OUTPUT"
+          printf '%s\n' "$scopes"
 
   # --------------------------------------------------------------------------
   # QuipLinux — Rust + GTK4. whisper-rs builds whisper.cpp from source on the

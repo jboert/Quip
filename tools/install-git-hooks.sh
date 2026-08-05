@@ -13,7 +13,11 @@
 #   tools/install-git-hooks.sh --uninstall
 #   tools/install-git-hooks.sh --status
 
-set -uo pipefail
+# `-e` matters here: without it a failed mkdir/chmod/ln still fell through to
+# the unconditional "installed" line and exited 0 — an installer reporting a
+# gate as wired up when it is not. Every intentionally-tolerated failure below
+# is explicit (`|| true`, or a tested condition).
+set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 SRC="$ROOT/tools/git-hooks"
