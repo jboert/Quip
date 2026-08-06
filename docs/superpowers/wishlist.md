@@ -1527,3 +1527,61 @@ From the phone: open a Claude Code multi-select, tap 2+ options, Submit. The
 terminal must show every pick in "Review your answers" and land on
 `⏺ User answered Claude's questions`. Verified by direct injection on
 2026-08-03; the phone→Mac leg still wants one hands-on run.
+
+---
+
+## Session log — 2026-08-06 (the gate lied; CI had never run; merge to main blocked)
+
+One defect class, five instances: **a failure reported as a pass.** Found by
+chasing why a commit landed after what looked like a failing check.
+
+### Fixed
+
+1. **`tools/check.sh` called a failing swiftc harness green** (`b994d97`). It ran
+   `bash tools/run-multiselect-tests.sh | tail -2` and then tested `$?`, which is
+   *tail's* status — always 0. The two Xcode gates already used
+   `${PIPESTATUS[0]}`; the harness line did not. Proved by breaking a harness
+   check deliberately: pre-fix "all green", post-fix "1 suite(s) ran, 1 FAILED",
+   exit 1.
+2. **CI's `changes` job failed CLOSED** (`ba07665`). If the scope mapper errored,
+   `apple` came out unset, both 10×-billed macOS jobs skipped, and the run went
+   green having built nothing. Now falls **open** — an unusable scope output runs
+   everything. Note the tempting wrong fix: `exit 1` there produces the same
+   outcome, because a failed `needs` *skips* its dependents rather than failing
+   them.
+3. **`tools/install-git-hooks.sh` printed "installed" after a failed `ln`** —
+   no `set -e`, unconditional success line. (`ba07665`)
+4. **`tools/quip-smoke.sh` called an unreadable log store a pass** — `log show |
+   grep -q` cannot distinguish "no match" from "the query itself failed". Split
+   into a status-checked query plus a grep, with an INCONCLUSIVE branch.
+   (`ba07665`)
+5. **`check.sh`'s `.github/` rule was a fallback, not unconditional** (`38482d9`).
+   A CI edit shipped alongside a `tools/` edit matched the harness rule first, so
+   the fallback never fired and a workflow change was "verified" by a 2-second
+   swiftc run.
+
+### The one that mattered — CI has been red since `f19760d`
+
+`.gitignore` carried an unanchored `scripts/`. **An unanchored directory pattern
+matches at ANY depth**, so it silently swallowed `.github/scripts/`. Both files
+the workflow calls — `changed-scopes.sh` and `changed-scopes-test.sh` — were
+never committed. Every run has failed at step one ever since, and it was
+invisible locally because the files exist untracked on this machine and `git
+status` never lists an ignored file.
+
+Anchored to `/scripts/` and `/tasks/`, and both scripts committed (`889db83`).
+Verified in a clean checkout, where untracked files do not exist: the files are
+present and `changed-scopes-test.sh` passes 13 checks run exactly as a runner
+would run it.
+
+Local gate on the merged tree: 62 harness checks, 680 QuipMac, 746 QuipiOS, all
+`TEST SUCCEEDED`.
+
+### Blocked — the merge to `main`
+
+`eb-branch` → `main` is a clean fast-forward and has been run locally; `main` is
+at `889db83`. Pushing it is blocked: **`main` is protected** and rejects direct
+pushes ("Changes must be made through a pull request"). `origin/main` is
+untouched at `3269351`, `origin/eb-branch` at `731a20d`. Landing this needs
+`eb-branch` pushed and a PR opened — an outward-facing action distinct from the
+direct push that was approved, so it waits on the owner.
