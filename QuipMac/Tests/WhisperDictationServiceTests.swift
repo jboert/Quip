@@ -21,6 +21,33 @@ final class WhisperDictationServiceTests: XCTestCase {
                                  pcmBase64: data.base64EncodedString(), isFinal: isFinal)
     }
 
+    /// `ingest` is called from the MainActor message loop once per audio chunk
+    /// of every PTT stream. Decoding there blocks main for the length of the
+    /// decode, every chunk — so the count has to stay at zero for both entry
+    /// points, including the one the other tests in this file drive.
+    /// `@MainActor` is load-bearing, not decoration: a plain `async` XCTest
+    /// method runs on a cooperative thread, so without it the call below is not
+    /// coming from main and a zero count would prove nothing. The first
+    /// assertion exists to keep that true if anyone drops the attribute.
+    @MainActor
+    func testChunkDecodeNeverRunsOnTheMainThread() async {
+        WhisperDictationService.resetMainThreadChunkDecodeCount()
+        let fake = FakeTranscriber()
+        let svc = WhisperDictationService(transcriber: fake) { _ in }
+        let sid = UUID()
+
+        XCTAssertTrue(Thread.isMainThread, "the counter only proves anything if the caller IS main")
+        svc.ingest(chunk(sessionId: sid, seq: 0, samples: 1600))
+        await svc.ingestAsync(chunk(sessionId: sid, seq: 1, samples: 1600))
+        // Ordered behind both appends on the same serial queue, so by the time
+        // this returns the decodes have happened.
+        XCTAssertTrue(svc.hasBuffer(for: sid))
+
+        XCTAssertEqual(
+            WhisperDictationService.mainThreadChunkDecodes, 0,
+            "a PCM chunk was base64-decoded on the main thread")
+    }
+
     func testBuffersPerSession() async {
         let fake = FakeTranscriber()
         var sent: [Any] = []

@@ -1390,29 +1390,54 @@ Commits `c6631ef`..`e451f57`. Suite 636 → 663 tests.
 `Process()` launches where `Thread.isMainThread`. Tests assert it stays 0. Reuse
 it for any new spawn site rather than inventing a second mechanism.
 
-### Still open — same defect class, no hang report yet
+### Same defect class — swept 2026-08-08
 
-Found by a full `QuipMac/` sweep, ranked by exposure. None are speculative; each
-is a named blocking call on a confirmed MainActor path.
+Found by a full `QuipMac/` sweep, ranked by exposure. None were speculative; each
+was a named blocking call on a confirmed MainActor path. Four are fixed, three
+are deliberately left alone with reasons.
 
-- `WhisperDictationService.ingest(_:)` (`:66`) — base64 PCM decode + `queue.sync`
-  on main, **once per audio chunk of every PTT stream** (`QuipMacApp.swift:1969`).
-  Highest remaining frequency. Fix shape: decode off main, drop the `queue.sync`.
-- `PINStore.read()` (`:110`) — synchronous `SecItemCopyMatching` during
-  `App.init` on main. The file's own comment at `:88-92` already records a
-  sampled hang on this exact stack. Fix shape: async first read, or accept the
-  cached value and refresh in background.
-- `ImageUploadHandler.save(message:)` (`:97`, `:129`) — full base64 decode plus
-  an atomic disk write of an arbitrarily large image, on main
-  (`QuipMacApp.swift:1454`). Ties into the "photo upload spins forever" list in
-  CLAUDE.md.
-- `WebSocketServer.broadcast<T>` (`:631`) — `JSONEncoder().encode` on main for
-  payloads up to 4 MiB (`TTSAudioMessage` 300-700 KB per chunk, screenshot
-  `TerminalContentMessage`, `DiagnosticsBundleMessage`).
-- `PromptLibrary.rescan()` (`:224-252`) and `VibeCutPromptReader.read()`
-  (`:70`, `:91`) — serial whole-directory file reads on main.
-- `QuipMacApp.windowIndexForWindow(_:terminalApp:)` (`:3275-3313`) — AX title
-  walk, no callers. Dead code with a live defect; delete it.
+**Fixed**
+
+- `WhisperDictationService.ingest(_:)` — base64 PCM decode plus `queue.sync` on
+  main, **once per audio chunk of every PTT stream**. Highest frequency of the
+  set. Both halves now run on the existing serial whisper queue; because it is
+  serial, a later `hasBuffer`/`purgeStaleSessions` still sees the append.
+  `ingestAsync` (test-only) routes through the same path via a continuation,
+  so tests and production agree about where the decode happens.
+  Oracle: `WhisperDictationService.mainThreadChunkDecodes`, same shape as
+  `TerminalStateDetector.mainThreadProcessSpawns`, asserted 0.
+- `WebSocketServer.broadcast<T>` — `JSONEncoder().encode` on main for payloads up
+  to 4 MiB. Encode moved to a **serial** `encodeQueue`, each item hopping back
+  via `DispatchQueue.main.async`. Serial + FIFO is the whole point: TTS audio
+  chunks must arrive in sequence, and a concurrent queue or a `Task { @MainActor }`
+  hop (unordered by design) would scramble them.
+- `VibeCutPromptReader.read()` — packs-directory walk plus a JSON decode per
+  pack. Now `Task.detached`; `handleSyncVibeCut` split so only the read moved and
+  the MainActor tail (`finishSyncVibeCut`) is unchanged.
+- `QuipMacApp.windowIndexForWindow(_:terminalApp:)` — AX title walk with zero
+  callers anywhere in the repo. Deleted rather than fixed.
+
+**Left alone, on purpose**
+
+- `ImageUploadHandler.save(message:)` — moving it off main makes the whole
+  `image_upload` branch async, and `handleIncomingMessage` is what currently
+  guarantees frames are processed in arrival order. That ordering is exactly what
+  the press_return race in CLAUDE.md ("break in the prompt with no image pasted")
+  depends on. Needs a way to keep per-connection message ordering across an async
+  hop first; a bare `Task` reintroduces a bug that was already fixed once.
+- `PromptLibrary.rescan()` — `replaceVibeCutSet`'s own comment states the
+  single-broadcast guarantee "relies on this running synchronously on the
+  MainActor … Do not introduce an `await` between the delete and the final
+  rescan." Making `rescan` async breaks that invariant; N prompts would emit N
+  `prompt_library` messages instead of one.
+- `PINStore.read()` — a synchronous `SecItemCopyMatching` during `App.init`, with
+  a sampled hang already recorded in the file's own comment. Left because it is
+  the authentication path: making the first read async means deciding what the
+  server does with connections that arrive before the PIN is known, and getting
+  that wrong fails open. Wants a deliberate design pass, not a thread hop.
+
+**Not swept:** `sendToClient` and `broadcastTunnelsOnly` still encode on main.
+Same fix shape as `broadcast`; they carry the QA-mode per-client layout path.
 
 ### Deliberate deviations from the plan (do not "fix" without reading why)
 

@@ -2232,17 +2232,34 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     private func handleSyncVibeCut(_ msg: SyncVibeCutMessage) {
         let messageId = msg.messageId ?? UUID()
 
-        let readResult: VibeCutPromptReader.ReadResult
-        do {
-            readResult = try VibeCutPromptReader(root: VibeCutPromptReader.defaultRoot()).read()
-        } catch {
-            let reason = (error as? VibeCutPromptReader.ReadError)?.description ?? "\(error)"
-            print("[Quip] sync_vibecut failed: \(reason)")
-            webSocketServer.broadcast(SyncVibeCutAckMessage(
-                messageId: messageId, syncedCount: 0, skippedCount: 0, error: reason))
-            return
+        // The read walks the packs directory and decodes every JSON in it —
+        // serial file I/O whose cost scales with how many packs the user has.
+        // Off main, same shape as handleRequestDiagnostics below. Only the READ
+        // moves: everything from `mapped` on still runs synchronously on the
+        // MainActor, because `replaceVibeCutSet`'s one-broadcast guarantee
+        // depends on no `await` between its delete and its final rescan.
+        Task { @MainActor in
+            let readResult: VibeCutPromptReader.ReadResult
+            do {
+                readResult = try await Task.detached(priority: .userInitiated) {
+                    try VibeCutPromptReader(root: VibeCutPromptReader.defaultRoot()).read()
+                }.value
+            } catch {
+                let reason = (error as? VibeCutPromptReader.ReadError)?.description ?? "\(error)"
+                print("[Quip] sync_vibecut failed: \(reason)")
+                self.webSocketServer.broadcast(SyncVibeCutAckMessage(
+                    messageId: messageId, syncedCount: 0, skippedCount: 0, error: reason))
+                return
+            }
+            self.finishSyncVibeCut(readResult: readResult, messageId: messageId)
         }
+    }
 
+    /// The MainActor tail of `handleSyncVibeCut`, split out so the file read can
+    /// happen off main without indenting (or reordering) any of this.
+    @MainActor
+    private func finishSyncVibeCut(readResult: VibeCutPromptReader.ReadResult,
+                                   messageId: UUID) {
         let mapped = VibeCutPromptMapper.map(catalog: readResult.catalog)
         guard !mapped.entries.isEmpty else {
             // Valid read but nothing inheritable — don't wipe the existing set.
@@ -3506,55 +3523,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         webSocketServer.broadcast(FrontmostChangedMessage(windowId: current))
     }
 
-    /// Find the 1-based window index in the terminal app by matching
-    /// the managed window's position against AX window positions.
-    /// Terminal apps order their windows differently than CG, so we
-    /// enumerate AX windows for the same PID and find which index matches.
-    private func windowIndexForWindow(_ window: ManagedWindow, terminalApp: TerminalApp) -> Int {
-        let appElement = AXUIElementCreateApplication(window.pid)
-        var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let axWindows = windowsRef as? [AXUIElement] else {
-            return 1
-        }
-
-        // Match by title first (most reliable for multiple windows of same app)
-        for (index, axWindow) in axWindows.enumerated() {
-            var titleRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef) == .success,
-               let axTitle = titleRef as? String {
-                if axTitle == window.name {
-                    print("[Quip] Title match '\(axTitle)' -> window \(index + 1)")
-                    return index + 1
-                }
-            }
-        }
-
-        // Fallback: match by CG window number via position
-        // Refresh bounds from CG first for accuracy
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        if let infoList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] {
-            for info in infoList {
-                guard let wn = info[kCGWindowNumber as String] as? CGWindowID,
-                      wn == window.windowNumber,
-                      let boundsDict = info[kCGWindowBounds as String] as? [String: Any] else { continue }
-                let freshX = boundsDict["X"] as? CGFloat ?? window.bounds.origin.x
-                let freshY = boundsDict["Y"] as? CGFloat ?? window.bounds.origin.y
-
-                for (index, axWindow) in axWindows.enumerated() {
-                    var posRef: CFTypeRef?
-                    guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success else { continue }
-                    var axPos = CGPoint.zero
-                    AXValueGetValue(posRef as! AXValue, .cgPoint, &axPos)
-
-                    if abs(axPos.x - freshX) < 10 && abs(axPos.y - freshY) < 10 {
-                        print("[Quip] Position match -> window \(index + 1)")
-                        return index + 1
-                    }
-                }
-            }
-        }
-
-        return 1
-    }
+    // `windowIndexForWindow(_:terminalApp:)` lived here: an AX title walk plus a
+    // CGWindowListCopyWindowInfo sweep, on the main thread, with zero callers
+    // anywhere in the repo. Deleted rather than moved off main — dead code with
+    // a live defect is still just dead code, and keeping it around means the
+    // next reader has to re-derive that nothing calls it.
 }

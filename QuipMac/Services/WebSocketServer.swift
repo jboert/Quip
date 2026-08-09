@@ -672,15 +672,38 @@ final class WebSocketServer {
         }
     }
 
-    func broadcast<T: Encodable & Sendable>(_ message: T) {
-        let data: Data
-        do {
-            data = try JSONEncoder().encode(message)
-        } catch {
-            print("[WebSocketServer] broadcast encode FAILED kind=\(String(describing: T.self)) err=\(error)")
-            return
-        }
+    /// Serial, and that is load-bearing. `JSONEncoder().encode` ran on the
+    /// MainActor for payloads up to 4 MiB — `TTSAudioMessage` is 300-700 KB per
+    /// chunk, screenshots and diagnostics bundles are larger — so every
+    /// broadcast blocked the UI for the length of its own encode. Moving it off
+    /// main must not reorder anything: TTS chunks have to reach the phone in
+    /// sequence. A serial queue encodes in submission order, and each item hops
+    /// back with `DispatchQueue.main.async`, which is FIFO — so sends happen in
+    /// call order. A concurrent queue, or a `Task { @MainActor }` hop (unordered
+    /// by design), would silently scramble audio.
+    private let encodeQueue = DispatchQueue(label: "com.quip.ws.encode", qos: .userInitiated)
 
+    func broadcast<T: Encodable & Sendable>(_ message: T) {
+        let kind = String(describing: T.self)
+        encodeQueue.async { [weak self] in
+            let data: Data
+            do {
+                data = try JSONEncoder().encode(message)
+            } catch {
+                print("[WebSocketServer] broadcast encode FAILED kind=\(kind) err=\(error)")
+                return
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.deliverBroadcast(data)
+            }
+        }
+    }
+
+    /// The send half of `broadcast`, once the message is already bytes.
+    /// Snapshotting `clients` here rather than at call time is deliberate: a
+    /// client that dropped while its payload was encoding should not be sent to.
+    private func deliverBroadcast(_ data: Data) {
         // Send to authenticated direct WebSocket clients
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
