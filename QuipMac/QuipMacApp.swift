@@ -132,6 +132,7 @@ struct QuipMacApp: App {
     @State private var pinManager = PINManager()
     @State private var connectionLog = ConnectionLog()
     @State private var promptLibrary = PromptLibrary()
+    @State private var vibeCutSyncService = VibeCutSyncService()
     @State private var pushNotificationService = PushNotificationService()
     @State private var swrmProjectStore = SwrmProjectStore()
     @State private var swrmStoryCoordinator = SwrmStoryCoordinator()
@@ -288,6 +289,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(pushNotificationService)
                 .environment(whisperStatusStore)
                 .environment(promptLibrary)
+                .environment(vibeCutSyncService)
                 .environment(swrmProjectStore)
         }
         .windowResizability(.contentMinSize)
@@ -2219,63 +2221,26 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
     }
 
-    /// Phone tapped "Sync from VibeCut". Read `<repo>/shared/prompts.json`, map its
-    /// real text prompts into the reserved `vibecut__*` namespace (tagged
-    /// "vibecut"), replace the prior inherited set on disk in one batch, and ack
-    /// with the synced/skipped counts. `replaceVibeCutSet` fires the single
-    /// `prompt_library` broadcast that refreshes the phone's catalog. One-way only.
-    ///
-    /// On repo-not-found (or an empty/failed read) the prompts directory is left
-    /// untouched — we do NOT wipe the existing inherited set on a transient miss —
-    /// and the ack carries `syncedCount: 0` + a reason string.
+    /// Phone tapped "Sync from VibeCut". The read/map/replace pipeline lives in
+    /// VibeCutSyncService (shared with the Settings → Prompts "Sync Now"
+    /// button); this handler only adds the wire ack. `replaceVibeCutSet` fires
+    /// the single `prompt_library` broadcast that refreshes the phone's catalog.
+    /// One-way only; a failed or empty read leaves the inherited set untouched.
     @MainActor
     private func handleSyncVibeCut(_ msg: SyncVibeCutMessage) {
         let messageId = msg.messageId ?? UUID()
-
-        // The read walks the packs directory and decodes every JSON in it —
-        // serial file I/O whose cost scales with how many packs the user has.
-        // Off main, same shape as handleRequestDiagnostics below. Only the READ
-        // moves: everything from `mapped` on still runs synchronously on the
-        // MainActor, because `replaceVibeCutSet`'s one-broadcast guarantee
-        // depends on no `await` between its delete and its final rescan.
         Task { @MainActor in
-            let readResult: VibeCutPromptReader.ReadResult
-            do {
-                readResult = try await Task.detached(priority: .userInitiated) {
-                    try VibeCutPromptReader(root: VibeCutPromptReader.defaultRoot()).read()
-                }.value
-            } catch {
-                let reason = (error as? VibeCutPromptReader.ReadError)?.description ?? "\(error)"
-                print("[Quip] sync_vibecut failed: \(reason)")
-                self.webSocketServer.broadcast(SyncVibeCutAckMessage(
-                    messageId: messageId, syncedCount: 0, skippedCount: 0, error: reason))
-                return
+            let outcome = await vibeCutSyncService.sync(into: promptLibrary)
+            if let error = outcome.error {
+                print("[Quip] sync_vibecut: \(error) (\(outcome.skipped) skipped)")
+            } else {
+                print("[Quip] sync_vibecut: wrote \(outcome.synced) prompts (\(outcome.skipped) skipped, \(outcome.skippedPacks) pack files unreadable)")
             }
-            self.finishSyncVibeCut(readResult: readResult, messageId: messageId)
+            self.webSocketServer.broadcast(SyncVibeCutAckMessage(
+                messageId: messageId, syncedCount: outcome.synced,
+                skippedCount: outcome.skipped, skippedPacks: outcome.skippedPacks,
+                error: outcome.error))
         }
-    }
-
-    /// The MainActor tail of `handleSyncVibeCut`, split out so the file read can
-    /// happen off main without indenting (or reordering) any of this.
-    @MainActor
-    private func finishSyncVibeCut(readResult: VibeCutPromptReader.ReadResult,
-                                   messageId: UUID) {
-        let mapped = VibeCutPromptMapper.map(catalog: readResult.catalog)
-        guard !mapped.entries.isEmpty else {
-            // Valid read but nothing inheritable — don't wipe the existing set.
-            print("[Quip] sync_vibecut: 0 inheritable prompts (\(mapped.skipped) skipped); leaving set untouched")
-            webSocketServer.broadcast(SyncVibeCutAckMessage(
-                messageId: messageId, syncedCount: 0, skippedCount: mapped.skipped,
-                skippedPacks: readResult.skippedPacks,
-                error: "No inheritable prompts found in VibeCut."))
-            return
-        }
-
-        let written = promptLibrary.replaceVibeCutSet(mapped.entries)
-        print("[Quip] sync_vibecut: wrote \(written) prompts (\(mapped.skipped) skipped, \(readResult.skippedPacks) pack files unreadable)")
-        webSocketServer.broadcast(SyncVibeCutAckMessage(
-            messageId: messageId, syncedCount: written, skippedCount: mapped.skipped,
-            skippedPacks: readResult.skippedPacks, error: nil))
     }
 
     /// Phone asked for the Mac's diagnostic log bundle. Build the zip on a
