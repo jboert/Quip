@@ -83,7 +83,18 @@ into Quip's Prompts page, via a manual Sync button. US-001..US-006 all green.
   (`hiddenPromptIDsJSON`, `PromptHideState`) filtered at `sortedPromptsByMRU()`.
 - Contract: `docs/vibecut-prompt-inherit.md`. **NOT hardware-verified** — needs a
   Mac rebuild (touches QuipMac) + live phone sync.
-- Possible v2: Settings UI for `vibecutRepoPath`; two-way sync (out of scope now).
+- ~~Possible v2: Settings UI for `vibecutRepoPath`~~ SHIPPED 2026-08-14 (`7f28b61`,
+  `8470340`): Mac Settings → Prompts VibeCut section (repo probe + Change… +
+  Sync Now via shared `VibeCutSyncService` + persisted last-sync counts), header
+  yours/inherited split, purple badge + prefix-free slugs on inherited rows,
+  sync trigger + outcome logged to websocket.log. Installed + Mac-verified
+  2026-08-14; live PHONE sync against the new build still unverified. Comps:
+  claude.ai/code/artifact/ae6ff381-5fef-4235-bc1a-ee6987075e57.
+  Open question: two syncs on 2026-08-14 (12:38:53, 12:43:44 local) fired with
+  zero WS clients and no button press, during synthetic AppleScript keystrokes
+  racing window restoration; unreproducible ×4 afterward. If websocket.log ever
+  shows `sync started (trigger=…)` nobody asked for, that line names the caller.
+- Two-way sync still out of scope.
 
 ## Wishlist — Alternate app icons (user-selectable in Settings)  [2026-06-20, requested]
 
