@@ -68,7 +68,14 @@ final class VibeCutSyncService {
     /// one-broadcast guarantee depends on no `await` between its delete and its
     /// final rescan. A failed or empty read leaves the existing inherited set
     /// untouched.
-    func sync(into library: PromptLibrary) async -> Outcome {
+    ///
+    /// `trigger` names the entry point ("phone" / "settings-button") in the
+    /// websocket.log line — every sync rewrites the whole inherited set on
+    /// disk, so an unattributed one must be traceable to its caller.
+    func sync(into library: PromptLibrary, trigger: String) async -> Outcome {
+        QuipLog.write(severity: .info, subsystem: "vibecut",
+                      message: "sync started (trigger=\(trigger))",
+                      to: LogPaths.webSocketPath)
         isSyncing = true
         defer { isSyncing = false }
 
@@ -102,6 +109,10 @@ final class VibeCutSyncService {
         if let data = try? JSONEncoder().encode(outcome) {
             UserDefaults.standard.set(data, forKey: Self.outcomeKey)
         }
+        QuipLog.write(severity: error == nil ? .info : .error, subsystem: "vibecut",
+                      message: "sync finished: \(synced) synced, \(skipped) skipped, "
+                             + "\(skippedPacks) packs unreadable\(error.map { " — \($0)" } ?? "")",
+                      to: LogPaths.webSocketPath)
         return outcome
     }
 }

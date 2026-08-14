@@ -2230,7 +2230,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     private func handleSyncVibeCut(_ msg: SyncVibeCutMessage) {
         let messageId = msg.messageId ?? UUID()
         Task { @MainActor in
-            let outcome = await vibeCutSyncService.sync(into: promptLibrary)
+            let outcome = await vibeCutSyncService.sync(into: promptLibrary, trigger: "phone")
             if let error = outcome.error {
                 print("[Quip] sync_vibecut: \(error) (\(outcome.skipped) skipped)")
             } else {
