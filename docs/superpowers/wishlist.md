@@ -6,9 +6,12 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
-## Session log — 2026-08-17 (multi-select "still broken" = stale binary; probe socket leak)
+## Session log — 2026-08-17 (multi-select "still broken" = stale binary; probe socket leak; LAN routing)
 
 ### Shipped
+- **Latency swap actually works** (`58dd75e`) — the engine was gated behind a
+  default-off key nobody ever wrote, and its comparison mixed measurement kinds. Both
+  fixed; the phone moved to LAN on hardware at `21:57:02Z`. Full write-up below.
 - **Pre-handshake reaper** (`1dbd64b`) — `PreHandshakeReapPolicy` closes any accepted
   connection that has not completed the WebSocket upgrade within 10s. The listener
   previously waited forever, so every phone latency probe (TCP-only, one per alternate
@@ -57,13 +60,41 @@ earlier the same morning (`15:41`–`15:42`) hit the old binary and died silentl
   came over Tailscale, never two at once; `urlsByRefreshingLocal` + `ingestLocalURLs`
   are in place. What looked like a flap in websocket.log was the probe artifact above.
 
-### Open question for the owner
-The phone has authenticated over **Tailscale on every single connect today** and never
-over LAN, even while sitting on the same Wi-Fi as the Mac. Bonjour advertises, the LAN
-URL is probed every 60s, and `URLSwapPolicy` exists to move to a faster path — but no
-swap has been observed. Worth confirming whether that is intended (Tailscale sticky by
-design) or whether the swap is silently not firing; the latter would mean every byte
-takes a relay hop when a LAN path is sitting right there.
+### Answered, then fixed — the phone was never going to use LAN
+The open question above ("why has the phone authenticated over Tailscale on all 20
+connects, never LAN?") had two independent answers, and both had to be fixed
+(`58dd75e`).
+
+1. **The swap engine was dark for everybody.** `evaluateSwap` gates on
+   `latencyAutoSwapEnabled`, and `UserDefaults.bool(forKey:)` returns false for a key
+   nobody ever wrote. It shipped "off until hardware-verified", which in practice meant
+   off forever — the verification required the engine to run. Unset now means on
+   (`BackendConnectionManager.autoSwapEnabled`); an explicit choice either way still
+   wins, and the Settings row reads through the same helper so the toggle cannot
+   disagree with the engine.
+2. **Turning it on would have decided wrongly.** `LatencyProbeService` skipped the URL
+   it was connected to, so that URL's bucket held only live samples — a full WebSocket
+   round trip — while every candidate's bucket held only TCP-connect times. A handshake
+   is cheaper than an application round trip by construction, so *any* candidate scored
+   far better than the URL in use, including a slower one. The `candidateRatio` guards
+   sampling noise; nothing guarded the unit mismatch. Now every URL is probed (the
+   connected one included, force-added since a hot-swap can briefly hide it from the
+   provider's view) and `URLSwapPolicy` scores probe samples only. Live samples stay in
+   the buffer for Diagnostics; they no longer vote.
+
+**Verified live on hardware.** Phone connected Tailscale-first as designed at
+`21:54:49Z`; both URLs probed in the same second each cycle (the signature of the fix —
+previously only the LAN line appeared); third probe round completed ~`21:56:5x`; swap
+landed at **`21:57:02Z`**, inside the window the thresholds predict. `netstat` confirmed
+the live socket as `192.168.4.26.8765 ← 192.168.4.42` — LAN to LAN, relay out of the
+path. QuipiOS suite: 756 tests, 0 failures.
+
+### Verified end to end this session
+| Change | Evidence |
+| --- | --- |
+| Phone-driven multi-select | `audit.log` `select_multi:1,2` at `20:40:45Z` → correct picks returned |
+| Pre-handshake reaper | `reaping … within 10s` at INFO; zero `broke during handshake` since; no leaked sockets |
+| LAN routing | `client live: 192.168.4.42` at `21:57:02Z`, first LAN auth on record |
 
 ---
 
