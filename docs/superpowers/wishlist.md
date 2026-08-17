@@ -6,6 +6,67 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-08-17 (multi-select "still broken" = stale binary; probe socket leak)
+
+### Shipped
+- **Pre-handshake reaper** (`1dbd64b`) — `PreHandshakeReapPolicy` closes any accepted
+  connection that has not completed the WebSocket upgrade within 10s. The listener
+  previously waited forever, so every phone latency probe (TCP-only, one per alternate
+  URL per minute, closed as soon as TCP is up) pinned a Mac socket in `CLOSE_WAIT` —
+  measured still open four minutes after the peer's FIN. Worse, ~60s later the peer's
+  own FIN_WAIT_2 timer RST'd the abandoned socket, the Mac's connection object was
+  still alive to receive it, and websocket.log printed `[WARN] broke during handshake
+  — the client never got connected: POSIX 54`. 43 of those in one day, all describing
+  a LAN path that was healthy. Deadline is pinned by test between the ~60s RST window
+  and a real handshake (milliseconds). Mac suite 685 green; verified live against the
+  phone's own probe (`reaping … within 10s` at INFO, zero WARNs since).
+- **Mac app brought current** — `/Applications/Quip.app` was the **Jun 20** build.
+
+### The one that mattered — no code was broken
+
+The reported symptom was multiple-choice answers failing three ways at once: tap does
+nothing, "Prompt changed — not sent", multi-select never submits. Every fix for all
+three had already shipped to `eb-branch`; none of it was running. The installed binary
+predated the entire interactive-checkbox path (`7654f6c`, Jul 1 — so the Mac typed
+`"1, 3"` as text into an Ink widget that ignores typed text), the Terminal.app space
+key (`bf050c7`), the untoggle + submit-review fix (`2c57768`), and two `fingerprint()`
+rule changes (`22e4f01`, `18b2ec0`) that break the phone↔Mac two-peer contract against
+a current phone — a mismatch that yields "Prompt changed — not sent" on *every* prompt.
+
+Diagnostic worth keeping: three symptoms spanning unrelated code paths point at one
+stale binary, not three live bugs. `stat -f "%Sm" /Applications/Quip.app` against the
+feature's commit date costs five seconds and would have opened this session instead of
+closing it. Verify the installed binary actually carries the feature with
+`nm -a …/Contents/MacOS/Quip | grep -ci multiselect` (68 after, 0 before) — `strings`
+does not work on Swift symbols, and `ditto` leaves the `.app` directory mtime stale so
+check `Contents/MacOS/Quip` instead.
+
+**Live-verified end to end:** phone tapped two options on a real Claude Code checkbox
+widget → `audit.log` recorded `select_multi:1,2` at `20:40:45Z` → the picks came back
+correct. First successful phone-driven multi-select on this machine; the three attempts
+earlier the same morning (`15:41`–`15:42`) hit the old binary and died silently.
+
+### Already shipped, contrary to the backlog
+- **Persist connections across reinstall** — done (`f75dcef`). `PreferencesSnapshot`
+  carries `pairedBackendsJSON`, `recentConnectionsJSON`, `activeBackendID`; restore goes
+  through merge hooks (never clobbers live rows) and is mirrored to
+  `NSUbiquitousKeyValueStore`, so it survives a reinstall even with no Mac reachable.
+- **Bonjour in Tailscale mode** — done (`8dbfa93`, TXT-fold). The Mac advertises LAN
+  Bonjour in all modes now.
+- **Dual-path row flap** — not reproducing. All 20 authenticated connects on 2026-08-17
+  came over Tailscale, never two at once; `urlsByRefreshingLocal` + `ingestLocalURLs`
+  are in place. What looked like a flap in websocket.log was the probe artifact above.
+
+### Open question for the owner
+The phone has authenticated over **Tailscale on every single connect today** and never
+over LAN, even while sitting on the same Wi-Fi as the Mac. Bonjour advertises, the LAN
+URL is probed every 60s, and `URLSwapPolicy` exists to move to a faster path — but no
+swap has been observed. Worth confirming whether that is intended (Tailscale sticky by
+design) or whether the swap is silently not firing; the latter would mean every byte
+takes a relay hop when a LAN path is sitting right there.
+
+---
+
 ## Session log — 2026-07-13 (error-handling sweep + crash fix + duplicate-instance fix)
 
 ### Shipped
