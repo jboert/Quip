@@ -14,10 +14,15 @@ final class URLSwapPolicyTests: XCTestCase {
 
     // MARK: - sample factory
 
+    /// Defaults to a probe sample because probes are the only kind the policy
+    /// scores on — every URL can produce them, so both sides of a comparison
+    /// are measuring the same thing. See `LatencySwapComparabilityTests` for
+    /// why admitting live round-trip samples here made every candidate look
+    /// faster than the URL already in use.
     private func sample(
         host: String,
         netRtt: Int,
-        path: String = "sendText"
+        path: String = "probe"
     ) -> WebSocketClient.LatencySample {
         WebSocketClient.LatencySample(
             timestamp: Date(),

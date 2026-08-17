@@ -53,9 +53,25 @@ final class BackendConnectionManager {
     /// (probes gather data; this evaluates whether to act on the data).
     private var swapEvaluatorTask: Task<Void, Never>?
     /// UserDefaults-backed toggle. Read at task start so a user flip
-    /// takes effect on the next eval tick. Defaults OFF until the
-    /// first hardware-verified release; opt-in keeps the rollout safe.
+    /// takes effect on the next eval tick.
     static let autoSwapDefaultsKey = "latencyAutoSwapEnabled"
+
+    /// Whether the latency swap engine may act. **Unset means on.**
+    ///
+    /// This shipped default-OFF pending hardware verification, and the effect
+    /// was that it never ran for anybody: `UserDefaults.bool(forKey:)` reports
+    /// false for a key nobody has written, so a user who never opened
+    /// Settings → Diagnostics → Latency got no swap engine at all. Measured on
+    /// 2026-08-17: 20 authenticated connects in a day, every one over the
+    /// Tailscale relay, with a Bonjour-advertised LAN path probed every 60s and
+    /// never once used.
+    ///
+    /// An explicit choice in either direction still wins — this only fills the
+    /// gap where there is no choice recorded.
+    nonisolated static func autoSwapEnabled(_ defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: autoSwapDefaultsKey) != nil else { return true }
+        return defaults.bool(forKey: autoSwapDefaultsKey)
+    }
 
     /// Hooks the host (`QuipApp`) sets so that side-effecty things which the
     /// manager itself shouldn't know about — Live Activity, push registration,
@@ -320,7 +336,7 @@ final class BackendConnectionManager {
     /// One eval pass. Returns the URL we swapped to (if any) for testability.
     @discardableResult
     func evaluateSwap() async -> URL? {
-        guard UserDefaults.standard.bool(forKey: Self.autoSwapDefaultsKey) else { return nil }
+        guard Self.autoSwapEnabled() else { return nil }
         guard !activeBackendID.isEmpty,
               let session = sessions[activeBackendID],
               let entry = paired.first(where: { $0.id == activeBackendID }),

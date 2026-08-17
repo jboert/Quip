@@ -8586,13 +8586,15 @@ struct LatencyDiagnosticsSheet: View {
                     Text("Recent (\(client.latencySamples.count) samples)")
                 }
 
-                // Phase 3: opt-in toggle for hot-swap routing. Off by default
-                // until hardware-verified across LAN / Tailscale / Cloudflare;
-                // user enables it from this row to opt into the experimental
-                // "always pick fastest path" behavior.
+                // Phase 3: hot-swap routing. ON unless the user opts out — the
+                // reader must agree with `BackendConnectionManager
+                // .autoSwapEnabled`, or this row would show OFF while the
+                // engine is running (which is exactly backwards from the bug
+                // this replaced, where the row showed OFF and the engine
+                // genuinely never ran for anyone).
                 Section {
                     Toggle("Auto-pick fastest path", isOn: Binding(
-                        get: { UserDefaults.standard.bool(forKey: BackendConnectionManager.autoSwapDefaultsKey) },
+                        get: { BackendConnectionManager.autoSwapEnabled() },
                         set: { UserDefaults.standard.set($0, forKey: BackendConnectionManager.autoSwapDefaultsKey) }
                     ))
                 } header: {
