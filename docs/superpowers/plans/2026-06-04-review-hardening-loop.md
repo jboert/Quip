@@ -85,28 +85,28 @@
 
 ---
 
-## Iteration 3 - Terminal Detector Backpressure And Stale-State Guards
+## Iteration 3 - Terminal Detector Backpressure And Stale-State Guards ✅ SHIPPED `0a1b206` (2026-08-17)
 
 **User value:** The Mac UI and phone state stop flickering or resurrecting stale terminal state when windows close, sessions respawn, or `ps` stalls.
 
 ### Tasks
 
-- [ ] **Add poll generation.** Increment a generation token on start/stop and capture it with each queued poll.
-- [ ] **Coalesce polls.** Add an in-flight guard so the 0.25s timer drops ticks while a previous poll is still running.
-- [ ] **Validate before apply.** Carry `(windowId, originalPid)` through poll results and discard results on main unless the window is still tracked with the same PID or an accepted resolved PID.
-- [ ] **Invalidate stop cleanly.** `stopMonitoring()` must prevent queued poll results from reinstalling process sources.
-- [ ] **Move process-exit refresh off main.** Exit handlers should dispatch descendant discovery to `pollQueue` and apply only watch mutations on main.
-- [ ] **Add focused tests if practical.** Prefer an injectable snapshot/poll application path rather than broad process-spawning tests.
+- [x] **Add poll generation.** Increment a generation token on start/stop and capture it with each queued poll.
+- [x] **Coalesce polls.** Add an in-flight guard so the 0.25s timer drops ticks while a previous poll is still running.
+- [x] **Validate before apply.** Carry `(windowId, originalPid)` through poll results and discard results on main unless the window is still tracked with the same PID or an accepted resolved PID.
+- [x] **Invalidate stop cleanly.** `stopMonitoring()` must prevent queued poll results from reinstalling process sources.
+- [x] **Move process-exit refresh off main.** (already landed in `f4f15ae`, verified 2026-08-17) Exit handlers should dispatch descendant discovery to `pollQueue` and apply only watch mutations on main.
+- [x] **Add focused tests if practical.** Prefer an injectable snapshot/poll application path rather than broad process-spawning tests.
 
 ### Verification
 
-- [ ] Mac build: `xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac build`
-- [ ] Any new targeted Mac tests.
+- [x] Mac build: `xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac build`
+- [x] Any new targeted Mac tests. (`TerminalPollGateTests`, 9 cases; suite 694 green)
 - [ ] Manual smoke: close tracked iTerm windows during active polling and confirm no stale state or source churn in logs.
 
 ### Commit
 
-- [ ] Commit message: `Guard terminal polling against stale state`
+- [x] Commit message: `Guard terminal polling against stale state` — landed `0a1b206`
 
 ---
 

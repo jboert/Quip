@@ -14,14 +14,17 @@ _(none)_
 
 ## Ready
 
-_(none)_
+| ID | Title | Notes |
+|----|-------|-------|
+| Q-17 | §58 Iteration 2 — prompt save/delete acks | Protocol work: ack messages, metadata preservation, ID-collision UX. Two-peer, so ship Mac + iOS together. |
+| Q-18 | §58 Iteration 1 — layout order + selected display | Unify sidebar/preview/arrange order; build Arrange rects from the selected display's frame. Needs a multi-display smoke to finish. |
+| Q-19 | §58 Iteration 4 — UX polish | Drag-to-resize promise, spawn-path quoting, accessibility labels, protocol docs. |
 
 ## Blocked
 
 | ID | Title | Blocked on |
 |----|-------|-----------|
-| Q-A1 | Acceptance: phone→Mac leg of multi-select | A paired phone. The Mac requires a PIN, so the WebSocket hop cannot be driven from a script here. Everything downstream of it is verified by direct injection. |
-| Q-A2 | Install the current iOS build on the phone | `devicectl` reports the iPhone `unavailable` (it pairs over Bonjour, so it needs USB or the same Wi-Fi, unlocked). The phone is running the build from earlier today: it HAS the `[✔]` + Submit-row detector, it does NOT have the divider rule (`ec9308b`), so it still shows "Chat about this" as a chip. Mac side is current. |
+| Q-16 | §58 Iteration 3 manual smoke | Close tracked iTerm windows during active polling and confirm no stale state or source churn. Needs the new Mac build installed (`0a1b206` is committed but `/Applications/Quip.app` predates it). |
 
 ## Done
 
@@ -43,6 +46,10 @@ _(none)_
 | Q-10 | `pre-commit` runs the gate on staged paths; fixed the gate reporting a failing swiftc harness as green (`\| tail` masked its exit status) | `b994d97` |
 | Q-11 | Three more places where a failure read as success: CI's `changes` job failed CLOSED (a broken mapper silently skipped both macOS jobs), the hook installer reported "installed" after a failed `ln`, and the Mac smoke test called an unreadable log store a pass | `ba07665` |
 | Q-12 | `check.sh`'s `.github/` rule was a fallback, so a CI change shipped alongside a `tools/` change was verified by a 2-second swiftc run | `38482d9` |
+| Q-14b | Multi-select verified phone→Mac end to end (`select_multi:1,2`, correct picks) — closes the old Q-A1 | verified 2026-08-17 |
+| Q-15 | Pre-handshake reaper — probe sockets no longer leak, no more false "broke during handshake" WARNs | `1dbd64b` |
+| Q-16a | LAN routing — swap engine was default-off for everyone and compared probes against live round-trips | `58dd75e` |
+| Q-16b | §58 Iteration 3 — terminal poll generation, coalescing, stale-result guards | `0a1b206` |
 | Q-13 | CI had failed at step one on every run since `f19760d`: an unanchored `scripts/` in `.gitignore` matches at ANY depth, so `.github/scripts/` was never committed and the workflow called two files that do not exist on a runner | `889db83` |
 | Q-14 | Main-thread blocking sweep: PTT chunk decode, WebSocket broadcast encode, and the VibeCut packs read moved off main; a dead AX walk deleted. Three sites left alone with reasons (see wishlist) | `05b935a` |
 
