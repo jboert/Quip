@@ -469,6 +469,17 @@ final class WebSocketServer {
         }
         connection.start(queue: networkQueue)
         Self.wslog("connection.start() called immediately")
+        // Bound the wait for the WS upgrade. Without this an accepted socket
+        // that never handshakes is held forever — the phone's TCP-only latency
+        // probes leaked one per alt URL per minute, and each leak later took an
+        // RST from the peer's FIN_WAIT_2 timer that we logged as a failed dial.
+        // Same queue as the state handler, so `handshake` stays single-threaded.
+        networkQueue.asyncAfter(deadline: .now() + PreHandshakeReapPolicy.deadline) {
+            guard PreHandshakeReapPolicy.shouldReap(reachedReady: handshake.reachedReady) else { return }
+            Self.wslog("reaping connection from \(connection.endpoint) — no WebSocket handshake "
+                       + "within \(Int(PreHandshakeReapPolicy.deadline))s (probe or abandoned dial)")
+            connection.cancel()
+        }
     }
 
     /// Schedule a single-shot retry of `start()`. Idempotent — replaces any
