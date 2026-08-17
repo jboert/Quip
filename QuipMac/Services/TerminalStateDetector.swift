@@ -110,18 +110,40 @@ final class TerminalStateDetector {
     /// Begin periodic polling of tracked terminal windows
     private let pollQueue = DispatchQueue(label: "quip.terminal-state-poll", qos: .utility)
 
+    /// Bumped by every start and every stop. A poll carries the value it saw
+    /// when it began, so results from a run that has since ended are discarded
+    /// instead of writing state — or reinstalling kqueue sources — after
+    /// `stopMonitoring` tore the run down.
+    private var pollGeneration = 0
+
+    /// One poll at a time; ticks arriving while a poll is still running are
+    /// dropped rather than queued behind it.
+    private let pollCoalescer = PollCoalescer()
+
     func startMonitoring() {
         guard pollTimer == nil else { return }
+        pollGeneration &+= 1
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
             // Timer fires on the main runloop. Snapshot MainActor state inside
             // assumeIsolated, then do the heavy ps(1) work off main.
-            let (tracked, ttys, sttWindows, threshold): ([String: pid_t], [String: String], Set<String>, Double) =
+            //
+            // The generation and the tracked PIDs travel WITH the poll: by the
+            // time it returns, a window may be untracked, a shell may have
+            // respawned, or monitoring may have stopped. `TerminalPollGate`
+            // decides per window whether the answer still describes the world
+            // it is about to be written into.
+            let snapshot: ([String: pid_t], [String: String], Set<String>, Double, Int)? =
                 MainActor.assumeIsolated {
+                    // A poll forks ps and can outlast the 0.25s interval. Drop
+                    // this tick rather than queueing another fork behind it.
+                    guard self.pollCoalescer.begin() else { return nil }
                     let states = self.windowStates
                     let stt = Set(states.filter { $0.value == .sttActive }.keys)
-                    return (self.trackedWindows, self.trackedTty, stt, self.cpuIdleThreshold)
+                    return (self.trackedWindows, self.trackedTty, stt,
+                            self.cpuIdleThreshold, self.pollGeneration)
                 }
+            guard let (tracked, ttys, sttWindows, threshold, generation) = snapshot else { return }
             self.pollQueue.async { [weak self] in
                 guard let self else { return }
                 var results: [(String, TerminalState)] = []
@@ -148,19 +170,40 @@ final class TerminalStateDetector {
                     if let resolvedPid { pidUpdates[windowId] = resolvedPid }
                     childPidsByWindow[windowId] = Set(children.map(\.pid))
                 }
+                // Freeze the poll's own re-resolutions before they cross onto
+                // main: the closure below reads them after this block returns,
+                // and Swift 6 will not send a value that is still mutable here.
+                let resolvedPids = pidUpdates
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
+                    defer { self.pollCoalescer.end() }
+                    // The whole batch is void once monitoring has stopped or
+                    // restarted — most importantly it must not reinstall the
+                    // process sources `stopMonitoring` just cancelled.
+                    guard generation == self.pollGeneration else { return }
                     // Apply re-resolved shell PIDs FIRST so kqueue installs
-                    // below watch the live shell, not the dead one.
-                    for (windowId, newPid) in pidUpdates {
+                    // below watch the live shell, not the dead one. Skip
+                    // windows that stopped being tracked while we polled.
+                    for (windowId, newPid) in resolvedPids where self.trackedWindows[windowId] != nil {
                         let oldPid = self.trackedWindows[windowId] ?? 0
                         self.trackedWindows[windowId] = newPid
                         NSLog("[TerminalStateDetector] Re-resolved shell PID for window %@: %d -> %d (TTY respawn)", windowId, oldPid, newPid)
                         self.installProcessSource(windowId: windowId, pid: newPid)
                     }
-                    self.applyPollResults(results)
+                    // Per-window staleness check. `tracked` is what the poll
+                    // measured; `trackedWindows` is what is true now.
+                    let isFresh: (String) -> Bool = { windowId in
+                        guard let capturedPid = tracked[windowId] else { return false }
+                        return TerminalPollGate.shouldApply(
+                            capturedGeneration: generation,
+                            currentGeneration: self.pollGeneration,
+                            capturedPid: capturedPid,
+                            currentPid: self.trackedWindows[windowId],
+                            resolvedPid: resolvedPids[windowId])
+                    }
+                    self.applyPollResults(results.filter { isFresh($0.0) })
                     // Update Claude process presence for thinking indicator
-                    for (windowId, hasClaude) in claudePresence {
+                    for (windowId, hasClaude) in claudePresence where isFresh(windowId) {
                         if hasClaude {
                             self.windowsWithClaudeProcess.insert(windowId)
                         } else {
@@ -169,11 +212,11 @@ final class TerminalStateDetector {
                     }
                     // GH I — track per-window CLI kind so image_upload can
                     // route to the right paste path.
-                    for (windowId, cli) in cliByWindow {
+                    for (windowId, cli) in cliByWindow where isFresh(windowId) {
                         self.windowCLIKind[windowId] = cli
                     }
                     // Install kqueue watches on main where MainActor state lives
-                    for (windowId, currentPids) in childPidsByWindow {
+                    for (windowId, currentPids) in childPidsByWindow where isFresh(windowId) {
                         let known = self.knownChildren[windowId] ?? []
                         let newPids = currentPids.subtracting(known)
                         self.knownChildren[windowId] = currentPids
@@ -191,6 +234,14 @@ final class TerminalStateDetector {
     func stopMonitoring() {
         pollTimer?.invalidate()
         pollTimer = nil
+        // Invalidate any poll already in flight BEFORE cancelling sources —
+        // otherwise its main hop runs afterwards and reinstalls exactly the
+        // sources being cancelled here, and the stop silently doesn't stop.
+        pollGeneration &+= 1
+        // A dropped in-flight poll still owes its `end()`, but that runs under
+        // the old generation and returns early; release the slot here so a
+        // later `startMonitoring` is not gated by a poll nobody will apply.
+        pollCoalescer.end()
         cancelAllProcessSources()
         print("[TerminalStateDetector] Stopped monitoring")
     }
