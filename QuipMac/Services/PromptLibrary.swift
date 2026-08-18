@@ -167,20 +167,12 @@ final class PromptLibrary {
 
     /// Strip path separators / leading dots / shell metacharacters so a
     /// hostile id (e.g. `../../../etc/passwd`) can't escape the prompts
-    /// directory or write outside it. Allowed: alphanumeric, dash,
-    /// underscore, dot in the middle. Empty result = reject.
+    /// directory or write outside it. Empty result = reject.
+    ///
+    /// The rule itself lives in `Shared/PromptID.swift` because the iOS editor
+    /// previews the resulting filename before saving; both peers must agree.
     static func sanitizeID(_ raw: String) -> String {
-        var out = ""
-        for ch in raw {
-            if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "." {
-                out.append(ch)
-            } else if ch == " " {
-                out.append("-")
-            }
-        }
-        // Strip leading dots (no hidden files, no `.` / `..` traversal).
-        while out.first == "." { out.removeFirst() }
-        return out
+        PromptID.sanitize(raw)
     }
 
     private func ensureDirExists() {

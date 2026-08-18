@@ -8880,7 +8880,7 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(isPresented: $creatingNew) {
-            PromptEditorSheet(initial: nil, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -8896,7 +8896,7 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(item: $generatedDraft) { draft in
-            PromptEditorSheet(initial: nil, draft: draft, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, draft: draft, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -9046,6 +9046,11 @@ struct PromptLibrarySheet: View {
         }
     }
 
+    /// Ids the Mac already holds, for the editor's collision warning.
+    private var existingPromptIDs: Set<String> {
+        Set(client.promptLibrary.map(\.id))
+    }
+
     private func putPrompt(_ entry: PromptEntry, messageId: UUID) -> Bool {
         guard client.isConnected && client.isAuthenticated else { return false }
         return client.send(PutPromptMessage(
@@ -9099,6 +9104,10 @@ struct PromptLibrarySheet: View {
 struct PromptEditorSheet: View {
     let initial: PromptEntry?
     var draft: PromptEntry? = nil
+    /// Ids already in the library, so the new-prompt flow can warn before a
+    /// save silently replaces a neighbour. Empty is safe — it just disables
+    /// the collision warning.
+    var existingIDs: Set<String> = []
     let latestAck: PutPromptAckMessage?
     let onSave: (_ entry: PromptEntry, _ messageId: UUID) -> Bool
     @Environment(\.dismiss) private var dismiss
@@ -9123,6 +9132,9 @@ struct PromptEditorSheet: View {
                         .foregroundStyle(initial != nil ? .secondary : .primary)
                     TextField("Display label (optional)", text: $labelText)
                         .autocorrectionDisabled(true)
+                    if initial == nil, !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        idPreviewRow
+                    }
                 } header: {
                     Text("Identity")
                 } footer: {
@@ -9169,7 +9181,9 @@ struct PromptEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Send the id the Mac would derive anyway, so the phone's
+                        // local view of the library matches the file on disk.
+                        let id = initial?.id ?? sanitizedID
                         let label = labelText.trimmingCharacters(in: .whitespaces)
                         guard !id.isEmpty, !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                         let messageId = UUID()
@@ -9195,7 +9209,7 @@ struct PromptEditorSheet: View {
                             saveError = "Timed out waiting for the Mac to confirm save."
                         }
                     }
-                    .disabled(idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    .disabled((initial == nil && sanitizedID.isEmpty)
                               || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                               || isSaving)
                 }
@@ -9231,6 +9245,44 @@ struct PromptEditorSheet: View {
 
     private var metadataSource: PromptEntry? {
         initial ?? draft
+    }
+
+    /// What the Mac will actually name the file. Same function the Mac runs
+    /// (`Shared/PromptID.swift`), so this preview cannot drift from the write.
+    private var sanitizedID: String {
+        PromptID.sanitize(idText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// A new prompt whose sanitized id already exists would overwrite that
+    /// prompt's file. Warn rather than block: replacing is a legitimate edit,
+    /// but it must not be a surprise. Locked ids (edit flow) always "collide"
+    /// with themselves, so the check is new-prompt only.
+    private var collidesWithExisting: Bool {
+        initial == nil && !sanitizedID.isEmpty && existingIDs.contains(sanitizedID)
+    }
+
+    /// Save is impossible when nothing survives sanitization ("!!!", "///").
+    private var idIsUnsavable: Bool {
+        !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && sanitizedID.isEmpty
+    }
+
+    @ViewBuilder
+    private var idPreviewRow: some View {
+        if idIsUnsavable {
+            Label("No usable characters in that id — it can't become a filename.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+        } else if collidesWithExisting {
+            Label("Will save as \(sanitizedID).txt — replaces the existing “\(sanitizedID)” prompt.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+        } else {
+            Text("Will save as \(sanitizedID).txt")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func handleAckIfNeeded() {

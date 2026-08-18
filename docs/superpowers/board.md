@@ -16,7 +16,6 @@ _(none)_
 
 | ID | Title | Notes |
 |----|-------|-------|
-| Q-17 | §58 Iteration 2 — prompt save/delete acks | Protocol work: ack messages, metadata preservation, ID-collision UX. Two-peer, so ship Mac + iOS together. |
 | Q-18 | §58 Iteration 1 — layout order + selected display | Unify sidebar/preview/arrange order; build Arrange rects from the selected display's frame. Needs a multi-display smoke to finish. |
 | Q-19 | §58 Iteration 4 — UX polish | Drag-to-resize promise, spawn-path quoting, accessibility labels, protocol docs. |
 
@@ -24,6 +23,7 @@ _(none)_
 
 | ID | Title | Blocked on |
 |----|-------|-----------|
+| Q-17a | §58 Iteration 2 manual smoke | Create / edit / delete a prompt from the phone, save while disconnected, and try a duplicate sanitized id. Needs a Mac + iOS install (two-peer). |
 | Q-16 | §58 Iteration 3 manual smoke | Close tracked iTerm windows during active polling and confirm no stale state or source churn. Needs the new Mac build installed (`0a1b206` is committed but `/Applications/Quip.app` predates it). |
 
 ## Done
@@ -50,6 +50,7 @@ _(none)_
 | Q-15 | Pre-handshake reaper — probe sockets no longer leak, no more false "broke during handshake" WARNs | `1dbd64b` |
 | Q-16a | LAN routing — swap engine was default-off for everyone and compared probes against live round-trips | `58dd75e` |
 | Q-16b | §58 Iteration 3 — terminal poll generation, coalescing, stale-result guards | `0a1b206` |
+| Q-17 | §58 Iteration 2 — prompt mutation trust. Acks/pending UI/metadata had landed earlier; the last gap was client-side id validation, now a shared sanitizer with a filename preview and a collision warning | `PENDING` |
 | Q-13 | CI had failed at step one on every run since `f19760d`: an unanchored `scripts/` in `.gitignore` matches at ANY depth, so `.github/scripts/` was never committed and the workflow called two files that do not exist on a runner | `889db83` |
 | Q-14 | Main-thread blocking sweep: PTT chunk decode, WebSocket broadcast encode, and the VibeCut packs read moved off main; a dead AX walk deleted. Three sites left alone with reasons (see wishlist) | `05b935a` |
 

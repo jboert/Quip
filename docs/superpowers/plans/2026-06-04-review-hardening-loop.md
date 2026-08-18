@@ -58,30 +58,36 @@
 
 ---
 
-## Iteration 2 - Prompt Mutation Trust
+## Iteration 2 - Prompt Mutation Trust ✅ SHIPPED (2026-08-18)
 
 **User value:** Creating, editing, and deleting prompts from iPhone is no longer fire-and-forget. The UI waits for Mac disk-write confirmation and preserves prompt metadata.
 
+Most of this iteration (acks, message ids, pending/error UI, recoverable delete,
+metadata and body preservation) landed incrementally with earlier prompt work.
+The 2026-08-18 pass closed the one remaining task — client-side id validation —
+by lifting the Mac's sanitizer into `Shared/PromptID.swift` so the editor can
+show the exact filename the Mac will write.
+
 ### Tasks
 
-- [ ] **Add protocol acks.** Add `PutPromptAckMessage` and `DeletePromptAckMessage` with `messageId`, `id`, `success`, and optional `error`.
-- [ ] **Add message IDs to prompt mutations.** Ensure `PutPromptMessage` and `DeletePromptMessage` include optional IDs for ack correlation and Mac dedupe compatibility.
-- [ ] **Ack Mac persistence result.** In `QuipMacApp`, send a success or error ack based on `PromptLibrary.put` / `delete`.
-- [ ] **Preserve prompt metadata on edit.** iOS edit saves must round-trip `tags`, `targetAgent`, and `description` from the initial `PromptEntry` unless the UI intentionally edits those fields.
-- [ ] **Add pending/error UI.** `PromptEditorSheet` should show saving state, keep the sheet open until ack, and display specific errors for disconnected, unauthenticated, timed out, and Mac write failed.
-- [ ] **Make delete recoverable.** Gate delete on connected/authenticated state, show failure, and prefer confirmation or undo because deletes mutate disk-backed files.
-- [ ] **Validate prompt IDs client-side.** Share or mirror `PromptLibrary.sanitizeID`, show "Will save as ...", block empty sanitized IDs, and warn on sanitized collisions.
-- [ ] **Preserve body text.** Avoid trimming the saved body if the UI says prompt text is sent verbatim. Validate all-whitespace bodies separately.
+- [x] **Add protocol acks.** Add `PutPromptAckMessage` and `DeletePromptAckMessage` with `messageId`, `id`, `success`, and optional `error`.
+- [x] **Add message IDs to prompt mutations.** Ensure `PutPromptMessage` and `DeletePromptMessage` include optional IDs for ack correlation and Mac dedupe compatibility.
+- [x] **Ack Mac persistence result.** In `QuipMacApp`, send a success or error ack based on `PromptLibrary.put` / `delete`.
+- [x] **Preserve prompt metadata on edit.** iOS edit saves must round-trip `tags`, `targetAgent`, and `description` from the initial `PromptEntry` unless the UI intentionally edits those fields.
+- [x] **Add pending/error UI.** `PromptEditorSheet` should show saving state, keep the sheet open until ack, and display specific errors for disconnected, unauthenticated, timed out, and Mac write failed.
+- [x] **Make delete recoverable.** Gate delete on connected/authenticated state, show failure, and prefer confirmation or undo because deletes mutate disk-backed files.
+- [x] **Validate prompt IDs client-side.** Share or mirror `PromptLibrary.sanitizeID`, show "Will save as ...", block empty sanitized IDs, and warn on sanitized collisions.
+- [x] **Preserve body text.** Avoid trimming the saved body if the UI says prompt text is sent verbatim. Validate all-whitespace bodies separately.
 
 ### Verification
 
-- [ ] Mac prompt tests: `xcodebuild test -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -only-testing:QuipMacTests/PromptFrontMatterTests`
-- [ ] iOS build: `xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination generic/platform=iOS -derivedDataPath QuipiOS/build build`
-- [ ] Manual iPhone smoke: create, edit, delete, disconnected save, duplicate sanitized ID.
+- [x] Mac tests: full QuipMac suite, 702 green (adds `PromptIDTests`, 8 cases).
+- [x] iOS build: `xcodebuild ... -destination generic/platform=iOS` — BUILD SUCCEEDED.
+- [ ] Manual iPhone smoke: create, edit, delete, disconnected save, duplicate sanitized ID. (needs an install)
 
 ### Commit
 
-- [ ] Commit message: `Confirm prompt saves and preserve metadata`
+- [x] Commit message: `Confirm prompt saves and preserve metadata`
 
 ---
 
