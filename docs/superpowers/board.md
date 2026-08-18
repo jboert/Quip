@@ -16,12 +16,12 @@ _(none)_
 
 | ID | Title | Notes |
 |----|-------|-------|
-| Q-19 | §58 Iteration 4 — drag-to-resize promise | The toggle advertises a resize gesture that does not exist. Two options: implement handles backed by `customFrames`, or hide the toggle. **Needs an owner decision before it can be worked.** |
 
 ## Blocked
 
 | ID | Title | Blocked on |
 |----|-------|-----------|
+| Q-19b | Drag-to-resize smoke | Toggle on, drag a tile's corner, Arrange, confirm the window matches the dragged rect; switch preset and confirm sizes reset. Needs a Mac install. |
 | Q-18a | §58 Iteration 1 manual smoke | Reorder in the layout preview and confirm the sidebar + Arrange agree; then a multi-display pass: select the secondary display, Arrange, confirm windows stay on it. Needs a Mac install. |
 | Q-17a | §58 Iteration 2 manual smoke | Create / edit / delete a prompt from the phone, save while disconnected, and try a duplicate sanitized id. Needs a Mac + iOS install (two-peer). |
 | Q-16 | §58 Iteration 3 manual smoke | Close tracked iTerm windows during active polling and confirm no stale state or source churn. Needs the new Mac build installed (`0a1b206` is committed but `/Applications/Quip.app` predates it). |
@@ -51,6 +51,7 @@ _(none)_
 | Q-16a | LAN routing — swap engine was default-off for everyone and compared probes against live round-trips | `58dd75e` |
 | Q-16b | §58 Iteration 3 — terminal poll generation, coalescing, stale-result guards | `0a1b206` |
 | Q-17 | §58 Iteration 2 — prompt mutation trust. Acks/pending UI/metadata had landed earlier; the last gap was client-side id validation, now a shared sanitizer with a filename preview and a collision warning | `PENDING` |
+| Q-19 | §58 Iteration 4 — drag-to-resize now real: 8 handles per tile, Arrange uses the dragged rects, presets reset them | `PENDING` |
 | Q-19a | §58 Iteration 4 — spawn-path quoting, accessibility labels, protocol docs | `PENDING` |
 | Q-18 | §58 Iteration 1 — one order source for sidebar/preview/arrange, Arrange targets the selected display in AX coordinates, failures surface instead of doing nothing, row numbers mean arrange slots | `PENDING` |
 | Q-13 | CI had failed at step one on every run since `f19760d`: an unanchored `scripts/` in `.gitignore` matches at ANY depth, so `.github/scripts/` was never committed and the workflow called two files that do not exist on a runner | `889db83` |

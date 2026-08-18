@@ -124,13 +124,13 @@ show the exact filename the Mac will write.
 
 ---
 
-## Iteration 4 - UX Polish And Hardware Acceptance
+## Iteration 4 - UX Polish And Hardware Acceptance ✅ CODE COMPLETE (2026-08-18) — hardware acceptance outstanding
 
 **User value:** The app no longer advertises unavailable controls, error states are visible, and the latest build is proven on hardware.
 
 ### Tasks
 
-- [ ] **Resolve drag-to-resize promise.** Either implement resize handles backed by `customFrames`, or hide/disable the toggle until a real resize iteration. **Needs an owner decision** — build it or hide it.
+- [x] **Resolve drag-to-resize promise.** Implemented (owner chose build over hide, 2026-08-18): eight handles per tile writing `customFrames`, `LayoutResize` for the arithmetic, Arrange consuming the same frames, preset changes clearing them, and a "Reset sizes" escape hatch.
 - [x] **Harden terminal spawn paths.** Quote shell paths and escape AppleScript strings so paths with spaces or quotes work.
 - [x] **Accessibility pass.** Convert gesture-only prompt rows to `Button` or add clear accessibility traits/actions. Add labels for icon-only Mac buttons where missing.
 - [x] **Protocol docs.** Document prompt mutation ack messages and timeout behavior in `docs/protocol.md`.

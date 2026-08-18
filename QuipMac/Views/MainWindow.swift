@@ -107,6 +107,17 @@ struct MainWindow: View {
                     selectedTemplate: $customTemplate,
                     isDragToResizeEnabled: $isDragToResizeEnabled
                 )
+                // Picking a preset means "lay them out like this" — keeping the
+                // hand-dragged rects would make the preset look broken.
+                .onChange(of: layoutMode) { _, _ in customFrames.removeAll() }
+                .onChange(of: customTemplate) { _, _ in customFrames.removeAll() }
+
+                if !customFrames.isEmpty {
+                    Button("Reset sizes") { customFrames.removeAll() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .help("Discard hand-dragged window sizes and go back to the preset")
+                }
 
                 Spacer()
 
@@ -390,19 +401,11 @@ struct MainWindow: View {
 
     private var layoutSnapshot: LayoutSnapshot {
         let displayWindows = displayWindows
-        let enabledWindowCount = displayWindows.lazy.filter(\.isEnabled).count
-        let currentFrames: [NormalizedRect]
-
-        switch layoutMode {
-        case .custom:
-            currentFrames = customTemplate.frames(for: enabledWindowCount)
-        default:
-            currentFrames = LayoutCalculator.calculate(mode: layoutMode, windowCount: enabledWindowCount)
-        }
-
+        // One source for the frames — the preview and Arrange must not compute
+        // them differently, or a resized tile would move on arrange.
         return LayoutSnapshot(
             displayWindows: displayWindows,
-            enabledWindowCount: enabledWindowCount,
+            enabledWindowCount: displayWindows.lazy.filter(\.isEnabled).count,
             currentFrames: currentFrames
         )
     }
@@ -438,12 +441,24 @@ struct MainWindow: View {
         enabledWindows.count
     }
 
+    /// Frames the preview draws and Arrange uses. A window the user dragged to
+    /// a size keeps that rect; the rest follow the preset. Without this the
+    /// drag-to-resize toggle changed the picture and nothing else.
     private var currentFrames: [NormalizedRect] {
+        let preset: [NormalizedRect]
         switch layoutMode {
         case .custom:
-            return customTemplate.frames(for: enabledWindowCount)
+            preset = customTemplate.frames(for: enabledWindowCount)
         default:
-            return LayoutCalculator.calculate(mode: layoutMode, windowCount: enabledWindowCount)
+            preset = LayoutCalculator.calculate(mode: layoutMode, windowCount: enabledWindowCount)
+        }
+
+        guard !customFrames.isEmpty else { return preset }
+        return enabledWindows.enumerated().map { index, window in
+            if let custom = customFrames[window.id] {
+                return LayoutResize.clampToDisplay(custom)
+            }
+            return index < preset.count ? preset[index] : NormalizedRect(x: 0, y: 0, width: 1, height: 1)
         }
     }
 
