@@ -16,12 +16,13 @@ _(none)_
 
 | ID | Title | Notes |
 |----|-------|-------|
-| Q-20 | Terminal state flaps ~26×/min on a busy agent window | Measured 2026-08-18 on the fresh build: `push.log` shows 73 `neutral↔waiting_for_input` transitions in 2m50s for one iTerm window (others 2–7). Cause is a single `cpuIdleThreshold = 5.0` with no hysteresis — a working agent oscillates across it, and the 2-poll debounce (0.5s) is far too short to absorb that. Pushes are safe (30s per-window/device debounce in `PushNotificationService`), so the cost is phone-grid badge flicker and a layout broadcast per transition. Fix shape: separate enter/exit thresholds plus a minimum dwell time before flipping back. **Changes when the phone says "waiting for input" — confirm the latency trade before building.** |
+| _(none)_ | | |
 
 ## Blocked
 
 | ID | Title | Blocked on |
 |----|-------|-----------|
+| Q-20a | Confirm the flap is actually gone | Re-run the measurement after installing: drive a busy agent for ~3 minutes, then count `neutral↔waiting_for_input` lines in `push.log` for that window. Baseline was 73 in 2m50s; expect single digits. Also confirm a real prompt still badges the phone within ~2s. Needs a Mac install. |
 | Q-19b | Drag-to-resize smoke | Toggle on, drag a tile's corner, Arrange, confirm the window matches the dragged rect; switch preset and confirm sizes reset. Needs a Mac install. |
 | Q-18a | §58 Iteration 1 manual smoke | Reorder in the layout preview and confirm the sidebar + Arrange agree; then a multi-display pass: select the secondary display, Arrange, confirm windows stay on it. Needs a Mac install. |
 | Q-17a | §58 Iteration 2 manual smoke | Create / edit / delete a prompt from the phone, save while disconnected, and try a duplicate sanitized id. Needs a Mac + iOS install (two-peer). |
@@ -51,10 +52,11 @@ _(none)_
 | Q-15 | Pre-handshake reaper — probe sockets no longer leak, no more false "broke during handshake" WARNs | `1dbd64b` |
 | Q-16a | LAN routing — swap engine was default-off for everyone and compared probes against live round-trips | `58dd75e` |
 | Q-16b | §58 Iteration 3 — terminal poll generation, coalescing, stale-result guards | `0a1b206` |
-| Q-17 | §58 Iteration 2 — prompt mutation trust. Acks/pending UI/metadata had landed earlier; the last gap was client-side id validation, now a shared sanitizer with a filename preview and a collision warning | `PENDING` |
-| Q-19 | §58 Iteration 4 — drag-to-resize now real: 8 handles per tile, Arrange uses the dragged rects, presets reset them | `PENDING` |
-| Q-19a | §58 Iteration 4 — spawn-path quoting, accessibility labels, protocol docs | `PENDING` |
-| Q-18 | §58 Iteration 1 — one order source for sidebar/preview/arrange, Arrange targets the selected display in AX coordinates, failures surface instead of doing nothing, row numbers mean arrange slots | `PENDING` |
+| Q-17 | §58 Iteration 2 — prompt mutation trust. Acks/pending UI/metadata had landed earlier; the last gap was client-side id validation, now a shared sanitizer with a filename preview and a collision warning | `316f483` |
+| Q-19 | §58 Iteration 4 — drag-to-resize now real: 8 handles per tile, Arrange uses the dragged rects, presets reset them | `198b43c` |
+| Q-19a | §58 Iteration 4 — spawn-path quoting, accessibility labels, protocol docs | `f42ae84` |
+| Q-18 | §58 Iteration 1 — one order source for sidebar/preview/arrange, Arrange targets the selected display in AX coordinates, failures surface instead of doing nothing, row numbers mean arrange slots | `cf0f1b3` |
+| Q-20 | Terminal state flaps ~26×/min — enter/exit debounce is now asymmetric: raising a "waiting for input" badge needs 1.5s of sustained quiet, clearing one still takes 0.5s | `PENDING` |
 | Q-13 | CI had failed at step one on every run since `f19760d`: an unanchored `scripts/` in `.gitignore` matches at ANY depth, so `.github/scripts/` was never committed and the workflow called two files that do not exist on a runner | `889db83` |
 | Q-14 | Main-thread blocking sweep: PTT chunk decode, WebSocket broadcast encode, and the VibeCut packs read moved off main; a dead AX walk deleted. Three sites left alone with reasons (see wishlist) | `05b935a` |
 

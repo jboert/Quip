@@ -6,7 +6,7 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
-## Session log — 2026-08-18 (§58 Iterations 1, 2, 4 shipped; Mac installed; a flap found by testing)
+## Session log — 2026-08-18 (§58 Iterations 1, 2, 4 shipped; Mac installed; a flap found by testing, then fixed)
 
 ### Shipped
 
@@ -59,8 +59,32 @@ interval) is nowhere near long enough to absorb that. Pushes are protected by a
 separate 30s per-(window, device) debounce in `PushNotificationService`, so this
 is not notification spam — it is phone-grid badge flicker plus one layout
 broadcast per transition. Filed as Q-20 with the fix shape (separate enter/exit
-thresholds + a minimum dwell), deliberately not built: it changes when the phone
-says "waiting for input", which is a product call.
+thresholds + a minimum dwell).
+
+**Fixed the same day** in `TerminalStateDebounce`. The key observation is that
+the two directions were never symmetric and should never have shared a number:
+
+- Raising `waitingForInput` is the expensive mistake — it badges the phone grid
+  and can fire a push claiming an agent is asking the user something when it is
+  not. That direction now needs **6 agreeing polls (1.5s)** of sustained quiet.
+- Clearing it is cheap to get wrong and expensive to get slow (a stale "answer
+  me" badge), so it stays at the original **2 polls (0.5s)**.
+
+That asymmetry is why this did not need the latency trade it looked like it
+needed. A genuine prompt idles indefinitely, so it still lands — about a second
+later than before, against a human reaction time measured in seconds. A working
+agent essentially never idles 1.5s straight inside a turn, so the flap stops.
+The regression oracle is `test_alternatingPollsNeverTransition`: it replays the
+measured shape (two quiet polls, two busy, 200 times) and asserts **zero**
+transitions, where the old flat threshold produced one roughly every other poll.
+
+Also tightened: the pending run is now dropped on `untrackWindow`,
+`stopMonitoring`, `trackWindow`, and both STT state writes, so a half-accumulated
+candidate can never survive a lifecycle event and complete a transition it did
+not earn.
+
+Still to confirm on hardware (Q-20a): re-run the count after installing — the
+baseline to beat is 73 in 2m50s.
 
 ### Smokes still not run
 

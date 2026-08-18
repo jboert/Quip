@@ -243,6 +243,9 @@ final class TerminalStateDetector {
         // later `startMonitoring` is not gated by a poll nobody will apply.
         pollCoalescer.end()
         cancelAllProcessSources()
+        // A half-accumulated candidate must not survive a stop/start pair and
+        // let the first poll of the new run complete a transition it did not earn.
+        debounce.forgetAll()
         print("[TerminalStateDetector] Stopped monitoring")
     }
 
@@ -300,6 +303,7 @@ final class TerminalStateDetector {
         }
         windowStates[windowId] = .neutral
         knownChildren[windowId] = []
+        debounce.forget(windowId: windowId)
         installProcessSource(windowId: windowId, pid: shellPid)
         print("[TerminalStateDetector] Tracking window \(windowId) with shell PID \(shellPid) tty=\(tty ?? "<none>")")
     }
@@ -310,17 +314,20 @@ final class TerminalStateDetector {
         trackedTty.removeValue(forKey: windowId)
         windowStates.removeValue(forKey: windowId)
         knownChildren.removeValue(forKey: windowId)
+        debounce.forget(windowId: windowId)
         cancelProcessSources(for: windowId)
     }
 
     /// Externally set a window to STT active state
     func setSTTActive(for windowId: String) {
         windowStates[windowId] = .sttActive
+        debounce.forget(windowId: windowId)
     }
 
     /// Clear STT state back to auto-detected
     func clearSTTState(for windowId: String) {
         windowStates[windowId] = .neutral
+        debounce.forget(windowId: windowId)
     }
 
     // MARK: - kqueue Process Sources
@@ -381,33 +388,22 @@ final class TerminalStateDetector {
 
     // MARK: - Polling
 
-    /// Debounce counter: how many consecutive polls have shown the same "candidate" state.
-    /// 2 consecutive agreeing polls (~0.5s at 0.25s polling) is enough to avoid most
-    /// false transitions while keeping latency low.
-    private var debounceCount: [String: (state: TerminalState, count: Int)] = [:]
-    private let debounceThreshold = 2
+    /// Debounce: how many consecutive polls have shown the same "candidate"
+    /// state before it is allowed to become the window's state. The thresholds
+    /// are asymmetric — see `TerminalStateDebounce` for why raising a
+    /// "waiting for input" badge costs more agreement than clearing one.
+    private var debounce = TerminalStateDebounce()
 
     /// Check all tracked windows' process states
     /// Apply poll results on main — only does lightweight state comparisons.
     private func applyPollResults(_ results: [(String, TerminalState)]) {
         for (windowId, detected) in results {
             let currentState = windowStates[windowId] ?? .neutral
-
-            if detected == currentState {
-                debounceCount[windowId] = nil
-            } else {
-                let prev = debounceCount[windowId]
-                if prev?.state == detected {
-                    debounceCount[windowId] = (detected, (prev?.count ?? 0) + 1)
-                } else {
-                    debounceCount[windowId] = (detected, 1)
-                }
-                if let entry = debounceCount[windowId], entry.count >= debounceThreshold {
-                    windowStates[windowId] = detected
-                    debounceCount[windowId] = nil
-                    onStateTransition?(windowId, currentState, detected)
-                }
+            guard debounce.observe(windowId: windowId, detected: detected, current: currentState) else {
+                continue
             }
+            windowStates[windowId] = detected
+            onStateTransition?(windowId, currentState, detected)
         }
     }
 
