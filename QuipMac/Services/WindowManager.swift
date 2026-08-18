@@ -337,6 +337,72 @@ final class WindowManager {
         applyWindowSnapshot(Self.fetchWindowList())
     }
 
+    // MARK: - Ordering
+
+    /// The one place window order is written. Sidebar drags, the magic-wand
+    /// sort, the per-row chevrons, and the layout-preview drag all funnel here.
+    ///
+    /// Before Iteration 1 there were two lists: `MainWindow.windowOrder` (what
+    /// the sidebar and preview rendered) and this `customOrder` (what survived
+    /// a refresh and what the phone saw). A preview drag wrote one, a sidebar
+    /// drag wrote the other, and the two views disagreed about which window was
+    /// arrange slot 1.
+    ///
+    /// `ids` may be partial or contain stale ids: unknown ids are dropped and
+    /// windows the caller didn't mention keep their existing relative position
+    /// at the end, so no window can fall out of the list by being forgotten.
+    func setOrder(_ ids: [String]) {
+        let known = Set(windows.map(\.id))
+        var next = ids.filter { known.contains($0) }
+        var seen = Set(next)
+        for window in windows where !seen.contains(window.id) {
+            next.append(window.id)
+            seen.insert(window.id)
+        }
+        customOrder = next
+
+        var byID: [String: ManagedWindow] = [:]
+        byID.reserveCapacity(windows.count)
+        for window in windows { byID[window.id] = window }
+        windows = next.compactMap { byID[$0] }
+    }
+
+    /// Move one window to sit where another currently sits, preserving the rest
+    /// of the order. Used by both drag paths, which speak in positions rather
+    /// than in ids.
+    func swapOrder(_ id: String, with otherID: String) {
+        guard let i = customOrder.firstIndex(of: id),
+              let j = customOrder.firstIndex(of: otherID) else { return }
+        var next = customOrder
+        next.swapAt(i, j)
+        setOrder(next)
+    }
+
+    // MARK: - Display Geometry
+
+    /// Convert a display's `NSScreen` frame (bottom-left origin, y up, measured
+    /// from the primary display) into the global CG / Accessibility space
+    /// (top-left origin, y down, measured from the primary display's top edge).
+    ///
+    /// Arrange targets are handed to the Accessibility API, which is top-left
+    /// origin — so a secondary display's rect has to be flipped or the windows
+    /// land in the primary display's coordinate space. Pure and static so the
+    /// arithmetic is testable without attaching monitors.
+    static func cgRect(forDisplayFrame frame: CGRect, primaryFrame: CGRect) -> CGRect {
+        CGRect(x: frame.minX,
+               y: primaryFrame.maxY - frame.maxY,
+               width: frame.width,
+               height: frame.height)
+    }
+
+    /// `cgRect(forDisplayFrame:primaryFrame:)` against the live primary screen.
+    /// Note `NSScreen.main` is the *focused* screen, not the primary — the
+    /// primary is `NSScreen.screens.first`, and it is the one CG measures from.
+    func cgFrame(for display: DisplayInfo) -> CGRect {
+        let primary = NSScreen.screens.first?.frame ?? display.frame
+        return Self.cgRect(forDisplayFrame: display.frame, primaryFrame: primary)
+    }
+
     // MARK: - Filter by Display
 
     /// Returns windows whose center point falls within the given display's frame.

@@ -34,21 +34,29 @@
 
 ---
 
-## Iteration 1 - Layout Order And Selected Display
+## Iteration 1 - Layout Order And Selected Display ✅ SHIPPED (2026-08-18)
 
 **User value:** The sidebar, preview, and Arrange button agree about which windows go where, and arranging a secondary display does not move windows into the main display's coordinate space.
 
+Landed 2026-08-18. Order now has exactly one owner (`WindowManager.customOrder`,
+written only via `setOrder`/`swapOrder`); Arrange builds rects from the selected
+display converted into the Accessibility API's top-left origin space
+(`WindowManager.cgFrame(for:)`), which also fixed the phone and menu-bar arrange
+paths; failures surface in an alert with a one-click jump to the Accessibility
+pane. Sidebar row numbers now show the arrange slot (enabled windows only)
+rather than the raw row position.
+
 ### Tasks
 
-- [ ] **Unify layout order source.** Pick one ordered ID list for sidebar, preview, and arrange. Prefer `WindowManager.customOrder` as the persisted source and remove or tightly synchronize `MainWindow.windowOrder`.
-- [ ] **Fix preview drag reorder.** When `LayoutPreview` calls `onReorder`, update the same order source that `MainWindow.orderedWindows` reads.
-- [ ] **Clarify sidebar grouping.** Either stop rank-sorting rows independently, or render explicit sections such as "Enabled terminals", "Enabled targets", and "Other windows" so row numbers do not imply arrange slots.
-- [ ] **Respect selected display frame.** Build Arrange target rects from `selectedDisplay.frame` when a display is selected. Keep the single-display fallback unchanged.
-- [ ] **Surface arrange failures.** If `WindowManager.arrangeWindows(frames:)` returns false, show a user-visible permission/status message instead of silently doing nothing.
+- [x] **Unify layout order source.** Pick one ordered ID list for sidebar, preview, and arrange. Prefer `WindowManager.customOrder` as the persisted source and remove or tightly synchronize `MainWindow.windowOrder`.
+- [x] **Fix preview drag reorder.** When `LayoutPreview` calls `onReorder`, update the same order source that `MainWindow.orderedWindows` reads.
+- [x] **Clarify sidebar grouping.** Either stop rank-sorting rows independently, or render explicit sections such as "Enabled terminals", "Enabled targets", and "Other windows" so row numbers do not imply arrange slots.
+- [x] **Respect selected display frame.** Build Arrange target rects from `selectedDisplay.frame` when a display is selected. Keep the single-display fallback unchanged.
+- [x] **Surface arrange failures.** If `WindowManager.arrangeWindows(frames:)` returns false, show a user-visible permission/status message instead of silently doing nothing.
 
 ### Verification
 
-- [ ] Mac build: `xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac build`
+- [x] Mac build + full suite: 710 tests green (adds `WindowOrderAndDisplayTests`, 8 cases).
 - [ ] Manual Mac smoke: reorder in preview, confirm sidebar and Arrange use the same order.
 - [ ] Manual multi-display smoke when available: select secondary display, arrange, confirm windows stay on that display.
 

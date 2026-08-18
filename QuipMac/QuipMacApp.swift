@@ -2396,9 +2396,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return
         }
         let frames = LayoutCalculator.calculate(mode: mode, windowCount: enabled.count)
+        // `display.frame` is NSScreen space (bottom-left origin); the
+        // Accessibility calls behind arrangeWindows are top-left origin. They
+        // coincide only for the primary display, and `isMain` tracks the
+        // *focused* screen — so on a two-display desk this used to place
+        // windows in the wrong coordinate space.
+        let screenFrame = windowManager.cgFrame(for: display)
         var targetFrames: [String: CGRect] = [:]
         for (index, window) in enabled.enumerated() where index < frames.count {
-            targetFrames[window.id] = frames[index].toCGRect(in: display.frame)
+            targetFrames[window.id] = frames[index].toCGRect(in: screenFrame)
         }
         if !windowManager.arrangeWindows(frames: targetFrames) {
             webSocketServer.broadcast(ErrorMessage(reason: "Grant Accessibility access to Quip in System Settings"))
