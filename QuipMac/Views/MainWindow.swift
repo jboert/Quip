@@ -151,6 +151,7 @@ struct MainWindow: View {
                         .font(.body)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Show QR code for iPhone")
                 .help("Show QR code for iPhone")
                 .popover(isPresented: $showQRPopover) {
                     tunnelQRPopover
@@ -239,6 +240,7 @@ struct MainWindow: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Copy connection URL")
                 }
             }
         }
@@ -283,6 +285,7 @@ struct MainWindow: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Copy local URL")
                 .help("Copy local URL")
 
             case .tailscale:
@@ -302,6 +305,7 @@ struct MainWindow: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Copy Tailscale URL")
                     .help("Copy Tailscale URL")
                 } else if let err = tailscale.lastError {
                     Text(err)
@@ -332,6 +336,7 @@ struct MainWindow: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Copy tunnel URL")
                     .help("Copy tunnel URL")
                 } else if tunnel.isRunning {
                     ProgressView()

@@ -130,10 +130,10 @@ show the exact filename the Mac will write.
 
 ### Tasks
 
-- [ ] **Resolve drag-to-resize promise.** Either implement resize handles backed by `customFrames`, or hide/disable the toggle until a real resize iteration.
-- [ ] **Harden terminal spawn paths.** Quote shell paths and escape AppleScript strings so paths with spaces or quotes work.
-- [ ] **Accessibility pass.** Convert gesture-only prompt rows to `Button` or add clear accessibility traits/actions. Add labels for icon-only Mac buttons where missing.
-- [ ] **Protocol docs.** Document prompt mutation ack messages and timeout behavior in `docs/protocol.md`.
+- [ ] **Resolve drag-to-resize promise.** Either implement resize handles backed by `customFrames`, or hide/disable the toggle until a real resize iteration. **Needs an owner decision** — build it or hide it.
+- [x] **Harden terminal spawn paths.** Quote shell paths and escape AppleScript strings so paths with spaces or quotes work.
+- [x] **Accessibility pass.** Convert gesture-only prompt rows to `Button` or add clear accessibility traits/actions. Add labels for icon-only Mac buttons where missing.
+- [x] **Protocol docs.** Document prompt mutation ack messages and timeout behavior in `docs/protocol.md`.
 - [ ] **Wishlist closeout.** Update this plan's status in `docs/superpowers/wishlist.md`.
 - [ ] **Install latest on iPhone.** Build, install, and launch on the paired iPhone with `devicectl`.
 

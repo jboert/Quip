@@ -794,7 +794,9 @@ final class KeystrokeInjector {
     /// - Returns: Result indicating success or failure
     @discardableResult
     func spawnTerminal(in directory: String, terminalApp: TerminalApp) async -> InjectionResult {
-        let escapedDir = escapeForAppleScript(directory)
+        // Shell first, then AppleScript — the directory lands inside `cd "…"`,
+        // so a `$` or a backtick in the path would otherwise expand or run.
+        let escapedDir = escapeForAppleScript(escapeForShell(directory))
         let script: String
 
         switch terminalApp {
@@ -1245,6 +1247,13 @@ final class KeystrokeInjector {
     /// at the shell level, and then the whole resulting string gets escaped
     /// again for the AppleScript string literal.
     private func escapeForShell(_ text: String) -> String {
+        Self.escapeForShellStatic(text)
+    }
+
+    /// Same rule, callable without an instance — the sidebar's "spawn a
+    /// terminal here" action builds its own AppleScript and needs it too.
+    /// `nonisolated` so tests and non-main-actor callers can reach it.
+    nonisolated static func escapeForShellStatic(_ text: String) -> String {
         text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")

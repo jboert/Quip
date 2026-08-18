@@ -43,6 +43,7 @@ struct WindowListSidebar: View {
                     .font(.title3)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Auto-sort and toggle dev windows")
             .help("Auto-sort + toggle your dev windows — terminals (attention-needed first) and simulators sort to the top and turn on; tap again to turn them off. Other windows just get sorted.")
 
             Button {
@@ -52,6 +53,7 @@ struct WindowListSidebar: View {
                     .font(.title3)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Add a terminal")
             .popover(isPresented: $showingAddPopover, arrowEdge: .trailing) {
                 addTerminalPopover
             }
@@ -257,6 +259,7 @@ struct WindowListSidebar: View {
                     .font(.caption)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Refresh window list")
             .help("Refresh window list")
         }
         .padding(.horizontal, 16)
@@ -293,6 +296,7 @@ struct WindowListSidebar: View {
                         Image(systemName: "folder")
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Choose a project directory")
                 }
             }
 
@@ -341,8 +345,14 @@ struct WindowListSidebar: View {
     }
 
     private func spawnTerminal() {
-        let dir = newProjectDirectory
         let appName = newTerminalApp.rawValue
+        // The directory comes from an open panel, so it is whatever the user has
+        // on disk — spaces, quotes, `$`, backticks. It gets interpolated into a
+        // shell `cd` that is itself an AppleScript string literal, so it needs
+        // both escapes, shell first. Unquoted, a path with a space simply cd'd
+        // to the wrong place; unescaped, a path with a backtick ran a command.
+        let cdCommand = "cd \"\(KeystrokeInjector.escapeForShellStatic(newProjectDirectory))\""
+        let scriptSafeCommand = KeystrokeInjector.escapeForAppleScriptStatic(cdCommand)
         let script: String
 
         switch newTerminalApp {
@@ -352,7 +362,7 @@ struct WindowListSidebar: View {
             script = """
             tell application "\(appName)"
                 activate
-                do script "cd \(dir)"
+                do script "\(scriptSafeCommand)"
             end tell
             """
         case .iterm2:
@@ -362,7 +372,7 @@ struct WindowListSidebar: View {
                 tell current window
                     create tab with default profile
                     tell current session
-                        write text "cd \(dir)"
+                        write text "\(scriptSafeCommand)"
                     end tell
                 end tell
             end tell
@@ -458,6 +468,7 @@ private struct WindowRow: View {
                                 .font(.caption2)
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel("Move \(window.name) up")
                     }
                     if let onMoveDown {
                         Button { onMoveDown() } label: {
@@ -465,6 +476,7 @@ private struct WindowRow: View {
                                 .font(.caption2)
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel("Move \(window.name) down")
                     }
                 }
             }

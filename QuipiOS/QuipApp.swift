@@ -9023,6 +9023,16 @@ struct PromptLibrarySheet: View {
         .contentShape(Rectangle())
         .onTapGesture { fire(entry, pressReturn: false) }
         .onLongPressGesture(minimumDuration: 0.4) { fire(entry, pressReturn: true) }
+        // Both actions are gesture-only, which VoiceOver cannot discover: the
+        // row reads as static text and long-press has no spoken equivalent at
+        // all. Declaring the button trait plus a named custom action makes
+        // "paste and send" reachable without the gesture.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(entry.label)
+        .accessibilityValue(hidden ? "Hidden" : entry.bodyPreview)
+        .accessibilityHint("Pastes this prompt into the active terminal")
+        .accessibilityAction(named: "Paste and send") { fire(entry, pressReturn: true) }
     }
 
     /// Compact provenance / state capsule, quieter than the label so the merged
