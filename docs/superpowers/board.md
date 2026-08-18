@@ -56,7 +56,7 @@ _(none)_
 | Q-19 | §58 Iteration 4 — drag-to-resize now real: 8 handles per tile, Arrange uses the dragged rects, presets reset them | `198b43c` |
 | Q-19a | §58 Iteration 4 — spawn-path quoting, accessibility labels, protocol docs | `f42ae84` |
 | Q-18 | §58 Iteration 1 — one order source for sidebar/preview/arrange, Arrange targets the selected display in AX coordinates, failures surface instead of doing nothing, row numbers mean arrange slots | `cf0f1b3` |
-| Q-20 | Terminal state flaps ~26×/min — enter/exit debounce is now asymmetric: raising a "waiting for input" badge needs 1.5s of sustained quiet, clearing one still takes 0.5s | `PENDING` |
+| Q-20 | Terminal state flaps ~26×/min — enter/exit debounce is now asymmetric: raising a "waiting for input" badge needs 1.5s of sustained quiet, clearing one still takes 0.5s | `9aef9f8` |
 | Q-13 | CI had failed at step one on every run since `f19760d`: an unanchored `scripts/` in `.gitignore` matches at ANY depth, so `.github/scripts/` was never committed and the workflow called two files that do not exist on a runner | `889db83` |
 | Q-14 | Main-thread blocking sweep: PTT chunk decode, WebSocket broadcast encode, and the VibeCut packs read moved off main; a dead AX walk deleted. Three sites left alone with reasons (see wishlist) | `05b935a` |
 
