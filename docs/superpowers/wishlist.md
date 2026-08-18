@@ -6,6 +6,76 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-08-18 (§58 Iterations 1, 2, 4 shipped; Mac installed; a flap found by testing)
+
+### Shipped
+
+| Commit | What |
+| --- | --- |
+| `316f483` | §58 Iteration 2 closed. The acks/pending-UI/metadata work had already landed piecemeal; the last gap was client-side id validation. The Mac's filename sanitizer moved to `Shared/PromptID.swift` (two-peer contract, like `NumberedPromptDetector`) and the editor now previews the real filename, refuses ids that sanitize to nothing, warns on a sanitized collision, and sends the sanitized id. |
+| `cf0f1b3` | §58 Iteration 1. One order source (`WindowManager.customOrder` via `setOrder`/`swapOrder`) instead of three; Arrange builds rects from the selected display converted into AX top-left space; failures raise an alert instead of doing nothing; sidebar numbers are arrange slots, not row positions. |
+| `f42ae84` | §58 Iteration 4 minus the resize decision: spawn-path quoting (the sidebar interpolated an NSOpenPanel path straight into `do script "cd \(dir)"` — unquoted and unescaped), 11 icon-only Mac controls labelled, iOS prompt rows given the button trait plus a named "Paste and send" action, prompt-ack timeouts + sanitization documented in `docs/protocol.md`. |
+| `198b43c` | Drag-to-resize made real. The toggle had shipped for months with nothing behind it — `customFrames` was passed in, never written, never read by Arrange. Eight handles per tile, `LayoutResize` for the arithmetic, Arrange and the preview reading one computed property, presets clearing hand-dragged rects, "Reset sizes" escape hatch. |
+
+### The generalisable one: two views, two lists, one lie
+
+Iteration 1's order bug and Iteration 4's resize toggle are the same failure. In
+both, the UI rendered from one data structure and the action read from another,
+so the picture and the behaviour could disagree indefinitely without anything
+erroring. The preview drag wrote `customOrder`; the sidebar drag wrote
+`windowOrder`; Arrange computed frames in its own switch statement while the
+preview computed them in a different one. Nothing crashes when two sources
+diverge — it just quietly stops meaning anything.
+
+Worth looking for elsewhere: any place a SwiftUI view takes a `@Binding` it
+writes but nothing reads, or where two call sites compute "the same" derived
+value independently.
+
+### Mac install (2026-08-18 11:30 PDT)
+
+`/Applications/Quip.app` rebuilt from `198b43c` — Developer ID
+(`D2PM6R797Q`), hardened runtime, `codesign --verify --deep --strict` valid on
+the installed bundle, fresh pid 88438 (verified `STARTED`, not the trapped-SIGTERM
+no-op), `nm` confirms `LayoutResize` + `PromptID` symbols are present.
+
+Trap re-confirmed: the Release build failed first with ~30 `cannot find X in
+scope` errors because the committed `pbxproj` is stale — the pre-commit gate
+restores it under the zero-pbxproj protocol, so `xcodegen generate` is mandatory
+before any build, not just after adding files.
+
+APNs orphaned by the reinstall exactly as predicted — `push.log` now logs
+`waiting_for_input skipped — APNs not configured in Settings → Notifications`.
+The `.p8` needs re-entering.
+
+### Found by testing, not by reading: state flaps ~26×/min
+
+Running the Q-16 smoke surfaced something unrelated and more interesting.
+`push.log` carries 73 `neutral↔waiting_for_input` transitions in 2m50s for a
+single busy iTerm window (other windows: 2–7 in the same period).
+
+Cause is a single `cpuIdleThreshold = 5.0` with no hysteresis: an agent doing
+work oscillates across it, and the existing 2-poll debounce (0.5s at a 0.25s
+interval) is nowhere near long enough to absorb that. Pushes are protected by a
+separate 30s per-(window, device) debounce in `PushNotificationService`, so this
+is not notification spam — it is phone-grid badge flicker plus one layout
+broadcast per transition. Filed as Q-20 with the fix shape (separate enter/exit
+thresholds + a minimum dwell), deliberately not built: it changes when the phone
+says "waiting for input", which is a product call.
+
+### Smokes still not run
+
+- **Q-16 (poll guards): NOT verified.** The window opened for the test never
+  entered a tracked state, and three AppleScript `close` variants against it
+  returned success while leaving it open (iTerm window id 2962 is still on the
+  desktop — worth closing by hand). Nothing about the guard was exercised;
+  do not read the clean log as a pass.
+- **Q-18a multi-display: unrunnable here.** This machine reports one display, so
+  the half of Iteration 1 that matters most cannot be tested without a second
+  monitor attached.
+- **Q-19b (resize) and Q-17a (prompt CRUD)** need hands on the UI.
+
+---
+
 ## Session log — 2026-08-17 (multi-select "still broken" = stale binary; probe socket leak; LAN routing)
 
 ### Shipped

@@ -16,6 +16,7 @@ _(none)_
 
 | ID | Title | Notes |
 |----|-------|-------|
+| Q-20 | Terminal state flaps ~26×/min on a busy agent window | Measured 2026-08-18 on the fresh build: `push.log` shows 73 `neutral↔waiting_for_input` transitions in 2m50s for one iTerm window (others 2–7). Cause is a single `cpuIdleThreshold = 5.0` with no hysteresis — a working agent oscillates across it, and the 2-poll debounce (0.5s) is far too short to absorb that. Pushes are safe (30s per-window/device debounce in `PushNotificationService`), so the cost is phone-grid badge flicker and a layout broadcast per transition. Fix shape: separate enter/exit thresholds plus a minimum dwell time before flipping back. **Changes when the phone says "waiting for input" — confirm the latency trade before building.** |
 
 ## Blocked
 
