@@ -20,7 +20,6 @@ _(none)_
 | Q-19b | Drag-to-resize smoke | Unblocked 2026-08-19 (Mac install done, pid 42368). Toggle on, drag a tile corner, Arrange, confirm the window matches the dragged rect; switch preset and confirm sizes reset. |
 | Q-16 | §58 Iteration 3 manual smoke | Unblocked 2026-08-19 (Mac install done). Close tracked iTerm windows during active polling, confirm no stale state or source churn. NOTE: the 2026-08-18 attempt proved nothing — the window opened for it never entered a tracked state, so the clean log meant nothing ran. Use a window actually running an agent CLI and confirm it is tracked first. |
 | Q-18a | §58 Iteration 1 manual smoke | Partly unblocked 2026-08-19. Runnable half: reorder in the layout preview, confirm sidebar + Arrange agree. Multi-display half stays BLOCKED — this machine has one display. |
-| Q-21 | Terminal "waiting for input" is inferred from CPU alone, so a network-blocked agent reads as a prompt | Measured 2026-08-19 on the installed flap fix: 44 neutral<->waiting_for_input transitions in 180s for one window (~14.7/min), against a ~26/min baseline and a single-digit target. Q-20's asymmetric debounce works and should stay, but it is a timing fix for a signal problem. `TerminalStateDetector.swift:515` sets the state with `totalCPU < cpuThreshold` over the AI child processes, so an agent blocked on an LLM stream or MCP call is indistinguishable from a prompt waiting on a human. Every observed raise cleared again after 1-5s; a real prompt idles indefinitely, so none were prompts. Needs a second signal (screen content / a prompt marker), not a longer timeout. |
 
 ## Blocked
 
@@ -59,6 +58,8 @@ _(none)_
 | Q-20 | Terminal state flaps ~26×/min — enter/exit debounce is now asymmetric: raising a "waiting for input" badge needs 1.5s of sustained quiet, clearing one still takes 0.5s | `9aef9f8` |
 | Q-13 | CI had failed at step one on every run since `f19760d`: an unanchored `scripts/` in `.gitignore` matches at ANY depth, so `.github/scripts/` was never committed and the workflow called two files that do not exist on a runner | `889db83` |
 | Q-20a | Flap measured on hardware after install — reduced ~26/min to ~14.7/min, but did NOT reach the single-digit bar; root cause found and refiled as Q-21 | measured 2026-08-19 |
+| Q-21 | Terminal "waiting for input" was inferred from CPU alone, so an agent blocked on an LLM stream read as a prompt. The raise now re-reads the pane twice 400ms apart and proceeds only if nothing moved | `7611d32` |
+| Q-21a | Prompt gate confirmed on hardware — raises across all windows 67 -> 10 in the same 180s protocol, worst window 44 -> 1, zero fail-open skips | measured 2026-08-19 |
 | Q-14 | Main-thread blocking sweep: PTT chunk decode, WebSocket broadcast encode, and the VibeCut packs read moved off main; a dead AX walk deleted. Three sites left alone with reasons (see wishlist) | `05b935a` |
 
 ## Branch policy
