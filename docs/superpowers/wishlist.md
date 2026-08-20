@@ -83,8 +83,87 @@ Also tightened: the pending run is now dropped on `untrackWindow`,
 candidate can never survive a lifecycle event and complete a transition it did
 not earn.
 
-Still to confirm on hardware (Q-20a): re-run the count after installing — the
-baseline to beat is 73 in 2m50s.
+Confirmed on hardware 2026-08-19 (Q-20a) — and it did **not** clear the bar:
+44 transitions in 180s for one window, ~14.7/min against a ~26/min baseline and
+a single-digit target. The debounce is a real ~1.8x improvement and stays, but
+it was answering the wrong question. See below.
+
+## Session log — 2026-08-19 (Q-20a failed, Q-21 shipped and confirmed)
+
+### The flap was never a timing problem
+
+`TerminalStateDetector.swift:515` decides the state with `totalCPU <
+cpuThreshold` over the AI child processes alone. An agent blocked on an LLM
+stream or an MCP call burns ~0% CPU, so by that measure it is *identical* to a
+prompt waiting on a human. Q-20 made the required quiet run longer, which can
+only delay the same wrong answer. The log said so plainly once it was read the
+right way: every raise cleared again after 1-5s, and a real prompt idles
+indefinitely — so none of those 22 cycles were prompts at all.
+
+### The obvious fix is a trap
+
+"Read the pane and look for the prompt" does not work. **Claude Code draws its
+`❯` input box while it is working too** — verified against live panes, the box
+is present in both states. Status-line glyphs do not separate them either: a
+working pane shows `✶ Crystallizing… (40s · ↓ 1.4k tokens)`, a finished one
+`✻ Cooked for 23m 34s`, both a glyph plus an elapsed time. The design was
+approved on the input-cue rule and had to be changed mid-build once the live
+captures falsified it.
+
+What separates them is **movement**. A working agent redraws a live counter
+every frame; an idle one is frozen — the same idle pane read three times a
+second apart came back byte-identical. So the raise, and only the raise, now
+captures the pane twice 400ms apart and proceeds only if nothing moved. This
+needs no per-CLI dialect knowledge, which matters: the status verbs are
+randomized per turn and every CLI draws its own chrome, so a matcher would have
+started rotting immediately.
+
+Shipped in `7611d32` as three pieces, split so the logic is testable without
+spawning `osascript` against a live terminal — which is exactly the shape of
+test that missed the original flap:
+
+- `Shared/PaneStability.swift` — pure text compare; strips ANSI so a colour
+  repaint is not movement, and refuses to answer on an empty capture rather
+  than calling two failed reads "identical"
+- `QuipMac/Services/PromptRaiseGate.swift` — pure decision: stable raises,
+  moving drops, unreadable **fails open**, and staleness outranks all three
+- detector wiring — resolves the reader on main (window metadata is MainActor),
+  runs the reads on `pollQueue` (they fork `osascript`), applies back on main
+  behind the Q-16b generation guard
+
+Unreadable panes fail open deliberately. A missing Automation grant that
+silently stopped the badge would look exactly like a fixed flap, so it raises on
+CPU alone as before and logs `prompt-gate skipped` into `push.log` next to the
+transitions it failed to gate.
+
+### Q-21a — confirmed, same protocol
+
+| window | Q-20 only | with gate |
+| --- | --- | --- |
+| `iterm2.114` | 44 | 1 |
+| `iterm2.118` | 39 | 3 |
+| `iterm2.116` | 24 | 0 |
+| `iterm2.115` | 24 | 0 |
+| `iterm2.113` | 2 | 6 |
+| **raises, all windows** | **67** | **10** |
+
+Zero `prompt-gate skipped` lines in the window, so every raise was actually
+gated — none of the improvement came from the fail-open path, which is the
+reading that would have made these numbers meaningless. The two
+`com.apple.Terminal` windows that raised once and stayed raised are correct: no
+agent process, so they take the early return at `:511` and genuinely are waiting
+on a human.
+
+Still owed: confirming on hardware that a real prompt badges the phone within
+~2s. The unit oracle covers it; the grid does not yet.
+
+### Owed regardless — APNs is still dark
+
+`push.log` logged `waiting_for_input skipped — APNs not configured` throughout
+this session, including after the key was re-entered. Quip was reinstalled twice
+more afterwards for the Q-21 build, and every stable-resign reinstall re-triggers
+the keychain-orphan pattern, so the key needs re-importing through Settings →
+Notifications rather than just re-typing.
 
 ### Smokes still not run
 
