@@ -59,32 +59,63 @@ final class WhisperDictationService: @unchecked Sendable {
         self.send = send
     }
 
-    /// Synchronous ingest — fire-and-forget. Used when caller doesn't need
-    /// to await the transcription result (normal message-loop case).
+    /// Number of times a chunk was decoded while on the main thread.
+    ///
+    /// Same regression oracle as `TerminalStateDetector.mainThreadProcessSpawns`,
+    /// for a different blocking primitive. `ingest` is reached from the MainActor
+    /// message loop once per audio chunk of every PTT stream, so a base64 decode
+    /// there is the highest-frequency main-thread block in the app. Incremented
+    /// inside the decode itself so it cannot drift away from where the work
+    /// actually runs; it must stay 0. `nonisolated(unsafe)` for the same reason
+    /// the spawn counter is: only the main thread ever writes it, and an off-main
+    /// decode — the correct case — leaves it alone.
+    nonisolated(unsafe) private(set) static var mainThreadChunkDecodes = 0
+
+    /// Test-only reset so each case starts from a known count.
+    static func resetMainThreadChunkDecodeCount() {
+        mainThreadChunkDecodes = 0
+    }
+
+    /// Fire-and-forget ingest. Used when the caller doesn't need to await the
+    /// transcription result (the normal message-loop case).
+    ///
+    /// Nothing here runs on the caller's thread. Both halves of this used to:
+    /// the base64 → `[Float]` decode, and a `queue.sync` that parked main behind
+    /// whatever the whisper queue was already doing. `queue` is serial, so
+    /// hopping onto it with `async` preserves the ordering callers rely on — a
+    /// `hasBuffer` or `purgeStaleSessions` issued after this call still runs
+    /// after this block, because both enter the same serial queue behind it.
     func ingest(_ chunk: AudioChunkMessage) {
-        let samples = Self.decodeInt16LE(base64: chunk.pcmBase64)
-        queue.sync {
-            var buf = sessions[chunk.sessionId] ?? SessionBuffer()
-            buf.samples.append(contentsOf: samples)
-            buf.lastTouched = Date()
-            sessions[chunk.sessionId] = buf
-        }
-        if chunk.isFinal {
-            Task { await finalize(sessionId: chunk.sessionId) }
+        queue.async { [self] in
+            append(chunk)
+            if chunk.isFinal {
+                Task { await finalize(sessionId: chunk.sessionId) }
+            }
         }
     }
 
     /// Test-only variant that awaits the finalize Task so assertions see
-    /// the send-closure call.
+    /// the send-closure call. Routes through the same off-main append as
+    /// `ingest` — a `queue.sync` here would decode on the caller's thread and
+    /// make the tests disagree with production about where the work happens.
     func ingestAsync(_ chunk: AudioChunkMessage) async {
-        let samples = Self.decodeInt16LE(base64: chunk.pcmBase64)
-        queue.sync {
-            var buf = sessions[chunk.sessionId] ?? SessionBuffer()
-            buf.samples.append(contentsOf: samples)
-            buf.lastTouched = Date()
-            sessions[chunk.sessionId] = buf
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                append(chunk)
+                continuation.resume()
+            }
         }
         if chunk.isFinal { await finalize(sessionId: chunk.sessionId) }
+    }
+
+    /// Decode a chunk and fold it into its session buffer.
+    /// MUST be called on `queue` — it touches `sessions` unsynchronized.
+    private func append(_ chunk: AudioChunkMessage) {
+        let samples = Self.decodeInt16LE(base64: chunk.pcmBase64)
+        var buf = sessions[chunk.sessionId] ?? SessionBuffer()
+        buf.samples.append(contentsOf: samples)
+        buf.lastTouched = Date()
+        sessions[chunk.sessionId] = buf
     }
 
     func hasBuffer(for sessionId: UUID) -> Bool {
@@ -119,6 +150,7 @@ final class WhisperDictationService: @unchecked Sendable {
     }
 
     private static func decodeInt16LE(base64: String) -> [Float] {
+        if Thread.isMainThread { mainThreadChunkDecodes += 1 }
         guard let data = Data(base64Encoded: base64), !data.isEmpty else { return [] }
         let count = data.count / 2
         var out = [Float](repeating: 0, count: count)

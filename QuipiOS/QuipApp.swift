@@ -5621,7 +5621,11 @@ struct InlineTerminalContent: View {
             // detector finds an agent CLI's numeric choice menu, render one
             // in-app button per detected option so Codex/Claude prompts with
             // 1...N choices are answerable without typing.
-            if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
+            // `answerableOptions`, not `detect`: the widget appends a free-text
+            // "Type something" row after the real options, and a chip for it
+            // opens an editor the phone cannot type into. Keystroke generation
+            // still sees the full run, so the walk to Submit is unaffected.
+            if let options = NumberedPromptDetector.answerableOptions(in: content), options.count >= 2 {
                 let fingerprint = NumberedPromptDetector.fingerprint(in: content)
                 if NumberedPromptDetector.isMultiSelect(in: content) {
                     // §18.2 — checkbox (multi-select) menu: accumulate picks on
@@ -8582,13 +8586,15 @@ struct LatencyDiagnosticsSheet: View {
                     Text("Recent (\(client.latencySamples.count) samples)")
                 }
 
-                // Phase 3: opt-in toggle for hot-swap routing. Off by default
-                // until hardware-verified across LAN / Tailscale / Cloudflare;
-                // user enables it from this row to opt into the experimental
-                // "always pick fastest path" behavior.
+                // Phase 3: hot-swap routing. ON unless the user opts out — the
+                // reader must agree with `BackendConnectionManager
+                // .autoSwapEnabled`, or this row would show OFF while the
+                // engine is running (which is exactly backwards from the bug
+                // this replaced, where the row showed OFF and the engine
+                // genuinely never ran for anyone).
                 Section {
                     Toggle("Auto-pick fastest path", isOn: Binding(
-                        get: { UserDefaults.standard.bool(forKey: BackendConnectionManager.autoSwapDefaultsKey) },
+                        get: { BackendConnectionManager.autoSwapEnabled() },
                         set: { UserDefaults.standard.set($0, forKey: BackendConnectionManager.autoSwapDefaultsKey) }
                     ))
                 } header: {
@@ -8874,7 +8880,7 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(isPresented: $creatingNew) {
-            PromptEditorSheet(initial: nil, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -8890,7 +8896,7 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(item: $generatedDraft) { draft in
-            PromptEditorSheet(initial: nil, draft: draft, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, draft: draft, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -9017,6 +9023,16 @@ struct PromptLibrarySheet: View {
         .contentShape(Rectangle())
         .onTapGesture { fire(entry, pressReturn: false) }
         .onLongPressGesture(minimumDuration: 0.4) { fire(entry, pressReturn: true) }
+        // Both actions are gesture-only, which VoiceOver cannot discover: the
+        // row reads as static text and long-press has no spoken equivalent at
+        // all. Declaring the button trait plus a named custom action makes
+        // "paste and send" reachable without the gesture.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(entry.label)
+        .accessibilityValue(hidden ? "Hidden" : entry.bodyPreview)
+        .accessibilityHint("Pastes this prompt into the active terminal")
+        .accessibilityAction(named: "Paste and send") { fire(entry, pressReturn: true) }
     }
 
     /// Compact provenance / state capsule, quieter than the label so the merged
@@ -9038,6 +9054,11 @@ struct PromptLibrarySheet: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             if lastFiredId == entry.id { lastFiredId = nil }
         }
+    }
+
+    /// Ids the Mac already holds, for the editor's collision warning.
+    private var existingPromptIDs: Set<String> {
+        Set(client.promptLibrary.map(\.id))
     }
 
     private func putPrompt(_ entry: PromptEntry, messageId: UUID) -> Bool {
@@ -9093,6 +9114,10 @@ struct PromptLibrarySheet: View {
 struct PromptEditorSheet: View {
     let initial: PromptEntry?
     var draft: PromptEntry? = nil
+    /// Ids already in the library, so the new-prompt flow can warn before a
+    /// save silently replaces a neighbour. Empty is safe — it just disables
+    /// the collision warning.
+    var existingIDs: Set<String> = []
     let latestAck: PutPromptAckMessage?
     let onSave: (_ entry: PromptEntry, _ messageId: UUID) -> Bool
     @Environment(\.dismiss) private var dismiss
@@ -9117,6 +9142,9 @@ struct PromptEditorSheet: View {
                         .foregroundStyle(initial != nil ? .secondary : .primary)
                     TextField("Display label (optional)", text: $labelText)
                         .autocorrectionDisabled(true)
+                    if initial == nil, !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        idPreviewRow
+                    }
                 } header: {
                     Text("Identity")
                 } footer: {
@@ -9163,7 +9191,9 @@ struct PromptEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Send the id the Mac would derive anyway, so the phone's
+                        // local view of the library matches the file on disk.
+                        let id = initial?.id ?? sanitizedID
                         let label = labelText.trimmingCharacters(in: .whitespaces)
                         guard !id.isEmpty, !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                         let messageId = UUID()
@@ -9189,7 +9219,7 @@ struct PromptEditorSheet: View {
                             saveError = "Timed out waiting for the Mac to confirm save."
                         }
                     }
-                    .disabled(idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    .disabled((initial == nil && sanitizedID.isEmpty)
                               || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                               || isSaving)
                 }
@@ -9225,6 +9255,44 @@ struct PromptEditorSheet: View {
 
     private var metadataSource: PromptEntry? {
         initial ?? draft
+    }
+
+    /// What the Mac will actually name the file. Same function the Mac runs
+    /// (`Shared/PromptID.swift`), so this preview cannot drift from the write.
+    private var sanitizedID: String {
+        PromptID.sanitize(idText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// A new prompt whose sanitized id already exists would overwrite that
+    /// prompt's file. Warn rather than block: replacing is a legitimate edit,
+    /// but it must not be a surprise. Locked ids (edit flow) always "collide"
+    /// with themselves, so the check is new-prompt only.
+    private var collidesWithExisting: Bool {
+        initial == nil && !sanitizedID.isEmpty && existingIDs.contains(sanitizedID)
+    }
+
+    /// Save is impossible when nothing survives sanitization ("!!!", "///").
+    private var idIsUnsavable: Bool {
+        !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && sanitizedID.isEmpty
+    }
+
+    @ViewBuilder
+    private var idPreviewRow: some View {
+        if idIsUnsavable {
+            Label("No usable characters in that id — it can't become a filename.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+        } else if collidesWithExisting {
+            Label("Will save as \(sanitizedID).txt — replaces the existing “\(sanitizedID)” prompt.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+        } else {
+            Text("Will save as \(sanitizedID).txt")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func handleAckIfNeeded() {

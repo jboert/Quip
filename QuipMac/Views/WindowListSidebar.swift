@@ -7,7 +7,6 @@ struct WindowListSidebar: View {
     @Environment(WindowManager.self) private var windowManager
     @Environment(TerminalStateDetector.self) private var stateDetector
     @Binding var selectedWindowId: String?
-    @Binding var windowOrder: [String]
 
     @State private var showingAddPopover = false
     @State private var newTerminalApp: TerminalApp = .iterm2
@@ -23,8 +22,6 @@ struct WindowListSidebar: View {
             Divider()
             bottomBar
         }
-        .onAppear { syncWindowOrder() }
-        .onChange(of: windowManager.windows.map(\.id)) { _, _ in syncWindowOrder() }
     }
 
     // MARK: - Header
@@ -46,6 +43,7 @@ struct WindowListSidebar: View {
                     .font(.title3)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Auto-sort and toggle dev windows")
             .help("Auto-sort + toggle your dev windows — terminals (attention-needed first) and simulators sort to the top and turn on; tap again to turn them off. Other windows just get sorted.")
 
             Button {
@@ -55,6 +53,7 @@ struct WindowListSidebar: View {
                     .font(.title3)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Add a terminal")
             .popover(isPresented: $showingAddPopover, arrowEdge: .trailing) {
                 addTerminalPopover
             }
@@ -72,7 +71,10 @@ struct WindowListSidebar: View {
 
     private struct SidebarRowModel: Identifiable {
         let window: ManagedWindow
-        let index: Int
+        /// Arrange slot — the position this window gets when you hit Arrange,
+        /// counted over *enabled* windows only. `nil` for a disabled window,
+        /// which is not in the layout at all.
+        let slot: Int?
         let previousSameRankID: String?
         let nextSameRankID: String?
 
@@ -81,6 +83,16 @@ struct WindowListSidebar: View {
 
     private func sidebarSnapshot() -> SidebarSnapshot {
         let ordered = orderedWindows()
+        // Row numbers used to count every row, which read as "Arrange puts this
+        // one third" — wrong, because Arrange only places enabled windows. Number
+        // the enabled ones in order and leave the rest blank, so the number on a
+        // row means exactly one thing.
+        var nextSlot = 0
+        var slotByID: [String: Int] = [:]
+        for window in ordered where window.isEnabled {
+            nextSlot += 1
+            slotByID[window.id] = nextSlot
+        }
         let rows = ordered.enumerated().map { index, window in
             let rank = windowTier(window)
             let nextIndex = ordered.index(after: index)
@@ -93,7 +105,7 @@ struct WindowListSidebar: View {
 
             return SidebarRowModel(
                 window: window,
-                index: index + 1,
+                slot: slotByID[window.id],
                 previousSameRankID: previousID,
                 nextSameRankID: nextID
             )
@@ -101,36 +113,13 @@ struct WindowListSidebar: View {
         return SidebarSnapshot(rows: rows)
     }
 
+    /// `WindowManager.windows` is already stored in `customOrder` sequence —
+    /// one list, written only through `setOrder`, so the sidebar, the layout
+    /// preview, and Arrange can never disagree about position again. Windows
+    /// that appeared since the last snapshot are already appended by
+    /// `applyWindowSnapshot`, so there is nothing left to reconcile here.
     private func orderedWindows() -> [ManagedWindow] {
-        let allWindows = windowManager.windows
-        var windowsByID: [String: ManagedWindow] = [:]
-        windowsByID.reserveCapacity(allWindows.count)
-        for window in allWindows {
-            windowsByID[window.id] = window
-        }
-
-        // windowOrder is authoritative — it carries whatever the user last
-        // arranged, by dragging rows or tapping the magic-wand sort. Render
-        // strictly in that order so a manual/magic arrangement sticks instead
-        // of being re-shuffled every frame.
-        var ordered: [ManagedWindow] = []
-        var orderedIDs = Set<String>()
-        ordered.reserveCapacity(allWindows.count)
-        for id in windowOrder {
-            if let window = windowsByID[id] {
-                ordered.append(window)
-                orderedIDs.insert(id)
-            }
-        }
-
-        // Windows not yet recorded in windowOrder (just appeared, before
-        // syncWindowOrder catches them) get appended in tier order so a freshly
-        // spawned terminal lands among the terminals rather than at the bottom.
-        let fresh = allWindows
-            .filter { !orderedIDs.contains($0.id) }
-            .sorted { windowTier($0) < windowTier($1) }
-        ordered.append(contentsOf: fresh)
-        return ordered
+        windowManager.windows
     }
 
     /// Three-tier grouping used for BOTH the magic-wand sort and the sidebar's
@@ -147,9 +136,9 @@ struct WindowListSidebar: View {
     }
 
     /// Magic-wand one-tap sort + enable-toggle. Snapshots the current
-    /// arrangement into a dev-focused order and writes it to `windowOrder`
-    /// (which orderedWindows renders verbatim, so it sticks and stays
-    /// drag-tweakable afterward):
+    /// arrangement into a dev-focused order and writes it through
+    /// `WindowManager.setOrder` (which the sidebar renders verbatim, so it
+    /// sticks and stays drag-tweakable afterward):
     ///   1. Terminals — and within them, windows where Claude is WAITING FOR
     ///      INPUT bubble to the very top (the one that needs you is #1).
     ///   2. Simulators.
@@ -187,25 +176,11 @@ struct WindowListSidebar: View {
         let enableAll = !allOn
 
         withAnimation(.easeOut(duration: 0.22)) {
-            windowOrder = sorted
+            windowManager.setOrder(sorted)
             for target in targets {
                 windowManager.toggleWindow(target.id, enabled: enableAll)
             }
         }
-    }
-
-    /// Sync windowOrder binding with current window list — called outside of body evaluation
-    private func syncWindowOrder() {
-        let allWindows = windowManager.windows
-        var knownOrderIDs = Set(windowOrder)
-        for window in allWindows {
-            if !knownOrderIDs.contains(window.id) {
-                windowOrder.append(window.id)
-                knownOrderIDs.insert(window.id)
-            }
-        }
-        let activeIds = Set(allWindows.map(\.id))
-        windowOrder.removeAll { !activeIds.contains($0) }
     }
 
     private func windowList(snapshot: SidebarSnapshot) -> some View {
@@ -213,7 +188,7 @@ struct WindowListSidebar: View {
             ForEach(snapshot.rows) { row in
                 WindowRow(
                     window: row.window,
-                    index: row.index,
+                    slot: row.slot,
                     isSelected: selectedWindowId == row.window.id,
                     onToggle: { enabled in
                         windowManager.toggleWindow(row.window.id, enabled: enabled)
@@ -230,18 +205,18 @@ struct WindowListSidebar: View {
     }
 
     /// Native drag-to-reorder. The rows render in `orderedWindows()` order
-    /// (which is `windowOrder` verbatim), so a visible-index move maps directly
-    /// onto that rendered id list — apply it and write the result straight back
-    /// to the authoritative `windowOrder`. Free across tiers on purpose: a
+    /// (which is `WindowManager.customOrder` verbatim), so a visible-index move
+    /// maps directly onto that rendered id list — apply it and write the result
+    /// straight back through `setOrder`. Free across tiers on purpose: a
     /// hand-drag is the user explicitly overriding the tier grouping, and
-    /// because windowOrder is authoritative the arrangement sticks until the
+    /// because that order is authoritative the arrangement sticks until the
     /// next magic-wand tap. Complements the per-row chevrons (same-tier nudge)
     /// and the wand (whole-list snap).
     private func dragReorder(from source: IndexSet, to destination: Int) {
         var rendered = orderedWindows().map(\.id)
         rendered.move(fromOffsets: source, toOffset: destination)
         withAnimation(.easeOut(duration: 0.18)) {
-            windowOrder = rendered
+            windowManager.setOrder(rendered)
         }
     }
 
@@ -251,11 +226,7 @@ struct WindowListSidebar: View {
     }
 
     private func moveWindow(_ id: String, beside neighborID: String) {
-        guard let source = windowOrder.firstIndex(of: id),
-              let destination = windowOrder.firstIndex(of: neighborID) else {
-            return
-        }
-        windowOrder.swapAt(source, destination)
+        windowManager.swapOrder(id, with: neighborID)
     }
 
     // MARK: - Bottom Bar
@@ -288,6 +259,7 @@ struct WindowListSidebar: View {
                     .font(.caption)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Refresh window list")
             .help("Refresh window list")
         }
         .padding(.horizontal, 16)
@@ -324,6 +296,7 @@ struct WindowListSidebar: View {
                         Image(systemName: "folder")
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Choose a project directory")
                 }
             }
 
@@ -350,8 +323,12 @@ struct WindowListSidebar: View {
 
     private func removeSelectedWindow() {
         guard let id = selectedWindowId else { return }
+        // "Remove" means "stop managing it" — the window itself stays on
+        // screen and stays in the list. It used to also drop the id from the
+        // view's private order list, which only shuffled the row to its tier
+        // position; order now lives in WindowManager and rebuilds from the
+        // live window set, so there is nothing to prune.
         windowManager.toggleWindow(id, enabled: false)
-        windowOrder.removeAll { $0 == id }
         selectedWindowId = nil
     }
 
@@ -368,8 +345,14 @@ struct WindowListSidebar: View {
     }
 
     private func spawnTerminal() {
-        let dir = newProjectDirectory
         let appName = newTerminalApp.rawValue
+        // The directory comes from an open panel, so it is whatever the user has
+        // on disk — spaces, quotes, `$`, backticks. It gets interpolated into a
+        // shell `cd` that is itself an AppleScript string literal, so it needs
+        // both escapes, shell first. Unquoted, a path with a space simply cd'd
+        // to the wrong place; unescaped, a path with a backtick ran a command.
+        let cdCommand = "cd \"\(KeystrokeInjector.escapeForShellStatic(newProjectDirectory))\""
+        let scriptSafeCommand = KeystrokeInjector.escapeForAppleScriptStatic(cdCommand)
         let script: String
 
         switch newTerminalApp {
@@ -379,7 +362,7 @@ struct WindowListSidebar: View {
             script = """
             tell application "\(appName)"
                 activate
-                do script "cd \(dir)"
+                do script "\(scriptSafeCommand)"
             end tell
             """
         case .iterm2:
@@ -389,7 +372,7 @@ struct WindowListSidebar: View {
                 tell current window
                     create tab with default profile
                     tell current session
-                        write text "cd \(dir)"
+                        write text "\(scriptSafeCommand)"
                     end tell
                 end tell
             end tell
@@ -411,7 +394,8 @@ struct WindowListSidebar: View {
 
 private struct WindowRow: View {
     let window: ManagedWindow
-    let index: Int
+    /// Arrange slot, or nil when this window is not part of the layout.
+    let slot: Int?
     let isSelected: Bool
     let onToggle: (Bool) -> Void
     var onMoveUp: (() -> Void)?
@@ -439,10 +423,11 @@ private struct WindowRow: View {
             }
             .toggleStyle(.checkbox)
 
-            Text("\(index).")
+            Text(slot.map { "\($0)." } ?? "–")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(slot == nil ? .tertiary : .secondary)
                 .frame(width: 20, alignment: .trailing)
+                .help(slot.map { "Arrange slot \($0)" } ?? "Not included in Arrange — enable it first")
 
             Circle()
                 .fill(Color(hex: window.assignedColor))
@@ -483,6 +468,7 @@ private struct WindowRow: View {
                                 .font(.caption2)
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel("Move \(window.name) up")
                     }
                     if let onMoveDown {
                         Button { onMoveDown() } label: {
@@ -490,6 +476,7 @@ private struct WindowRow: View {
                                 .font(.caption2)
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel("Move \(window.name) down")
                     }
                 }
             }

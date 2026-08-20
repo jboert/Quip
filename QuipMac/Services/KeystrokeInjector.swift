@@ -284,6 +284,43 @@ final class KeystrokeInjector {
     /// Returns failure if the image can't be loaded; success codepath
     /// trusts AppleScript (same as `sendText`'s iTerm2 path).
     @discardableResult
+    /// Put an image on `pasteboard` in every representation a paste target is
+    /// likely to ask for, as ONE item.
+    ///
+    /// `writeObjects([NSImage])` alone offers only `public.tiff`, so a target
+    /// that reads PNG (or wants a file rather than raw bytes) finds nothing and
+    /// the paste silently does nothing. TIFF is still written first and stays
+    /// the primary representation — it is what the proven iTerm2 + Codex path
+    /// consumes today — and PNG plus the file URL are added alongside it, so
+    /// this can only widen what a target can accept, never narrow it.
+    ///
+    /// One item with several types (not several items): a multi-item pasteboard
+    /// reads as a multi-file paste to some targets.
+    nonisolated static func writeImagePayload(_ image: NSImage, fileURL: URL,
+                                              to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        var wroteAnyBytes = false
+        if let tiff = image.tiffRepresentation {
+            item.setData(tiff, forType: .tiff)
+            wroteAnyBytes = true
+            // PNG is derived from the same bitmap so the two always agree.
+            if let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                item.setData(png, forType: .png)
+            }
+        }
+        // Lets a target treat this as "a file was pasted" — how editors and
+        // several TUIs prefer to attach an image.
+        item.setString(fileURL.absoluteString, forType: .fileURL)
+        pasteboard.writeObjects([item])
+        // Belt and braces: if the image had no bitmap to hand (vector-only, or
+        // a load that produced no representation), fall back to the old call so
+        // the pasteboard is never left with just a URL.
+        if !wroteAnyBytes {
+            pasteboard.writeObjects([image])
+        }
+    }
+
     func pasteImage(at imageURL: URL, to windowId: String, terminalApp: TerminalApp,
                     iterm2SessionId: String?) async -> InjectionResult {
         guard let image = NSImage(contentsOf: imageURL) else {
@@ -298,8 +335,7 @@ final class KeystrokeInjector {
         // Shared coordinator: restore once after the burst even if a text
         // paste overlaps this image paste (both touch NSPasteboard.general).
         Self.beginClipboardInjection()
-        pb.clearContents()
-        pb.writeObjects([image])
+        Self.writeImagePayload(image, fileURL: imageURL, to: pb)
         // 0.6s: floor before Cmd+V lands; iTerm2 paste-confirm may extend past it.
         defer { Self.endClipboardInjection(after: 0.6) }
 
@@ -348,8 +384,12 @@ final class KeystrokeInjector {
             return await executeAppleScriptOffMain(script, context: "pasteImage to \(windowId) [iTerm2]")
 
         case .terminal:
-            // Terminal.app doesn't support image paste (text-only); the
-            // caller should fall back to path-typing for this host.
+            // Terminal.app is text-only, so there is nothing for Cmd+V to
+            // deliver. Callers must not reach this — `imageInjectionRoute`
+            // sends Terminal.app windows down the typed-path route, which
+            // Codex handles by reading the file itself. Kept as a guard so a
+            // future caller that forgets fails loudly instead of silently
+            // pasting nothing.
             return InjectionResult(success: false, error: "Terminal.app does not accept pasted images")
 
         case .claudeDesktop:
@@ -754,7 +794,9 @@ final class KeystrokeInjector {
     /// - Returns: Result indicating success or failure
     @discardableResult
     func spawnTerminal(in directory: String, terminalApp: TerminalApp) async -> InjectionResult {
-        let escapedDir = escapeForAppleScript(directory)
+        // Shell first, then AppleScript — the directory lands inside `cd "…"`,
+        // so a `$` or a backtick in the path would otherwise expand or run.
+        let escapedDir = escapeForAppleScript(escapeForShell(directory))
         let script: String
 
         switch terminalApp {
@@ -894,7 +936,28 @@ final class KeystrokeInjector {
         case .claudeDesktop:
             return nil
         case .terminal:
-            script = """
+            // Terminal.app's AppleScript `id of window` IS the CGWindowID —
+            // verified against CGWindowListCopyWindowInfo (ids 72 and 968 matched
+            // exactly on two live windows). That makes an exact per-window read
+            // possible, and it reads a window that isn't frontmost just fine.
+            //
+            // It matters because the old `contents of front window` made every
+            // Terminal.app read window-blind: with two windows open, the prompt
+            // scrape that drives push notifications, the mode poll, and answer
+            // re-validation could all be looking at a different window than the
+            // one they were asked about. (iTerm2 has targeted by session id all
+            // along — this closes the same hole for Terminal.app.)
+            //
+            // `front window` stays as the fallback for a caller that has no
+            // window number, which is what every caller used to get anyway.
+            script = cgWindowNumber != 0 ? """
+            tell application "Terminal"
+                if (exists window id \(cgWindowNumber)) then
+                    return contents of window id \(cgWindowNumber)
+                end if
+                return contents of front window
+            end tell
+            """ : """
             tell application "Terminal"
                 return contents of front window
             end tell
@@ -935,7 +998,37 @@ final class KeystrokeInjector {
 
         let result = AppleScriptRunner.run(script)
         if result.failed { return nil }
+        // Redact HERE, not at the broadcast, so the Mac reasons over exactly the
+        // bytes the phone was shown. Prompt fingerprints are hashes of on-screen
+        // text: the phone can only ever hash redacted content, so if the Mac
+        // re-hashed the raw buffer, any prompt containing something the redactor
+        // rewrites would never re-validate and every answer to it would be
+        // dropped as "Prompt changed — not sent". One canonical form removes the
+        // whole class. `redact` is a fixed set of regex substitutions — same
+        // input, same output — so hashes stay stable.
         return result.stringValue
+            .map(Self.trimTrailingBlankLines)
+            .map(SecretRedactor.redact)
+    }
+
+    /// Drop the blank lines a terminal pads its buffer with below the last
+    /// painted row.
+    ///
+    /// This is not cosmetic. Both terminals return the FULL window height, so a
+    /// prompt drawn near the top of a tall window sits dozens of blank lines
+    /// above the end of the string — past `NumberedPromptDetector.scanLineLimit`,
+    /// which only ever looks at the trailing lines. Every detector then reports
+    /// "no prompt": one-tap answers got dropped as "Prompt changed — not sent"
+    /// (the phone hashes the TRIMMED content it was sent, the Mac re-hashed the
+    /// padded one and got nil) and multi-select fell through to the typed-text
+    /// path. Trimming here — the single choke point every reader goes through —
+    /// keeps all consumers looking at the same shape the phone does.
+    nonisolated static func trimTrailingBlankLines(_ content: String) -> String {
+        var lines = content.components(separatedBy: "\n")
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Capture Window Screenshot
@@ -1154,6 +1247,13 @@ final class KeystrokeInjector {
     /// at the shell level, and then the whole resulting string gets escaped
     /// again for the AppleScript string literal.
     private func escapeForShell(_ text: String) -> String {
+        Self.escapeForShellStatic(text)
+    }
+
+    /// Same rule, callable without an instance — the sidebar's "spawn a
+    /// terminal here" action builds its own AppleScript and needs it too.
+    /// `nonisolated` so tests and non-main-actor callers can reach it.
+    nonisolated static func escapeForShellStatic(_ text: String) -> String {
         text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")

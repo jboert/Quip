@@ -78,19 +78,28 @@ enum NumberedPromptDetector {
         return false
     }
 
-    /// A `[ ]` / `[x]` / `[X]` / `[✓]` checkbox token anywhere on the line —
-    /// the signature of an interactive multi-select option.
+    /// The CHECKED-box tokens a live widget can render. `[✔]` (U+2714 HEAVY
+    /// CHECK MARK) is what Claude Code v2.1.x actually paints — captured off a
+    /// live AskUserQuestion multi-select — and its absence here used to break
+    /// detection twice over: the checked line stopped counting as a checkbox
+    /// line (truncating/corrupting the option run) and `checkedOptions` reported
+    /// an empty pre-checked set (so the toggle diff flipped correct boxes).
+    /// `[✓]` (U+2713) stays for widgets that render the light check.
+    private static let checkedBoxTokens = ["[x]", "[X]", "[✓]", "[✔]"]
+
+    /// A `[ ]` / `[x]` / `[X]` / `[✓]` / `[✔]` checkbox token anywhere on the
+    /// line — the signature of an interactive multi-select option.
     static func lineHasCheckbox(_ line: String) -> Bool {
         let s = stripANSI(line)
-        return s.contains("[ ]") || s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
+        return s.contains("[ ]") || checkedBoxTokens.contains(where: s.contains)
     }
 
-    /// A CHECKED checkbox token (`[x]` / `[X]` / `[✓]`) anywhere on the line —
-    /// distinct from an unchecked `[ ]`. Reads which options Claude has
+    /// A CHECKED checkbox token (`[x]` / `[X]` / `[✓]` / `[✔]`) anywhere on the
+    /// line — distinct from an unchecked `[ ]`. Reads which options Claude has
     /// PRE-CHECKED in an interactive multi-select widget. (US-001)
     static func lineHasCheckedBox(_ line: String) -> Bool {
         let s = stripANSI(line)
-        return s.contains("[x]") || s.contains("[X]") || s.contains("[✓]")
+        return checkedBoxTokens.contains(where: s.contains)
     }
 
     /// The option numbers in the detected prompt (`bestRun`) whose line renders
@@ -115,6 +124,114 @@ enum NumberedPromptDetector {
     /// DOWN to each option it must toggle. (US-001)
     static func cursorOption(in content: String) -> Int? {
         bestRun(in: content)?.first(where: \.hasMarker)?.number
+    }
+
+    /// The last option number in the detected run — the row the cursor must pass
+    /// on its way to a trailing Submit row.
+    static func lastOption(in content: String) -> Int? {
+        bestRun(in: content)?.last?.number
+    }
+
+    /// The placeholder Claude Code paints in the free-text row that every
+    /// AskUserQuestion menu appends after the question's real options. Read
+    /// verbatim out of the shipped CLI binary (v2.1.221), which builds the row
+    /// list as:
+    ///
+    ///     const label = multiSelect ? "Type something" : "Type something."
+    ///     const other = { type: "input", value: "__other__", placeholder: label, … }
+    ///     const chat  = showChat && !multiSelect ? [{ value: "__chat__", … }] : []
+    ///     rows = [...realOptions, other, ...chat]
+    ///
+    /// Three facts follow, and this code depends on all three: the label is a
+    /// fixed literal, there is exactly one such row, and it is always the LAST
+    /// row of the option run (the `__chat__` row sits under the rule, which
+    /// `bestRun` already cuts). Matching the literal ALONE would be exactly the
+    /// label-guessing that broke multi-select twice; requiring it to also be the
+    /// run's final row is what makes this structural rather than a guess.
+    private static let freeTextPlaceholders: Set<String> = ["type something", "type something."]
+
+    /// The option number of the widget's free-text ("Type something") row, or
+    /// nil when the run has no such row. See `freeTextPlaceholders`.
+    static func freeTextOption(in content: String) -> Int? {
+        guard let last = bestRun(in: content)?.last else { return nil }
+        return isFreeTextOptionLine(last.normalized) ? last.number : nil
+    }
+
+    /// The options a remote client can actually ANSWER: `detect` minus the
+    /// free-text row. Tapping that row opens a text field the phone has no way
+    /// to fill, so it must never be offered as a chip or a notification action.
+    ///
+    /// NAVIGATION still counts the row — `lastOption` / `hasSubmitRow` /
+    /// `MultiSelectSync.keystrokes` keep reading the full run, so the cursor
+    /// walk to the Submit row still steps over it. Narrowing those instead
+    /// would land the cursor ON the free-text row and Return would open the
+    /// editor. Returns nil when nothing answerable is left.
+    static func answerableOptions(in content: String) -> [Int]? {
+        guard let all = detect(in: content) else { return nil }
+        guard let free = freeTextOption(in: content) else { return all }
+        let kept = all.filter { $0 != free }
+        return kept.isEmpty ? nil : kept
+    }
+
+    /// True when a normalized option line's body is the free-text placeholder,
+    /// modulo its number, separator and (multi-select) checkbox token.
+    private static func isFreeTextOptionLine(_ normalized: String) -> Bool {
+        var rest = Substring(normalized)
+        while let c = rest.first, c.isNumber { rest = rest.dropFirst() }
+        guard rest.hasPrefix(". ") || rest.hasPrefix(") ") || rest.hasPrefix(": ") else { return false }
+        var body = String(rest.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        for token in ["[ ]"] + checkedBoxTokens where body.hasPrefix(token) {
+            body = String(body.dropFirst(token.count)).trimmingCharacters(in: .whitespaces)
+            break
+        }
+        return freeTextPlaceholders.contains(body.lowercased())
+    }
+
+    /// True when the widget renders an unnumbered, navigable **Submit** row
+    /// directly under the option list, e.g. Claude Code's AskUserQuestion
+    /// multi-select:
+    ///
+    ///     ❯ 1. [ ] Apple
+    ///       …
+    ///       5. [ ] Type something
+    ///          Submit          ← this row
+    ///
+    /// Captured off a live widget: in it, Return does NOT submit — it TOGGLES
+    /// the highlighted checkbox (the footer's "Enter to select"). The only way
+    /// to commit is to walk the cursor one row past the last option onto Submit
+    /// and press Return there. Widgets without this row keep the plain
+    /// "toggle then Return" contract. (§18.2)
+    static func hasSubmitRow(in content: String) -> Bool {
+        guard let run = bestRun(in: content), let last = run.last else { return false }
+        let tail = Array(content.components(separatedBy: "\n").suffix(scanLineLimit))
+        // Scan the lines after the last option; a Submit row sits within the
+        // option block's body, before any following numbered option.
+        for idx in (last.lineIndex + 1)..<tail.count {
+            let line = tail[idx]
+            if parseNumberedLine(line) != nil { return false }
+            if isSubmitRowLine(line) { return true }
+        }
+        return false
+    }
+
+    /// A standalone Submit row: the word "Submit" alone on the line, modulo an
+    /// optional cursor marker (`❯ Submit` when highlighted) and indentation.
+    /// Excludes lines that merely mention submitting ("Ready to submit your
+    /// answers?") and the widget's header tab strip (`← ☐ Fruit ✔ Submit →`).
+    private static func isSubmitRowLine(_ line: String) -> Bool {
+        var s = stripANSI(line).trimmingCharacters(in: .whitespaces)
+        if let marker = promptMarkerPrefix(in: s) { s.removeFirst(marker.count) }
+        return s.trimmingCharacters(in: .whitespaces).lowercased() == "submit"
+    }
+
+    /// True when the live screen is the multi-select CONFIRM step Claude Code
+    /// shows after Submit ("Ready to submit your answers? ❯ 1. Submit answers /
+    /// 2. Cancel") with the cursor already on the submit option — so a single
+    /// Return commits. Lets the Mac finish the choreography only when it can see
+    /// that exact screen, never blind-firing a Return. (§18.2)
+    static func isSubmitConfirmPrompt(in content: String) -> Bool {
+        guard let run = bestRun(in: content), let first = run.first, first.hasMarker else { return false }
+        return first.normalized.lowercased().contains("submit answer")
     }
 
     /// Tokens that anchor an inline bracketed choice as a real prompt (vs prose
@@ -330,6 +447,18 @@ enum NumberedPromptDetector {
                 }
                 // else: numbered line, no run yet, n != 1 → out-of-order start, ignore.
             } else if !current.isEmpty {
+                if isDividerLine(line) {
+                    // A rule under the options closes the menu. Claude Code
+                    // draws one between a question's real choices and the meta
+                    // actions below ("Chat about this"), which the phone was
+                    // rendering as just another numbered chip — tapping it
+                    // started a chat instead of answering. Structural, so it
+                    // needs no guessing at label text in any language.
+                    flush()
+                    current = []
+                    gap = 0
+                    continue
+                }
                 // Body line under the current option. Tolerate up to
                 // maxBodyLinesBetweenOptions; only a longer gap ends the run
                 // (the prompt finished, or this was prose all along).
@@ -344,6 +473,19 @@ enum NumberedPromptDetector {
         flush()  // trailing run
 
         return best.isEmpty ? nil : best
+    }
+
+    /// Minimum run of rule characters before a line counts as a divider. Long
+    /// enough that a `---` in prose or an em-dash sentence can't end a menu.
+    private static let dividerMinLength = 8
+
+    /// A horizontal rule — a line of nothing but box-drawing/dash characters.
+    /// Widgets use it to separate a question's real options from the meta
+    /// actions underneath.
+    private static func isDividerLine(_ line: String) -> Bool {
+        let s = stripANSI(line).trimmingCharacters(in: .whitespaces)
+        guard s.count >= dividerMinLength else { return false }
+        return s.allSatisfy { "─━═-–—_=".contains($0) }
     }
 
     /// Normalize one option line to its stable identity: ANSI-stripped,

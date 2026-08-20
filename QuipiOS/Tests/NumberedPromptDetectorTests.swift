@@ -717,4 +717,211 @@ final class NumberedPromptDetectorTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Live Claude Code widgets (captured 2026-08-03, v2.1.220)
+
+    /// Verbatim capture of a real AskUserQuestion MULTI-select, read off a live
+    /// iTerm2 session (trailing spaces stripped — every detector collapses
+    /// whitespace). The hand-written fixtures above got three things wrong that
+    /// this one gets right, and the phone is the peer that renders chips from
+    /// this detector, so it locks the shape here too:
+    ///   • the checked box is `[✔]` (U+2714), not `[✓]` / `[x]`
+    ///   • options carry description lines between them
+    ///   • an unnumbered `Submit` row sits under the last option
+    private let liveMultiSelect = """
+    ←  ☒ Fruit  ✔ Submit  →
+
+    Which fruits do you want?
+
+    ❯ 1. [✔] Apple
+      Crisp, common, keeps well.
+      2. [ ] Banana
+      Soft, sweet, no peel tools needed.
+      3. [ ] Cherry
+      Small, tart-sweet, has pits.
+      4. [ ] Durian
+      Strong smell, custard texture, divisive.
+      5. [ ] Type something
+         Submit
+    ──────────────────────────────────────────────
+      6. Chat about this
+
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    """
+
+    /// The same widget in SINGLE-select form — no checkboxes, same meta rows.
+    private let liveSingleSelect = """
+     ☐ Pick
+
+    Which one you pick?
+
+    ❯ 1. Alpha
+         First option.
+      2. Beta
+         Second option.
+      3. Gamma
+         Third option.
+      4. Type something.
+    ──────────────────────────────────────────────
+      5. Chat about this
+
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    """
+
+    func test_liveMultiSelect_detectsCheckboxOptionsOnly() {
+        // 6 ("Chat about this") carries no checkbox and is below the divider, so
+        // it stays out of a checkbox run.
+        XCTAssertEqual(NumberedPromptDetector.detect(in: liveMultiSelect), [1, 2, 3, 4, 5])
+        XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: liveMultiSelect))
+        XCTAssertTrue(NumberedPromptDetector.isInteractiveMultiSelect(in: liveMultiSelect))
+    }
+
+    /// The U+2714 regression: before this was recognised, the checked line was
+    /// not even counted as a checkbox line, which broke the run AND made the
+    /// phone seed its picks from an empty set.
+    func test_liveMultiSelect_heavyCheckMarkCountsAsChecked() {
+        XCTAssertEqual(NumberedPromptDetector.checkedOptions(in: liveMultiSelect), [1])
+        XCTAssertEqual(MultiSelectSync.initialPicks(liveContent: liveMultiSelect), [1])
+        XCTAssertEqual(NumberedPromptDetector.cursorOption(in: liveMultiSelect), 1)
+    }
+
+    func test_liveMultiSelect_hasSubmitRow() {
+        XCTAssertTrue(NumberedPromptDetector.hasSubmitRow(in: liveMultiSelect))
+        XCTAssertEqual(NumberedPromptDetector.lastOption(in: liveMultiSelect), 5)
+    }
+
+    /// A checkbox menu with no Submit row keeps the plain contract (Return
+    /// confirms in place) — the two dialects must stay distinguishable.
+    func test_plainCheckboxMenu_hasNoSubmitRow() {
+        let content = """
+        Which to delete?
+        ❯ 1. [ ] G1 caches
+          2. [ ] G2 backups
+        """
+        XCTAssertFalse(NumberedPromptDetector.hasSubmitRow(in: content))
+    }
+
+    func test_liveSingleSelect_notMultiSelect() {
+        XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: liveSingleSelect) == false)
+        XCTAssertEqual(NumberedPromptDetector.cursorOption(in: liveSingleSelect), 1)
+        XCTAssertNotNil(NumberedPromptDetector.fingerprint(in: liveSingleSelect))
+    }
+
+    /// The rule under the options closes the menu, so "Chat about this" — a meta
+    /// action, not an answer — is never rendered as a chip. Tapping it used to
+    /// start a chat instead of answering the question.
+    func test_liveSingleSelect_dividerEndsTheMenu() {
+        XCTAssertEqual(NumberedPromptDetector.detect(in: liveSingleSelect), [1, 2, 3, 4])
+    }
+
+    /// A short dash run inside an option's body is not a divider — the rule is
+    /// length-gated so prose can't truncate a real menu.
+    func test_shortDashRunInBody_doesNotEndTheMenu() {
+        let content = """
+        Which one?
+        ❯ 1. Alpha
+          --- notes ---
+          2. Beta
+        """
+        XCTAssertEqual(NumberedPromptDetector.detect(in: content), [1, 2])
+    }
+
+    /// The review step Claude shows after Submit. The Mac presses Return again
+    /// only when it can see this screen, so the phone-side detector must agree
+    /// on what it looks like.
+    func test_liveConfirmStep_isSubmitConfirmPrompt() {
+        let review = """
+        Review your answers
+
+         ● Which fruits do you want?
+           → Apple, Cherry
+
+        Ready to submit your answers?
+
+        ❯ 1. Submit answers
+          2. Cancel
+        """
+        XCTAssertTrue(NumberedPromptDetector.isSubmitConfirmPrompt(in: review))
+        XCTAssertFalse(NumberedPromptDetector.isSubmitConfirmPrompt(in: liveMultiSelect))
+    }
+
+    /// Terminals pad the buffer to the full window height, which pushes the
+    /// prompt past the trailing scan window. The Mac trims that at the read
+    /// (KeystrokeInjector.readContent) — this pins WHY it has to.
+    func test_blankPaddedWidget_detectsNothing() {
+        let padded = liveMultiSelect + String(repeating: "\n", count: 30)
+        XCTAssertNil(NumberedPromptDetector.detect(in: padded))
+        XCTAssertNil(NumberedPromptDetector.fingerprint(in: padded))
+    }
+
+    // MARK: - The free-text row is not an answer
+
+    /// Every AskUserQuestion menu appends a free-text row after the question's
+    /// real options — read verbatim from the shipped CLI (v2.1.221):
+    ///
+    ///     const label = multiSelect ? "Type something" : "Type something."
+    ///     rows = [...realOptions, {type:"input", value:"__other__", placeholder: label}, ...chat]
+    ///
+    /// A chip for it opens an editor the phone has no way to type into, so it
+    /// must not be offered. Note the dialect difference the two fixtures pin:
+    /// the multi-select placeholder has no trailing period, the single-select
+    /// one does.
+    func test_freeTextRow_isFoundInBothDialects() {
+        XCTAssertEqual(NumberedPromptDetector.freeTextOption(in: liveMultiSelect), 5)
+        XCTAssertEqual(NumberedPromptDetector.freeTextOption(in: liveSingleSelect), 4)
+    }
+
+    func test_answerableOptions_dropsTheFreeTextRow() {
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: liveMultiSelect), [1, 2, 3, 4])
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: liveSingleSelect), [1, 2, 3])
+    }
+
+    /// NAVIGATION must still count the row. Removing it from the run would make
+    /// the cursor walk one step short and land on the free-text row, where
+    /// Return opens the editor rather than submitting — the failure this whole
+    /// area started with.
+    func test_freeTextRow_isStillCountedForNavigation() {
+        XCTAssertEqual(NumberedPromptDetector.lastOption(in: liveMultiSelect), 5)
+        XCTAssertTrue(NumberedPromptDetector.hasSubmitRow(in: liveMultiSelect))
+        XCTAssertEqual(
+            MultiSelectSync.keystrokes(desired: [1, 3], liveContent: liveMultiSelect),
+            ["down", "down", "space", "down", "down", "down", "return"]
+        )
+    }
+
+    /// Position is half the rule. Matching the literal alone would be the kind
+    /// of label guessing that broke this area twice; the row must ALSO be last.
+    func test_freeTextLiteral_inANonFinalRow_staysAnswerable() {
+        let content = """
+        Which one?
+        ❯ 1. Type something
+          2. Alpha
+          3. Beta
+        """
+        XCTAssertNil(NumberedPromptDetector.freeTextOption(in: content))
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: content), [1, 2, 3])
+    }
+
+    /// A menu from any other CLI passes through untouched.
+    func test_plainMenu_answerableOptionsMatchesDetect() {
+        let content = """
+        Which to delete?
+        ❯ 1. G1 caches
+          2. G2 backups
+        """
+        XCTAssertNil(NumberedPromptDetector.freeTextOption(in: content))
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: content),
+                       NumberedPromptDetector.detect(in: content))
+    }
+
+    /// Nothing left to offer reports nil, not an empty list — the chip bar's
+    /// `options.count >= 2` guard reads the same either way, but a caller that
+    /// force-unwraps a count should see "no prompt".
+    func test_menuOfNothingButTheEditor_offersNothing() {
+        let content = """
+        Which one?
+        ❯ 1. Type something.
+        """
+        XCTAssertNil(NumberedPromptDetector.answerableOptions(in: content))
+    }
 }

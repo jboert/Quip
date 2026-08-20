@@ -16,6 +16,7 @@ fileprivate func appendPushDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.pushPath
+        LogPaths.rotateIfNeeded(path: path)
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)
@@ -35,6 +36,7 @@ fileprivate func appendLatency(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.latencyPath
+        LogPaths.rotateIfNeeded(path: path)
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)
@@ -51,6 +53,7 @@ fileprivate func appendImageUploadDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.imageUploadPath
+        LogPaths.rotateIfNeeded(path: path)
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)
@@ -129,6 +132,7 @@ struct QuipMacApp: App {
     @State private var pinManager = PINManager()
     @State private var connectionLog = ConnectionLog()
     @State private var promptLibrary = PromptLibrary()
+    @State private var vibeCutSyncService = VibeCutSyncService()
     @State private var pushNotificationService = PushNotificationService()
     @State private var swrmProjectStore = SwrmProjectStore()
     @State private var swrmStoryCoordinator = SwrmStoryCoordinator()
@@ -207,6 +211,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// otherwise the first broadcast at launch is suppressed when the
     /// frontmost happens to be untracked. (wishlist §B16.)
     @State private var lastBroadcastFrontmostWindowId: String? = nil
+
+    /// True while an off-main frontmost AX probe is outstanding. Suppresses
+    /// the next 0.4s tick so a wedged foreign app can't let probes pile up.
+    @State private var frontmostProbeInFlight = false
     @State private var hasBroadcastFrontmostOnce: Bool = false
 
     var body: some Scene {
@@ -270,6 +278,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // to open it via the replaced .appSettings command below.
         Window("Settings", id: quipSettingsWindowID) {
             SettingsView()
+                .environment(permissionsStore)
                 .environment(windowManager)
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
@@ -280,6 +289,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(pushNotificationService)
                 .environment(whisperStatusStore)
                 .environment(promptLibrary)
+                .environment(vibeCutSyncService)
                 .environment(swrmProjectStore)
         }
         .windowResizability(.contentMinSize)
@@ -506,6 +516,29 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         Task { await setupWhisper() }
 
+        // Q-21. The detector infers "waiting for input" from CPU alone, and an
+        // agent blocked on an LLM stream burns ~0% CPU, so it cannot tell a
+        // prompt from a turn in progress. Before it raises the badge it reads
+        // the pane twice and requires that nothing moved; this is what gives it
+        // something to read. Runs on main — `windowManager` is MainActor — and
+        // returns a closure that owns its metadata by value so the detector can
+        // run it off main without touching the window list.
+        terminalStateDetector.makePaneReader = { [self] windowId in
+            guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
+                return nil
+            }
+            let termApp = terminalAppForWindow(window)
+            let windowNumber = window.windowNumber
+            let sessionId = window.iterm2SessionId
+            let injector = keystrokeInjector
+            return {
+                injector.readContent(
+                    terminalApp: termApp,
+                    cgWindowNumber: windowNumber,
+                    iterm2SessionId: sessionId)
+            }
+        }
+
         terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
             appendPushDiagnostic("state \(oldState.rawValue)→\(newState.rawValue) for \(windowId) (selected=\(clientSelectedWindowId ?? "nil"))")
             webSocketServer.broadcast(StateChangeMessage(windowId: windowId, state: newState.rawValue))
@@ -567,7 +600,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             let content = keystrokeInjector.readContent(
                                 terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId
                             ) ?? ""
-                            let options = NumberedPromptDetector.detect(in: content)
+                            // Same rule as the phone's chips: never offer the
+                            // widget's free-text row as a notification action.
+                            let options = NumberedPromptDetector.answerableOptions(in: content)
                             let isYesNo = NumberedPromptDetector.detectYesNo(in: content)
                             let fingerprint = NumberedPromptDetector.fingerprint(in: content)
                             DispatchQueue.main.async {
@@ -699,7 +734,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // client authenticates — keeps the timer's "skip on equality" path
         // from suppressing the very first send.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.broadcastPermissions(force: true)
+            self.broadcastPermissions(force: true) {
             // Rebuild-aware re-grant nudge (US-002, GH #33). Every `QuipMac/`
             // rebuild bumps the binary's cdhash, and macOS TCC revokes
             // Accessibility / Screen Recording / Automation on the change even
@@ -712,22 +747,37 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // since last launch) AND a permission actually preflights false, raise
             // the quiet `permissionsNeedAttention` signal that lights the menubar
             // glyph + 'Fix Permissions…' (US-003). We NEVER open a pane on launch
-            // — the user re-grants on their own terms. The probe just ran
-            // (force:true above), so `permissionsStore` holds the fresh snapshot.
+            // — the user re-grants on their own terms. This runs in the
+            // `then:` callback, i.e. after the off-main probe has landed and
+            // `permissionsStore` holds the fresh snapshot.
             // `didCodeIdentityChangeSinceLastLaunch` has a store side effect, so
             // call it exactly once per launch.
             if CodeIdentity.didCodeIdentityChangeSinceLastLaunch(),
                self.permissionsStore.deniedCount > 0 {
                 self.permissionsStore.permissionsNeedAttention = true
             }
+            }
         }
     }
 
     /// Probe + broadcast permissions. `force` skips the equality check (used at
     /// client-auth time so a freshly-connected phone always gets the current state).
+    ///
+    /// The probe runs off main — `AEDeterminePermissionToAutomateTarget` blocks
+    /// on an Apple Events round-trip to iTerm2 and tccd, and froze the UI for
+    /// 6.3 seconds when it ran inline here (`Quip_2026-07-30-091540.hang`).
+    /// `then` runs on main after the snapshot has been applied, for callers
+    /// that used to rely on the probe having completed synchronously.
     @MainActor
-    private func broadcastPermissions(force: Bool) {
-        let snapshot = permissionProbe.probe()
+    private func broadcastPermissions(force: Bool, then: (@MainActor () -> Void)? = nil) {
+        permissionProbe.refresh { snapshot in
+            applyPermissionsSnapshot(snapshot, force: force)
+            then?()
+        }
+    }
+
+    @MainActor
+    private func applyPermissionsSnapshot(_ snapshot: MacPermissionsMessage, force: Bool) {
         // Keep the quiet attention signal (US-002) truthful as grants change
         // mid-session, WITHOUT ever opening a pane: a grant dropped (denied count
         // rose vs the last snapshot) lights it; everything re-granted clears it so
@@ -855,7 +905,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// verified the response is present (e.g. the pending-input polling path).
     @MainActor
     private func triggerTTSFor(windowId: String, skipStableWait: Bool = false) {
-        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else { return }
+        guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
+            // Usually benign — the window closed between the state transition
+            // and this call. But it also fires when the snapshot is merely
+            // stale, and then a response that should have been spoken is lost
+            // for good with nothing recorded. Cheap to say, and it is the line
+            // that distinguishes "you closed it" from "we lost track of it".
+            KokoroTTSDebug.log("TTS DROPPED for \(windowId): window id no longer in the snapshot "
+                               + "(closed, or the snapshot has not caught up yet)")
+            return
+        }
         let termApp = terminalAppForWindow(window)
         let wn = window.windowNumber
         let name = window.name
@@ -877,7 +936,19 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
 
         waitForStableContent(termApp: termApp, windowNumber: wn, iterm2SessionId: window.iterm2SessionId) { stableContent in
-            guard let content = stableContent else { return }
+            guard let content = stableContent else {
+                // nil here does NOT mean "the window was quiet" — it means every
+                // read across the whole settle deadline came back empty, i.e.
+                // the AppleScript/CG read itself failed. That is the difference
+                // between "nothing to say" and "we could not look", and until
+                // now both ended the same silent way: TTS simply never spoke.
+                KokoroTTSDebug.log(
+                    "TTS DROPPED for \(windowId): window content read empty for the whole "
+                    + "settle window — the terminal read failed, not the agent staying quiet. "
+                    + "Suspect a revoked Automation/Accessibility grant or a closed window."
+                )
+                return
+            }
             DispatchQueue.main.async { [self] in
                 doTriggerTTSBody(windowId: windowId, name: name, content: content)
             }
@@ -994,6 +1065,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let ts = ISO8601DateFormatter().string(from: Date())
         let line = "[\(ts)] \(msg)\n"
         let path = LogPaths.qaModePath
+        LogPaths.rotateIfNeeded(path: path)
         if let fh = FileHandle(forWritingAtPath: path) {
             fh.seekToEndOfFile()
             fh.write(Data(line.utf8))
@@ -1498,15 +1570,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     )
                     let finishInjection: @MainActor () async -> Void = {
                         let tStart = Date()
-                        let route = cliKind == .codex ? "pasteImage" : "sendTextPath"
+                        let imageRoute = Self.imageInjectionRoute(cliKind: cliKind, terminalApp: termApp)
+                        let route = imageRoute.rawValue
                         let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sessionId in
-                            switch cliKind {
-                            case .codex:
+                            switch imageRoute {
+                            case .pasteImage:
                                 return await self.keystrokeInjector.pasteImage(
                                     at: savedURL, to: msg.windowId,
                                     terminalApp: termApp, iterm2SessionId: sessionId
                                 )
-                            case .claude, .shell, .cursor, .grok:
+                            case .sendTextPath:
                                 // Cursor's TUI takes a typed absolute path like
                                 // Claude Code (not pasted bytes like Codex).
                                 // Grok prompt text uses clipboard paste, but image
@@ -1668,13 +1741,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer] in
                         let redacted: String
                         if isTerminal {
+                            // readContent is the canonical form: trailing blank
+                            // padding already dropped and secrets already
+                            // redacted, so the phone and the Mac's own detectors
+                            // reason over identical bytes (see readContent).
                             let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? ""
-                            var lines = content.components(separatedBy: "\n")
-                            while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-                                lines.removeLast()
-                            }
-                            let trimmed = lines.suffix(200).joined(separator: "\n")
-                            redacted = SecretRedactor.redact(trimmed)
+                            redacted = content.components(separatedBy: "\n").suffix(200).joined(separator: "\n")
                         } else {
                             redacted = "[non-terminal window — screenshot requires Screen Recording permission for Quip]"
                         }
@@ -2172,46 +2244,26 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
     }
 
-    /// Phone tapped "Sync from VibeCut". Read `<repo>/shared/prompts.json`, map its
-    /// real text prompts into the reserved `vibecut__*` namespace (tagged
-    /// "vibecut"), replace the prior inherited set on disk in one batch, and ack
-    /// with the synced/skipped counts. `replaceVibeCutSet` fires the single
-    /// `prompt_library` broadcast that refreshes the phone's catalog. One-way only.
-    ///
-    /// On repo-not-found (or an empty/failed read) the prompts directory is left
-    /// untouched — we do NOT wipe the existing inherited set on a transient miss —
-    /// and the ack carries `syncedCount: 0` + a reason string.
+    /// Phone tapped "Sync from VibeCut". The read/map/replace pipeline lives in
+    /// VibeCutSyncService (shared with the Settings → Prompts "Sync Now"
+    /// button); this handler only adds the wire ack. `replaceVibeCutSet` fires
+    /// the single `prompt_library` broadcast that refreshes the phone's catalog.
+    /// One-way only; a failed or empty read leaves the inherited set untouched.
     @MainActor
     private func handleSyncVibeCut(_ msg: SyncVibeCutMessage) {
         let messageId = msg.messageId ?? UUID()
-
-        let readResult: VibeCutPromptReader.ReadResult
-        do {
-            readResult = try VibeCutPromptReader(root: VibeCutPromptReader.defaultRoot()).read()
-        } catch {
-            let reason = (error as? VibeCutPromptReader.ReadError)?.description ?? "\(error)"
-            print("[Quip] sync_vibecut failed: \(reason)")
-            webSocketServer.broadcast(SyncVibeCutAckMessage(
-                messageId: messageId, syncedCount: 0, skippedCount: 0, error: reason))
-            return
+        Task { @MainActor in
+            let outcome = await vibeCutSyncService.sync(into: promptLibrary, trigger: "phone")
+            if let error = outcome.error {
+                print("[Quip] sync_vibecut: \(error) (\(outcome.skipped) skipped)")
+            } else {
+                print("[Quip] sync_vibecut: wrote \(outcome.synced) prompts (\(outcome.skipped) skipped, \(outcome.skippedPacks) pack files unreadable)")
+            }
+            self.webSocketServer.broadcast(SyncVibeCutAckMessage(
+                messageId: messageId, syncedCount: outcome.synced,
+                skippedCount: outcome.skipped, skippedPacks: outcome.skippedPacks,
+                error: outcome.error))
         }
-
-        let mapped = VibeCutPromptMapper.map(catalog: readResult.catalog)
-        guard !mapped.entries.isEmpty else {
-            // Valid read but nothing inheritable — don't wipe the existing set.
-            print("[Quip] sync_vibecut: 0 inheritable prompts (\(mapped.skipped) skipped); leaving set untouched")
-            webSocketServer.broadcast(SyncVibeCutAckMessage(
-                messageId: messageId, syncedCount: 0, skippedCount: mapped.skipped,
-                skippedPacks: readResult.skippedPacks,
-                error: "No inheritable prompts found in VibeCut."))
-            return
-        }
-
-        let written = promptLibrary.replaceVibeCutSet(mapped.entries)
-        print("[Quip] sync_vibecut: wrote \(written) prompts (\(mapped.skipped) skipped, \(readResult.skippedPacks) pack files unreadable)")
-        webSocketServer.broadcast(SyncVibeCutAckMessage(
-            messageId: messageId, syncedCount: written, skippedCount: mapped.skipped,
-            skippedPacks: readResult.skippedPacks, error: nil))
     }
 
     /// Phone asked for the Mac's diagnostic log bundle. Build the zip on a
@@ -2367,9 +2419,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return
         }
         let frames = LayoutCalculator.calculate(mode: mode, windowCount: enabled.count)
+        // `display.frame` is NSScreen space (bottom-left origin); the
+        // Accessibility calls behind arrangeWindows are top-left origin. They
+        // coincide only for the primary display, and `isMain` tracks the
+        // *focused* screen — so on a two-display desk this used to place
+        // windows in the wrong coordinate space.
+        let screenFrame = windowManager.cgFrame(for: display)
         var targetFrames: [String: CGRect] = [:]
         for (index, window) in enabled.enumerated() where index < frames.count {
-            targetFrames[window.id] = frames[index].toCGRect(in: display.frame)
+            targetFrames[window.id] = frames[index].toCGRect(in: screenFrame)
         }
         if !windowManager.arrangeWindows(frames: targetFrames) {
             webSocketServer.broadcast(ErrorMessage(reason: "Grant Accessibility access to Quip in System Settings"))
@@ -2558,6 +2616,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return false
         }
         // For a multi-select submit, every picked option must still be offered.
+        // Deliberately the WIDE `detect`, not `answerableOptions`: a phone still
+        // running an older build offers the free-text row as a chip, and a pick
+        // of it should keep behaving as it does today rather than turn into a
+        // confusing "Prompt changed — not sent".
         if let ns = selectedOptionNumbers(from: action) {
             guard let offered = NumberedPromptDetector.detect(in: liveContent) else { return false }
             return ns.allSatisfy { offered.contains($0) }
@@ -2574,6 +2636,52 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             return NumberedPromptDetector.detectInlineOptions(in: liveContent)?.contains(String(n)) ?? false
         }
         return true  // press_y / press_n — fingerprint match is sufficient
+    }
+
+    /// How an uploaded image reaches a terminal window.
+    enum ImageInjectionRoute: String {
+        /// Put the image bytes on the clipboard and Cmd+V them in.
+        case pasteImage
+        /// Type the saved file's absolute path into the composer.
+        case sendTextPath
+    }
+
+    /// Pure decision: clipboard-paste the image, or type its path?
+    ///
+    /// Codex's composer takes pasted image BYTES, which is why it got its own
+    /// branch. But that route runs through `pasteImage`, and `pasteImage` can
+    /// only drive iTerm2 — under Terminal.app it returned "Terminal.app does not
+    /// accept pasted images" and the upload just failed, with the phone showing
+    /// an error for a picture that had already been saved to disk.
+    ///
+    /// Measured on codex-cli 0.146.0: given a bare absolute path, Codex reads
+    /// the file itself ("Viewed Image └ …/quip-test-image.png" → it described
+    /// the picture). So Terminal.app + Codex falls back to the same typed-path
+    /// route every other CLI uses instead of hard-failing. iTerm2 + Codex keeps
+    /// pasting real bytes — that path is proven, and it attaches the image
+    /// rather than relying on the model choosing to open the file.
+    nonisolated static func imageInjectionRoute(cliKind: CLIKind,
+                                                terminalApp: TerminalApp) -> ImageInjectionRoute {
+        guard cliKind == .codex, terminalApp == .iterm2 else { return .sendTextPath }
+        return .pasteImage
+    }
+
+    /// Pure decision: after typing a single option's digit (with NO Return),
+    /// does the screen still need a Return?
+    ///
+    /// Interactive pickers act on the digit the moment it lands — a live probe
+    /// had "2" answer Claude's single-select outright and "3" pick a model in
+    /// Codex's `/model` AND advance to its next step — so an unconditional
+    /// Return would answer whatever came next (it was quietly confirming Codex's
+    /// default reasoning level). Return is warranted in exactly two cases:
+    ///
+    ///  • the same prompt is still on screen (`expectedFingerprint` still
+    ///    matches) — a menu that wants the digit typed and entered;
+    ///  • Claude's review step is up, which the user's tap already committed to.
+    nonisolated static func shouldPressReturnAfterPick(liveContent: String,
+                                                       expectedFingerprint: String) -> Bool {
+        if NumberedPromptDetector.fingerprint(in: liveContent) == expectedFingerprint { return true }
+        return NumberedPromptDetector.isSubmitConfirmPrompt(in: liveContent)
     }
 
     /// Re-scrape the window (background, AppleScript), and inject the answer
@@ -2615,6 +2723,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
         }() else { return }
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector, webSocketServer, windowManager] in
+            // Reads target the exact window on both terminals now (Terminal.app
+            // by CGWindowID, iTerm2 by session id), so what gets validated here
+            // is the same window `focusWindow` raises below before injecting.
             let content = isTerminal
                 ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
                 : ""
@@ -2622,7 +2733,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // #3 — re-fire a fresh push with the now-current options so the
             // user just taps again. Recompute now (still on bg) so the main
             // hop has them ready.
-            let freshOptions = NumberedPromptDetector.detect(in: content)
+            let freshOptions = NumberedPromptDetector.answerableOptions(in: content)
             let freshIsYesNo = NumberedPromptDetector.detectYesNo(in: content)
             let freshFingerprint = NumberedPromptDetector.fingerprint(in: content)
             // Multi-select into Claude's INTERACTIVE checkbox widget must be
@@ -2663,14 +2774,35 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         Task { @MainActor in
                             await self.injectKeystrokeSequence(keys, to: wid, sessionId: sessionId,
                                                                termApp: termApp, cgWindowNumber: wn)
+                            // Claude Code answers Submit with a review step
+                            // ("Ready to submit your answers? ❯ 1. Submit
+                            // answers / 2. Cancel"). The user already committed
+                            // by tapping Submit on the phone, so finish it —
+                            // but only after SEEING that screen, never by
+                            // firing a blind extra Return.
+                            await self.confirmSubmitIfShown(windowId: wid, sessionId: sessionId,
+                                                            termApp: termApp, cgWindowNumber: wn,
+                                                            isTerminal: isTerminal)
                         }
                     }
                     if delay == 0 { fire() }
                     else { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { fire() } }
                     return
                 }
+                // An INTERACTIVE picker (one carrying a cursor marker) acts on the
+                // digit the instant it arrives — verified live on both dialects:
+                // typing "2" into Claude's single-select answered the question
+                // outright, and typing "3" into Codex's `/model` picker selected
+                // that model AND advanced to its next step. An unconditional
+                // trailing Return therefore lands in whatever screen came next,
+                // where it silently confirmed Codex's default reasoning level.
+                // So: type the digit alone here, then decide what (if anything)
+                // still needs a Return by LOOKING at the screen.
+                let interactivePick = Self.selectedOptionNumber(from: action) != nil
+                    && NumberedPromptDetector.cursorOption(in: content) != nil
                 let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sid in
-                    await keystrokeInjector.sendText(text, to: wid, pressReturn: true, terminalApp: termApp,
+                    await keystrokeInjector.sendText(text, to: wid, pressReturn: !interactivePick,
+                                                     terminalApp: termApp,
                                                      windowName: wname, cgWindowNumber: wn, iterm2SessionId: sid)
                 }
                 let injectWithSelfHeal: @MainActor () async -> Void = {
@@ -2688,6 +2820,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     if !r.success {
                         let reason = r.error ?? "unknown injection failure"
                         webSocketServer.broadcast(ErrorMessage(reason: "One-tap answer failed: \(reason)"))
+                        return
+                    }
+                    if interactivePick {
+                        await self.commitPickIfNeeded(windowId: wid, sessionId: sessionId,
+                                                      termApp: termApp, cgWindowNumber: wn,
+                                                      isTerminal: isTerminal,
+                                                      expectedFingerprint: expectedFingerprint)
                     }
                 }
                 if delay == 0 { Task { await injectWithSelfHeal() } }
@@ -2709,6 +2848,63 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// toggles in the order `MultiSelectSync` computed them or not at all. (The
     /// gap now sits BETWEEN completions rather than between scheduled starts —
     /// same choreography, and it can no longer compress if a key runs slow.)
+    /// Finish a single-option pick after the digit was typed WITHOUT a Return.
+    /// Re-reads the screen and presses Return only when it still needs one:
+    ///
+    ///  • the same prompt is still up (its fingerprint is unchanged) — a menu
+    ///    that wants the digit typed and entered, so commit it;
+    ///  • Claude's review step appeared — commit that.
+    ///
+    /// Anything else means the digit already answered (both interactive dialects
+    /// act on it immediately) and a Return here would answer the NEXT prompt.
+    @MainActor
+    private func commitPickIfNeeded(windowId: String, sessionId: String?,
+                                    termApp: TerminalApp, cgWindowNumber: CGWindowID,
+                                    isTerminal: Bool, expectedFingerprint: String) async {
+        guard isTerminal else { return }
+        guard let content = await readContentOffMain(termApp: termApp, cgWindowNumber: cgWindowNumber,
+                                                     sessionId: sessionId),
+              Self.shouldPressReturnAfterPick(liveContent: content,
+                                              expectedFingerprint: expectedFingerprint) else { return }
+        _ = await keystrokeInjector.sendKeystroke("return", to: windowId, terminalApp: termApp,
+                                                  cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
+    }
+
+    /// Re-read a terminal window's live content after giving the TUI a beat to
+    /// repaint. AppleScript stays off the main thread.
+    @MainActor
+    private func readContentOffMain(termApp: TerminalApp, cgWindowNumber: CGWindowID,
+                                    sessionId: String?) async -> String? {
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let injector = keystrokeInjector
+        return await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: injector.readContent(terminalApp: termApp,
+                                                            cgWindowNumber: cgWindowNumber,
+                                                            iterm2SessionId: sessionId))
+            }
+        }
+    }
+
+    /// Re-read the window and, if it now shows the multi-select review step with
+    /// the cursor on "Submit answers", press Return once to commit. Reads on a
+    /// background queue (AppleScript off the main thread) and no-ops for any
+    /// other screen — a mis-timed Return here would answer whatever prompt
+    /// happened to be up. (§18.2)
+    @MainActor
+    private func confirmSubmitIfShown(windowId: String, sessionId: String?,
+                                      termApp: TerminalApp, cgWindowNumber: CGWindowID,
+                                      isTerminal: Bool) async {
+        guard isTerminal else { return }
+        // The review screen replaces the widget one render after Return, so the
+        // read waits a beat (readContentOffMain) before looking.
+        guard let content = await readContentOffMain(termApp: termApp, cgWindowNumber: cgWindowNumber,
+                                                     sessionId: sessionId),
+              NumberedPromptDetector.isSubmitConfirmPrompt(in: content) else { return }
+        _ = await keystrokeInjector.sendKeystroke("return", to: windowId, terminalApp: termApp,
+                                                  cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
+    }
+
     @MainActor
     private func injectKeystrokeSequence(_ keys: [String],
                                          to windowId: String, sessionId: String?,
@@ -3220,9 +3416,21 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// then leaves `selectedWindowId` alone instead of blanking it, so the
     /// user's last terminal stays the target until focus returns to a
     /// tracked window. (wishlist §B16.)
-    private func currentFrontmostManagedWindowId() -> String? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let pid = app.processIdentifier
+    /// One tracked window reduced to what the frontmost match needs. Plain
+    /// values so the matcher can run off the MainActor.
+    struct FrontmostCandidate: Sendable {
+        let id: String
+        let origin: CGPoint
+    }
+
+    /// Ask the Accessibility API where the frontmost app's focused window is.
+    ///
+    /// Two synchronous AX round-trips **into a foreign process**. If that app
+    /// is wedged, each blocks until the AX timeout — seconds. Never call this
+    /// on the main thread; it ran there on a 0.4s timer for the life of the
+    /// app, 2.5 times a second, into whatever the user happened to have
+    /// focused.
+    nonisolated static func focusedWindowOrigin(pid: pid_t) -> CGPoint? {
         let appElement = AXUIElementCreateApplication(pid)
         var windowRef: CFTypeRef?
         let attrResult = AXUIElementCopyAttributeValue(
@@ -3235,87 +3443,83 @@ private static let recentScrapeTTL: TimeInterval = 0.75
               let posValue = posRef else { return nil }
         var axPos = CGPoint.zero
         AXValueGetValue(posValue as! AXValue, .cgPoint, &axPos)
-        let candidates = windowManager.windows.filter { $0.pid == pid }
-        guard !candidates.isEmpty else { return nil }
-        // 50pt origin tolerance — CG and AX coords are both top-left, so
-        // typical drift is sub-pixel. A larger gap means we matched the
-        // wrong window (e.g. position-tying close on overlapping windows
-        // would still pick *a* candidate, but past 50pt that's a guess and
-        // we'd rather send nil than mis-route).
-        var best: (window: ManagedWindow, distSq: CGFloat)? = nil
-        for w in candidates {
-            let dx = w.bounds.origin.x - axPos.x
-            let dy = w.bounds.origin.y - axPos.y
+        return axPos
+    }
+
+    /// Pick the tracked window nearest the AX origin, or nil when nothing is
+    /// close enough.
+    ///
+    /// 50pt origin tolerance — CG and AX coords are both top-left, so typical
+    /// drift is sub-pixel. A larger gap means we matched the wrong window
+    /// (position-tying close on overlapping windows would still pick *a*
+    /// candidate, but past 50pt that's a guess and we'd rather send nil than
+    /// mis-route). Pure, so the tolerance is under test.
+    nonisolated static func matchFrontmost(
+        origin: CGPoint?,
+        candidates: [FrontmostCandidate]
+    ) -> String? {
+        guard let origin, !candidates.isEmpty else { return nil }
+        var best: (id: String, distSq: CGFloat)? = nil
+        for candidate in candidates {
+            let dx = candidate.origin.x - origin.x
+            let dy = candidate.origin.y - origin.y
             let d = dx * dx + dy * dy
             if best == nil || d < best!.distSq {
-                best = (w, d)
+                best = (candidate.id, d)
             }
         }
         guard let pick = best, pick.distSq <= 2500 else { return nil }
-        return pick.window.id
+        return pick.id
     }
 
-    /// Compute the current frontmost ManagedWindow.id and broadcast a
-    /// `frontmost_changed` frame iff it differs from the last value we
-    /// sent. Cheap to call on a tight cadence — the AX query is the only
-    /// real cost. (wishlist §B16.)
+    /// Resolve the OS's currently-focused window to a ManagedWindow.id and
+    /// broadcast a `frontmost_changed` frame iff it differs from the last
+    /// value we sent. (wishlist §B16.)
+    ///
+    /// The AX query runs off main. A probe still outstanding suppresses the
+    /// next one, so a wedged foreign app can't let 0.4s ticks pile up.
+    ///
+    /// Returns nil when frontmost is e.g. Finder/Mail/Safari — the phone then
+    /// leaves `selectedWindowId` alone instead of blanking it, so the user's
+    /// last terminal stays the target until focus returns to a tracked window.
     private func broadcastFrontmostIfChanged() {
-        let current = currentFrontmostManagedWindowId()
+        guard !frontmostProbeInFlight else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            applyFrontmost(nil)
+            return
+        }
+        let pid = app.processIdentifier
+        let candidates = windowManager.windows
+            .filter { $0.pid == pid }
+            .map { FrontmostCandidate(id: $0.id, origin: $0.bounds.origin) }
+        guard !candidates.isEmpty else {
+            applyFrontmost(nil)
+            return
+        }
+
+        frontmostProbeInFlight = true
+        DispatchQueue.global(qos: .utility).async {
+            let origin = Self.focusedWindowOrigin(pid: pid)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.frontmostProbeInFlight = false
+                    self.applyFrontmost(Self.matchFrontmost(origin: origin, candidates: candidates))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func applyFrontmost(_ current: String?) {
         if hasBroadcastFrontmostOnce && current == lastBroadcastFrontmostWindowId { return }
         lastBroadcastFrontmostWindowId = current
         hasBroadcastFrontmostOnce = true
         webSocketServer.broadcast(FrontmostChangedMessage(windowId: current))
     }
 
-    /// Find the 1-based window index in the terminal app by matching
-    /// the managed window's position against AX window positions.
-    /// Terminal apps order their windows differently than CG, so we
-    /// enumerate AX windows for the same PID and find which index matches.
-    private func windowIndexForWindow(_ window: ManagedWindow, terminalApp: TerminalApp) -> Int {
-        let appElement = AXUIElementCreateApplication(window.pid)
-        var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let axWindows = windowsRef as? [AXUIElement] else {
-            return 1
-        }
-
-        // Match by title first (most reliable for multiple windows of same app)
-        for (index, axWindow) in axWindows.enumerated() {
-            var titleRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef) == .success,
-               let axTitle = titleRef as? String {
-                if axTitle == window.name {
-                    print("[Quip] Title match '\(axTitle)' -> window \(index + 1)")
-                    return index + 1
-                }
-            }
-        }
-
-        // Fallback: match by CG window number via position
-        // Refresh bounds from CG first for accuracy
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        if let infoList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] {
-            for info in infoList {
-                guard let wn = info[kCGWindowNumber as String] as? CGWindowID,
-                      wn == window.windowNumber,
-                      let boundsDict = info[kCGWindowBounds as String] as? [String: Any] else { continue }
-                let freshX = boundsDict["X"] as? CGFloat ?? window.bounds.origin.x
-                let freshY = boundsDict["Y"] as? CGFloat ?? window.bounds.origin.y
-
-                for (index, axWindow) in axWindows.enumerated() {
-                    var posRef: CFTypeRef?
-                    guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success else { continue }
-                    var axPos = CGPoint.zero
-                    AXValueGetValue(posRef as! AXValue, .cgPoint, &axPos)
-
-                    if abs(axPos.x - freshX) < 10 && abs(axPos.y - freshY) < 10 {
-                        print("[Quip] Position match -> window \(index + 1)")
-                        return index + 1
-                    }
-                }
-            }
-        }
-
-        return 1
-    }
+    // `windowIndexForWindow(_:terminalApp:)` lived here: an AX title walk plus a
+    // CGWindowListCopyWindowInfo sweep, on the main thread, with zero callers
+    // anywhere in the repo. Deleted rather than moved off main — dead code with
+    // a live defect is still just dead code, and keeping it around means the
+    // next reader has to re-derive that nothing calls it.
 }

@@ -739,11 +739,18 @@ private struct ProjectsTab: View {
 
 private struct PromptsTab: View {
     @Environment(PromptLibrary.self) private var library
+    @Environment(VibeCutSyncService.self) private var vibeCutSync
     @State private var editingPrompt: PromptEntry?
     @State private var creatingPrompt = false
 
+    private var inheritedCount: Int {
+        library.entries.filter(\.isInherited).count
+    }
+
     var body: some View {
         Form {
+            vibeCutSection
+
             Section {
                 if library.entries.isEmpty {
                     Text("No prompts yet. Click + to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
@@ -770,7 +777,13 @@ private struct PromptsTab: View {
                     .font(.caption)
                 }
             } header: {
-                Text("Prompt Library (\(library.entries.count))")
+                if inheritedCount > 0 {
+                    Text("Prompt Library (\(library.entries.count))")
+                    + Text("  ·  \(library.entries.count - inheritedCount) yours · \(inheritedCount) from VibeCut")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Prompt Library (\(library.entries.count))")
+                }
             } footer: {
                 Text("Tapped on the phone, the body is sent verbatim to the active terminal. Edits broadcast to every connected phone.")
                     .font(.caption)
@@ -778,6 +791,7 @@ private struct PromptsTab: View {
             }
         }
         .formStyle(.grouped)
+        .task { vibeCutSync.refreshRepoProbe() }
         .sheet(isPresented: $creatingPrompt) {
             PromptEditorSheet(initial: nil) { id, label, body in
                 library.put(id: id, label: label, body: body) != nil
@@ -789,12 +803,94 @@ private struct PromptsTab: View {
             }
         }
     }
+
+    // MARK: VibeCut sync
+
+    /// Mac-side face of the VibeCut prompt inherit. Everything here reads or
+    /// drives plumbing that already existed for the phone's ⟳ button: the repo
+    /// probe surfaces `VibeCutPromptReader.defaultRoot()` (and Change… writes
+    /// the `vibecutRepoPath` default that was previously `defaults write`-only),
+    /// Sync Now runs the same VibeCutSyncService pipeline, and the status line
+    /// shows the counts that used to go only to stdout.
+    @ViewBuilder
+    private var vibeCutSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                switch vibeCutSync.repoFound {
+                case .some(true):  StatusDot(kind: .ok, text: "Repo found")
+                case .some(false): StatusDot(kind: .bad, text: "Repo not found")
+                case .none:        StatusDot(kind: .busy, text: "Checking…")
+                }
+                Text(vibeCutSync.repoPath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Spacer()
+                Button("Change…") { changeVibeCutRepo() }
+            }
+
+            HStack(spacing: 8) {
+                lastSyncLabel
+                Spacer()
+                if vibeCutSync.isSyncing {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Sync Now") {
+                    Task { _ = await vibeCutSync.sync(into: library, trigger: "settings-button") }
+                }
+                .disabled(vibeCutSync.isSyncing)
+            }
+        } header: {
+            Text("VibeCut")
+        } footer: {
+            Text("One-way inherit of VibeCut's prompt catalog + packs into the library below. Edits belong in VibeCut; sync here or from the phone (Settings → Prompts → ⟳).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var lastSyncLabel: some View {
+        if let outcome = vibeCutSync.lastOutcome {
+            if let error = outcome.error {
+                Text("Last attempt \(outcome.date.formatted(date: .abbreviated, time: .shortened)) — \(error)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            } else {
+                let packs = outcome.skippedPacks > 0
+                    ? " · \(outcome.skippedPacks) pack \(outcome.skippedPacks == 1 ? "file" : "files") unreadable" : ""
+                Text("Last sync \(outcome.date.formatted(date: .abbreviated, time: .shortened)) · \(outcome.synced) synced · \(outcome.skipped) skipped\(packs)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text("Never synced on this Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func changeVibeCutRepo() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the VibeCut repo root (the folder containing shared/prompts.json)"
+        if panel.runModal() == .OK, let url = panel.url {
+            UserDefaults.standard.set(url.path, forKey: "vibecutRepoPath")
+            vibeCutSync.refreshRepoProbe()
+        }
+    }
 }
 
 // MARK: - General Tab
 
 private struct GeneralTab: View {
     @Environment(WhisperStatusStore.self) private var whisperStatus
+    @Environment(MacPermissionsStore.self) private var permissionsStore
     @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.iterm2.rawValue
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("showInMenuBar") private var showInMenuBar = true
@@ -802,12 +898,6 @@ private struct GeneralTab: View {
     @AppStorage("mirrorDesktop") private var mirrorDesktop = false
     @AppStorage("crashRecoveryEnabled") private var crashRecoveryEnabled = false
     @State private var crashRecoveryError: String?
-
-    /// Re-probe TCC perms every 3s while this tab is visible so the row
-    /// status flips green within seconds of the user granting in System
-    /// Settings — without forcing the user to bounce back into Quip to
-    /// see it. TimelineView is the cheapest reactive timer in SwiftUI.
-    private let permissionProbe = PermissionProbeService()
 
     var body: some View {
         // Ordered by why you open General: permissions first (the actionable
@@ -817,12 +907,16 @@ private struct GeneralTab: View {
         // Refresh" FYI section was dropped.
         Form {
             Section("Permissions") {
-                TimelineView(.periodic(from: .now, by: 3.0)) { _ in
-                    let perms = permissionProbe.probe()
-                    macPermRow(name: "Accessibility", granted: perms.accessibility, pane: .accessibility)
-                    macPermRow(name: "Automation (iTerm)", granted: perms.appleEvents, pane: .automation)
-                    macPermRow(name: "Screen Recording", granted: perms.screenRecording, pane: .screenRecording)
-                }
+                // Rows track `permissionsStore`, which the app refreshes every
+                // 5s off the main thread. Probing here instead ran a blocking
+                // Apple Events round-trip inside a SwiftUI body on main, every
+                // 3s while this tab was open — see Quip_2026-07-30-091540.hang.
+                // Unknown (pre-first-probe) reads as granted, same as the
+                // probe's own can't-tell default.
+                let perms = permissionsStore.snapshot
+                macPermRow(name: "Accessibility", granted: perms?.accessibility ?? true, pane: .accessibility)
+                macPermRow(name: "Automation (iTerm)", granted: perms?.appleEvents ?? true, pane: .automation)
+                macPermRow(name: "Screen Recording", granted: perms?.screenRecording ?? true, pane: .screenRecording)
                 Text("If System Settings already shows Quip enabled but the row stays red, turn Quip off and back on there. Screen Recording changes may require relaunching Quip.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1849,6 +1943,16 @@ private struct PromptRow: View {
 
     @State private var hovering = false
 
+    /// The id shown next to the label. Inherited prompts drop the reserved
+    /// `vibecut__` filename prefix — the badge already carries the provenance,
+    /// so the visible slug matches what VibeCut calls the prompt. The real id
+    /// (with prefix) stays untouched for edit/delete/Reveal.
+    private var displaySlug: String {
+        entry.isInherited && entry.id.hasPrefix(VibeCutPromptMapper.idPrefix)
+            ? String(entry.id.dropFirst(VibeCutPromptMapper.idPrefix.count))
+            : entry.id
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "doc.text")
@@ -1857,8 +1961,19 @@ private struct PromptRow: View {
                 HStack {
                     Text(entry.label)
                         .font(.system(size: 13, weight: .medium))
-                    if entry.label != entry.id {
-                        Text(entry.id)
+                    if entry.isInherited {
+                        // Same badge vocabulary as the phone's prompt list; the
+                        // pill replaces the raw `vibecut__` prefix in the slug.
+                        Text("VibeCut")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .foregroundStyle(Color.purple)
+                            .background(Capsule().fill(Color.purple.opacity(0.15)))
+                            .overlay(Capsule().stroke(Color.purple.opacity(0.4), lineWidth: 0.5))
+                    }
+                    if displaySlug != entry.label {
+                        Text(displaySlug)
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
                     }

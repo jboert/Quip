@@ -45,7 +45,6 @@ struct MainWindow: View {
 
     @State private var selectedDisplayId: String?
     @State private var selectedWindowId: String?
-    @State private var windowOrder: [String] = []
     @State private var localWSURL: String = MainWindow.computeLocalWSURL()
 
     @State private var layoutMode: LayoutMode = .columns
@@ -53,12 +52,14 @@ struct MainWindow: View {
     @State private var isDragToResizeEnabled = false
     @State private var customFrames: [String: NormalizedRect] = [:]
     @State private var showQRPopover = false
+    /// Non-nil while an Arrange attempt has something to say — missing
+    /// permission, no enabled windows, no display.
+    @State private var arrangeError: String?
 
     var body: some View {
         NavigationSplitView {
             WindowListSidebar(
-                selectedWindowId: $selectedWindowId,
-                windowOrder: $windowOrder
+                selectedWindowId: $selectedWindowId
             )
             .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 340)
         } detail: {
@@ -66,6 +67,20 @@ struct MainWindow: View {
         }
         .toolbar {
             toolbarContent
+        }
+        .alert("Couldn't arrange windows", isPresented: Binding(
+            get: { arrangeError != nil },
+            set: { if !$0 { arrangeError = nil } }
+        )) {
+            Button("Open Accessibility Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(url)
+                }
+                arrangeError = nil
+            }
+            Button("OK", role: .cancel) { arrangeError = nil }
+        } message: {
+            Text(arrangeError ?? "")
         }
         .onAppear {
             windowManager.refreshDisplays()
@@ -92,6 +107,17 @@ struct MainWindow: View {
                     selectedTemplate: $customTemplate,
                     isDragToResizeEnabled: $isDragToResizeEnabled
                 )
+                // Picking a preset means "lay them out like this" — keeping the
+                // hand-dragged rects would make the preset look broken.
+                .onChange(of: layoutMode) { _, _ in customFrames.removeAll() }
+                .onChange(of: customTemplate) { _, _ in customFrames.removeAll() }
+
+                if !customFrames.isEmpty {
+                    Button("Reset sizes") { customFrames.removeAll() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .help("Discard hand-dragged window sizes and go back to the preset")
+                }
 
                 Spacer()
 
@@ -136,6 +162,7 @@ struct MainWindow: View {
                         .font(.body)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Show QR code for iPhone")
                 .help("Show QR code for iPhone")
                 .popover(isPresented: $showQRPopover) {
                     tunnelQRPopover
@@ -224,6 +251,7 @@ struct MainWindow: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Copy connection URL")
                 }
             }
         }
@@ -268,6 +296,7 @@ struct MainWindow: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Copy local URL")
                 .help("Copy local URL")
 
             case .tailscale:
@@ -287,6 +316,7 @@ struct MainWindow: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Copy Tailscale URL")
                     .help("Copy Tailscale URL")
                 } else if let err = tailscale.lastError {
                     Text(err)
@@ -317,6 +347,7 @@ struct MainWindow: View {
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Copy tunnel URL")
                     .help("Copy tunnel URL")
                 } else if tunnel.isRunning {
                     ProgressView()
@@ -370,19 +401,11 @@ struct MainWindow: View {
 
     private var layoutSnapshot: LayoutSnapshot {
         let displayWindows = displayWindows
-        let enabledWindowCount = displayWindows.lazy.filter(\.isEnabled).count
-        let currentFrames: [NormalizedRect]
-
-        switch layoutMode {
-        case .custom:
-            currentFrames = customTemplate.frames(for: enabledWindowCount)
-        default:
-            currentFrames = LayoutCalculator.calculate(mode: layoutMode, windowCount: enabledWindowCount)
-        }
-
+        // One source for the frames — the preview and Arrange must not compute
+        // them differently, or a resized tile would move on arrange.
         return LayoutSnapshot(
             displayWindows: displayWindows,
-            enabledWindowCount: enabledWindowCount,
+            enabledWindowCount: displayWindows.lazy.filter(\.isEnabled).count,
             currentFrames: currentFrames
         )
     }
@@ -403,27 +426,11 @@ struct MainWindow: View {
         return orderedWindows.filter { displayWindowIds.contains($0.id) }
     }
 
+    /// One order, owned by WindowManager and written only through `setOrder`.
+    /// The sidebar renders the same array, so a drag in either place moves the
+    /// window in both — and in the arrange slots.
     private var orderedWindows: [ManagedWindow] {
-        let allWindows = windowManager.windows
-        var windowsByID: [String: ManagedWindow] = [:]
-        windowsByID.reserveCapacity(allWindows.count)
-        for window in allWindows {
-            windowsByID[window.id] = window
-        }
-
-        var result: [ManagedWindow] = []
-        var orderedIDs = Set<String>()
-        result.reserveCapacity(allWindows.count)
-        for id in windowOrder {
-            if let w = windowsByID[id] {
-                result.append(w)
-                orderedIDs.insert(id)
-            }
-        }
-        for w in allWindows where !orderedIDs.contains(w.id) {
-            result.append(w)
-        }
-        return result
+        windowManager.windows
     }
 
     private var enabledWindows: [ManagedWindow] {
@@ -434,12 +441,24 @@ struct MainWindow: View {
         enabledWindows.count
     }
 
+    /// Frames the preview draws and Arrange uses. A window the user dragged to
+    /// a size keeps that rect; the rest follow the preset. Without this the
+    /// drag-to-resize toggle changed the picture and nothing else.
     private var currentFrames: [NormalizedRect] {
+        let preset: [NormalizedRect]
         switch layoutMode {
         case .custom:
-            return customTemplate.frames(for: enabledWindowCount)
+            preset = customTemplate.frames(for: enabledWindowCount)
         default:
-            return LayoutCalculator.calculate(mode: layoutMode, windowCount: enabledWindowCount)
+            preset = LayoutCalculator.calculate(mode: layoutMode, windowCount: enabledWindowCount)
+        }
+
+        guard !customFrames.isEmpty else { return preset }
+        return enabledWindows.enumerated().map { index, window in
+            if let custom = customFrames[window.id] {
+                return LayoutResize.clampToDisplay(custom)
+            }
+            return index < preset.count ? preset[index] : NormalizedRect(x: 0, y: 0, width: 1, height: 1)
         }
     }
 
@@ -450,41 +469,35 @@ struct MainWindow: View {
         guard fromIndex >= 0, fromIndex < enabled.count,
               toIndex >= 0, toIndex < enabled.count else { return }
 
-        let fromId = enabled[fromIndex].id
-        let toId = enabled[toIndex].id
-
-        // Swap in WindowManager's customOrder — persists across refreshes
-        if let i = windowManager.customOrder.firstIndex(of: fromId),
-           let j = windowManager.customOrder.firstIndex(of: toId) {
-            windowManager.customOrder.swapAt(i, j)
-        }
-
-        // Also swap in the live windows array for immediate effect
-        if let i = windowManager.windows.firstIndex(where: { $0.id == fromId }),
-           let j = windowManager.windows.firstIndex(where: { $0.id == toId }) {
-            windowManager.windows.swapAt(i, j)
-        }
+        // One write, one source. This used to swap `customOrder` and the live
+        // `windows` array while the views rendered a third list, so a preview
+        // drag looked like it did nothing.
+        windowManager.swapOrder(enabled[fromIndex].id, with: enabled[toIndex].id)
     }
 
     private func arrangeWindows() {
-        let screenFrame: CGRect
-        if let main = NSScreen.main {
-            // Convert NSScreen frame to CG coordinates (top-left origin)
-            screenFrame = CGRect(x: 0, y: 0, width: main.frame.width, height: main.frame.height)
-        } else {
-            print("[MainWindow] No display available")
+        // Target the display the user picked, converted into the top-left
+        // origin space the Accessibility API speaks. This used to take
+        // `NSScreen.main` — which is the *focused* screen, not the primary —
+        // and pin it at (0,0), so arranging while Quip sat on a secondary
+        // display threw every window onto the primary at the wrong size.
+        guard let display = selectedDisplay else {
+            arrangeError = "No display available to arrange on."
             return
         }
+        let screenFrame = windowManager.cgFrame(for: display)
 
         let enabled = enabledWindows
         let frames = currentFrames
 
         guard !enabled.isEmpty, !frames.isEmpty else {
-            print("[MainWindow] No enabled windows (\(enabled.count)) or no frames (\(frames.count))")
+            arrangeError = enabled.isEmpty
+                ? "No windows are enabled — tick one in the sidebar first."
+                : "The selected layout produced no frames."
             return
         }
 
-        print("[MainWindow] Arranging \(enabled.count) windows on screen \(screenFrame)")
+        print("[MainWindow] Arranging \(enabled.count) windows on \(display.name) \(screenFrame)")
 
         var targetFrames: [String: CGRect] = [:]
         for (index, window) in enabled.enumerated() where index < frames.count {
@@ -493,6 +506,10 @@ struct MainWindow: View {
             print("[MainWindow]   \(window.name) -> \(targetRect)")
         }
 
-        windowManager.arrangeWindows(frames: targetFrames)
+        // Arrange silently doing nothing is almost always a revoked
+        // Accessibility grant. Say so, and offer the one click that fixes it.
+        if !windowManager.arrangeWindows(frames: targetFrames) {
+            arrangeError = "Quip needs Accessibility access to move windows. Grant it in System Settings → Privacy & Security → Accessibility."
+        }
     }
 }

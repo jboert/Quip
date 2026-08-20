@@ -579,6 +579,24 @@ Mac → iPhone. Sent after the delete either reaches disk or fails. The `message
 }
 ```
 
+### Prompt mutation timeouts and id sanitization
+
+Both acks are correlated by `messageId`; a client that sends one is expected to
+keep its UI in a pending state until the matching ack arrives. Quip's iPhone
+client waits **8 seconds**, then gives up and reports a timeout rather than
+assuming the write landed — a queued WebSocket send is not evidence of a disk
+write. Sending a mutation without a `messageId` is still accepted (older
+clients), but there is then no way to correlate the ack, so the sender cannot
+distinguish "saved" from "dropped".
+
+Prompt ids are sanitized before they become filenames: letters, digits, `-`,
+`_`, and `.` survive; spaces become `-`; everything else (path separators, shell
+metacharacters) is dropped; leading dots are stripped. An id that sanitizes to
+an empty string is rejected. The rule lives in `Shared/PromptID.swift` and both
+peers run the same function, so a client can show the resulting filename before
+sending. Two different raw ids can sanitize onto the same file — `put_prompt`
+then overwrites, so clients should warn before saving onto an existing id.
+
 ## Message Routing
 
 The server reads the `type` field from the JSON envelope first, then deserializes into the appropriate struct. Unknown types are logged and ignored. Decode failures inside a known type send back an `error` message rather than silently dropping.

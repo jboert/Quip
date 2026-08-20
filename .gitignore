@@ -82,9 +82,32 @@ QuipiOS/Info.plist
 .build/
 .swiftpm/
 
+# Xcode build/test output bundles — result bundles from `-resultBundlePath`,
+# archives from Product > Archive, exported apps and debug symbols.
+*.xcresult
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+
 # Coverage / profiling artifacts
 *.profraw
 *.profdata
+
+# Editor droppings — vim swaps, backups, patch/merge leftovers, IDE state
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+.idea/
+.vscode/
+
+# Local MCP server config — may carry tokens/credentials
+.mcp.json
+
+# JS tooling (docs/scripts) — never commit dependency trees
+node_modules/
 
 # Runtime logs — Mac/iOS Quip writes to ~/Library/Logs/Quip/ which is
 # already outside the repo, but cover any log files that ever land
@@ -92,9 +115,14 @@ QuipiOS/Info.plist
 *.log
 logs/
 
-# Machine-local / planning scripts — not for the public repo
-scripts/
-tasks/
+# Machine-local / planning scripts — not for the public repo.
+# ANCHORED with a leading slash: an unanchored `scripts/` matches a directory
+# at ANY depth, which silently swallowed .github/scripts/ — so the CI workflow
+# shipped referencing changed-scopes.sh and changed-scopes-test.sh while
+# neither file was ever committed, and every run failed at the first step.
+# `git status` said clean the whole time, because ignored files never show up.
+/scripts/
+/tasks/
 
 # swrm board-integration runtime/event dir — local state, not for the repo
 .swrm/
@@ -104,3 +132,6 @@ tasks/
 # per task. Not product code; keep them out of commits (same class as .swrm/).
 /prd.json
 /progress.txt
+
+# Tool droppings (claude-flow / ruflo scratch state)
+.claude-flow/

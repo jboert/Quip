@@ -119,6 +119,33 @@ final class SwrmEventTailerTests: XCTestCase {
         XCTAssertEqual(SwrmCursorStore.load(forRootPath: root), SwrmCursor(byteOffset: 128, seq: 9))
     }
 
+    /// A cursor file that exists but will not decode resets to `.zero`, which
+    /// REPLAYS the whole event history for that root. That has to remain
+    /// survivable (no crash, no throw) — and it is now logged, which the silent
+    /// `try?` it replaced never was.
+    func test_cursorStore_corruptFile_fallsBackToZero() {
+        SwrmCursorStore.directoryOverrideForTests =
+            tmpDir.appendingPathComponent("cursors", isDirectory: true)
+        let root = "/Users/me/Projects/corrupt"
+        SwrmCursorStore.save(SwrmCursor(byteOffset: 128, seq: 9), forRootPath: root)
+        let url = SwrmCursorStore.cursorURL(forRootPath: root)
+        try? Data("{ not json".utf8).write(to: url)
+
+        XCTAssertEqual(SwrmCursorStore.load(forRootPath: root), .zero)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
+                      "the unreadable cursor is left on disk, not destroyed")
+    }
+
+    /// An absent cursor is the normal first-launch case and must stay quiet —
+    /// `exists` is what the first-launch policy actually keys on.
+    func test_cursorStore_missingFile_isNotTreatedAsCorrupt() {
+        SwrmCursorStore.directoryOverrideForTests =
+            tmpDir.appendingPathComponent("cursors", isDirectory: true)
+        let root = "/Users/me/Projects/brand-new"
+        XCTAssertFalse(SwrmCursorStore.exists(forRootPath: root))
+        XCTAssertEqual(SwrmCursorStore.load(forRootPath: root), .zero)
+    }
+
     func test_cursorStore_distinctRootsDoNotCollide() {
         let a = SwrmCursorStore.filename(forRootPath: "/Users/me/Projects/alpha")
         let b = SwrmCursorStore.filename(forRootPath: "/Users/me/Projects/beta")

@@ -49,3 +49,43 @@ Sim is read-only in v1: send button + TextField disabled when Sim is selected; P
 Mac broadcast paths:
 - Fast path (no QA pair anywhere) — encode `LayoutUpdate` once, broadcast.
 - Per-client path (≥1 phone in QA mode) — encode per client with the right filter (paired phones get 2 windows, others get the unfiltered list). Tunnel broadcasters always get unfiltered (no per-tunnel pair state).
+
+## Verifying a change locally
+
+`tools/check.sh` runs only the suites a change can affect, using the same
+path→scope mapping CI uses (`.github/scripts/changed-scopes.sh`), so the two can
+never disagree about what a diff touches. It also handles the xcodegen/pbxproj
+dance (US-005) and always prints what it skipped and why.
+
+```bash
+tools/check.sh                 # uncommitted work + commits not yet pushed
+tools/check.sh --all           # every suite
+tools/check.sh --since REF     # everything since REF
+printf 'QuipMac/Foo.swift\n' | tools/check.sh --files -   # explicit list
+```
+
+Costs, for reference: swiftc harness ~2s, QuipMac suite ~22s, QuipiOS simulator
+suite ~10s. A QuipMac-only change no longer pays for the simulator; a docs-only
+change pays nothing. `QUIP_QA_SIM_UDID` overrides the QA simulator.
+
+QuipLinux and QuipAndroid are reported as skipped rather than run — they are not
+built on this machine, and an unrun suite must never be reported as green.
+
+### At commit time
+
+`tools/install-git-hooks.sh` installs a `pre-commit` hook that runs the same
+gate over the **staged** paths, so a broken suite cannot reach a commit. Hooks
+are per-clone and opt-in; the installer symlinks into whatever `core.hooksPath`
+resolves to rather than repointing it, and refuses to clobber a hook it did not
+create.
+
+```bash
+tools/install-git-hooks.sh              # install
+tools/install-git-hooks.sh --status
+tools/install-git-hooks.sh --uninstall
+QUIP_SKIP_CHECK=1 git commit            # skip once (git commit --no-verify also works)
+```
+
+A docs-only commit costs nothing; a `Shared/` commit pays for all three suites.
+Note the hook tests the **working tree**, not the index — if you stage only part
+of your edits, what runs is not exactly what you are committing.

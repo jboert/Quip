@@ -473,9 +473,11 @@ struct MenuBarView: View {
             return
         }
 
+        // Top-left origin space for the AX calls — see WindowManager.cgFrame.
+        let screenFrame = windowManager.cgFrame(for: display)
         var targetFrames: [String: CGRect] = [:]
         for (index, window) in enabled.enumerated() where index < frames.count {
-            targetFrames[window.id] = frames[index].toCGRect(in: display.frame)
+            targetFrames[window.id] = frames[index].toCGRect(in: screenFrame)
         }
 
         windowManager.arrangeWindows(frames: targetFrames)

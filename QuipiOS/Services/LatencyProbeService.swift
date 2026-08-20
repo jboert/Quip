@@ -1,9 +1,9 @@
 import Foundation
 import Network
 
-/// Phase 3 commit 3: periodic transient TCP probes against the alt URLs in
-/// the active backend's `urlsInOrder`, so URLSwapPolicy has data to compare
-/// against the connected URL's recent live latency.
+/// Phase 3 commit 3: periodic transient TCP probes against every URL in the
+/// active backend's `urlsInOrder` — the connected one included — so
+/// URLSwapPolicy compares like with like.
 ///
 /// Why TCP-only (no WS handshake):
 ///   - WS handshake involves auth + PIN + session-restore traffic; firing
@@ -42,9 +42,10 @@ final class LatencyProbeService {
     /// a swap.
     private let urlsProvider: () -> [URL]
 
-    /// Closure that reports the current connection URL so we don't probe
-    /// it (we already have live samples). Returns nil when the client is
-    /// disconnected; in that case we still probe everything.
+    /// Closure that reports the current connection URL. It is probed like any
+    /// other — the swap policy needs a probe bucket for it, not live
+    /// round-trips, which are not comparable to a TCP connect. Returns nil when
+    /// the client is disconnected.
     private let currentURLProvider: () -> URL?
 
     private var timerTask: Task<Void, Never>?
@@ -81,14 +82,32 @@ final class LatencyProbeService {
 
     // MARK: - Probe loop
 
-    /// Probes every URL in the provider that isn't the current one.
+    /// Which URLs this cycle probes: all of them, the connected one included.
+    ///
+    /// Skipping the current URL was the bug. Its bucket then held only live
+    /// round-trip samples while every candidate held only TCP connects, and
+    /// `URLSwapPolicy` was comparing the two kinds against each other — a
+    /// handshake against a full application round trip. Probing the connected
+    /// URL as well costs one extra TCP connect per minute and makes every
+    /// bucket the same kind of number, which is the only way the comparison
+    /// means anything. Deduplicated so a paired list that repeats a URL does
+    /// not probe that host twice per cycle.
+    nonisolated static func urlsToProbe(_ urls: [URL], current: URL?) -> [URL] {
+        var seen = Set<URL>()
+        var out = urls.filter { seen.insert($0).inserted }
+        // A hot-swap reorders the list in memory only, so the URL actually in
+        // use can briefly be absent from the provider's view. Include it
+        // regardless — it is the one URL whose bucket must never go empty.
+        if let current, seen.insert(current).inserted { out.append(current) }
+        return out
+    }
+
+    /// Probes every URL, including the one in use.
     /// Probes are sequential (not parallel) — running 3 concurrent NWConnections
     /// to the same Mac during peak TCP flux skews the radio readings; serial
     /// probes get clean per-URL numbers at a small wall-clock cost.
     private func probeAll() async {
-        let urls = urlsProvider()
-        let current = currentURLProvider()
-        for url in urls where url != current {
+        for url in Self.urlsToProbe(urlsProvider(), current: currentURLProvider()) {
             await probe(url: url)
         }
     }
