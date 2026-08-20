@@ -516,6 +516,29 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         Task { await setupWhisper() }
 
+        // Q-21. The detector infers "waiting for input" from CPU alone, and an
+        // agent blocked on an LLM stream burns ~0% CPU, so it cannot tell a
+        // prompt from a turn in progress. Before it raises the badge it reads
+        // the pane twice and requires that nothing moved; this is what gives it
+        // something to read. Runs on main — `windowManager` is MainActor — and
+        // returns a closure that owns its metadata by value so the detector can
+        // run it off main without touching the window list.
+        terminalStateDetector.makePaneReader = { [self] windowId in
+            guard let window = windowManager.windows.first(where: { $0.id == windowId }) else {
+                return nil
+            }
+            let termApp = terminalAppForWindow(window)
+            let windowNumber = window.windowNumber
+            let sessionId = window.iterm2SessionId
+            let injector = keystrokeInjector
+            return {
+                injector.readContent(
+                    terminalApp: termApp,
+                    cgWindowNumber: windowNumber,
+                    iterm2SessionId: sessionId)
+            }
+        }
+
         terminalStateDetector.onStateTransition = { [self] windowId, oldState, newState in
             appendPushDiagnostic("state \(oldState.rawValue)→\(newState.rawValue) for \(windowId) (selected=\(clientSelectedWindowId ?? "nil"))")
             webSocketServer.broadcast(StateChangeMessage(windowId: windowId, state: newState.rawValue))

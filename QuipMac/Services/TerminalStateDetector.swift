@@ -23,6 +23,27 @@ fileprivate func appendClassifyLog(_ message: String) {
     }
 }
 
+/// Append one line per Q-21 prompt-gate decision to `push.log`, alongside the
+/// `state …→…` transitions the gate is there to suppress. Same append-only,
+/// failure-swallowing contract as `appendClassifyLog`.
+///
+/// This is what makes a degraded gate visible: every fail-open path logs, so a
+/// missing Automation grant reads as "gate skipped" in the same file where the
+/// flap is counted, rather than looking like a fix.
+fileprivate func appendPushLog(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = LogPaths.pushPath
+    LogPaths.rotateIfNeeded(path: path)
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
+
 // MARK: - TerminalStateDetector
 
 @MainActor
@@ -246,6 +267,7 @@ final class TerminalStateDetector {
         // A half-accumulated candidate must not survive a stop/start pair and
         // let the first poll of the new run complete a transition it did not earn.
         debounce.forgetAll()
+        raisesAwaitingConfirmation.removeAll()
         print("[TerminalStateDetector] Stopped monitoring")
     }
 
@@ -304,6 +326,7 @@ final class TerminalStateDetector {
         windowStates[windowId] = .neutral
         knownChildren[windowId] = []
         debounce.forget(windowId: windowId)
+        raisesAwaitingConfirmation.remove(windowId)
         installProcessSource(windowId: windowId, pid: shellPid)
         print("[TerminalStateDetector] Tracking window \(windowId) with shell PID \(shellPid) tty=\(tty ?? "<none>")")
     }
@@ -315,6 +338,7 @@ final class TerminalStateDetector {
         windowStates.removeValue(forKey: windowId)
         knownChildren.removeValue(forKey: windowId)
         debounce.forget(windowId: windowId)
+        raisesAwaitingConfirmation.remove(windowId)
         cancelProcessSources(for: windowId)
     }
 
@@ -322,12 +346,14 @@ final class TerminalStateDetector {
     func setSTTActive(for windowId: String) {
         windowStates[windowId] = .sttActive
         debounce.forget(windowId: windowId)
+        raisesAwaitingConfirmation.remove(windowId)
     }
 
     /// Clear STT state back to auto-detected
     func clearSTTState(for windowId: String) {
         windowStates[windowId] = .neutral
         debounce.forget(windowId: windowId)
+        raisesAwaitingConfirmation.remove(windowId)
     }
 
     // MARK: - kqueue Process Sources
@@ -394,6 +420,32 @@ final class TerminalStateDetector {
     /// "waiting for input" badge costs more agreement than clearing one.
     private var debounce = TerminalStateDebounce()
 
+    /// Q-21. Given a window id, returns something that can read that window's
+    /// visible pane text — or nil when the window is unknown.
+    ///
+    /// A factory rather than a reader because the two halves belong on
+    /// different threads. Resolving a window id to a `TerminalApp`, a
+    /// `CGWindowID` and an iTerm2 session id needs `windowManager`, which is
+    /// MainActor; actually reading the pane forks `osascript` and must not
+    /// touch main. So the owner runs the factory ON MAIN, captures that
+    /// metadata by value, and hands back a `Sendable` closure the detector runs
+    /// on `pollQueue`. The detector still knows nothing about window metadata.
+    ///
+    /// Left nil, every raise proceeds on CPU alone: the pre-Q-21 behaviour,
+    /// logged once per raise so an unwired gate cannot pass for a working one.
+    var makePaneReader: ((String) -> (@Sendable () -> String?)?)?
+
+    /// How long to wait between the two captures. Long enough for a working
+    /// agent to redraw its live counter at least once (Claude Code's ticks
+    /// about once a second, and its spinner far faster), short enough to stay
+    /// well inside human reaction time on a real prompt.
+    static let paneSettleInterval: TimeInterval = 0.4
+
+    /// Windows with a confirmation read already in flight. Without this, every
+    /// poll that lands during the ~0.4s settle would queue another pair of
+    /// `osascript` calls for the same window.
+    private var raisesAwaitingConfirmation: Set<String> = []
+
     /// Check all tracked windows' process states
     /// Apply poll results on main — only does lightweight state comparisons.
     private func applyPollResults(_ results: [(String, TerminalState)]) {
@@ -402,9 +454,76 @@ final class TerminalStateDetector {
             guard debounce.observe(windowId: windowId, detected: detected, current: currentState) else {
                 continue
             }
+            // Q-21. Every direction but this one applies straight away — the
+            // cost of a slow CLEAR is a stale badge, and only the RAISE can
+            // tell the user a human is wanted when one is not. So the raise,
+            // and only the raise, goes and looks at the screen first.
+            if detected == .waitingForInput {
+                confirmRaise(windowId: windowId, from: currentState)
+                continue
+            }
             windowStates[windowId] = detected
             onStateTransition?(windowId, currentState, detected)
         }
+    }
+
+    /// Q-21's second signal. CPU quiet plus 1.5s of debounce agreement is not
+    /// evidence a human is wanted: an agent blocked on an LLM stream or an MCP
+    /// call is exactly that quiet. So before the badge goes up, capture the
+    /// pane twice `paneSettleInterval` apart and require that nothing moved.
+    ///
+    /// The reads fork `osascript`, so they run on `pollQueue`, never on main —
+    /// `applyPollResults` is documented as lightweight main-thread work, and a
+    /// blocking call there is the exact shape of every Quip hang on record.
+    private func confirmRaise(windowId: String, from previous: TerminalState) {
+        // Resolved here, on main, while the window metadata is safe to read.
+        guard let readPane = makePaneReader?(windowId) else {
+            appendPushLog(
+                "prompt-gate skipped for \(windowId) — no pane reader, raising on CPU alone")
+            applyConfirmedRaise(windowId: windowId, from: previous)
+            return
+        }
+        // One pair of reads per window at a time.
+        guard raisesAwaitingConfirmation.insert(windowId).inserted else { return }
+
+        let generation = pollGeneration
+        pollQueue.async { [weak self] in
+            guard let self else { return }
+            let first = readPane()
+            self.pollQueue.asyncAfter(deadline: .now() + Self.paneSettleInterval) { [weak self] in
+                guard let self else { return }
+                let second = readPane()
+                let stability: PromptRaiseGate.Stability
+                switch (first, second) {
+                case let (one?, two?):
+                    stability = PaneStability.isStable(one, two) ? .stable : .moving
+                default:
+                    stability = .unreadable
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.raisesAwaitingConfirmation.remove(windowId)
+                    let outcome = PromptRaiseGate.decide(
+                        stability: stability,
+                        capturedAt: generation,
+                        current: self.pollGeneration)
+                    if stability == .unreadable {
+                        appendPushLog(
+                            "prompt-gate skipped for \(windowId) — pane unreadable, raising on CPU alone")
+                    }
+                    guard outcome == .raise else { return }
+                    // The window may have moved on during the settle; only a
+                    // window still sitting where the poll left it may be raised.
+                    guard (self.windowStates[windowId] ?? .neutral) == previous else { return }
+                    self.applyConfirmedRaise(windowId: windowId, from: previous)
+                }
+            }
+        }
+    }
+
+    private func applyConfirmedRaise(windowId: String, from previous: TerminalState) {
+        windowStates[windowId] = .waitingForInput
+        onStateTransition?(windowId, previous, .waitingForInput)
     }
 
     /// Synchronous one-window refresh for command handlers that are about to
