@@ -108,6 +108,15 @@ enum LogPaths {
     /// but returned shell (classifier bug), vs `comms=[zsh]` (process-tree walk
     /// missed the agent → stale PID), vs `chosen=grok` (paste/inject is at
     /// fault, not classification). One line per user action, not per poll.
+    /// Whisper/WhisperKit model lifecycle. Its own file because the failure
+    /// this exists to catch is a silent one: `setupWhisper` used to swallow the
+    /// init error into `whisperStatusStore` and the phone banner, so the Mac
+    /// had no record at all and a restart erased the evidence.
+    static var whisperPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("whisper.log").path
+    }
+
     static var classifyPath: String {
         ensureDirectoryExists()
         return directory.appendingPathComponent("classify.log").path

@@ -47,6 +47,26 @@ fileprivate func appendLatency(_ message: String) {
     }
 }
 
+/// Append one line to ~/Library/Logs/Quip/whisper.log. Same shape as
+/// appendPushDiagnostic. Exists because the WhisperKit init failure path used
+/// to write nothing anywhere: the reason lived only in `whisperStatusStore` and
+/// the phone's banner, so `log show`, stdout and every Quip log file were all
+/// silent and a relaunch destroyed the only copy.
+fileprivate func appendWhisperDiagnostic(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    if let data = line.data(using: .utf8) {
+        let path = LogPaths.whisperPath
+        LogPaths.rotateIfNeeded(path: path)
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 /// Append one structured line per image upload pipeline event. This is the
 /// companion to latency.log for the `image_upload` event slice.
 fileprivate func appendImageUploadDiagnostic(_ message: String) {
@@ -139,6 +159,13 @@ struct QuipMacApp: App {
     @State private var whisperService: WhisperDictationService?
     @State private var whisperStatusStore = WhisperStatusStore()
     @State private var whisperReaper: Timer?
+    /// Retry bookkeeping for `setupWhisper`. It used to run exactly once at
+    /// launch, so any throw — including a transient one — latched
+    /// `.failed` for the whole process lifetime and every PTT press silently
+    /// fell back to on-device SFSpeech until the user happened to relaunch.
+    @State private var whisperRetryTimer: Timer?
+    @State private var whisperAttempt: Int = 0
+    @State private var whisperSetupInFlight: Bool = false
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
     private var networkMode: NetworkMode {
@@ -2085,6 +2112,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // main throughout — Swift 6 strict concurrency rejected the previous
         // form because `try await WhisperKit(...)` was nonisolated and the
         // result couldn't be sent back into MainActor.run.
+        guard !whisperSetupInFlight else {
+            appendWhisperDiagnostic("setup skipped — already in flight")
+            return
+        }
+        whisperSetupInFlight = true
+        defer { whisperSetupInFlight = false }
+
+        whisperAttempt += 1
+        appendWhisperDiagnostic("setup attempt=\(whisperAttempt) state=preparing")
+
         self.whisperStatusStore.state = .preparing
         self.broadcastWhisperStatus()
 
@@ -2110,6 +2147,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // (audit.log 2026-07-10 — "codex", model names, inverted negations)
             // even with promptTokens biasing. One-shot decode at PTT release,
             // so the extra latency is per-utterance, not per-chunk.
+            appendWhisperDiagnostic("downloadBase=\(modelBase.path)")
             let config = WhisperKitConfig(model: "openai_whisper-small.en", downloadBase: modelBase)
             let kit = try await WhisperKit(config)
             let transcriber = WhisperKitTranscriber(kit: kit)
@@ -2124,14 +2162,52 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             self.whisperStatusStore.state = .ready
             self.broadcastWhisperStatus()
             self.startWhisperReaper()
+            self.whisperRetryTimer?.invalidate()
+            self.whisperRetryTimer = nil
+            appendWhisperDiagnostic("state=ready attempt=\(whisperAttempt)")
         } catch {
+            // Log BOTH forms. `localizedDescription` is what the phone banner
+            // shows and is often just "The operation couldn't be completed";
+            // the interpolated error carries the concrete enum case, which is
+            // the part that actually names the cause.
+            appendWhisperDiagnostic("state=failed attempt=\(whisperAttempt) "
+                + "error=\(error) localized=\(error.localizedDescription)")
             self.whisperStatusStore.state = .failed(message: error.localizedDescription)
             self.broadcastWhisperStatus()
+            self.scheduleWhisperRetry()
         }
         #else
+        appendWhisperDiagnostic("state=failed — WhisperKit not compiled in (canImport false)")
         self.whisperStatusStore.state = .failed(message: "WhisperKit not available")
         self.broadcastWhisperStatus()
         #endif
+    }
+
+    /// Backoff schedule for `setupWhisper` retries, in seconds. Capped rather
+    /// than unbounded: if it has not come up within ~4 minutes the cause is
+    /// structural (missing model, bad config) and hammering it will not help,
+    /// but whisper.log will by then hold one line per attempt.
+    private static let whisperRetryDelays: [TimeInterval] = [5, 15, 45, 120]
+
+    @MainActor
+    private func scheduleWhisperRetry() {
+        whisperRetryTimer?.invalidate()
+        whisperRetryTimer = nil
+
+        let idx = whisperAttempt - 1
+        guard idx < Self.whisperRetryDelays.count else {
+            appendWhisperDiagnostic("giving up after \(whisperAttempt) attempts — "
+                + "state stays .failed until relaunch")
+            return
+        }
+        let delay = Self.whisperRetryDelays[idx]
+        appendWhisperDiagnostic("retry scheduled in \(Int(delay))s")
+
+        let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+            Task { @MainActor in await self.setupWhisper() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        whisperRetryTimer = timer
     }
 
     private func broadcastWhisperStatus() {
