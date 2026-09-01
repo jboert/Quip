@@ -801,6 +801,46 @@ final class NumberedPromptDetectorTests: XCTestCase {
         XCTAssertFalse(NumberedPromptDetector.hasSubmitRow(in: content))
     }
 
+    /// Captured from a live Claude Code multi-select (2026-09-01): same widget
+    /// shape as `liveMultiSelect`, but its commit row is labelled **Next**
+    /// rather than Submit. The footer still says "Enter to select", so Return on
+    /// an option row toggles instead of committing — the row must be recognised
+    /// or the choreography silently un-picks the last option.
+    let liveMultiSelectNextRow = """
+    Which part are you hitting?
+
+      1. [\u{2714}] Getting around it
+         Navigation and IA. 3 tabs, a header 'More' hub, and ~25 screens.
+      2. [\u{2714}] Same job, several screens
+         Overlapping surfaces. Fix = merge each cluster to one screen.
+      3. [\u{2714}] The big screens themselves
+         Individual screens doing too many jobs.
+    \u{276F} 4. [\u{2714}] How it looks / feels
+         Visual and interaction inconsistency.
+      5. [ ] Type something
+            Next
+
+      6. Chat about this
+
+    Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+    """
+
+    func test_nextLabelledCommitRow_countsAsSubmitRow() {
+        XCTAssertTrue(NumberedPromptDetector.hasSubmitRow(in: liveMultiSelectNextRow))
+        XCTAssertEqual(NumberedPromptDetector.lastOption(in: liveMultiSelectNextRow), 5)
+        XCTAssertEqual(NumberedPromptDetector.answerableOptions(in: liveMultiSelectNextRow), [1, 2, 3, 4])
+    }
+
+    /// The consequence of the above: with the commit row recognised, the walk
+    /// must land one row PAST the last option before Return. Cursor starts on 4
+    /// and every option is already checked, so keeping 1-4 needs no toggles —
+    /// just the walk from 4 to 6 and a Return.
+    func test_nextLabelledCommitRow_choreographyWalksToIt() {
+        let keys = MultiSelectSync.keystrokes(desired: [1, 2, 3, 4],
+                                              liveContent: liveMultiSelectNextRow)
+        XCTAssertEqual(keys, ["down", "down", "return"])
+    }
+
     func test_liveSingleSelect_notMultiSelect() {
         XCTAssertTrue(NumberedPromptDetector.isMultiSelect(in: liveSingleSelect) == false)
         XCTAssertEqual(NumberedPromptDetector.cursorOption(in: liveSingleSelect), 1)

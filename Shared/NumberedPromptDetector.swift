@@ -214,14 +214,24 @@ enum NumberedPromptDetector {
         return false
     }
 
-    /// A standalone Submit row: the word "Submit" alone on the line, modulo an
-    /// optional cursor marker (`❯ Submit` when highlighted) and indentation.
-    /// Excludes lines that merely mention submitting ("Ready to submit your
-    /// answers?") and the widget's header tab strip (`← ☐ Fruit ✔ Submit →`).
+    /// Labels a widget uses for the navigable commit row under its options.
+    /// Claude Code renders "Submit" on some multi-select prompts and "Next" on
+    /// others (captured live 2026-09-01) — same widget, same "Enter to select"
+    /// footer, so both must resolve to the walk-then-Return dialect. Matching a
+    /// label alone would be the label-guessing that broke multi-select twice;
+    /// what keeps this structural is `hasSubmitRow` requiring the row to sit
+    /// after the run's last option and before any following numbered option.
+    private static let commitRowLabels: Set<String> = ["submit", "next"]
+
+    /// A standalone commit row: one of `commitRowLabels` alone on the line,
+    /// modulo an optional cursor marker (`❯ Submit` when highlighted) and
+    /// indentation. Excludes lines that merely mention submitting ("Ready to
+    /// submit your answers?") and the widget's header tab strip
+    /// (`← ☐ Fruit ✔ Submit →`).
     private static func isSubmitRowLine(_ line: String) -> Bool {
         var s = stripANSI(line).trimmingCharacters(in: .whitespaces)
         if let marker = promptMarkerPrefix(in: s) { s.removeFirst(marker.count) }
-        return s.trimmingCharacters(in: .whitespaces).lowercased() == "submit"
+        return commitRowLabels.contains(s.trimmingCharacters(in: .whitespaces).lowercased())
     }
 
     /// True when the live screen is the multi-select CONFIRM step Claude Code
