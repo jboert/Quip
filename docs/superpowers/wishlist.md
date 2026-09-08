@@ -1886,3 +1886,115 @@ pushes ("Changes must be made through a pull request"). `origin/main` is
 untouched at `3269351`, `origin/eb-branch` at `731a20d`. Landing this needs
 `eb-branch` pushed and a PR opened — an outward-facing action distinct from the
 direct push that was approved, so it waits on the owner.
+
+## Multi-display + any-app dictation — shipped 2026-09-08 (`c5aa63e`), hardware verification still open
+
+Asked for: the phone must work across the apps on the desktop, and across the
+screens on a Mac Studio — the terminal often lives on the second monitor, and
+toggling back and forth has to be one tap.
+
+Neither worked. Both were found by reading the broadcast path, then reproduced
+with the reporting desk's real geometry (3440x1440 ultrawide primary, a
+2560x1440 monitor to its right):
+
+```
+focus on primary:     second-screen window -> x = 1.047   OFF-CANVAS
+focus on 2nd screen:  primary window       -> x = -1.266  OFF-CANVAS
+per-own-display:      both                 -> 0.058 / 0.062  on-canvas
+```
+
+Four defects behind that:
+
+1. `broadcastLayout` normalized EVERY window against one display, so anything on
+   a second screen arrived outside the phone's 0-1 canvas. Second-screen windows
+   still appeared in the list (tap worked) — they just drew off the thumbnail,
+   which reads as "the phone can't see my other monitor".
+2. "Which display" was `NSScreen.main` — the *focused* screen, not the primary.
+   Clicking the other monitor re-based every window AND changed
+   `LayoutUpdate.monitor`, which `BackendConnectionManager.isSameMac` treats as a
+   same-Mac identity signal. A screen-focus change could read as a different Mac.
+3. Nothing about displays existed on the wire at all, so there was no way to
+   build a screen toggle: `LayoutUpdate` carried one `monitor` string, and the
+   phone had no display filter.
+4. `terminalAppForWindow` answers `.terminal` for every unrecognized bundle id,
+   and that path runs `tell application "Terminal" to activate` + keystroke into
+   `process "Terminal"`. Dictating into a Slack or Xcode card typed the
+   transcript into Terminal.app's shell. Silently, in the wrong app.
+
+Shipped:
+
+- `Shared/DisplayGeometry.swift` — Foundation-only pure math both peers use:
+  normalize a window against its own display, compute the desktop span, compose
+  the two back for a merged canvas. The Mac splits, the phone composes; the
+  round trip is pinned by test.
+- Wire: `LayoutUpdate.displays` + `spanAspect`, `WindowState.displayID`, all
+  optional so an older Mac or phone decodes and renders exactly as before.
+- `DisplayInfo.isMain` → `isPrimary` (`NSScreen.screens.first`, the display CG
+  measures from), and its id is now the `CGDirectDisplayID` rather than an
+  enumeration index — an index re-points at a different monitor the moment
+  displays are reordered, which would strand a saved phone selection.
+- `applyWindowSnapshot` re-enumerates displays every poll tick and assigns each
+  window a display by center point. Hot-plugging a monitor mid-session used to
+  leave `displays` stale until a Quip window happened to appear, because only
+  `MainWindow` / `MenuBarView` ever refreshed it.
+- Phone: a compact chip row (one per screen + "All") filters the grid and
+  switches the canvas aspect. Persists per backend; drops itself back to "All"
+  when the pinned monitor is unplugged; hidden entirely on a one-screen Mac.
+- Generic injection: `sendTextToApp` / `sendKeystrokeToApp` / `pasteImageToApp`
+  address the target by **unix id** (a process's System Events name is not its
+  app name) and raise it before typing. `send_text`, `image_upload`, and quick
+  actions branch on `isFirstClassHost`; shell-only verbs (clear / restart /
+  scrollback) are refused out loud instead of typed in as literal text.
+- New Mac setting **"Mirror every app"** (off by default). Without it a
+  non-terminal window can only reach the phone by being enabled by hand on the
+  Mac, so there was no way to pick an app as a dictation target from the phone.
+
+QuipMac 758 tests, QuipiOS 772 tests, `TEST SUCCEEDED` both. Mac Release built,
+signed Developer ID `D2PM6R797Q` at build time, `ditto`'d to `/Applications`
+(fresh pid, 14:17:02). iOS installed to the iPhone 17 Pro Max.
+
+### Open — needs the second monitor plugged in
+
+Only `C34J79x` was attached during this session, so every multi-display claim
+rests on the pure-geometry tests, not on hardware. The acceptance flow:
+
+1. Plug in monitor #2, move an iTerm window to it.
+2. Force-quit the phone app from the app switcher and relaunch — `devicectl
+   install` replaces the bundle but does not kill the running process.
+3. Chip row appears above the grid. Tap monitor 2: only its windows, correctly
+   placed. Tap back: the toggle is one tap each way.
+4. Tap "All": both screens on one wide canvas, second-screen windows in the
+   right-hand slot.
+5. Click a window on monitor 2 **on the Mac** and confirm the phone grid does
+   NOT jump — that is defect 2, and it is invisible on a single-screen desk.
+6. Settings → Phone → Mirror every app on. Select a Slack/Xcode card, dictate,
+   confirm the text lands in that app and not in a terminal.
+7. With a non-terminal selected, tap Clear: expect the refusal toast and nothing
+   typed anywhere.
+
+Also needs a TCC re-grant this session: the Mac was rebuilt, so Accessibility
+and Screen Recording may have to be re-checked before any keystroke lands.
+
+### Open — the QuipiOS suite cannot run on this machine
+
+`xcodebuild -scheme QuipiOS` fails before compiling anything:
+
+```
+This scheme builds an embedded Apple Watch app. watchOS 26.5 must be installed
+in order to run the scheme
+```
+
+The watchOS **SDK** is installed; the watchOS **simulator runtime** is not
+(`xcrun simctl list runtimes` lists no watch entry), and the scheme's
+embedded-watch check wants a paired watch simulator for any iOS destination.
+That means `tools/check.sh`'s QuipiOS gate is dead on this box — it reports a
+build failure, not a skip.
+
+Worked around by generating a watch-free project from `project.yml` (strip the
+`QuipWatch` target and the `- target: QuipWatch` dependency, rename the project),
+which builds and tests fine. The real fixes, either is fine:
+
+- `xcodebuild -downloadPlatform watchOS` to install the simulator runtime (a
+  large download, so it wants a deliberate go-ahead); or
+- teach `check.sh` to fall back to a watch-free spec, so the iOS gate keeps
+  working on a machine without watch runtimes instead of failing.
