@@ -10,16 +10,32 @@ struct WSMessage: Codable {
 
 struct LayoutUpdate: Codable, Sendable {
     let type: String
+    /// Name of the PRIMARY display (`NSScreen.screens.first`), not the focused
+    /// one. The phone also uses this string as a same-Mac identity signal
+    /// (`BackendConnectionManager.isSameMac`), so it must not change when the
+    /// user clicks a second monitor.
     let monitor: String
-    /// width / height of the host display — lets clients render a correctly-proportioned thumbnail
+    /// width / height of the primary display — lets clients render a
+    /// correctly-proportioned thumbnail. Per-display aspects live on
+    /// `displays`; this stays for older clients that know only one screen.
     let screenAspect: Double?
     let windows: [WindowState]
+    /// Every connected display. Optional so an older Mac build (which omits it)
+    /// still decodes; clients treat nil/empty as "one screen, the primary".
+    let displays: [DisplayState]?
+    /// width / height of the union of all displays — the aspect a client needs
+    /// to render every screen on one merged canvas. Equals `screenAspect` on a
+    /// single-display Mac.
+    let spanAspect: Double?
 
-    init(monitor: String, screenAspect: Double? = nil, windows: [WindowState]) {
+    init(monitor: String, screenAspect: Double? = nil, windows: [WindowState],
+         displays: [DisplayState]? = nil, spanAspect: Double? = nil) {
         self.type = "layout_update"
         self.monitor = monitor
         self.screenAspect = screenAspect
         self.windows = windows
+        self.displays = displays
+        self.spanAspect = spanAspect
     }
 }
 
@@ -84,13 +100,20 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     /// generic apps). Optional + string-typed for forward compat — older
     /// Mac builds omit it; older clients ignore unknown values.
     let targetKind: String?
+    /// Which display this window sits on — matches a `DisplayState.id` in the
+    /// same `LayoutUpdate`. `frame` is normalized against THIS display, not
+    /// against the whole desktop, so a client that ignores `displayID` still
+    /// renders every window inside a single 0-1 canvas. Optional for backward
+    /// compat with older Mac builds (nil = "the primary display").
+    let displayID: String?
 
     // Synthesized Equatable compares ALL fields including frame
 
     /// Backward-compat: default isThinking to false and claudeMode to nil if missing from JSON
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
-         claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil) {
+         claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil,
+         displayID: String? = nil) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
@@ -98,6 +121,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         self.claudeMode = claudeMode
         self.cliKind = cliKind
         self.targetKind = targetKind
+        self.displayID = displayID
     }
 
     init(from decoder: Decoder) throws {
@@ -114,10 +138,12 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         claudeMode = try? c.decode(String.self, forKey: .claudeMode)
         cliKind = try? c.decode(CLIKind.self, forKey: .cliKind)
         targetKind = try? c.decode(String.self, forKey: .targetKind)
+        displayID = try? c.decode(String.self, forKey: .displayID)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind, targetKind
+        case displayID
     }
 }
 

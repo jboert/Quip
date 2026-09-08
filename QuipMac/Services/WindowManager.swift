@@ -44,6 +44,12 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
     /// inactive Spaces or disconnected monitors, so we re-check here.
     var isOnVisibleScreen: Bool = true
 
+    /// Which display this window sits on (`DisplayInfo.id`), by center point.
+    /// Populated on every snapshot refresh alongside `isOnVisibleScreen`, and
+    /// shipped to the phone on `WindowState.displayID` so it can group windows
+    /// by screen. nil only when no display is known yet (first tick).
+    var displayID: String?
+
     /// Whether this window is hosted by a terminal emulator Quip supports
     /// (Terminal.app or iTerm2). Used for auto-grouping in the sidebar.
     var isTerminal: Bool {
@@ -101,7 +107,8 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             isThinking: isThinking,
             claudeMode: claudeMode,
             cliKind: cliKind,
-            targetKind: targetKind
+            targetKind: targetKind,
+            displayID: displayID
         )
     }
 }
@@ -191,25 +198,56 @@ final class WindowManager {
     // MARK: - Display Info
 
     struct DisplayInfo: Identifiable, Sendable, Equatable, Hashable {
+        /// `CGDirectDisplayID` as a string. Stable across focus changes, app
+        /// restarts, and screen reordering — an enumeration index is not, and
+        /// a saved "show me the terminal screen" selection on the phone would
+        /// silently re-point at the other monitor the moment displays moved.
         let id: String
         let name: String
         let frame: CGRect
-        let isMain: Bool
+        /// True for `NSScreen.screens.first` — the display CG measures window
+        /// bounds from. Deliberately NOT `NSScreen.main`, which is the
+        /// *focused* screen: keying off that made every coordinate conversion
+        /// (and the monitor name the phone treats as Mac identity) flip the
+        /// moment the user clicked the second monitor.
+        let isPrimary: Bool
     }
 
     // MARK: - Refresh Displays
 
-    /// Enumerate available displays from NSScreen
+    /// Enumerate available displays from NSScreen. Index 0 is the primary.
     func refreshDisplays() {
         displays = NSScreen.screens.enumerated().map { index, screen in
-            let isMain = (screen == NSScreen.main)
-            let name = screen.localizedName
-            return DisplayInfo(
-                id: "display-\(index)",
-                name: name,
+            DisplayInfo(
+                id: Self.displayID(of: screen, fallbackIndex: index),
+                name: screen.localizedName,
                 frame: screen.frame,
-                isMain: isMain
+                isPrimary: index == 0
             )
+        }
+    }
+
+    /// `CGDirectDisplayID` for a screen, as a string. Falls back to the
+    /// enumeration index only when `NSScreenNumber` is missing (never observed
+    /// on real hardware, but the dictionary lookup is optional).
+    private static func displayID(of screen: NSScreen, fallbackIndex: Int) -> String {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        if let number = screen.deviceDescription[key] as? NSNumber {
+            return "display-\(number.uint32Value)"
+        }
+        return "display-idx\(fallbackIndex)"
+    }
+
+    /// Every display as the pure-geometry tuple `DisplayGeometry` speaks, in CG
+    /// space (top-left origin) so window bounds can be compared directly.
+    /// One place builds this so the broadcast path and the per-window display
+    /// assignment can never disagree about where a screen is.
+    func cgDisplayRects() -> [(id: String, isPrimary: Bool, rect: DisplayRect)] {
+        displays.map { display in
+            let cg = cgFrame(for: display)
+            return (id: display.id, isPrimary: display.isPrimary,
+                    rect: DisplayRect(x: cg.origin.x, y: cg.origin.y,
+                                      width: cg.width, height: cg.height))
         }
     }
 
@@ -273,19 +311,31 @@ final class WindowManager {
         // duplicate line if it fails again, which is the harmless direction.
         Self.axFocusGate.retainOnly(Set(raw.map(\.pid)))
 
-        // Precompute once per snapshot. Accessing NSScreen.screens is MainActor-safe
-        // and we're already on main here.
-        let screens = NSScreen.screens
-        let totalHeight = screens.map { $0.frame.maxY }.max() ?? 0
+        // Re-enumerate displays on every snapshot. Hot-plugging the second
+        // monitor mid-session used to leave `displays` stale until a Quip
+        // window happened to appear (only MainWindow/MenuBarView refreshed it),
+        // so a terminal moved to a just-connected screen was assigned to the
+        // wrong display — or to none. NSScreen.screens is a cheap MainActor
+        // read and we're already on main here.
+        refreshDisplays()
+        let displayRects = cgDisplayRects()
 
         var refreshed: [ManagedWindow] = []
         for info in raw {
-            // CG bounds use top-left origin; NSScreen frames use bottom-left.
-            // Flip the Y to compare against screen frames. Same technique as
-            // `windows(for display:)` below.
-            let flippedY = totalHeight - info.bounds.midY
-            let center = CGPoint(x: info.bounds.midX, y: flippedY)
-            let onScreen = screens.contains { $0.frame.contains(center) }
+            // Both rects are CG space (top-left origin) — `cgDisplayRects`
+            // already flipped the NSScreen frames — so the window's own bounds
+            // compare directly with no second flip.
+            let windowRect = DisplayRect(x: info.bounds.origin.x, y: info.bounds.origin.y,
+                                         width: info.bounds.width, height: info.bounds.height)
+            let hitDisplay = displayRects.first {
+                $0.rect.contains(x: windowRect.midX, y: windowRect.midY)
+            }
+            let onScreen = hitDisplay != nil
+            // A window whose center lands in a gap between mismatched monitors
+            // still gets a display (the primary) so it can't vanish from every
+            // screen filter on the phone — but it is NOT counted as on-screen,
+            // which is what QA-mode's offscreen detection keys off.
+            let displayID = DisplayGeometry.displayID(forWindow: windowRect, displays: displayRects)
 
             let icon = NSRunningApplication(processIdentifier: info.pid)?.icon
             if let existing = windows.first(where: { $0.id == info.id }) {
@@ -297,7 +347,8 @@ final class WindowManager {
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: existing.iterm2SessionId,
                     iterm2Tty: existing.iterm2Tty,
-                    isOnVisibleScreen: onScreen
+                    isOnVisibleScreen: onScreen,
+                    displayID: displayID
                 ))
             } else {
                 refreshed.append(ManagedWindow(
@@ -308,7 +359,8 @@ final class WindowManager {
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
                     iterm2Tty: nil,
-                    isOnVisibleScreen: onScreen
+                    isOnVisibleScreen: onScreen,
+                    displayID: displayID
                 ))
             }
         }
@@ -637,14 +689,26 @@ final class WindowManager {
     /// `mirrorDesktop=false` (no pair, default): enabled windows + visible
     /// targets (Simulator etc.). Targets ride along even when disabled so
     /// QA-mode pairing is discoverable without a manual enable step.
+    ///
+    /// `mirrorAllApps=true` outranks both: every visible window of every app,
+    /// so the phone can pick any app to dictate into.
     nonisolated static func windowsForBroadcast(
         _ all: [ManagedWindow],
         mirrorDesktop: Bool,
+        mirrorAllApps: Bool = false,
         qaPair: (String, String)? = nil
     ) -> [ManagedWindow] {
         if let pair = qaPair {
             let want: Set<String> = [pair.0, pair.1]
             return all.filter { want.contains($0.id) }
+        }
+        // `mirrorAllApps` is the "talk to any app from the phone" mode: without
+        // it a non-terminal window (Slack, Xcode, a browser) can only reach the
+        // phone by being enabled by hand on the Mac, so a user who wants to
+        // dictate into an app has no way to discover it from the phone at all.
+        // Strictly wider than `mirrorDesktop`, so it subsumes it.
+        if mirrorAllApps {
+            return all.filter { $0.isOnVisibleScreen || $0.isEnabled }
         }
         if mirrorDesktop {
             return all.filter {

@@ -667,6 +667,168 @@ final class KeystrokeInjector {
         return await executeAppleScriptOffMain(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
     }
 
+    // MARK: - Generic Apps (anything that isn't iTerm2 / Terminal / Claude)
+
+    /// Bundle ids Quip has a first-class injection path for. Everything else
+    /// must go through `sendTextToApp` / `sendKeystrokeToApp`.
+    ///
+    /// Why this exists: `terminalAppForWindow` maps every unrecognized bundle
+    /// id to `.terminal`, and the `.terminal` path does
+    /// `tell application "Terminal" to activate` + keystroke into
+    /// `process "Terminal"`. So dictating into a Slack or Xcode card on the
+    /// phone typed the text into Terminal.app instead — a silent misroute into
+    /// a shell prompt. Callers ask this first and branch.
+    nonisolated static func isFirstClassHost(bundleId: String) -> Bool {
+        TerminalApp.allCases.contains { $0.bundleIdentifier == bundleId }
+    }
+
+    /// The System Events command for one key, for a generic (non-terminal) app.
+    /// Same key vocabulary as `sendKeystroke`'s Terminal.app path so the phone
+    /// speaks one language regardless of what the target app is. Returns nil
+    /// for an unknown key so the caller can report it instead of injecting
+    /// keycode 0 (the `a` key).
+    ///
+    /// `nonisolated static` + pure so the whole table is unit-testable.
+    nonisolated static func genericKeystrokeCommand(for key: String) -> String? {
+        // (System Events key name or literal, modifier list)
+        let mapping: (key: String, modifiers: String)?
+        switch key.lowercased() {
+        case "return", "enter":     mapping = ("return", "")
+        case "escape", "esc":       mapping = ("escape", "")
+        case "tab":                 mapping = ("tab", "")
+        case "shift+tab":           mapping = ("tab", "shift down")
+        case "space":               mapping = ("space", "")
+        case "up", "down", "left", "right":
+                                    mapping = (key.lowercased(), "")
+        case "backspace", "delete": mapping = ("delete", "")
+        case "ctrl+c":              mapping = ("c", "control down")
+        case "ctrl+d":              mapping = ("d", "control down")
+        case "ctrl+u":              mapping = ("u", "control down")
+        default:                    mapping = nil
+        }
+        guard let mapping else { return nil }
+        // Same keyCodeFor-driven split as `keystrokeScript`: a key with a real
+        // virtual keycode goes as `key code N`, everything else as a literal
+        // `keystroke "x"`. One table, so the two paths can't drift.
+        if let code = keyCodeFor(mapping.key) {
+            return mapping.modifiers.isEmpty
+                ? "key code \(code)"
+                : "key code \(code) using {\(mapping.modifiers)}"
+        }
+        return mapping.modifiers.isEmpty
+            ? "keystroke \"\(mapping.key)\""
+            : "keystroke \"\(mapping.key)\" using {\(mapping.modifiers)}"
+    }
+
+    /// AppleScript that runs `body` inside the process with this unix id.
+    ///
+    /// Targets by **unix id, not by name**: a process's System Events name is
+    /// not its app name (`Code` vs "Visual Studio Code", localized names, apps
+    /// with two processes), and a name miss either errors or — worse — hits a
+    /// different app. The pid comes straight from the CG window list, so it is
+    /// exactly the process owning the window the phone tapped.
+    ///
+    /// `nonisolated static` so tests can lock the script shape.
+    nonisolated static func genericAppScript(pid: pid_t, body: String, activateDelay: Double = 0.15) -> String {
+        """
+        tell application "System Events"
+            set quipProcs to (every application process whose unix id is \(pid))
+            if quipProcs is {} then error "Quip: no process with unix id \(pid)"
+            set quipProc to item 1 of quipProcs
+            set frontmost of quipProc to true
+            delay \(activateDelay)
+            tell quipProc
+                \(body)
+            end tell
+        end tell
+        """
+    }
+
+    /// Type text into an arbitrary app's focused window via System Events.
+    ///
+    /// The caller must have raised the target window first
+    /// (`WindowManager.focusWindow`) — this addresses the *process*, and System
+    /// Events types into whatever window that process has focused. Multi-window
+    /// apps therefore depend on the AX raise, exactly like the Terminal.app path.
+    ///
+    /// Newlines are typed as Return between lines rather than as a literal
+    /// `\n` in one keystroke, because a chat app (Slack, Messages) sends the
+    /// message on Return — so a multi-line transcript becomes several sends,
+    /// which is what a person typing it would get too.
+    @discardableResult
+    func sendTextToApp(_ text: String, to windowId: String, pressReturn: Bool,
+                       pid: pid_t, appName: String) async -> InjectionResult {
+        let lines = text.components(separatedBy: "\n")
+        var cmds: [String] = []
+        for (i, line) in lines.enumerated() {
+            if !line.isEmpty {
+                cmds.append("keystroke \"\(escapeForAppleScript(line))\"")
+            }
+            if i < lines.count - 1 { cmds.append("key code 36") }
+        }
+        if pressReturn { cmds.append("key code 36") }
+        guard !cmds.isEmpty else {
+            return InjectionResult(success: true, error: nil)
+        }
+        let script = Self.genericAppScript(
+            pid: pid,
+            body: cmds.joined(separator: "\n                ")
+        )
+        return await executeAppleScriptOffMain(
+            script, context: "sendTextToApp to \(windowId) [\(appName) pid \(pid)]"
+        )
+    }
+
+    /// Send one keystroke to an arbitrary app. Generic counterpart of
+    /// `sendKeystroke`, which only speaks iTerm2 / Terminal.app.
+    @discardableResult
+    func sendKeystrokeToApp(_ key: String, to windowId: String,
+                            pid: pid_t, appName: String) async -> InjectionResult {
+        guard let cmd = Self.genericKeystrokeCommand(for: key) else {
+            return InjectionResult(success: false, error: "Unknown key: \(key)")
+        }
+        let script = Self.genericAppScript(pid: pid, body: cmd)
+        return await executeAppleScriptOffMain(
+            script, context: "sendKeystrokeToApp \(key) to \(windowId) [\(appName) pid \(pid)]"
+        )
+    }
+
+    /// Paste an image into an arbitrary app: image bytes onto the clipboard,
+    /// then Cmd+V into that pid. Generic counterpart of `pasteImage`, which
+    /// only knows iTerm2's paste-confirm dance.
+    ///
+    /// The user's clipboard is snapshotted and restored through the same shared
+    /// coordinator the terminal paths use, so an overlapping text paste can't
+    /// leave the injected image sitting on the clipboard.
+    @discardableResult
+    func pasteImageToApp(at imageURL: URL, to windowId: String,
+                         pid: pid_t, appName: String) async -> InjectionResult {
+        guard let image = NSImage(contentsOf: imageURL) else {
+            return InjectionResult(success: false, error: "couldn't load image at \(imageURL.path)")
+        }
+        Self.beginClipboardInjection()
+        Self.writeImagePayload(image, fileURL: imageURL, to: NSPasteboard.general)
+        // Same 0.6s floor as `pasteImage`: the delay must outlast Cmd+V landing
+        // in the target app, or the restore races the paste and pastes nothing.
+        defer { Self.endClipboardInjection(after: 0.6) }
+        return await pasteClipboardToApp(to: windowId, pressReturn: false,
+                                         pid: pid, appName: appName)
+    }
+
+    /// Paste the clipboard into an arbitrary app (Cmd+V), optionally pressing
+    /// Return after. Used for the image path: a generic app has no PTY to
+    /// write bytes into, so pasted bytes are the only route.
+    @discardableResult
+    func pasteClipboardToApp(to windowId: String, pressReturn: Bool,
+                             pid: pid_t, appName: String) async -> InjectionResult {
+        var body = "keystroke \"v\" using {command down}"
+        if pressReturn { body += "\n                key code 36" }
+        let script = Self.genericAppScript(pid: pid, body: body)
+        return await executeAppleScriptOffMain(
+            script, context: "pasteClipboardToApp to \(windowId) [\(appName) pid \(pid)]"
+        )
+    }
+
     /// Map a key descriptor to an AppleScript expression suitable as the
     /// argument to iTerm2's `write text` verb. Single-byte keys come back as
     /// `(character id N)`. Multi-byte sequences (CSI escape codes like Shift+Tab)

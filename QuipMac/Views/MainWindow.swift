@@ -87,7 +87,7 @@ struct MainWindow: View {
             windowManager.refreshWindowList()
             localWSURL = Self.computeLocalWSURL()
             if selectedDisplayId == nil {
-                selectedDisplayId = windowManager.displays.first(where: { $0.isMain })?.id
+                selectedDisplayId = windowManager.displays.first(where: { $0.isPrimary })?.id
                     ?? windowManager.displays.first?.id
             }
         }
@@ -414,7 +414,7 @@ struct MainWindow: View {
         if let id = selectedDisplayId {
             return windowManager.displays.first { $0.id == id }
         }
-        return windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first
+        return windowManager.displays.first(where: { $0.isPrimary }) ?? windowManager.displays.first
     }
 
     private var displayWindows: [ManagedWindow] {

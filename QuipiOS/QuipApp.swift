@@ -101,6 +101,12 @@ struct QuipApp: App {
     @State private var selectedWindowId: String?
     @State private var monitorName: String = "Mac"
     @State private var screenAspect: Double = 16.0 / 10.0
+    /// Displays on the active Mac. Empty = one screen (or an older Mac build),
+    /// which hides the screen chips entirely.
+    @State private var displays: [DisplayState] = []
+    @State private var spanAspect: Double = 16.0 / 10.0
+    /// Chip selection: a `DisplayState.id`, or nil for "All screens".
+    @State private var selectedDisplayID: String?
     @State private var isRecording = false
     @State private var pttTracker = PTTWindowTracker()
     // Text input bar state owned here so PTT can drop the voice
@@ -215,6 +221,9 @@ struct QuipApp: App {
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
                 screenAspect: screenAspect,
+                displays: displays,
+                spanAspect: spanAspect,
+                selectedDisplayID: $selectedDisplayID,
                 showTextInput: $showTextInput,
                 textInputValue: $textInputValue,
                 onStartRecording: { DispatchQueue.main.async { startRecording() } },
@@ -294,6 +303,9 @@ struct QuipApp: App {
                 selectedWindowId = s.selectedWindowId
                 monitorName = s.monitorName
                 screenAspect = s.screenAspect
+                displays = s.displays
+                spanAspect = s.spanAspect
+                selectedDisplayID = s.selectedDisplayID
                 terminalContentText = s.terminalContentText
                 terminalContentScreenshot = s.terminalContentScreenshot
                 terminalContentURLs = s.terminalContentURLs
@@ -527,6 +539,12 @@ struct QuipApp: App {
                 windows = update.windows
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
+                if let d = update.displays { displays = d }
+                if let span = update.spanAspect, span > 0 { spanAspect = span }
+                // The manager already dropped a filter pointing at an
+                // unplugged monitor; mirror its verdict so the chips and the
+                // canvas can't disagree about which screen is showing.
+                selectedDisplayID = manager.active.selectedDisplayID
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
                 // Push window snapshot to the paired Apple Watch (no-op if
                 // no watch is paired or the app isn't installed).
@@ -1292,6 +1310,13 @@ struct MainiOSView: View {
     var ttsOverlayTexts: [String: String]
     var monitorName: String
     var screenAspect: Double
+    /// Every display on the Mac, primary first. Empty or single-element =>
+    /// no screen chips (nothing to switch between).
+    var displays: [DisplayState]
+    /// width / height of all displays combined — the "All screens" canvas.
+    var spanAspect: Double
+    /// nil = show every screen on one merged canvas.
+    @Binding var selectedDisplayID: String?
     @Binding var showTextInput: Bool
     @Binding var textInputValue: String
     var onStartRecording: () -> Void
@@ -3579,8 +3604,121 @@ struct MainiOSView: View {
     // MARK: - Window Layout
 
     private var windowLayout: some View {
+        // The chips are the whole multi-screen affordance, and they cost zero
+        // vertical space on a one-screen Mac (see `screenChips`). Inside
+        // windowLayout rather than at each of its four call sites so every
+        // layout — portrait, landscape, expanded — gets them for free.
+        VStack(spacing: 0) {
+            screenChips
+            windowCanvas
+        }
+    }
+
+    /// Compact per-screen filter. One chip per display plus "All", only when
+    /// the Mac actually has more than one screen — a single-display desk sees
+    /// nothing at all, not a row with one useless chip.
+    @ViewBuilder
+    private var screenChips: some View {
+        if displays.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(displays) { display in
+                        screenChip(title: display.name,
+                                   count: windows.filter { effectiveDisplayID($0) == display.id }.count,
+                                   isOn: selectedDisplayID == display.id) {
+                            selectDisplay(display.id)
+                        }
+                    }
+                    screenChip(title: "All", count: windows.count,
+                               isOn: selectedDisplayID == nil) {
+                        selectDisplay(nil)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+            }
+            .frame(height: 26)
+        }
+    }
+
+    private func screenChip(title: String, count: Int, isOn: Bool,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: "display")
+                    .font(.system(size: 8, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 10, weight: isOn ? .semibold : .regular))
+                    .lineLimit(1)
+                Text("\(count)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(isOn ? Color.white.opacity(0.75) : colors.textFaint)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .foregroundStyle(isOn ? Color.white : colors.textFaint)
+            .background(
+                Capsule().fill(isOn ? Color.blue.opacity(0.75) : colors.surface.opacity(0.6))
+            )
+            .overlay(
+                Capsule().strokeBorder(isOn ? Color.clear : colors.surfaceBorder, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Write the chip choice through to the session so it persists per backend
+    /// and survives a backend switch.
+    private func selectDisplay(_ id: String?) {
+        withAnimation(.easeOut(duration: 0.15)) { selectedDisplayID = id }
+        manager.active.updateSelectedDisplay(id)
+    }
+
+    /// A window's display, defaulting to the primary. An older Mac build sends
+    /// no `displayID`, and everything it sends is normalized against the
+    /// primary — so treating nil as primary keeps those builds rendering
+    /// exactly as before.
+    private func effectiveDisplayID(_ window: WindowState) -> String? {
+        window.displayID ?? displays.first(where: { $0.isPrimary })?.id ?? displays.first?.id
+    }
+
+    /// The display the chips are currently showing, or nil for "All".
+    private var activeDisplay: DisplayState? {
+        guard let id = selectedDisplayID else { return nil }
+        return displays.first { $0.id == id }
+    }
+
+    /// Aspect of the canvas the windows are drawn on: the chosen screen's own
+    /// aspect, or the whole desk's span when "All" is showing. Falls back to
+    /// `screenAspect` (the primary) for a single-screen Mac.
+    private var canvasAspect: Double {
+        if let display = activeDisplay, display.aspect > 0 { return display.aspect }
+        if displays.count > 1, spanAspect > 0 { return spanAspect }
+        return screenAspect
+    }
+
+    /// Windows for the chosen screen. "All" shows everything.
+    private var screenFilteredWindows: [WindowState] {
+        guard let id = selectedDisplayID else { return displayWindows }
+        return displayWindows.filter { effectiveDisplayID($0) == id }
+    }
+
+    /// Where a window is drawn on the current canvas.
+    ///
+    /// Mac-side frames are normalized against the window's OWN display, so
+    /// showing one screen needs no conversion at all. The merged "All" canvas
+    /// composes each display's `spanFrame` with the window's frame inside it —
+    /// the exact inverse of the split the Mac performs (`DisplayGeometry`).
+    private func canvasFrame(for window: WindowState) -> WindowFrame {
+        guard selectedDisplayID == nil, displays.count > 1,
+              let display = displays.first(where: { $0.id == effectiveDisplayID(window) })
+        else { return window.frame }
+        return DisplayGeometry.spanFrame(ofWindow: window.frame, onDisplay: display.spanFrame)
+    }
+
+    private var windowCanvas: some View {
         GeometryReader { geo in
-            let mac = hostScreenRect(in: geo.size, aspect: CGFloat(screenAspect))
+            let mac = hostScreenRect(in: geo.size, aspect: CGFloat(canvasAspect))
             ZStack(alignment: .topLeading) {
                 Color.clear
 
@@ -3614,9 +3752,28 @@ struct MainiOSView: View {
                                 }
                             }
                         }
+                    } else if screenFilteredWindows.isEmpty, let display = activeDisplay {
+                        // The Mac has windows, just none on the pinned screen.
+                        // Without this the canvas rendered blank and looked
+                        // like a dead connection.
+                        VStack(spacing: 6) {
+                            Image(systemName: "display")
+                                .font(.system(size: 20, weight: .light))
+                                .foregroundStyle(colors.textFaint)
+                            Text("Nothing on \(display.name)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(colors.textFaint)
+                            Button("Show all screens") { selectDisplay(nil) }
+                                .font(.system(size: 11, weight: .medium))
+                        }
                     } else {
-                        ForEach(Array(displayWindows.enumerated()), id: \.element.id) { index, window in
-                            let effectiveFrame = phoneLayoutFrame(for: window, index: index, total: displayWindows.count) ?? window.frame
+                        ForEach(Array(screenFilteredWindows.enumerated()), id: \.element.id) { index, window in
+                            // A phone-side override (manual drag / auto-arrange)
+                            // is already canvas-space, so it must NOT be run
+                            // through the span composition again.
+                            let effectiveFrame = phoneLayoutFrame(for: window, index: index,
+                                                                  total: screenFilteredWindows.count)
+                                ?? canvasFrame(for: window)
                             let rect = windowRect(frame: effectiveFrame, in: mac.size, inset: 3)
                             let isDragging = draggingWindowId == window.id
 

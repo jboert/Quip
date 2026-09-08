@@ -89,5 +89,55 @@ final class WindowOrderAndDisplayTests: XCTestCase {
         XCTAssertEqual(WindowManager.cgRect(forDisplayFrame: left, primaryFrame: primary),
                        CGRect(x: -1440, y: 180, width: 1440, height: 900))
     }
+
+    // MARK: - Per-display broadcast frames
+
+    /// The broadcast path normalizes each window against the CG rect of the
+    /// display it is on. Passing the *primary* rect for a second-screen window
+    /// — what `broadcastLayout` did before — puts x past 1 and the phone's
+    /// canvas cannot draw it.
+    func testSecondScreenWindowNormalizesInsideItsOwnDisplay() {
+        let primaryCG = CGRect(x: 0, y: 0, width: 3440, height: 1440)
+        let secondaryCG = CGRect(x: 3440, y: 0, width: 2560, height: 1440)
+        let terminal = ManagedWindow(
+            id: "term", name: "claude", app: "iTerm2", subtitle: "",
+            cwdPath: nil, bundleId: "com.googlecode.iterm2", icon: nil,
+            isEnabled: true, assignedColor: "#000000",
+            pid: 1, windowNumber: 1,
+            bounds: CGRect(x: 3600, y: 200, width: 1200, height: 800),
+            iterm2SessionId: nil, iterm2Tty: nil,
+            isOnVisibleScreen: true, displayID: "display-2")
+
+        let wrong = terminal.toWindowState(screenBounds: primaryCG)
+        XCTAssertGreaterThan(wrong.frame.x, 1.0, "the old behavior — off the canvas")
+
+        let right = terminal.toWindowState(screenBounds: secondaryCG)
+        XCTAssertEqual(right.frame.x, 160.0 / 2560.0, accuracy: 0.0001)
+        XCTAssertEqual(right.frame.y, 200.0 / 1440.0, accuracy: 0.0001)
+        XCTAssertLessThanOrEqual(right.frame.x + right.frame.width, 1.0001)
+        XCTAssertEqual(right.displayID, "display-2",
+                       "the phone needs the id to know which chip this window belongs to")
+    }
+
+    /// A display whose CG rect starts above the primary's top edge has a
+    /// negative CG y (see `testSecondaryDisplayAboveOriginFlipsY`). A window on
+    /// it must still normalize into 0-1 — subtracting a negative origin is the
+    /// step that makes it work, and getting the sign wrong here is invisible on
+    /// a single-monitor desk.
+    func testWindowOnATallerSecondaryNormalizesIntoRange() {
+        let secondaryCG = CGRect(x: 1920, y: -360, width: 2560, height: 1440)
+        let window = ManagedWindow(
+            id: "w", name: "w", app: "Test", subtitle: "",
+            cwdPath: nil, bundleId: "com.test", icon: nil,
+            isEnabled: true, assignedColor: "#000000",
+            pid: 1, windowNumber: 1,
+            bounds: CGRect(x: 2020, y: -260, width: 1000, height: 700),
+            iterm2SessionId: nil, iterm2Tty: nil,
+            isOnVisibleScreen: true, displayID: "display-2")
+        let frame = window.toWindowState(screenBounds: secondaryCG).frame
+        XCTAssertEqual(frame.x, 100.0 / 2560.0, accuracy: 0.0001)
+        XCTAssertEqual(frame.y, 100.0 / 1440.0, accuracy: 0.0001)
+        XCTAssertGreaterThanOrEqual(frame.y, 0, "a window above the primary's top edge is still on-canvas")
+    }
 }
 #endif

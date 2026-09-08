@@ -1165,19 +1165,20 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     @MainActor
     private func broadcastLayout() {
         guard webSocketServer.hasConnectedClients else { return }
-        let display = windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first
-        let screenBounds = display?.frame ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
-
+        let geometry = buildDisplayGeometry()
         let mirrorDesktop = UserDefaults.standard.bool(forKey: "mirrorDesktop")
-        let monitor = display?.name ?? "Display 1"
-        let aspect = screenBounds.height > 0 ? Double(screenBounds.width / screenBounds.height) : nil
+        let mirrorAllApps = UserDefaults.standard.bool(forKey: "mirrorAllApps")
+        let monitor = geometry.primaryName
+        let aspect = geometry.primaryAspect
         let allWindows = windowManager.windows
 
         // Fast path: no client is in QA mode → encode once, broadcast as before.
         if !webSocketServer.anyQAPairActive {
-            let visible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop)
-            let states = stateize(visible, screenBounds: screenBounds)
-            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
+            let visible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop,
+                                                        mirrorAllApps: mirrorAllApps)
+            let states = stateize(visible, geometry: geometry)
+            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states,
+                                      displays: geometry.displays, spanAspect: geometry.spanAspect)
             webSocketServer.broadcast(update)
             broadcastProjectDirectories()
             return
@@ -1188,10 +1189,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // get exactly two windows and non-QA phones get the unfiltered list.
         webSocketServer.forEachAuthenticatedClientWithQAPair { connection, pair in
             let visible = WindowManager.windowsForBroadcast(
-                allWindows, mirrorDesktop: mirrorDesktop, qaPair: pair
+                allWindows, mirrorDesktop: mirrorDesktop,
+                mirrorAllApps: mirrorAllApps, qaPair: pair
             )
-            let states = self.stateize(visible, screenBounds: screenBounds)
-            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states)
+            let states = self.stateize(visible, geometry: geometry)
+            let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states,
+                                      displays: geometry.displays, spanAspect: geometry.spanAspect)
             self.webSocketServer.sendToClient(update, connection: connection)
             if let p = pair {
                 _ = p
@@ -1207,20 +1210,86 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // Tunnel broadcasters can't have per-connection QA pair state, so
         // they always receive the unfiltered LayoutUpdate. Build it once and
         // push.
-        let unfilteredVisible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop)
-        let unfilteredStates = stateize(unfilteredVisible, screenBounds: screenBounds)
-        let unfilteredUpdate = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: unfilteredStates)
+        let unfilteredVisible = WindowManager.windowsForBroadcast(allWindows, mirrorDesktop: mirrorDesktop,
+                                                        mirrorAllApps: mirrorAllApps)
+        let unfilteredStates = stateize(unfilteredVisible, geometry: geometry)
+        let unfilteredUpdate = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: unfilteredStates,
+                                            displays: geometry.displays, spanAspect: geometry.spanAspect)
         webSocketServer.broadcastTunnelsOnly(unfilteredUpdate)
         broadcastProjectDirectories()
     }
 
+    /// Everything the broadcast path needs to know about the desk's displays,
+    /// computed once per tick. Built by `buildDisplayGeometry()`.
+    struct DisplayGeometrySnapshot {
+        /// Wire-format displays, in enumeration order (primary first).
+        let displays: [DisplayState]
+        /// CG-space rect per display id — what window frames normalize against.
+        let cgRects: [String: CGRect]
+        /// The primary display's CG rect. Fallback for a window whose display
+        /// id is unknown (nil `displayID` on the first tick, or a monitor
+        /// unplugged between the snapshot and this broadcast).
+        let primaryRect: CGRect
+        let primaryName: String
+        let primaryAspect: Double?
+        /// width / height of the union of all displays.
+        let spanAspect: Double?
+    }
+
+    /// Snapshot the display topology for one broadcast.
+    ///
+    /// Every window is normalized against ITS OWN display, and each display
+    /// carries its position inside the desktop span. Normalizing everything
+    /// against one screen is what put second-monitor windows at x > 1 (off the
+    /// phone's canvas entirely) and made the whole grid jump whenever focus
+    /// moved to the other monitor.
+    @MainActor
+    private func buildDisplayGeometry() -> DisplayGeometrySnapshot {
+        let displays = windowManager.displays
+        let primary = displays.first(where: { $0.isPrimary }) ?? displays.first
+        let fallbackRect = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let primaryRect = primary.map { windowManager.cgFrame(for: $0) } ?? fallbackRect
+
+        var cgRects: [String: CGRect] = [:]
+        var rects: [DisplayRect] = []
+        for display in displays {
+            let cg = windowManager.cgFrame(for: display)
+            cgRects[display.id] = cg
+            rects.append(DisplayRect(x: cg.origin.x, y: cg.origin.y,
+                                     width: cg.width, height: cg.height))
+        }
+        let span = DisplayGeometry.span(of: rects)
+        let states: [DisplayState] = displays.enumerated().map { index, display in
+            let rect = rects[index]
+            return DisplayState(
+                id: display.id,
+                name: display.name,
+                isPrimary: display.isPrimary,
+                aspect: rect.height > 0 ? rect.width / rect.height : 1,
+                spanFrame: DisplayGeometry.spanFrame(of: rect, in: span)
+            )
+        }
+        return DisplayGeometrySnapshot(
+            displays: states,
+            cgRects: cgRects,
+            primaryRect: primaryRect,
+            primaryName: primary?.name ?? "Display 1",
+            primaryAspect: primaryRect.height > 0 ? Double(primaryRect.width / primaryRect.height) : nil,
+            spanAspect: span.height > 0 ? span.width / span.height : nil
+        )
+    }
+
     /// Build the `WindowState` array from a filtered `ManagedWindow` slice.
     /// Pulled out so the QA-mode per-client path doesn't duplicate the loop.
-    private func stateize(_ windows: [ManagedWindow], screenBounds: CGRect) -> [WindowState] {
+    private func stateize(_ windows: [ManagedWindow], geometry: DisplayGeometrySnapshot) -> [WindowState] {
         windows.map { window in
-            window.toWindowState(
+            // Normalize against the window's own display, falling back to the
+            // primary so an unknown display id degrades to the old behavior
+            // rather than emitting a zeroed frame.
+            let bounds = window.displayID.flatMap { geometry.cgRects[$0] } ?? geometry.primaryRect
+            return window.toWindowState(
                 state: terminalStateDetector.windowStates[window.id]?.rawValue ?? "neutral",
-                screenBounds: screenBounds,
+                screenBounds: bounds,
                 isThinking: thinkingWindows.contains(window.id),
                 claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue,
                 cliKind: terminalStateDetector.windowCLIKind[window.id]
@@ -1414,9 +1483,29 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         iterm2SessionId: window.iterm2SessionId
                     )
                     let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
-                    let routingPath = route.rawValue
+                    let isGenericApp = !self.isFirstClassHost(window)
+                    // `let`, not a mutated `var`: this string is captured by the
+                    // @Sendable latency-logging closure below, and Swift 6 rejects
+                    // sending a mutable local into it.
+                    let routingPath = isGenericApp ? "genericApp" : route.rawValue
                     let inject: @MainActor () async -> KeystrokeInjector.InjectionResult
-                    if route == .pasteText {
+                    if isGenericApp {
+                        // Generic app (Slack, Xcode, a browser…). System Events
+                        // types into THIS pid — before this branch the text went
+                        // to `process "Terminal"`, because terminalAppForWindow
+                        // answers `.terminal` for every unrecognized bundle id.
+                        let pid = window.pid
+                        let appName = window.app
+                        NSLog("[Quip] send_text routing: genericApp (app=%@, pid=%d, window=%@)",
+                              appName, pid, msg.windowId)
+                        inject = {
+                            await self.keystrokeInjector.sendTextToApp(msg.text,
+                                                                      to: msg.windowId,
+                                                                      pressReturn: msg.pressReturn,
+                                                                      pid: pid,
+                                                                      appName: appName)
+                        }
+                    } else if route == .pasteText {
                         NSLog("[Quip] send_text routing: pasteText (cliKind=%@, term=iterm2, window=%@)", cliKind.rawValue, msg.windowId)
                         inject = {
                             await self.keystrokeInjector.pasteText(msg.text,
@@ -1600,6 +1689,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         let imageRoute = Self.imageInjectionRoute(cliKind: cliKind, terminalApp: termApp)
                         let route = imageRoute.rawValue
                         let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sessionId in
+                            // Generic app: no PTY to type a path into and no
+                            // terminal AppleScript vocabulary, so pasted bytes
+                            // are the only route. Put the image on the
+                            // clipboard, then Cmd+V into THAT pid.
+                            if !self.isFirstClassHost(window) {
+                                return await self.keystrokeInjector.pasteImageToApp(
+                                    at: savedURL, to: msg.windowId,
+                                    pid: window.pid, appName: window.app
+                                )
+                            }
                             switch imageRoute {
                             case .pasteImage:
                                 return await self.keystrokeInjector.pasteImage(
@@ -2489,7 +2588,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             webSocketServer.broadcast(ErrorMessage(reason: "No enabled windows to arrange"))
             return
         }
-        guard let display = windowManager.displays.first(where: { $0.isMain })
+        guard let display = windowManager.displays.first(where: { $0.isPrimary })
                 ?? windowManager.displays.first else {
             webSocketServer.broadcast(ErrorMessage(reason: "No display available"))
             return
@@ -2497,9 +2596,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let frames = LayoutCalculator.calculate(mode: mode, windowCount: enabled.count)
         // `display.frame` is NSScreen space (bottom-left origin); the
         // Accessibility calls behind arrangeWindows are top-left origin. They
-        // coincide only for the primary display, and `isMain` tracks the
-        // *focused* screen — so on a two-display desk this used to place
-        // windows in the wrong coordinate space.
+        // coincide only for the primary display, so a secondary display's rect
+        // MUST be flipped through `cgFrame(for:)` or the windows land in the
+        // primary's coordinate space.
         let screenFrame = windowManager.cgFrame(for: display)
         var targetFrames: [String: CGRect] = [:]
         for (index, window) in enabled.enumerated() where index < frames.count {
@@ -3017,6 +3116,28 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         if action != "toggle_enabled" {
             windowManager.focusWindow(wid)
         }
+        // A generic app (Slack, Xcode, a browser…) has no PTY and no
+        // AppleScript terminal vocabulary. Route the keys that still make
+        // sense through System Events on ITS pid, and refuse the shell-only
+        // verbs out loud — the alternative is typing "/clear" into a chat box.
+        if !isFirstClassHost(window), action != "toggle_enabled" {
+            if let key = Self.genericAppQuickActionKeys[action] {
+                let pid = window.pid
+                let app = window.app
+                Task { @MainActor in
+                    let r = await self.keystrokeInjector.sendKeystrokeToApp(
+                        key, to: wid, pid: pid, appName: app)
+                    if !r.success {
+                        self.webSocketServer.broadcast(
+                            ErrorMessage(reason: "\(app): \(r.error ?? "keystroke failed")"))
+                    }
+                }
+            } else {
+                webSocketServer.broadcast(
+                    ErrorMessage(reason: "\(window.app) is not a terminal — '\(action)' needs a terminal window"))
+            }
+            return
+        }
         // 200ms lets windowManager.focusWindow's AX raise propagate before the
         // keystroke AppleScript fires — but only when we're falling back to
         // the front-window/System-Events path. When iTerm2 session-write has
@@ -3448,6 +3569,35 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             clientSelectedWindowId = nil
         }
     }
+
+    /// True when this window's host app is one Quip has a first-class
+    /// AppleScript path for (iTerm2 / Terminal.app / Claude Desktop).
+    ///
+    /// `terminalAppForWindow` answers `.terminal` for EVERYTHING it doesn't
+    /// recognize, and the `.terminal` path types into `process "Terminal"` —
+    /// so before this check, dictating into a Slack or Xcode card typed the
+    /// transcript into Terminal.app's shell instead. Callers branch on this
+    /// and use the generic per-pid path for anything else.
+    private func isFirstClassHost(_ window: ManagedWindow) -> Bool {
+        KeystrokeInjector.isFirstClassHost(bundleId: window.bundleId)
+    }
+
+    /// Quick actions that mean something in an arbitrary app. The rest
+    /// (`clear_terminal`, `restart_claude`, scrollback, `press_n`, …) are
+    /// shell/CLI verbs and must be refused for a generic app rather than
+    /// typed into it as literal text.
+    private static let genericAppQuickActionKeys: [String: String] = [
+        "press_return": "return",
+        "press_escape": "escape",
+        "press_tab": "tab",
+        "press_shift_tab": "shift+tab",
+        "press_up": "up",
+        "press_down": "down",
+        "press_left": "left",
+        "press_right": "right",
+        "press_backspace": "backspace",
+        "press_space": "space",
+    ]
 
     private func terminalAppForWindow(_ window: ManagedWindow) -> TerminalApp {
         switch window.bundleId {

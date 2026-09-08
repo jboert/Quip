@@ -469,7 +469,7 @@ struct MenuBarView: View {
         let enabled = windowManager.windows.filter(\.isEnabled)
         let frames = LayoutCalculator.calculate(mode: .columns, windowCount: enabled.count)
 
-        guard let display = windowManager.displays.first(where: { $0.isMain }) ?? windowManager.displays.first else {
+        guard let display = windowManager.displays.first(where: { $0.isPrimary }) ?? windowManager.displays.first else {
             return
         }
 

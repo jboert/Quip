@@ -1208,6 +1208,19 @@ final class BackendConnectionManager {
             session.windows = update.windows
             session.monitorName = update.monitor
             if let a = update.screenAspect, a > 0 { session.screenAspect = a }
+            // Older Mac builds omit `displays` entirely; treat that as "one
+            // screen" rather than clobbering a list we already have.
+            if let displays = update.displays { session.displays = displays }
+            if let span = update.spanAspect, span > 0 { session.spanAspect = span }
+            // A screen the user had pinned can be unplugged mid-session. Drop
+            // the filter instead of showing an empty grid with no way out.
+            if let picked = session.selectedDisplayID,
+               !session.displays.isEmpty,
+               !session.displays.contains(where: { $0.id == picked }) {
+                session.selectedDisplayID = nil
+                UserDefaults.standard.removeObject(
+                    forKey: BackendSession.screenFilterKey(forBackendId: session.backendID))
+            }
             let wasConnected = session.reachability == .connected
             if !wasConnected { session.reachability = .connected }
             // §J — stamp the paired-backend's lastConnectedAt on the
@@ -1447,6 +1460,9 @@ final class BackendConnectionManager {
             rebuilt.selectedWindowId = session.selectedWindowId
             rebuilt.monitorName = session.monitorName
             rebuilt.screenAspect = session.screenAspect
+            rebuilt.displays = session.displays
+            rebuilt.spanAspect = session.spanAspect
+            rebuilt.updateSelectedDisplay(session.selectedDisplayID)
             rebuilt.terminalContentText = session.terminalContentText
             rebuilt.terminalContentScreenshot = session.terminalContentScreenshot
             rebuilt.terminalContentURLs = session.terminalContentURLs

@@ -896,6 +896,9 @@ private struct GeneralTab: View {
     @AppStorage("showInMenuBar") private var showInMenuBar = true
     @AppStorage("showInDock") private var showInDock = true
     @AppStorage("mirrorDesktop") private var mirrorDesktop = false
+    /// Widens the phone's window list to every visible app, not just terminals.
+    /// Off by default: it is a real increase in what the phone can type into.
+    @AppStorage("mirrorAllApps") private var mirrorAllApps = false
     @AppStorage("crashRecoveryEnabled") private var crashRecoveryEnabled = false
     @State private var crashRecoveryError: String?
 
@@ -940,6 +943,11 @@ private struct GeneralTab: View {
             Section("Phone") {
                 Toggle("Mirror desktop terminals", isOn: $mirrorDesktop)
                 Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Mirror every app", isOn: $mirrorAllApps)
+                Text("Adds non-terminal windows too — Slack, Xcode, a browser — so you can select one on the phone and dictate straight into it. Text and keystrokes go to that app; terminal-only actions (clear, restart, scrollback) are refused for it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
