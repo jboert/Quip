@@ -62,13 +62,18 @@ Periodic broadcast (~2s) with current window layout.
       "state": "neutral",
       "color": "#FF6B6B",
       "isThinking": false,
-      "claudeMode": "normal"
+      "claudeMode": "normal",
+      "displayID": "display-123",
+      "spaceID": "space-3"
     }
+  ],
+  "spaces": [
+    { "id": "space-3", "name": "Desktop 1", "isCurrent": true }
   ]
 }
 ```
 
-`screenAspect`, `folder`, `isThinking`, and `claudeMode` are optional for backward-compat with older desktop builds; clients must tolerate their absence. `frame` coordinates are normalized 0.0–1.0 relative to the display bounds.
+`screenAspect`, `folder`, `isThinking`, `claudeMode`, `displayID`, `spaceID`, and `spaces` are optional for backward-compat with older desktop builds; clients must tolerate their absence. `frame` coordinates are normalized 0.0–1.0 relative to the window's display. The Mac omits `optionOnScreenOnly` when enumerating, so windows on inactive Mission Control desktops are included. The phone's Space chips filter those cards; tapping a card asks macOS to activate its owning desktop before raising the window.
 
 **Window state** values:
 - `"neutral"` — idle

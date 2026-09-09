@@ -194,6 +194,27 @@ final class DisplayGeometryTests: XCTestCase {
         """
         let state = try JSONDecoder().decode(WindowState.self, from: Data(json.utf8))
         XCTAssertNil(state.displayID, "nil means 'the primary display' to the client")
+        XCTAssertNil(state.spaceID, "nil means an older Mac did not report Space metadata")
+    }
+
+    func testLayoutUpdateWithoutSpacesStillDecodes() throws {
+        let json = #"{"type":"layout_update","monitor":"Mac","windows":[]}"#
+        let update = try JSONDecoder().decode(LayoutUpdate.self, from: Data(json.utf8))
+        XCTAssertNil(update.spaces)
+    }
+
+    func testSpaceMetadataRoundTrips() throws {
+        let window = WindowState(id: "w", name: "Terminal", app: "iTerm2",
+                                 enabled: true,
+                                 frame: WindowFrame(x: 0, y: 0, width: 1, height: 1),
+                                 state: "neutral", color: "#fff",
+                                 spaceID: "space-4")
+        let original = LayoutUpdate(monitor: "Mac", windows: [window],
+                                    spaces: [SpaceState(id: "space-4", name: "Desktop 4", isCurrent: true)])
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(LayoutUpdate.self, from: data)
+        XCTAssertEqual(decoded.windows.first?.spaceID, "space-4")
+        XCTAssertEqual(decoded.spaces?.first?.isCurrent, true)
     }
 
     func testLayoutUpdateRoundTripsDisplays() throws {

@@ -49,6 +49,9 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
     /// shipped to the phone on `WindowState.displayID` so it can group windows
     /// by screen. nil only when no display is known yet (first tick).
     var displayID: String?
+    /// Mission Control Space containing this window, when the system metadata
+    /// can identify it. Nil is a safe fallback on unsupported macOS versions.
+    var spaceID: String?
 
     /// Whether this window is hosted by a terminal emulator Quip supports
     /// (Terminal.app or iTerm2). Used for auto-grouping in the sidebar.
@@ -108,7 +111,8 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             claudeMode: claudeMode,
             cliKind: cliKind,
             targetKind: targetKind,
-            displayID: displayID
+            displayID: displayID,
+            spaceID: spaceID
         )
     }
 }
@@ -149,6 +153,10 @@ final class WindowManager {
 
     /// Available displays
     var displays: [DisplayInfo] = []
+
+    /// Mission Control Spaces discovered from the read-only system metadata.
+    /// Empty means macOS did not expose a usable catalog this tick.
+    private(set) var spaces: [SpaceState] = []
 
     // Next color index for assignment
     private var colorIndex: Int = 0
@@ -262,16 +270,70 @@ final class WindowManager {
         let pid: pid_t
         let windowNumber: CGWindowID
         let bounds: CGRect
+        let spaceID: String?
     }
 
-    /// Fetch on-screen windows from CG. Safe to call from any thread.
+    /// Read-only projection of macOS' persisted Space/window membership. There
+    /// is no public Space API; keeping this parser isolated makes the fallback
+    /// explicit and keeps the rest of window management API-based.
+    struct SpaceCatalog: Sendable {
+        let spaces: [SpaceState]
+        private let byWindow: [CGWindowID: String]
+
+        nonisolated static func read() -> SpaceCatalog {
+            let domain = UserDefaults.standard.persistentDomain(forName: "com.apple.spaces")
+            let root = domain?["SpacesDisplayConfiguration"] as? [String: Any]
+            let management = root?["Management Data"] as? [String: Any]
+            let monitors = management?["Monitors"] as? [[String: Any]] ?? []
+            let primary = monitors.first
+            let current = ((primary?["Current Space"] as? [String: Any])?["ManagedSpaceID"] as? NSNumber)?.uint64Value
+            let managedSpaces = primary?["Spaces"] as? [[String: Any]] ?? []
+            let properties = root?["Space Properties"] as? [[String: Any]] ?? []
+
+            var ids: [String] = []
+            for entry in managedSpaces {
+                if let id = (entry["ManagedSpaceID"] as? NSNumber)?.uint64Value {
+                    ids.append("space-\(id)")
+                }
+            }
+            var byWindow: [CGWindowID: String] = [:]
+            var states: [SpaceState] = []
+            for (index, property) in properties.enumerated() {
+                let id = index < ids.count ? ids[index] : "space-\(index + 1)"
+                let managedID = index < managedSpaces.count
+                    ? (managedSpaces[index]["ManagedSpaceID"] as? NSNumber)?.uint64Value
+                    : nil
+                let isCurrent = managedID != nil && managedID == current
+                let name = "Desktop \(index + 1)"
+                states.append(SpaceState(id: id, name: name, isCurrent: isCurrent))
+                for number in property["windows"] as? [NSNumber] ?? [] {
+                    let windowID = CGWindowID(number.uint32Value)
+                    // Windows pinned to every Space occur in multiple lists;
+                    // prefer the current Space so their card remains stable.
+                    if byWindow[windowID] == nil || isCurrent { byWindow[windowID] = id }
+                }
+            }
+            return SpaceCatalog(spaces: states, byWindow: byWindow)
+        }
+
+        nonisolated func id(for windowNumber: CGWindowID) -> String? {
+            byWindow[windowNumber]
+        }
+    }
+
+    /// Fetch windows across all Mission Control Spaces from CG. Safe to call
+    /// from any thread; inactive-Space bounds remain in global CG coordinates.
     nonisolated static func fetchWindowList() -> [RawWindowInfo] {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        // `optionOnScreenOnly` is scoped to the active Space. Omitting it is
+        // the only CoreGraphics-supported way to discover windows on other
+        // Spaces; their bounds remain in the global desktop coordinate space.
+        let options: CGWindowListOption = [.excludeDesktopElements]
         guard let infoList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return []
         }
 
         var result: [RawWindowInfo] = []
+        let spaces = SpaceCatalog.read()
         let systemApps: Set<String> = ["Window Server", "Control Center", "Notification Center", "SystemUIServer"]
 
         for info in infoList {
@@ -295,7 +357,8 @@ final class WindowManager {
 
             result.append(RawWindowInfo(id: windowId, name: title, app: ownerName,
                                         bundleId: bundleId, pid: pid,
-                                        windowNumber: windowNumber, bounds: bounds))
+                                        windowNumber: windowNumber, bounds: bounds,
+                                        spaceID: spaces.id(for: windowNumber)))
         }
         return result
     }
@@ -318,6 +381,7 @@ final class WindowManager {
         // wrong display — or to none. NSScreen.screens is a cheap MainActor
         // read and we're already on main here.
         refreshDisplays()
+        spaces = Self.SpaceCatalog.read().spaces
         let displayRects = cgDisplayRects()
 
         var refreshed: [ManagedWindow] = []
@@ -348,7 +412,8 @@ final class WindowManager {
                     iterm2SessionId: existing.iterm2SessionId,
                     iterm2Tty: existing.iterm2Tty,
                     isOnVisibleScreen: onScreen,
-                    displayID: displayID
+                    displayID: displayID,
+                    spaceID: info.spaceID
                 ))
             } else {
                 refreshed.append(ManagedWindow(
@@ -360,7 +425,8 @@ final class WindowManager {
                     iterm2SessionId: nil,
                     iterm2Tty: nil,
                     isOnVisibleScreen: onScreen,
-                    displayID: displayID
+                    displayID: displayID,
+                    spaceID: info.spaceID
                 ))
             }
         }
@@ -477,7 +543,10 @@ final class WindowManager {
     func focusWindow(_ windowId: String) {
         guard let window = windows.first(where: { $0.id == windowId }) else { return }
         let app = NSRunningApplication(processIdentifier: window.pid)
-        app?.activate()
+        // `.activateAllWindows` asks Mission Control to switch to the Space
+        // owning the app when the user's macOS setting permits it. AX raise
+        // then selects the exact window once that Space is active.
+        app?.activate(options: [.activateAllWindows])
 
         // Also raise the specific window via AX
         let appElement = AXUIElementCreateApplication(window.pid)

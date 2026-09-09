@@ -1178,7 +1178,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                                         mirrorAllApps: mirrorAllApps)
             let states = stateize(visible, geometry: geometry)
             let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states,
-                                      displays: geometry.displays, spanAspect: geometry.spanAspect)
+                                      displays: geometry.displays, spanAspect: geometry.spanAspect,
+                                      spaces: geometry.spaces)
             webSocketServer.broadcast(update)
             broadcastProjectDirectories()
             return
@@ -1194,7 +1195,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             )
             let states = self.stateize(visible, geometry: geometry)
             let update = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: states,
-                                      displays: geometry.displays, spanAspect: geometry.spanAspect)
+                                      displays: geometry.displays, spanAspect: geometry.spanAspect,
+                                      spaces: geometry.spaces)
             self.webSocketServer.sendToClient(update, connection: connection)
             if let p = pair {
                 _ = p
@@ -1214,7 +1216,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                                         mirrorAllApps: mirrorAllApps)
         let unfilteredStates = stateize(unfilteredVisible, geometry: geometry)
         let unfilteredUpdate = LayoutUpdate(monitor: monitor, screenAspect: aspect, windows: unfilteredStates,
-                                            displays: geometry.displays, spanAspect: geometry.spanAspect)
+                                            displays: geometry.displays, spanAspect: geometry.spanAspect,
+                                            spaces: geometry.spaces)
         webSocketServer.broadcastTunnelsOnly(unfilteredUpdate)
         broadcastProjectDirectories()
     }
@@ -1234,6 +1237,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let primaryAspect: Double?
         /// width / height of the union of all displays.
         let spanAspect: Double?
+        let spaces: [SpaceState]
     }
 
     /// Snapshot the display topology for one broadcast.
@@ -1275,7 +1279,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             primaryRect: primaryRect,
             primaryName: primary?.name ?? "Display 1",
             primaryAspect: primaryRect.height > 0 ? Double(primaryRect.width / primaryRect.height) : nil,
-            spanAspect: span.height > 0 ? span.width / span.height : nil
+            spanAspect: span.height > 0 ? span.width / span.height : nil,
+            spaces: windowManager.spaces
         )
     }
 

@@ -27,15 +27,19 @@ struct LayoutUpdate: Codable, Sendable {
     /// to render every screen on one merged canvas. Equals `screenAspect` on a
     /// single-display Mac.
     let spanAspect: Double?
+    /// Spaces visible to the Mac. Optional so older peers continue to decode.
+    let spaces: [SpaceState]?
 
     init(monitor: String, screenAspect: Double? = nil, windows: [WindowState],
-         displays: [DisplayState]? = nil, spanAspect: Double? = nil) {
+         displays: [DisplayState]? = nil, spanAspect: Double? = nil,
+         spaces: [SpaceState]? = nil) {
         self.type = "layout_update"
         self.monitor = monitor
         self.screenAspect = screenAspect
         self.windows = windows
         self.displays = displays
         self.spanAspect = spanAspect
+        self.spaces = spaces
     }
 }
 
@@ -106,6 +110,8 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     /// renders every window inside a single 0-1 canvas. Optional for backward
     /// compat with older Mac builds (nil = "the primary display").
     let displayID: String?
+    /// Desktop Space containing the window, when macOS exposes that metadata.
+    let spaceID: String?
 
     // Synthesized Equatable compares ALL fields including frame
 
@@ -113,7 +119,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
          claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil,
-         displayID: String? = nil) {
+         displayID: String? = nil, spaceID: String? = nil) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
@@ -122,6 +128,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         self.cliKind = cliKind
         self.targetKind = targetKind
         self.displayID = displayID
+        self.spaceID = spaceID
     }
 
     init(from decoder: Decoder) throws {
@@ -139,12 +146,21 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         cliKind = try? c.decode(CLIKind.self, forKey: .cliKind)
         targetKind = try? c.decode(String.self, forKey: .targetKind)
         displayID = try? c.decode(String.self, forKey: .displayID)
+        spaceID = try? c.decode(String.self, forKey: .spaceID)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind, targetKind
-        case displayID
+        case displayID, spaceID
     }
+}
+
+/// A macOS Mission Control desktop. The identifier is intentionally opaque;
+/// only the Mac can activate a Space and older clients may ignore this field.
+struct SpaceState: Codable, Sendable, Equatable, Hashable, Identifiable {
+    let id: String
+    let name: String
+    let isCurrent: Bool
 }
 
 // MARK: - Claude Code Mode

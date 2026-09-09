@@ -1212,6 +1212,7 @@ final class BackendConnectionManager {
             // screen" rather than clobbering a list we already have.
             if let displays = update.displays { session.displays = displays }
             if let span = update.spanAspect, span > 0 { session.spanAspect = span }
+            if let spaces = update.spaces { session.spaces = spaces }
             // A screen the user had pinned can be unplugged mid-session. Drop
             // the filter instead of showing an empty grid with no way out.
             if let picked = session.selectedDisplayID,
@@ -1462,6 +1463,7 @@ final class BackendConnectionManager {
             rebuilt.screenAspect = session.screenAspect
             rebuilt.displays = session.displays
             rebuilt.spanAspect = session.spanAspect
+            rebuilt.spaces = session.spaces
             rebuilt.updateSelectedDisplay(session.selectedDisplayID)
             rebuilt.terminalContentText = session.terminalContentText
             rebuilt.terminalContentScreenshot = session.terminalContentScreenshot

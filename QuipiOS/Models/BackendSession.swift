@@ -50,6 +50,8 @@ final class BackendSession {
     var displays: [DisplayState] = []
     /// width / height of all displays combined, for the "All screens" canvas.
     var spanAspect: Double = 16.0 / 10.0
+    /// Mission Control desktops reported by the Mac. Empty on older builds.
+    var spaces: [SpaceState] = []
     /// Which screen's windows to show. nil = all screens. Persisted per
     /// backend (`screenFilterKey`) so "the terminal screen" survives an app
     /// relaunch — keyed by CGDirectDisplayID, so it can't drift onto the wrong

@@ -105,6 +105,8 @@ struct QuipApp: App {
     /// which hides the screen chips entirely.
     @State private var displays: [DisplayState] = []
     @State private var spanAspect: Double = 16.0 / 10.0
+    @State private var spaces: [SpaceState] = []
+    @State private var selectedSpaceID: String?
     /// Chip selection: a `DisplayState.id`, or nil for "All screens".
     @State private var selectedDisplayID: String?
     @State private var isRecording = false
@@ -223,6 +225,8 @@ struct QuipApp: App {
                 screenAspect: screenAspect,
                 displays: displays,
                 spanAspect: spanAspect,
+                spaces: spaces,
+                selectedSpaceID: $selectedSpaceID,
                 selectedDisplayID: $selectedDisplayID,
                 showTextInput: $showTextInput,
                 textInputValue: $textInputValue,
@@ -305,6 +309,8 @@ struct QuipApp: App {
                 screenAspect = s.screenAspect
                 displays = s.displays
                 spanAspect = s.spanAspect
+                spaces = s.spaces
+                selectedSpaceID = s.spaces.first(where: { $0.isCurrent })?.id
                 selectedDisplayID = s.selectedDisplayID
                 terminalContentText = s.terminalContentText
                 terminalContentScreenshot = s.terminalContentScreenshot
@@ -541,6 +547,12 @@ struct QuipApp: App {
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
                 if let d = update.displays { displays = d }
                 if let span = update.spanAspect, span > 0 { spanAspect = span }
+                if let incomingSpaces = update.spaces {
+                    spaces = incomingSpaces
+                    if selectedSpaceID == nil {
+                        selectedSpaceID = incomingSpaces.first(where: { $0.isCurrent })?.id
+                    }
+                }
                 // The manager already dropped a filter pointing at an
                 // unplugged monitor; mirror its verdict so the chips and the
                 // canvas can't disagree about which screen is showing.
@@ -1315,6 +1327,8 @@ struct MainiOSView: View {
     var displays: [DisplayState]
     /// width / height of all displays combined — the "All screens" canvas.
     var spanAspect: Double
+    var spaces: [SpaceState]
+    @Binding var selectedSpaceID: String?
     /// nil = show every screen on one merged canvas.
     @Binding var selectedDisplayID: String?
     @Binding var showTextInput: Bool
@@ -3609,6 +3623,7 @@ struct MainiOSView: View {
         // windowLayout rather than at each of its four call sites so every
         // layout — portrait, landscape, expanded — gets them for free.
         VStack(spacing: 0) {
+            spaceChips
             screenChips
             windowCanvas
         }
@@ -3632,6 +3647,30 @@ struct MainiOSView: View {
                     screenChip(title: "All", count: windows.count,
                                isOn: selectedDisplayID == nil) {
                         selectDisplay(nil)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+            }
+            .frame(height: 26)
+        }
+    }
+
+    @ViewBuilder
+    private var spaceChips: some View {
+        if spaces.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(spaces) { space in
+                        screenChip(title: space.name,
+                                   count: windows.filter { $0.spaceID == space.id }.count,
+                                   isOn: selectedSpaceID == space.id) {
+                            withAnimation(.easeOut(duration: 0.15)) { selectedSpaceID = space.id }
+                        }
+                    }
+                    screenChip(title: "All Desktops", count: windows.count,
+                               isOn: selectedSpaceID == nil) {
+                        withAnimation(.easeOut(duration: 0.15)) { selectedSpaceID = nil }
                     }
                 }
                 .padding(.horizontal, 6)
@@ -3699,8 +3738,9 @@ struct MainiOSView: View {
 
     /// Windows for the chosen screen. "All" shows everything.
     private var screenFilteredWindows: [WindowState] {
-        guard let id = selectedDisplayID else { return displayWindows }
-        return displayWindows.filter { effectiveDisplayID($0) == id }
+        let bySpace = selectedSpaceID.map { id in displayWindows.filter { $0.spaceID == id } } ?? displayWindows
+        guard let id = selectedDisplayID else { return bySpace }
+        return bySpace.filter { effectiveDisplayID($0) == id }
     }
 
     /// Where a window is drawn on the current canvas.
