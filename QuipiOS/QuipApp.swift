@@ -64,6 +64,25 @@ enum ContentMapMutations {
             urlsMap.removeValue(forKey: id)
         }
     }
+
+    /// Keep the potentially large screenshot/text caches aligned with the
+    /// current window snapshot. A window can disappear without entering QA
+    /// mode (quit, Space change, or backend switch), so pair-only cleanup is
+    /// not sufficient and would retain base64 screenshots forever.
+    static func pruneToWindowIDs(
+        _ activeIDs: Set<String>,
+        textMap: inout [String: String],
+        _ screenshotMap: inout [String: String],
+        _ urlsMap: inout [String: [String]],
+        _ updatedAtMap: inout [String: Date],
+        _ autosuggestMap: inout [String: Bool]
+    ) {
+        textMap.keys.filter { !activeIDs.contains($0) }.forEach { textMap.removeValue(forKey: $0) }
+        screenshotMap.keys.filter { !activeIDs.contains($0) }.forEach { screenshotMap.removeValue(forKey: $0) }
+        urlsMap.keys.filter { !activeIDs.contains($0) }.forEach { urlsMap.removeValue(forKey: $0) }
+        updatedAtMap.keys.filter { !activeIDs.contains($0) }.forEach { updatedAtMap.removeValue(forKey: $0) }
+        autosuggestMap.keys.filter { !activeIDs.contains($0) }.forEach { autosuggestMap.removeValue(forKey: $0) }
+    }
 }
 
 @main
@@ -312,6 +331,14 @@ struct QuipApp: App {
                 spaces = s.spaces
                 selectedSpaceID = s.spaces.first(where: { $0.isCurrent })?.id
                 selectedDisplayID = s.selectedDisplayID
+                ContentMapMutations.pruneToWindowIDs(
+                    Set(s.windows.map(\.id)),
+                    textMap: &terminalContentTextById,
+                    &terminalContentScreenshotById,
+                    &terminalContentURLsById,
+                    &terminalContentUpdatedAtById,
+                    &terminalContentHasAutosuggestById
+                )
                 terminalContentText = s.terminalContentText
                 terminalContentScreenshot = s.terminalContentScreenshot
                 terminalContentURLs = s.terminalContentURLs
@@ -543,6 +570,14 @@ struct QuipApp: App {
             DispatchQueue.main.async {
                 let wasEmpty = windows.isEmpty
                 windows = update.windows
+                ContentMapMutations.pruneToWindowIDs(
+                    Set(update.windows.map(\.id)),
+                    textMap: &terminalContentTextById,
+                    &terminalContentScreenshotById,
+                    &terminalContentURLsById,
+                    &terminalContentUpdatedAtById,
+                    &terminalContentHasAutosuggestById
+                )
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
                 if let d = update.displays { displays = d }
