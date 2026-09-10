@@ -282,13 +282,37 @@ final class WindowManager {
 
         nonisolated static func read() -> SpaceCatalog {
             let domain = UserDefaults.standard.persistentDomain(forName: "com.apple.spaces")
-            let root = domain?["SpacesDisplayConfiguration"] as? [String: Any]
-            let management = root?["Management Data"] as? [String: Any]
+            guard let root = domain?["SpacesDisplayConfiguration"] as? [String: Any]
+            else { return SpaceCatalog(spaces: [], byWindow: [:]) }
+            return parse(root: root)
+        }
+
+        /// The monitor whose desktops we report. macOS keeps a collapsed record
+        /// for every display the user has ever attached, so the array is full of
+        /// stale entries with no `Spaces` at all — `monitors.first` lands on the
+        /// live one only by luck. Prefer the display macOS labels "Main", then
+        /// any display that actually carries desktops, so a reordered array
+        /// can't silently point Space enumeration at an unplugged screen.
+        nonisolated static func primaryMonitor(in monitors: [[String: Any]]) -> [String: Any]? {
+            func carriesSpaces(_ monitor: [String: Any]) -> Bool {
+                !((monitor["Spaces"] as? [[String: Any]]) ?? []).isEmpty
+            }
+            if let main = monitors.first(where: {
+                ($0["Display Identifier"] as? String) == "Main" && carriesSpaces($0)
+            }) { return main }
+            return monitors.first(where: carriesSpaces)
+        }
+
+        /// Pure projection of the `com.apple.spaces` payload, split out from
+        /// `read()` so the monitor-selection and window-mapping rules are
+        /// testable without a live WindowServer.
+        nonisolated static func parse(root: [String: Any]) -> SpaceCatalog {
+            let management = root["Management Data"] as? [String: Any]
             let monitors = management?["Monitors"] as? [[String: Any]] ?? []
-            let primary = monitors.first
+            let primary = primaryMonitor(in: monitors)
             let current = ((primary?["Current Space"] as? [String: Any])?["ManagedSpaceID"] as? NSNumber)?.uint64Value
             let managedSpaces = primary?["Spaces"] as? [[String: Any]] ?? []
-            let properties = root?["Space Properties"] as? [[String: Any]] ?? []
+            let properties = root["Space Properties"] as? [[String: Any]] ?? []
 
             var ids: [String] = []
             for entry in managedSpaces {
@@ -299,7 +323,11 @@ final class WindowManager {
             var byWindow: [CGWindowID: String] = [:]
             var states: [SpaceState] = []
             for (index, property) in properties.enumerated() {
-                let id = index < ids.count ? ids[index] : "space-\(index + 1)"
+                // A property with no ManagedSpaceID behind it is not a desktop
+                // we can address — synthesizing "space-N" from its index would
+                // hand the phone a chip whose id matches no window's `spaceID`.
+                guard index < ids.count else { continue }
+                let id = ids[index]
                 let managedID = index < managedSpaces.count
                     ? (managedSpaces[index]["ManagedSpaceID"] as? NSNumber)?.uint64Value
                     : nil

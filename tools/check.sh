@@ -131,13 +131,52 @@ else
     note_skip "QuipMac suite" "no QuipMac/ or Shared/ change"
 fi
 
+# The QuipiOS scheme embeds a Watch app, and xcodebuild refuses to build the
+# scheme AT ALL when no watchOS *simulator runtime* is installed — having the
+# watchOS SDK is not enough. That turns an unrelated machine gap into "QuipiOS
+# suite FAILED", which says nothing about the change under test and blocks the
+# pre-commit hook. When the runtime is missing, generate from a spec with the
+# QuipWatch target stripped and say so, so the iOS code still gets tested and
+# the report stays honest about what ran.
+ios_generate() {
+    if xcrun simctl list runtimes 2>/dev/null | grep -q "watchOS"; then
+        (cd "$ROOT/QuipiOS" && xcodegen generate >/dev/null 2>&1)
+        return 0
+    fi
+    python3 - "$ROOT/QuipiOS/project.yml" "$ROOT/QuipiOS/project.nowatch.yml" <<'PY'
+import sys
+lines = open(sys.argv[1]).read().split('\n')
+out, i = [], 0
+while i < len(lines):
+    line = lines[i]
+    if line == '  QuipWatch:':
+        i += 1
+        while i < len(lines) and (lines[i].startswith('    ') or lines[i].strip() == ''):
+            i += 1
+        continue
+    if line == '    dependencies:' and i + 1 < len(lines) and lines[i+1].strip() == '- target: QuipWatch':
+        i += 1
+        while i < len(lines) and lines[i].startswith('      '):
+            i += 1
+        continue
+    out.append(line)
+    i += 1
+open(sys.argv[2], 'w').write('\n'.join(out))
+PY
+    # xcodegen records the spec path inside the generated project, so the file
+    # has to outlive the build; the gate below removes it once the suite ran.
+    (cd "$ROOT/QuipiOS" && xcodegen generate --spec project.nowatch.yml >/dev/null 2>&1)
+    echo "   note: no watchOS simulator runtime — ran without the QuipWatch target"
+}
+
 if [ "$run_ios" = "true" ]; then
     echo "── QuipiOS suite"
     ran=$((ran + 1))
-    (cd QuipiOS && xcodegen generate >/dev/null 2>&1)
+    ios_generate
     xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination "id=$IOS_SIM_UDID" test 2>&1 \
         | grep -E "error:|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" | tail -3
     [ "${PIPESTATUS[0]}" -eq 0 ] || failures=$((failures + 1))
+    rm -f "$ROOT/QuipiOS/project.nowatch.yml"
     git -C "$ROOT" checkout QuipiOS/QuipiOS.xcodeproj/project.pbxproj >/dev/null 2>&1 || true
     echo ""
 else
