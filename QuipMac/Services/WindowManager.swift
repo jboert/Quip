@@ -273,75 +273,78 @@ final class WindowManager {
         let spaceID: String?
     }
 
-    /// Read-only projection of macOS' persisted Space/window membership. There
-    /// is no public Space API; keeping this parser isolated makes the fallback
-    /// explicit and keeps the rest of window management API-based.
+    /// Which desktop a window sits on, to the precision macOS exposes without
+    /// private API.
+    ///
+    /// The first attempt at this read `com.apple.spaces` and mapped windows via
+    /// `Space Properties[].windows`. Measured against a live desktop that list
+    /// held 30 window ids and covered 9 of 112 real windows — it does not carry
+    /// app windows, so nearly every window came back with no desktop at all.
+    ///
+    /// `optionOnScreenOnly` is scoped to the active Space, so the windows it
+    /// omits are exactly the ones living elsewhere. That supports an honest
+    /// two-way split — this desktop vs the rest — and nothing finer: naming a
+    /// specific other desktop needs `CGSCopySpacesForWindows`, which is private.
     struct SpaceCatalog: Sendable {
+        static let currentSpaceID = "space-current"
+        static let otherSpaceID = "space-other"
+
         let spaces: [SpaceState]
         private let byWindow: [CGWindowID: String]
 
         nonisolated static func read() -> SpaceCatalog {
-            let domain = UserDefaults.standard.persistentDomain(forName: "com.apple.spaces")
-            guard let root = domain?["SpacesDisplayConfiguration"] as? [String: Any]
-            else { return SpaceCatalog(spaces: [], byWindow: [:]) }
-            return parse(root: root)
+            split(allWindows: layerZeroWindowIDs([.excludeDesktopElements]),
+                  onCurrentSpace: layerZeroWindowIDs([.excludeDesktopElements,
+                                                      .optionOnScreenOnly]))
         }
 
-        /// The monitor whose desktops we report. macOS keeps a collapsed record
-        /// for every display the user has ever attached, so the array is full of
-        /// stale entries with no `Spaces` at all — `monitors.first` lands on the
-        /// live one only by luck. Prefer the display macOS labels "Main", then
-        /// any display that actually carries desktops, so a reordered array
-        /// can't silently point Space enumeration at an unplugged screen.
-        nonisolated static func primaryMonitor(in monitors: [[String: Any]]) -> [String: Any]? {
-            func carriesSpaces(_ monitor: [String: Any]) -> Bool {
-                !((monitor["Spaces"] as? [[String: Any]]) ?? []).isEmpty
-            }
-            if let main = monitors.first(where: {
-                ($0["Display Identifier"] as? String) == "Main" && carriesSpaces($0)
-            }) { return main }
-            return monitors.first(where: carriesSpaces)
-        }
-
-        /// Pure projection of the `com.apple.spaces` payload, split out from
-        /// `read()` so the monitor-selection and window-mapping rules are
-        /// testable without a live WindowServer.
-        nonisolated static func parse(root: [String: Any]) -> SpaceCatalog {
-            let management = root["Management Data"] as? [String: Any]
-            let monitors = management?["Monitors"] as? [[String: Any]] ?? []
-            let primary = primaryMonitor(in: monitors)
-            let current = ((primary?["Current Space"] as? [String: Any])?["ManagedSpaceID"] as? NSNumber)?.uint64Value
-            let managedSpaces = primary?["Spaces"] as? [[String: Any]] ?? []
-            let properties = root["Space Properties"] as? [[String: Any]] ?? []
-
-            var ids: [String] = []
-            for entry in managedSpaces {
-                if let id = (entry["ManagedSpaceID"] as? NSNumber)?.uint64Value {
-                    ids.append("space-\(id)")
-                }
-            }
+        /// Pure half of `read()`, so the split is testable without a
+        /// WindowServer. Both entries are always reported when something is on
+        /// the current desktop; the phone drops an empty one and hides the row
+        /// when only one survives (`SpaceActivity`).
+        nonisolated static func split(allWindows: [CGWindowID],
+                                      onCurrentSpace: [CGWindowID]) -> SpaceCatalog {
+            let current = Set(onCurrentSpace)
             var byWindow: [CGWindowID: String] = [:]
+            for id in allWindows {
+                byWindow[id] = current.contains(id) ? currentSpaceID : otherSpaceID
+            }
             var states: [SpaceState] = []
-            for (index, property) in properties.enumerated() {
-                // A property with no ManagedSpaceID behind it is not a desktop
-                // we can address — synthesizing "space-N" from its index would
-                // hand the phone a chip whose id matches no window's `spaceID`.
-                guard index < ids.count else { continue }
-                let id = ids[index]
-                let managedID = index < managedSpaces.count
-                    ? (managedSpaces[index]["ManagedSpaceID"] as? NSNumber)?.uint64Value
-                    : nil
-                let isCurrent = managedID != nil && managedID == current
-                let name = "Desktop \(index + 1)"
-                states.append(SpaceState(id: id, name: name, isCurrent: isCurrent))
-                for number in property["windows"] as? [NSNumber] ?? [] {
-                    let windowID = CGWindowID(number.uint32Value)
-                    // Windows pinned to every Space occur in multiple lists;
-                    // prefer the current Space so their card remains stable.
-                    if byWindow[windowID] == nil || isCurrent { byWindow[windowID] = id }
-                }
+            if byWindow.values.contains(currentSpaceID) {
+                states.append(SpaceState(id: currentSpaceID, name: "This Desktop",
+                                         isCurrent: true))
+            }
+            if byWindow.values.contains(otherSpaceID) {
+                states.append(SpaceState(id: otherSpaceID, name: "Other Desktops",
+                                         isCurrent: false))
             }
             return SpaceCatalog(spaces: states, byWindow: byWindow)
+        }
+
+        /// The desktops represented in an already-stamped snapshot, in the
+        /// order the chips should appear.
+        nonisolated static func desktops(inSnapshot raw: [RawWindowInfo]) -> [SpaceState] {
+            let present = Set(raw.compactMap(\.spaceID))
+            var states: [SpaceState] = []
+            if present.contains(currentSpaceID) {
+                states.append(SpaceState(id: currentSpaceID, name: "This Desktop",
+                                         isCurrent: true))
+            }
+            if present.contains(otherSpaceID) {
+                states.append(SpaceState(id: otherSpaceID, name: "Other Desktops",
+                                         isCurrent: false))
+            }
+            return states
+        }
+
+        nonisolated static func layerZeroWindowIDs(_ options: CGWindowListOption) -> [CGWindowID] {
+            guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
+            else { return [] }
+            return list.compactMap { info in
+                guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0
+                else { return nil }
+                return info[kCGWindowNumber as String] as? CGWindowID
+            }
         }
 
         nonisolated func id(for windowNumber: CGWindowID) -> String? {
@@ -409,7 +412,11 @@ final class WindowManager {
         // wrong display — or to none. NSScreen.screens is a cheap MainActor
         // read and we're already on main here.
         refreshDisplays()
-        spaces = Self.SpaceCatalog.read().spaces
+        // Derive the desktop list from the snapshot rather than re-reading it.
+        // `fetchWindowList` already paid for the two CoreGraphics enumerations
+        // the split needs and stamped every window; reading again here would
+        // double that cost on every poll tick, on the main actor.
+        spaces = Self.SpaceCatalog.desktops(inSnapshot: raw)
         let displayRects = cgDisplayRects()
 
         var refreshed: [ManagedWindow] = []

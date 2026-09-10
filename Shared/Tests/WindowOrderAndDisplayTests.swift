@@ -140,81 +140,57 @@ final class WindowOrderAndDisplayTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(frame.y, 0, "a window above the primary's top edge is still on-canvas")
     }
 
-    // MARK: - SpaceCatalog monitor selection
+    // MARK: - SpaceCatalog (current-Space split)
 
-    /// Shape of the real `com.apple.spaces` payload: a monitor carrying the
-    /// desktops, plus the collapsed records macOS keeps for displays that are
-    /// no longer attached.
-    private func spacesRoot(monitors: [[String: Any]],
-                            properties: [[String: Any]]) -> [String: Any] {
-        ["Management Data": ["Monitors": monitors],
-         "Space Properties": properties]
+    func testSpaceCatalogSplitsCurrentDesktopFromTheRest() {
+        let catalog = WindowManager.SpaceCatalog.split(
+            allWindows: [1, 2, 3, 4], onCurrentSpace: [1, 3])
+        XCTAssertEqual(catalog.spaces.map(\.id),
+                       [WindowManager.SpaceCatalog.currentSpaceID,
+                        WindowManager.SpaceCatalog.otherSpaceID])
+        XCTAssertEqual(catalog.id(for: 1), WindowManager.SpaceCatalog.currentSpaceID)
+        XCTAssertEqual(catalog.id(for: 3), WindowManager.SpaceCatalog.currentSpaceID)
+        XCTAssertEqual(catalog.id(for: 2), WindowManager.SpaceCatalog.otherSpaceID)
+        XCTAssertEqual(catalog.id(for: 4), WindowManager.SpaceCatalog.otherSpaceID)
     }
 
-    private func mainMonitor(ids: [UInt64], current: UInt64) -> [String: Any] {
-        ["Display Identifier": "Main",
-         "Current Space": ["ManagedSpaceID": NSNumber(value: current)],
-         "Spaces": ids.map { ["ManagedSpaceID": NSNumber(value: $0)] }]
+    func testSpaceCatalogMarksOnlyTheCurrentDesktopAsCurrent() {
+        let catalog = WindowManager.SpaceCatalog.split(
+            allWindows: [1, 2], onCurrentSpace: [1])
+        XCTAssertEqual(catalog.spaces.first(where: { $0.isCurrent })?.id,
+                       WindowManager.SpaceCatalog.currentSpaceID)
+        XCTAssertEqual(catalog.spaces.filter(\.isCurrent).count, 1)
     }
 
-    private func staleMonitor(_ uuid: String) -> [String: Any] {
-        ["Display Identifier": uuid, "Collapsed Space": [String: Any]()]
+    /// Everything on one desktop reports just that desktop — announcing an
+    /// "Other Desktops" entry holding nothing would put a chip on the phone
+    /// that filters to an empty grid, which is the defect this whole mechanism
+    /// replaced.
+    func testSpaceCatalogReportsOnlyTheCurrentDesktopWhenNothingIsElsewhere() {
+        let catalog = WindowManager.SpaceCatalog.split(
+            allWindows: [1, 2], onCurrentSpace: [1, 2])
+        XCTAssertEqual(catalog.spaces.map(\.id), [WindowManager.SpaceCatalog.currentSpaceID])
+        XCTAssertEqual(catalog.id(for: 1), WindowManager.SpaceCatalog.currentSpaceID)
+        XCTAssertEqual(catalog.id(for: 2), WindowManager.SpaceCatalog.currentSpaceID)
     }
 
-    private func properties(_ count: Int) -> [[String: Any]] {
-        (0..<count).map { _ in ["windows": [NSNumber]()] }
+    func testSpaceCatalogReportsAnUnknownWindowAsNil() {
+        let catalog = WindowManager.SpaceCatalog.split(
+            allWindows: [1], onCurrentSpace: [1])
+        XCTAssertNil(catalog.id(for: 99))
     }
 
-    func testSpaceCatalogReadsTheMainDisplayEvenWhenItIsNotFirst() {
-        let root = spacesRoot(
-            monitors: [staleMonitor("F04E1233-7112-F976-4064-CA1A90B7ED3E"),
-                       mainMonitor(ids: [1, 3], current: 3)],
-            properties: properties(2))
-        let catalog = WindowManager.SpaceCatalog.parse(root: root)
-        XCTAssertEqual(catalog.spaces.map(\.id), ["space-1", "space-3"])
-        XCTAssertEqual(catalog.spaces.first(where: { $0.isCurrent })?.id, "space-3")
-    }
-
-    func testSpaceCatalogStillReadsTheMainDisplayWhenItIsFirst() {
-        let root = spacesRoot(
-            monitors: [mainMonitor(ids: [1, 3], current: 1),
-                       staleMonitor("EED9059E-E51F-4745-9492-67106E47BA41")],
-            properties: properties(2))
-        let catalog = WindowManager.SpaceCatalog.parse(root: root)
-        XCTAssertEqual(catalog.spaces.map(\.id), ["space-1", "space-3"])
-        XCTAssertEqual(catalog.spaces.first(where: { $0.isCurrent })?.id, "space-1")
-    }
-
-    /// No monitor is labelled "Main" on some configurations; the one that
-    /// actually carries desktops still beats a collapsed record.
-    func testSpaceCatalogFallsBackToTheMonitorThatCarriesSpaces() {
-        let root = spacesRoot(
-            monitors: [staleMonitor("F04E1233-7112-F976-4064-CA1A90B7ED3E"),
-                       ["Display Identifier": "EED9059E-E51F-4745-9492-67106E47BA41",
-                        "Current Space": ["ManagedSpaceID": NSNumber(value: UInt64(5))],
-                        "Spaces": [["ManagedSpaceID": NSNumber(value: UInt64(5))]]]],
-            properties: properties(1))
-        let catalog = WindowManager.SpaceCatalog.parse(root: root)
-        XCTAssertEqual(catalog.spaces.map(\.id), ["space-5"])
-    }
-
-    func testSpaceCatalogIsEmptyWhenNoMonitorCarriesSpaces() {
-        let root = spacesRoot(
-            monitors: [staleMonitor("F04E1233-7112-F976-4064-CA1A90B7ED3E"),
-                       staleMonitor("EED9059E-E51F-4745-9492-67106E47BA41")],
-            properties: properties(2))
-        XCTAssertTrue(WindowManager.SpaceCatalog.parse(root: root).spaces.isEmpty)
-    }
-
-    func testSpaceCatalogMapsWindowsToTheirDesktop() {
-        let root = spacesRoot(
-            monitors: [mainMonitor(ids: [1, 3], current: 1)],
-            properties: [["windows": [NSNumber(value: 42)]],
-                         ["windows": [NSNumber(value: 77)]]])
-        let catalog = WindowManager.SpaceCatalog.parse(root: root)
-        XCTAssertEqual(catalog.id(for: CGWindowID(42)), "space-1")
-        XCTAssertEqual(catalog.id(for: CGWindowID(77)), "space-3")
-        XCTAssertNil(catalog.id(for: CGWindowID(99)))
+    /// The window ids CoreGraphics hands back for other Spaces are exactly the
+    /// ones missing from the on-screen list — the property the whole split
+    /// rests on.
+    func testSpaceCatalogTreatsEveryWindowMissingFromOnScreenAsElsewhere() {
+        let catalog = WindowManager.SpaceCatalog.split(
+            allWindows: [10, 20, 30], onCurrentSpace: [])
+        XCTAssertEqual(catalog.spaces.map(\.id), [WindowManager.SpaceCatalog.otherSpaceID])
+        for id in [10, 20, 30] {
+            XCTAssertEqual(catalog.id(for: CGWindowID(id)),
+                           WindowManager.SpaceCatalog.otherSpaceID)
+        }
     }
 }
 
