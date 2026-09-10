@@ -1103,6 +1103,11 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     var pushNotifyAllWindows: Bool?
     var liveActivitiesEnabled: Bool?
     var ttsEnabled: Bool?
+    /// Press Return automatically once a dictation finishes, instead of
+    /// leaving the transcript sitting in the prompt for the user to send.
+    /// Optional so a Mac that predates the setting decodes as nil and the
+    /// phone keeps its own value rather than being reset on every restore.
+    var dictationAutoSend: Bool?
     /// JSON-encoded ordered slot list from the Apple-toolbar-style editor.
     /// Supersedes `enabledQuickButtons` (kept for downgrade safety) — the
     /// CSV is regenerated from the slot list's built-in entries on each
@@ -1142,6 +1147,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         pushNotifyAllWindows: Bool? = nil,
         liveActivitiesEnabled: Bool? = nil,
         ttsEnabled: Bool? = nil,
+        dictationAutoSend: Bool? = nil,
         quickSlotsJSON: String? = nil,
         customButtonsJSON: String? = nil,
         followFrontmost: Bool? = nil,
@@ -1164,6 +1170,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.pushNotifyAllWindows = pushNotifyAllWindows
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.ttsEnabled = ttsEnabled
+        self.dictationAutoSend = dictationAutoSend
         self.quickSlotsJSON = quickSlotsJSON
         self.customButtonsJSON = customButtonsJSON
         self.followFrontmost = followFrontmost

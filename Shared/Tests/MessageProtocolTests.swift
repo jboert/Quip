@@ -1185,4 +1185,31 @@ final class MessageProtocolTests: XCTestCase {
         let active = [space("space-1"), space("space-3")]
         XCTAssertNil(SpaceActivity.resolvedSelection(nil, activeSpaces: active))
     }
+
+    // MARK: - PreferencesSnapshot: dictation auto-send
+
+    func testPreferencesSnapshotRoundTripsDictationAutoSend() throws {
+        let snapshot = PreferencesSnapshot(dictationAutoSend: true)
+        let data = try MessageCoder.encoder.encode(snapshot)
+        let decoded = try MessageCoder.decoder.decode(PreferencesSnapshot.self, from: data)
+        XCTAssertEqual(decoded.dictationAutoSend, true)
+    }
+
+    /// A Mac that predates the setting simply omits the key; the phone must
+    /// read that as "no opinion" and keep its own value rather than being
+    /// reset to off on every restore.
+    func testPreferencesSnapshotDecodesAbsentDictationAutoSendAsNil() throws {
+        let json = "{\"ttsEnabled\":true}"
+        let decoded = try MessageCoder.decoder.decode(PreferencesSnapshot.self,
+                                                      from: Data(json.utf8))
+        XCTAssertNil(decoded.dictationAutoSend)
+        XCTAssertEqual(decoded.ttsEnabled, true)
+    }
+
+    func testPreferencesSnapshotCarriesDictationAutoSendWhenOff() throws {
+        let snapshot = PreferencesSnapshot(dictationAutoSend: false)
+        let data = try MessageCoder.encoder.encode(snapshot)
+        let decoded = try MessageCoder.decoder.decode(PreferencesSnapshot.self, from: data)
+        XCTAssertEqual(decoded.dictationAutoSend, false)
+    }
 }

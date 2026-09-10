@@ -166,6 +166,10 @@ struct QuipApp: App {
     @State private var macPermissions: MacPermissionsMessage? = nil
     @State private var errorToast: String?
     @AppStorage("ttsEnabled") private var ttsEnabled = false
+    /// Press Return for the user once a dictation finishes. Off by default:
+    /// the historical behaviour is to leave the transcript in the prompt so a
+    /// long dictation can be read back before it is sent.
+    @AppStorage("dictation.autoSend") private var dictationAutoSend = false
     /// Master toggle for the Dynamic Island / Lock Screen Live Activity.
     /// Default on — if the user's already wired up push they almost
     /// certainly want the island card too. Flipping it off tears down
@@ -1014,15 +1018,20 @@ struct QuipApp: App {
             generator.impactOccurred(intensity: 1.0)
         }
         // Type the transcription straight into Claude Code's `>` prompt on
-        // the Mac — `pressReturn: false` keeps it in the input line rather
+        // the Mac. `pressReturn: false` keeps it in the input line rather
         // than submitting, so a long dictation shows up verbatim in the
         // terminal (and thus in the phone's content panel via the next
-        // refresh). User hits Return when they're ready.
+        // refresh) and the user hits Return when they're ready — the default.
+        // With "Auto-send dictation" on, Return is pressed for them instead,
+        // which is what makes hands-free work end to end.
         //
         // Trim trailing whitespace/newlines: a stray \n typed into Claude's
         // box would get swallowed by the box as a newline rather than
         // treated as "submit," and it breaks the render.
         let windowId = pttTracker.end()
+        // Read the toggle now, on the main actor, rather than inside the
+        // completion that fires from the speech worker.
+        let autoSend = dictationAutoSend
         // Defer SendTextMessage until the speech worker finishes its 300ms
         // trailing flush — otherwise the user's last word (captured during
         // the flush window) never makes it into the prompt.
@@ -1033,7 +1042,8 @@ struct QuipApp: App {
             flushPendingImage(windowId: windowId) { [client] in
                 client.send(STTStateMessage.ended(windowId: windowId))
                 if !text.isEmpty {
-                    client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: false))
+                    client.send(SendTextMessage(windowId: windowId, text: text,
+                                                pressReturn: autoSend))
                 }
             }
         }
@@ -6632,6 +6642,9 @@ struct SettingsSheet: View {
     /// was active at sheet open.)
     var windowIdProvider: () -> String? = { nil }
     @AppStorage("tintContentBorder") private var tintContentBorder = true
+    /// Same key the PTT path reads in QuipApp; @AppStorage keeps the two in
+    /// step without threading a binding through the settings hierarchy.
+    @AppStorage("dictation.autoSend") private var settingsDictationAutoSend = false
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
     @AppStorage("contentRenderMode") private var contentRenderModeRaw: String = ContentRenderMode.auto.rawValue
@@ -6749,8 +6762,11 @@ struct SettingsSheet: View {
                             tint: .teal
                         )
                     }
+                    Toggle("Auto-send dictation", isOn: $settingsDictationAutoSend)
                 } header: {
                     Text("Input")
+                } footer: {
+                    Text("Presses Return as soon as you stop speaking. Off leaves the transcript in the prompt so you can read it back first.")
                 }
 
                 Section {
