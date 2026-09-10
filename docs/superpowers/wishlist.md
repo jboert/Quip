@@ -1998,3 +1998,99 @@ which builds and tests fine. The real fixes, either is fine:
   large download, so it wants a deliberate go-ahead); or
 - teach `check.sh` to fall back to a watch-free spec, so the iOS gate keeps
   working on a machine without watch runtimes instead of failing.
+
+## Desktop (Spaces) chips — shipped 2026-09-10 (`6863c30`), row confirmed on hardware
+
+Asked for during the multi-display acceptance walk above: the desk turned out to
+be **Apple Spaces on a single display**, not two monitors, so the display chips
+were hidden by construction and the feature actually under test was `b0280d7`'s
+Space-aware window enumeration.
+
+### The mechanism was wrong, not the parsing
+
+`SpaceCatalog` read `com.apple.spaces` from UserDefaults, since macOS exposes no
+public Space API. Two parsing defects were found and fixed first (`7e05ae4`):
+`monitors.first` picked the live display only by luck on a machine that keeps
+collapsed records for every display ever attached, and desktop ids synthesized
+from `Space Properties` indices matched no window at all.
+
+Both fixes were real. Neither made a chip appear, because the source itself is
+wrong. Measured against the live window list on the reporting desk:
+
+```
+Space Properties[].windows   ->  30 distinct window ids
+live layer-0 window list     -> 112 windows
+overlap                      ->   9
+```
+
+The plist tracks desktop pictures and a handful of system surfaces. It does not
+carry app windows. Nearly every `WindowState.spaceID` was nil, so the phone had
+nothing to attribute to a desktop.
+
+The measurement only got taken because the owner said "I could see it working at
+one point" — which was true, and diagnostic. `03ef379` (a desktop needs a window
+before it earns a chip) is a correct product rule that converted a *visibly*
+broken feature into an *invisibly* broken one: before it, chips rendered off
+`spaces.count > 1` regardless of whether the mapping worked.
+
+### What shipped instead
+
+Two `CGWindowListCopyWindowInfo` calls, differing by one option:
+
+| Options | Yields |
+|---|---|
+| `.excludeDesktopElements` | every layer-0 window on every desktop |
+| `.excludeDesktopElements` + `.optionOnScreenOnly` | only the active desktop |
+
+The set difference is an honest two-way split: **This Desktop** / **Other
+Desktops**, plus **All Desktops**. Same desk that measured 9-of-112 reports 16
+windows here and 96 elsewhere, re-attributing as you switch Spaces. The row
+hides entirely when everything is on one desktop.
+
+`applyWindowSnapshot` derives `spaces` from the snapshot it already holds rather
+than enumerating a second time, so a poll tick pays for one CG call instead of
+two — relevant given this project's history of MainActor-blocking hangs.
+
+### Tabled deliberately: per-desktop names
+
+The public API cannot say *which* other desktop a window sits on. The private
+`CGSCopySpacesForWindows` can. It was declined: two accurate chips beat five
+chips that point at nothing, and a private API is a dependency this doesn't need.
+Reopen only if the two-way split proves too coarse in daily use. The doc comment
+on `SpaceCatalog` carries the 9-of-112 measurement so the plist route is not
+re-attempted by someone reading only the code.
+
+### Also fixed: the iOS gate on a machine with no watch runtime
+
+`tools/check.sh` grew `ios_generate()`. When `xcrun simctl list runtimes` shows
+no watchOS runtime, it generates from a QuipWatch-stripped spec and prints
+`note: no watchOS simulator runtime — ran without the QuipWatch target` rather
+than reporting a build failure as a test failure. The generated spec is deleted
+*after* the suite runs — xcodegen records the spec path inside the project, so
+deleting it first makes `xcodebuild` fail with "couldn't be opened".
+
+### Open — the interactions past the row
+
+The chip row renders; the owner confirmed it on hardware. Not yet walked:
+
+1. Tap **Other Desktops** and confirm the grid filters to only those windows.
+2. Tap a card that lives on another desktop, confirm macOS switches Space and
+   raises that window. `activate(options: [.activateAllWindows])` + the AX raise
+   is untested on hardware.
+3. Tap **All Desktops** and confirm the full grid returns.
+
+### Open — auto-send dictation, installed but never exercised
+
+`aac4a1e` added **Settings → Input → "Auto-send dictation"**, off by default. On,
+`stopRecording` sends with `pressReturn: true` so a hands-free flow needs no tap;
+off is today's behaviour. It rides the prefs backup as
+`PreferencesSnapshot.dictationAutoSend`, optional so a Mac predating the field
+decodes as nil and the phone keeps its own value instead of being reset on every
+restore. Suites are green and it is on the phone. Nobody has spoken into it yet.
+
+### Open — the phone still never authenticates over LAN
+
+Reconnect after the Mac rebuild showed one `ESTABLISHED` socket over Tailscale
+(`100.x`, `auth=pin`, `client live`) while the LAN dial (`192.168.4.x`) was
+reaped before handshake. Same symptom recorded against the persist-connections
+work. Not chased this session.
