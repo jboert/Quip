@@ -2079,14 +2079,16 @@ The chip row renders; the owner confirmed it on hardware. Not yet walked:
    is untested on hardware.
 3. Tap **All Desktops** and confirm the full grid returns.
 
-### Open — auto-send dictation, installed but never exercised
+### Shipped and confirmed — auto-send dictation
 
 `aac4a1e` added **Settings → Input → "Auto-send dictation"**, off by default. On,
 `stopRecording` sends with `pressReturn: true` so a hands-free flow needs no tap;
 off is today's behaviour. It rides the prefs backup as
 `PreferencesSnapshot.dictationAutoSend`, optional so a Mac predating the field
 decodes as nil and the phone keeps its own value instead of being reset on every
-restore. Suites are green and it is on the phone. Nobody has spoken into it yet.
+restore. Suites are green, and the owner confirmed on hardware that speaking
+with the toggle on submits without a tap. The *off* path was not re-checked, but
+off is the pre-existing behaviour.
 
 ### Open — the phone still never authenticates over LAN
 

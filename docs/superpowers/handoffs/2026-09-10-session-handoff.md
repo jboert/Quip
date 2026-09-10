@@ -133,7 +133,7 @@ Files: `Shared/MessageProtocol.swift`, `QuipiOS/Services/PreferencesSyncService.
 | `PreferencesSnapshot.dictationAutoSend` round-trip | **Test-verified.** 3 cases including absent-key-decodes-as-nil. |
 | Full gate | **Green.** harness 62 checks, QuipMac 800 tests, QuipiOS 800 tests, `TEST SUCCEEDED` on all three — and again in the pre-commit hook, so `QUIP_SKIP_CHECK` was not needed. |
 | Tapping a chip filters the grid, and tapping a card on another desktop switches Space and raises it | **NOT verified.** The row renders; the interactions past that were not walked. `activate(options: [.activateAllWindows])` + AX raise remains untested on hardware. |
-| Auto-send dictation | **NOT verified on hardware.** Installed since `aac4a1e`; never exercised. |
+| Auto-send dictation | **Owner-confirmed on hardware.** Speaking with the toggle on submits without a tap. |
 | Phone authenticating over LAN | **Still not observed.** The phone authed over Tailscale (`100.x`); the LAN dial (`192.168.4.x`) was reaped before handshake. Known open item, not chased this session. |
 
 ## Open threads
@@ -142,9 +142,9 @@ Files: `Shared/MessageProtocol.swift`, `QuipiOS/Services/PreferencesSyncService.
    "Other Desktops" and confirm the grid filters; tap a card that lives on
    another desktop and confirm macOS switches Space and raises that window; tap
    "All Desktops" and confirm the full grid returns.
-2. **Exercise auto-send dictation on device.** Toggle on, speak, confirm it
-   submits without a tap; toggle off, confirm the transcript waits in the
-   prompt.
+2. **Auto-send dictation with the toggle *off*.** The on path is confirmed;
+   the off path — transcript waits in the prompt — was not re-checked after the
+   setting landed. Low risk, since off is the pre-existing behaviour.
 3. **Per-desktop names are gone by choice.** If "Desktop 1 / Desktop 2 /
    Desktop 3" is wanted later, the only route is the private
    `CGSCopySpacesForWindows`. Declined deliberately; reopen only if the two-way
@@ -162,7 +162,7 @@ Files: `Shared/MessageProtocol.swift`, `QuipiOS/Services/PreferencesSyncService.
 ## Resume in a fresh session
 
 > Read `docs/superpowers/handoffs/2026-09-10-session-handoff.md`. The desktop
-> chips render now; start the tail of `~/Library/Logs/Quip/*.log`, check
-> `netstat -an | grep 8765`, then walk the chip interactions and the auto-send
-> dictation toggle on hardware — both are installed and neither has been
-> exercised.
+> chips render and auto-send dictation works; start the tail of
+> `~/Library/Logs/Quip/*.log`, check `netstat -an | grep 8765`, then walk the
+> chip interactions past the row — filtering, and tapping a card that lives on
+> another desktop.
