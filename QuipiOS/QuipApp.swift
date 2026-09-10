@@ -3656,20 +3656,28 @@ struct MainiOSView: View {
         }
     }
 
+    /// Desktops holding at least one window. A Space the user has nothing open
+    /// on would only offer a chip leading to a blank grid, and dropping the
+    /// empties can take the row back down to one — at which point it hides
+    /// entirely, exactly like `screenChips` on a single-display desk.
+    private var activeSpaces: [SpaceState] {
+        SpaceActivity.active(spaces: spaces, windows: windows)
+    }
+
     @ViewBuilder
     private var spaceChips: some View {
-        if spaces.count > 1 {
+        if activeSpaces.count > 1 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
-                    ForEach(spaces) { space in
+                    ForEach(activeSpaces) { space in
                         screenChip(title: space.name,
                                    count: windows.filter { $0.spaceID == space.id }.count,
-                                   isOn: selectedSpaceID == space.id) {
+                                   isOn: effectiveSpaceID == space.id) {
                             withAnimation(.easeOut(duration: 0.15)) { selectedSpaceID = space.id }
                         }
                     }
                     screenChip(title: "All Desktops", count: windows.count,
-                               isOn: selectedSpaceID == nil) {
+                               isOn: effectiveSpaceID == nil) {
                         withAnimation(.easeOut(duration: 0.15)) { selectedSpaceID = nil }
                     }
                 }
@@ -3736,9 +3744,16 @@ struct MainiOSView: View {
         return screenAspect
     }
 
+    /// The desktop filter actually in force. A pinned Space whose last window
+    /// just closed falls back to "All Desktops" rather than stranding the user
+    /// on an empty grid with the chip that got them there now gone.
+    private var effectiveSpaceID: String? {
+        SpaceActivity.resolvedSelection(selectedSpaceID, activeSpaces: activeSpaces)
+    }
+
     /// Windows for the chosen screen. "All" shows everything.
     private var screenFilteredWindows: [WindowState] {
-        let bySpace = selectedSpaceID.map { id in displayWindows.filter { $0.spaceID == id } } ?? displayWindows
+        let bySpace = effectiveSpaceID.map { id in displayWindows.filter { $0.spaceID == id } } ?? displayWindows
         guard let id = selectedDisplayID else { return bySpace }
         return bySpace.filter { effectiveDisplayID($0) == id }
     }

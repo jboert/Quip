@@ -1127,4 +1127,62 @@ final class MessageProtocolTests: XCTestCase {
         let decoded = try! MessageCoder.decoder.decode(WindowState.self, from: data)
         XCTAssertEqual(decoded.targetKind, "simulator")
     }
+
+    // MARK: - SpaceActivity
+
+    private func spaceWindow(_ id: String, spaceID: String?) -> WindowState {
+        WindowState(id: id, name: id, app: "Test", enabled: true,
+                    frame: WindowFrame(x: 0, y: 0, width: 1, height: 1),
+                    state: "idle", color: "#000000", spaceID: spaceID)
+    }
+
+    private func space(_ id: String, current: Bool = false) -> SpaceState {
+        SpaceState(id: id, name: id, isCurrent: current)
+    }
+
+    func testActiveSpacesDropsDesktopsWithNoWindows() {
+        let spaces = [space("space-1", current: true), space("space-3")]
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: "space-1")]
+        XCTAssertEqual(SpaceActivity.active(spaces: spaces, windows: windows).map(\.id),
+                       ["space-1"])
+    }
+
+    func testActiveSpacesKeepsEveryDesktopThatHasAWindow() {
+        let spaces = [space("space-1", current: true), space("space-3")]
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: "space-3")]
+        XCTAssertEqual(SpaceActivity.active(spaces: spaces, windows: windows).map(\.id),
+                       ["space-1", "space-3"])
+    }
+
+    func testActiveSpacesPreservesTheMacsSpaceOrder() {
+        let spaces = [space("space-1"), space("space-3"), space("space-7")]
+        let windows = [spaceWindow("a", spaceID: "space-7"),
+                       spaceWindow("b", spaceID: "space-1")]
+        XCTAssertEqual(SpaceActivity.active(spaces: spaces, windows: windows).map(\.id),
+                       ["space-1", "space-7"])
+    }
+
+    func testActiveSpacesIgnoresWindowsWithNoSpaceMetadata() {
+        let spaces = [space("space-1"), space("space-3")]
+        let windows = [spaceWindow("a", spaceID: nil)]
+        XCTAssertTrue(SpaceActivity.active(spaces: spaces, windows: windows).isEmpty)
+    }
+
+    func testResolvedSelectionKeepsAPickThatStillHasActivity() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertEqual(SpaceActivity.resolvedSelection("space-3", activeSpaces: active),
+                       "space-3")
+    }
+
+    func testResolvedSelectionFallsBackToAllWhenThePickedDesktopWentQuiet() {
+        let active = [space("space-1")]
+        XCTAssertNil(SpaceActivity.resolvedSelection("space-3", activeSpaces: active))
+    }
+
+    func testResolvedSelectionLeavesAllDesktopsAlone() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertNil(SpaceActivity.resolvedSelection(nil, activeSpaces: active))
+    }
 }

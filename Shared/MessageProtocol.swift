@@ -163,6 +163,35 @@ struct SpaceState: Codable, Sendable, Equatable, Hashable, Identifiable {
     let isCurrent: Bool
 }
 
+/// Which desktops are worth offering as a filter, and which pick to honour.
+///
+/// The Mac reports every Space macOS knows about, including ones the user has
+/// nothing open on. An empty desktop is noise rather than a destination — it
+/// gives the phone a chip that leads to a blank grid — so the chip row is
+/// built from the desktops that actually hold windows.
+enum SpaceActivity {
+
+    /// `spaces` narrowed to those holding at least one of `windows`, in the
+    /// Mac's original order. Windows the Mac could not place on a Space
+    /// (`spaceID == nil`) count toward no desktop.
+    static func active(spaces: [SpaceState], windows: [WindowState]) -> [SpaceState] {
+        let occupied = Set(windows.compactMap(\.spaceID))
+        return spaces.filter { occupied.contains($0.id) }
+    }
+
+    /// The selection to honour once empty desktops drop out: the pick itself
+    /// while it still has activity, otherwise nil ("All Desktops"). Closing
+    /// the last window on the pinned desktop must not strand the user on a
+    /// filter with no way back — the same rule the display chips follow when
+    /// a monitor is unplugged.
+    static func resolvedSelection(_ selected: String?,
+                                  activeSpaces: [SpaceState]) -> String? {
+        guard let selected, activeSpaces.contains(where: { $0.id == selected })
+        else { return nil }
+        return selected
+    }
+}
+
 // MARK: - Claude Code Mode
 
 /// Claude Code's three cyclable modes, scraped from terminal content by
