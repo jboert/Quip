@@ -19,6 +19,27 @@ enum TextInjectionRoute: String, Sendable {
     }
 }
 
+/// Append one line per FAILED injection to `injection.log`. Append-only,
+/// failures swallowed — a logger must never take the injector down. Same
+/// contract as `appendClassifyLog` / `appendImageUploadDiagnostic`.
+///
+/// Only failures are written. Successful sends are already recorded, with
+/// timing, in `latency.log`; duplicating them here would bury the one line
+/// someone opens this file to find.
+fileprivate func appendInjectionLog(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = LogPaths.injectionPath
+    LogPaths.rotateIfNeeded(path: path)
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
+
 @MainActor
 @Observable
 final class KeystrokeInjector {
@@ -55,6 +76,51 @@ final class KeystrokeInjector {
 
     /// Classify a raw AppleScript error message into a structured `InjectionError`.
     /// Pulled out for testing; runs on every executeAppleScript failure. (#4)
+    /// Build one `injection.log` line. Pure and static so the format is unit-
+    /// testable without touching the filesystem.
+    ///
+    /// `op` names the injector entry point (sendText / pasteText / …) so a
+    /// reader can tell a text send from a quick-action keystroke; `kind` is the
+    /// structured classification, which is what distinguishes a stale session
+    /// id (self-healable) from a TCC denial (needs a human).
+    nonisolated static func injectionLogLine(op: String,
+                                             windowId: String,
+                                             terminalApp: TerminalApp?,
+                                             kind: InjectionError?,
+                                             message: String) -> String {
+        let kindText: String
+        switch kind {
+        case .some(.sessionNotFound): kindText = "sessionNotFound"
+        case .some(.tccDenied):       kindText = "tccDenied"
+        case .some(.windowClosed):    kindText = "windowClosed"
+        case .some(.unknown):         kindText = "unknown"
+        case nil:                     kindText = "unclassified"
+        }
+        return "DROPPED op=\(op) window=\(windowId) app=\(terminalApp?.rawValue ?? "-") "
+            + "kind=\(kindText) msg=\"\(injectionLogValue(message))\""
+    }
+
+    /// Escape a message for the quoted `msg="…"` field so an AppleScript error
+    /// containing a quote or a newline can't forge a second log line.
+    nonisolated static func injectionLogValue(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
+    /// Record a failed injection. The single place the injector writes evidence.
+    nonisolated static func logInjectionFailure(op: String,
+                                                windowId: String,
+                                                terminalApp: TerminalApp?,
+                                                kind: InjectionError?,
+                                                message: String) {
+        appendInjectionLog(injectionLogLine(op: op, windowId: windowId,
+                                            terminalApp: terminalApp,
+                                            kind: kind, message: message))
+    }
+
     nonisolated static func classifyAppleScriptError(_ message: String) -> InjectionError {
         let lower = message.lowercased()
         if lower.contains("not found") { return .sessionNotFound }
@@ -225,8 +291,10 @@ final class KeystrokeInjector {
             // heal things; the phone can retry.
             guard let sessionId = iterm2SessionId else {
                 let err = "iTerm2 session not yet mapped for window \(windowId)"
-                print("[KeystrokeInjector] sendText DROPPED: \(err)")
-                return InjectionResult(success: false, error: err)
+                Self.logInjectionFailure(op: "sendText", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let escapedId = escapeForAppleScript(sessionId)
             // iTerm2's AppleScript hierarchy is window → tab → session. The
@@ -342,7 +410,11 @@ final class KeystrokeInjector {
         switch terminalApp {
         case .iterm2:
             guard let sessionId = iterm2SessionId else {
-                return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+                let err = "iTerm2 session not yet mapped for window \(windowId)"
+                Self.logInjectionFailure(op: "pasteImage", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let escapedId = escapeForAppleScript(sessionId)
             // iTerm2 needs to be activated AND the target session selected
@@ -440,7 +512,11 @@ final class KeystrokeInjector {
         switch terminalApp {
         case .iterm2:
             guard let sessionId = iterm2SessionId else {
-                return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+                let err = "iTerm2 session not yet mapped for window \(windowId)"
+                Self.logInjectionFailure(op: "pasteText", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let script = Self.pasteTextScript(iterm2SessionId: sessionId, pressReturn: pressReturn)
             return executeAppleScript(script, context: "pasteText to \(windowId) [iTerm2]")
@@ -547,8 +623,10 @@ final class KeystrokeInjector {
             // in the wrong terminal kills whatever's running there.
             guard let sessionId = iterm2SessionId else {
                 let err = "iTerm2 session not yet mapped for window \(windowId)"
-                print("[KeystrokeInjector] sendKeystroke DROPPED: \(err)")
-                return InjectionResult(success: false, error: err)
+                Self.logInjectionFailure(op: "sendKeystroke", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let escapedId = escapeForAppleScript(sessionId)
             // Walks window → tab → session (same reason as sendText: iTerm2's
@@ -906,7 +984,12 @@ final class KeystrokeInjector {
                       to windowId: String,
                       iterm2SessionId: String?) async -> InjectionResult {
         guard let sessionId = iterm2SessionId else {
-            return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+            let err = "iTerm2 session not yet mapped for window \(windowId)"
+            // iTerm2-only by construction — the phone hides scroll for other hosts.
+            Self.logInjectionFailure(op: "iterm2Scroll", windowId: windowId,
+                                     terminalApp: .iterm2, kind: .sessionNotFound,
+                                     message: err)
+            return InjectionResult(success: false, error: err, kind: .sessionNotFound)
         }
         let escapedId = escapeForAppleScript(sessionId)
         let (keyCode, modifiers) = direction.iTerm2Keystroke
@@ -1433,9 +1516,14 @@ final class KeystrokeInjector {
         let result = AppleScriptRunner.run(source)
 
         if let message = result.errorMessage {
-            print("[KeystrokeInjector] \(context): \(message)")
-            return InjectionResult(success: false, error: message,
-                                   kind: Self.classifyAppleScriptError(message))
+            let kind = Self.classifyAppleScriptError(message)
+            // `context` already reads "sendText to <windowId> [iTerm2]", so it
+            // carries the op and target; there is no separate window field to
+            // thread down here.
+            Self.logInjectionFailure(op: context, windowId: "-",
+                                     terminalApp: nil, kind: kind,
+                                     message: message)
+            return InjectionResult(success: false, error: message, kind: kind)
         }
 
         return InjectionResult(success: true, error: nil)

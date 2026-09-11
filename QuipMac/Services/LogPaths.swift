@@ -117,6 +117,21 @@ enum LogPaths {
         return directory.appendingPathComponent("whisper.log").path
     }
 
+    /// Keystroke/text injection outcomes — one line per FAILED injection, with
+    /// the operation, target window, terminal app, structured failure kind, and
+    /// the AppleScript message.
+    ///
+    /// This file exists because the injector's only record used to be `print`,
+    /// which reaches neither this directory nor the unified log: a Quip launched
+    /// from Finder dropped every "iTerm2 session not yet mapped" and every TCC
+    /// denial on the floor. The phone showed a red toast and the Mac kept no
+    /// evidence at all, so "did the keystrokes land?" could only be answered by
+    /// looking at the user's screen (2026-09-11).
+    static var injectionPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("injection.log").path
+    }
+
     static var classifyPath: String {
         ensureDirectoryExists()
         return directory.appendingPathComponent("classify.log").path

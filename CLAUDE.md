@@ -2,12 +2,13 @@
 
 ## Log file locations
 
-All Mac diagnostic logs live under `~/Library/Logs/Quip/`. They survive reboots and are indexed by `Console.app` (filter on "Quip"). The three append-only files are:
+All Mac diagnostic logs live under `~/Library/Logs/Quip/`. They survive reboots and are indexed by `Console.app` (filter on "Quip"). The main append-only files are:
 
 - `~/Library/Logs/Quip/websocket.log` — WS handshake / message arrival, oversized-drop notices, auth events
 - `~/Library/Logs/Quip/push.log` — APNs push pipeline (the "I didn't get a notification" debugging path)
 - `~/Library/Logs/Quip/kokoro.log` — Kokoro TTS daemon lifecycle and synth events
 - `~/Library/Logs/Quip/qa-mode.log` — QA-mode pair lifecycle (set/clear/lost) + throttled broadcast_filter window counts
+- `~/Library/Logs/Quip/injection.log` — FAILED keystroke/text injections, one line each: `DROPPED op=… window=… app=… kind=… msg="…"`. The "I tapped send and nothing happened" path. `kind` is a closed vocabulary — `sessionNotFound | tccDenied | windowClosed | unknown | unclassified` — so a stale session id (self-heals on the next fetch) greps apart from a TCC denial (needs a human to re-grant). Successes are not written here; they are in `latency.log` with timing.
 
 On Linux, the equivalents live under `$XDG_STATE_HOME/quip/` (default `~/.local/state/quip/`).
 
