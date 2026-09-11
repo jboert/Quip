@@ -775,8 +775,8 @@ final class WindowManager {
     /// Query iTerm2 for current session UUIDs and update `iterm2SessionId` on
     /// matching windows. `async` for the same reason as `refreshSubtitles`.
     func refreshIterm2SessionIds() async {
-        let sessions = await AppleScriptRunner.offMain { Self.fetchIterm2SessionIds() }
-        applyIterm2SessionIds(sessions)
+        let fetch = await AppleScriptRunner.offMain { Self.fetchIterm2SessionIds() }
+        applyIterm2SessionFetch(fetch)
     }
 
     /// Filter the window list for a single client's `LayoutUpdate` broadcast.
@@ -848,6 +848,20 @@ final class WindowManager {
         /// the per-window shell PID so state detection isn't conflated
         /// across all iTerm windows sharing the app PID.
         let tty: String
+    }
+
+    /// The outcome of one `fetchIterm2SessionIds()` pass.
+    ///
+    /// The distinction matters because `applyIterm2SessionIds` clears every
+    /// mapping before re-matching: `.ok([])` legitimately means "iTerm2 has no
+    /// windows, drop the stale ids", while `.failed` means we learned nothing
+    /// and must keep what we had. Returning a bare `[]` for both is what let a
+    /// single timed-out AppleEvent unmap every window at once (2026-09-11).
+    enum Iterm2SessionFetch: Sendable {
+        case ok([Iterm2SessionInfo])
+        /// The AppleScript errored — a busy iTerm2, an AppleEvent timeout, or a
+        /// consent prompt nobody has answered. Not evidence about sessions.
+        case failed
     }
 
     /// One terminal window's directory info: the basename for display plus the
@@ -1022,7 +1036,7 @@ final class WindowManager {
         return result.stringValue == "ok"
     }
 
-    nonisolated static func fetchIterm2SessionIds() -> [Iterm2SessionInfo] {
+    nonisolated static func fetchIterm2SessionIds() -> Iterm2SessionFetch {
         var result: [Iterm2SessionInfo] = []
         // bounds of w returns {left, top, right, bottom} in screen coordinates
         // with top-left origin — same as CGWindowList. We join the four with
@@ -1059,7 +1073,9 @@ final class WindowManager {
         """
 
         let asResult = AppleScriptRunner.run(script)
-        guard !asResult.failed, let output = asResult.stringValue else { return result }
+        // `.failed` is NOT "no sessions" — see `Iterm2SessionFetch`. Reporting
+        // it as an empty list made the caller wipe every good mapping.
+        guard !asResult.failed, let output = asResult.stringValue else { return .failed }
 
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")
@@ -1077,7 +1093,7 @@ final class WindowManager {
             let tty = rawTty.hasPrefix("/dev/") ? String(rawTty.dropFirst(5)) : rawTty
             result.append(Iterm2SessionInfo(windowNumber: CGWindowID(wid), bounds: bounds, uuid: uuid, tty: tty))
         }
-        return result
+        return .ok(result)
     }
 
     /// Apply pre-fetched subtitles to windows. Call on main.
@@ -1152,6 +1168,14 @@ final class WindowManager {
                 windows[i].isEnabled = true
             }
         }
+    }
+
+    /// Apply a fetch outcome. A `.failed` pass is dropped on the floor: the
+    /// last good mapping is a better answer than no mapping, and the poll runs
+    /// again shortly. `.ok` (including `.ok([])`) is applied as truth.
+    func applyIterm2SessionFetch(_ fetch: Iterm2SessionFetch) {
+        guard case .ok(let sessions) = fetch else { return }
+        applyIterm2SessionIds(sessions)
     }
 
     func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo]) {

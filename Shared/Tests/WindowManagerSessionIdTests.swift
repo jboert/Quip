@@ -163,5 +163,66 @@ final class WindowManagerSessionIdTests: XCTestCase {
                        "Exact window-id join must win even when bounds are far apart")
         XCTAssertEqual(wm.windows[0].iterm2Tty, "ttys005")
     }
+    // MARK: - A failed AppleScript must not wipe good mappings
+
+    /// Regression (2026-09-11): one failed AppleEvent unmapped every iTerm2
+    /// window at once, and every phone `send_text` then came back
+    /// "iTerm2 session not yet mapped for window …" until a later fetch
+    /// happened to succeed.
+    ///
+    /// `fetchIterm2SessionIds()` collapsed "AppleScript failed" and "no iTerm2
+    /// windows exist" into the same empty array, and `applyIterm2SessionIds`
+    /// opens by clearing every mapping before re-matching. A busy iTerm2 (nine
+    /// windows, several agents churning) times the AppleEvent out routinely, so
+    /// this fired in normal use. The last good mapping is a better answer than
+    /// no mapping: keep it and let the next fetch correct it.
+    func testFailedFetchKeepsPreviousSessionMappings() {
+        let wm = WindowManager()
+        let bounds = CGRect(x: 824, y: 30, width: 466, height: 1329)
+
+        wm.windows = [
+            makeIterm2Window(id: "com.googlecode.iterm2.808",
+                             name: "claude", windowNumber: 808, bounds: bounds)
+        ]
+
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 808, bounds: bounds,
+                                            uuid: "UUID-808", tty: "ttys008")
+        ]))
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808", "precondition")
+
+        wm.applyIterm2SessionFetch(.failed)
+
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808",
+                       "A failed AppleScript must leave the last good mapping alone")
+        XCTAssertEqual(wm.windows[0].iterm2Tty, "ttys008",
+                       "The tty rides with the session id and must survive too")
+    }
+
+    /// The other half of the contract: a fetch that genuinely saw no iTerm2
+    /// windows (iTerm quit, last window closed) still clears. Without this the
+    /// "keep the last good mapping" rule would pin a dead session id forever
+    /// and text would be injected into a window that no longer exists.
+    func testGenuinelyEmptyFetchStillClearsMappings() {
+        let wm = WindowManager()
+        let bounds = CGRect(x: 0, y: 0, width: 800, height: 600)
+
+        wm.windows = [
+            makeIterm2Window(id: "com.googlecode.iterm2.808",
+                             name: "claude", windowNumber: 808, bounds: bounds)
+        ]
+
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 808, bounds: bounds,
+                                            uuid: "UUID-808", tty: "ttys008")
+        ]))
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808", "precondition")
+
+        wm.applyIterm2SessionFetch(.ok([]))
+
+        XCTAssertNil(wm.windows[0].iterm2SessionId,
+                     "An empty-but-successful fetch means iTerm2 has no windows — clear")
+        XCTAssertNil(wm.windows[0].iterm2Tty)
+    }
 }
 #endif

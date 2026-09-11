@@ -710,12 +710,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     // Without the latter, a new window can route keystrokes to
                     // the wrong pane for up to the full 10s subtitle-cycle gap.
                     let shouldFetchSessions = subtitles != nil || forceSessionFetch
-                    let sessions = shouldFetchSessions ? WindowManager.fetchIterm2SessionIds() : nil
+                    let fetch = shouldFetchSessions ? WindowManager.fetchIterm2SessionIds() : nil
                     DispatchQueue.main.async {
                         Self.endWindowPoll()
                         windowManager.applyWindowSnapshot(snapshot)
                         if let subtitles { windowManager.applySubtitles(subtitles) }
-                        if let sessions { windowManager.applyIterm2SessionIds(sessions) }
+                        if let fetch { windowManager.applyIterm2SessionFetch(fetch) }
                         // After session IDs are matched, re-enable anything the
                         // user attached in a prior run so the window is in the
                         // picker again without a round-trip.
@@ -1557,8 +1557,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                     var result = primary
                                     var selfHealed = false
                                     if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                                        let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
-                                        self.windowManager.applyIterm2SessionIds(sessions)
+                                        let fetch = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
+                                        self.windowManager.applyIterm2SessionFetch(fetch)
                                         if let refreshed = self.windowManager.windows.first(where: { $0.id == wid }),
                                            let newId = refreshed.iterm2SessionId, newId != sid {
                                             NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", wid)
@@ -1594,8 +1594,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             var result = await inject()
                             var selfHealed = false
                             if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                                let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
-                                self.windowManager.applyIterm2SessionIds(sessions)
+                                let fetch = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
+                                self.windowManager.applyIterm2SessionFetch(fetch)
                                 if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
                                    let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
                                     NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", msg.windowId)
@@ -1728,8 +1728,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         var result = await doInject(window.iterm2SessionId)
                         var selfHealed = false
                         if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                            let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
-                            self.windowManager.applyIterm2SessionIds(sessions)
+                            let fetch = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
+                            self.windowManager.applyIterm2SessionFetch(fetch)
                             if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
                                let newId = refreshed.iterm2SessionId,
                                newId != window.iterm2SessionId {
@@ -2405,8 +2405,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // (#1) Same self-heal as send_text: stale iTerm2 session id → refresh + retry once.
                 var selfHealed = false
                 if Self.shouldSelfHealStaleSession(result: result, terminalApp: termApp) {
-                    let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
-                    self.windowManager.applyIterm2SessionIds(sessions)
+                    let fetch = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
+                    self.windowManager.applyIterm2SessionFetch(fetch)
                     if let refreshed = self.windowManager.windows.first(where: { $0.id == msg.windowId }),
                        let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
                         NSLog("[Quip] paste_prompt self-heal: refreshed iTerm2 session id for %@", msg.windowId)
@@ -2686,8 +2686,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                                  cgWindowNumber: cgWindowNumber,
                                                  iterm2SessionId: iterm2SessionId)
         if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: terminalApp) {
-            let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
-            windowManager.applyIterm2SessionIds(sessions)
+            let fetch = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
+            windowManager.applyIterm2SessionFetch(fetch)
             if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
                let newId = refreshed.iterm2SessionId, newId != iterm2SessionId {
                 NSLog("[Quip] quick_action self-heal: refreshed iTerm2 session id for %@", wid)
@@ -2989,8 +2989,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     var r = await doInject(sessionId)
                     // (#1) Self-heal: stale iTerm2 session id → refresh + retry once.
                     if QuipMacApp.shouldSelfHealStaleSession(result: r, terminalApp: termApp) {
-                        let sessions = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
-                        windowManager.applyIterm2SessionIds(sessions)
+                        let fetch = await AppleScriptRunner.offMain { WindowManager.fetchIterm2SessionIds() }
+                        windowManager.applyIterm2SessionFetch(fetch)
                         if let refreshed = windowManager.windows.first(where: { $0.id == wid }),
                            let newId = refreshed.iterm2SessionId, newId != sessionId {
                             NSLog("[Quip] revalidateAnswer self-heal: refreshed iTerm2 session id for %@", wid)
@@ -3450,9 +3450,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
         iterm2ResolveInFlight.insert(windowId)
         DispatchQueue.global(qos: .userInitiated).async {
-            let sessions = WindowManager.fetchIterm2SessionIds()
+            let fetch = WindowManager.fetchIterm2SessionIds()
             Task { @MainActor in
-                self.windowManager.applyIterm2SessionIds(sessions)
+                // A `.failed` fetch is dropped rather than applied, so this
+                // heal path can no longer be the thing that unmaps the window
+                // it was called to resolve.
+                self.windowManager.applyIterm2SessionFetch(fetch)
                 self.iterm2ResolveInFlight.remove(windowId)
                 let queued = self.pendingIterm2Resolves.removeValue(forKey: windowId) ?? []
                 guard let refreshed = self.windowManager.windows.first(where: { $0.id == windowId }) else {
