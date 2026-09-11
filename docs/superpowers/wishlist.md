@@ -10,6 +10,9 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 - `00d2f1e` — `fix(iterm2)`: a failed AppleScript no longer unmaps every window.
 - `9a4ac75` — `feat(diagnostics)`: failed injections now write `injection.log`.
+- `b9dbeec` — `fix(tts)`: a stale session map no longer reports itself as a
+  permissions problem. Found by following this session's own lead — open
+  thread 5 below was written as a suspicion and closed in the same session.
 
 ### The bug: one timed-out AppleEvent unmapped nine windows
 
@@ -95,10 +98,18 @@ path can finally see them.
    socket at 16:33 and collapsed on its own. Related to
    `project_dual_path_reap_deadlock`; not chased.
 4. **Nothing pushed.** Both commits are local on `eb-branch`.
-5. **`TTS DROPPED — window content read empty`** recurs in `kokoro.log` and dates
-   back to 2026-08-11, so it predates all of this. Never diagnosed. Given what
-   the session found, the same "empty means failure" shape is worth suspecting
-   in the content-read path before assuming a TCC cause.
+5. ~~**`TTS DROPPED — window content read empty`**~~ — **closed, `b9dbeec`.** The
+   suspicion was right. `readContent` separates a failed AppleScript (nil) from
+   an empty buffer (""), and `waitForStableContent` collapsed both with `?? ""`,
+   so an unmapped window, a genuinely failed read, and a quiet terminal all
+   produced the same "suspect a revoked Automation/Accessibility grant" line.
+   `ContentSettleOutcome { stable, noSessionId, unreadable, empty }` splits them,
+   and `.noSessionId` now says outright that it is not a permissions problem.
+   The 2026-08-11 history of this message is therefore **not** evidence of a
+   long-standing TCC fault — much of it was probably the unmapping bug all along.
+
+6. **The write path of `injection.log` is still unexercised** after three
+   installs — nothing has failed since. Same caveat as thread 2.
 
 
 **Scrub history:** 2026-05-05 — collapsed verbose ✅ Done bodies to status line + commit hash. Original context lives in git log + code; the entries here track *what shipped* not *how*. Wishlist / In Progress / Blocked items kept full. Tabled §55 (Universal Clipboard already covers it) and §52 (no iPad).
