@@ -858,7 +858,12 @@ final class WindowManager {
     /// and must keep what we had. Returning a bare `[]` for both is what let a
     /// single timed-out AppleEvent unmap every window at once (2026-09-11).
     enum Iterm2SessionFetch: Sendable {
-        case ok([Iterm2SessionInfo])
+        /// What the pass learned. `unreadableWindows` are the CGWindowIDs whose
+        /// per-window `try` swallowed an error: the script succeeded overall, but
+        /// those windows produced no row, and treating that as "this window has
+        /// no session" is the same defect as `.failed` at per-window scale.
+        /// Their existing mappings must be preserved, not cleared.
+        case ok([Iterm2SessionInfo], unreadableWindows: Set<CGWindowID>)
         /// The AppleScript errored — a busy iTerm2, an AppleEvent timeout, or a
         /// consent prompt nobody has answered. Not evidence about sessions.
         case failed
@@ -1050,10 +1055,23 @@ final class WindowManager {
         // bad window makes executeAndReturnError fail → the function returns an
         // EMPTY session list → EVERY iTerm window stays unmapped and all sends
         // fail "iTerm2 session not yet mapped". Swallow + skip the bad window.
+        //
+        // But swallowing silently is how the SAME bug survived at per-window
+        // scale: a window that threw simply produced no row, and the apply side
+        // reads a missing row as "this window has no session" and clears it. So
+        // the catch now REPORTS — `ERROR\t<wid>` — and the caller preserves those
+        // windows instead of unmapping them. `wid` is seeded before the `try` so
+        // a window that fails at `id of w` reports -1, which is unattributable
+        // and forces the whole pass to `.failed`.
+        //
+        // The COUNT header separates "iTerm2 has no windows" (clear the stale
+        // ids — correct) from "we read nothing from N windows" (keep them).
         let script = """
         set output to ""
         tell application "iTerm2"
+            set output to "COUNT\\t" & (count of windows) & linefeed
             repeat with w in windows
+                set wid to -1
                 try
                     set wid to id of w
                     set {l, t, r, b} to bounds of w
@@ -1066,6 +1084,8 @@ final class WindowManager {
                         end try
                     end tell
                     set output to output & wid & "\\t" & l & "," & t & "," & r & "," & b & "\\t" & uid & "\\t" & ttyPath & linefeed
+                on error
+                    set output to output & "ERROR\\t" & wid & linefeed
                 end try
             end repeat
         end tell
@@ -1077,8 +1097,32 @@ final class WindowManager {
         // it as an empty list made the caller wipe every good mapping.
         guard !asResult.failed, let output = asResult.stringValue else { return .failed }
 
+        // Windows whose row the script could not produce. Distinct from absent:
+        // absent means "iTerm2 does not have this window", unreadable means "we
+        // could not look at it", and only the first justifies clearing an id.
+        var unreadable: Set<CGWindowID> = []
+        var reportedWindowCount: Int?
+
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")
+            if parts[0] == "COUNT" {
+                reportedWindowCount = parts.count >= 2
+                    ? Int(parts[1].trimmingCharacters(in: .whitespaces))
+                    : nil
+                continue
+            }
+            if parts[0] == "ERROR" {
+                // An unattributable failure (the error hit before `id of w`) can
+                // not be preserved selectively — nothing names the window to
+                // spare. Keeping every mapping is the safe read of "we learned
+                // nothing", which is exactly `.failed`.
+                guard parts.count >= 2,
+                      let wid = Int(parts[1].trimmingCharacters(in: .whitespaces)),
+                      wid > 0
+                else { return .failed }
+                unreadable.insert(CGWindowID(wid))
+                continue
+            }
             // wid, coords, uid required; tty optional (older iTerm).
             guard parts.count >= 3, let wid = Int(parts[0]) else { continue }
             let coords = parts[1].components(separatedBy: ",")
@@ -1093,7 +1137,11 @@ final class WindowManager {
             let tty = rawTty.hasPrefix("/dev/") ? String(rawTty.dropFirst(5)) : rawTty
             result.append(Iterm2SessionInfo(windowNumber: CGWindowID(wid), bounds: bounds, uuid: uuid, tty: tty))
         }
-        return .ok(result)
+        // Nothing usable, nothing named, and iTerm2 did not tell us it has zero
+        // windows: we learned nothing about anything. This is the `.ok([])` that
+        // used to wipe every mapping in one pass.
+        if result.isEmpty && unreadable.isEmpty && reportedWindowCount != 0 { return .failed }
+        return .ok(result, unreadableWindows: unreadable)
     }
 
     /// Apply pre-fetched subtitles to windows. Call on main.
@@ -1174,11 +1222,14 @@ final class WindowManager {
     /// last good mapping is a better answer than no mapping, and the poll runs
     /// again shortly. `.ok` (including `.ok([])`) is applied as truth.
     func applyIterm2SessionFetch(_ fetch: Iterm2SessionFetch) {
-        guard case .ok(let sessions) = fetch else { return }
-        applyIterm2SessionIds(sessions)
+        guard case .ok(let sessions, let unreadable) = fetch else { return }
+        applyIterm2SessionIds(sessions, preserving: unreadable)
     }
 
-    func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo]) {
+    /// `preserving` names windows this pass could not read at all. They are left
+    /// exactly as they were — an unread window is not an unmapped one.
+    func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo],
+                               preserving unreadableWindows: Set<CGWindowID> = []) {
         let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
         // Tolerance is per-dimension (midX/Y/width/height each). Summed as
         // squared distance, the effective threshold is 4 * tol^2 in 4D.
@@ -1187,8 +1238,14 @@ final class WindowManager {
 
         var claimedUUIDs: Set<String> = []
 
-        // Clear stale assignments before re-matching this pass.
+        // Clear stale assignments before re-matching this pass — except windows
+        // the fetch could not read, which keep what they had. Their uuid is
+        // claimed up front so a later pass can't hand it to a different window.
         for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+            if unreadableWindows.contains(windows[i].windowNumber) {
+                if let held = windows[i].iterm2SessionId { claimedUUIDs.insert(held) }
+                continue
+            }
             windows[i].iterm2SessionId = nil
             windows[i].iterm2Tty = nil
         }
@@ -1205,7 +1262,8 @@ final class WindowManager {
             sessions.filter { $0.windowNumber != 0 }.map { ($0.windowNumber, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+        for i in windows.indices
+        where windows[i].bundleId == iterm2BundleId && windows[i].iterm2SessionId == nil {
             guard let s = sessionByWindow[windows[i].windowNumber],
                   !claimedUUIDs.contains(s.uuid) else { continue }
             windows[i].iterm2SessionId = s.uuid
