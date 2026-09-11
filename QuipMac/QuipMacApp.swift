@@ -107,6 +107,44 @@ private struct SettingsMenuButton: View {
     }
 }
 
+/// What a settle-window content read actually produced.
+///
+/// `readContent` deliberately separates "the AppleScript errored" (nil) from
+/// "the buffer is empty" (""), and `waitForStableContent` used to throw that
+/// away with `?? ""` on both read lines — so a stale session id, a revoked
+/// Automation grant, and a genuinely quiet terminal all ended as the same
+/// `TTS DROPPED … suspect a revoked Automation/Accessibility grant` line.
+///
+/// That misdiagnosis has real cost: the 2026-09-11 burst that logged this for
+/// windows 246, 247 and 808 in the same second was the session-unmapping bug
+/// (see `Iterm2SessionFetch`), not a permissions problem, and the message sent
+/// the reader to System Settings instead of the session map.
+enum ContentSettleOutcome: Sendable, Equatable {
+    /// Content settled and is non-empty.
+    case stable(String)
+    /// An iTerm2 window with no session id — there is nothing to target. The
+    /// unmapped-window case, not a permissions problem.
+    case noSessionId
+    /// Every read across the settle window returned nil: the AppleScript
+    /// itself failed. A revoked Automation/Accessibility grant is the usual
+    /// cause.
+    case unreadable
+    /// Reads succeeded; the buffer was genuinely empty the whole time. The
+    /// agent really did stay quiet.
+    case empty
+
+    /// Classify the end of a settle window. Pure, so the three-way split is
+    /// testable without AppleScript.
+    ///
+    /// `anyReadSucceeded` means at least one `readContent` returned non-nil —
+    /// including a successful read of an empty buffer, which is exactly the
+    /// distinction the `?? ""` collapse destroyed.
+    static func atDeadline(finalContent: String, anyReadSucceeded: Bool) -> ContentSettleOutcome {
+        if !finalContent.isEmpty { return .stable(finalContent) }
+        return anyReadSucceeded ? .empty : .unreadable
+    }
+}
+
 @main
 struct QuipMacApp: App {
     @State private var windowManager = WindowManager()
@@ -953,31 +991,56 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
 
         if skipStableWait {
+            let sessionId = window.iterm2SessionId
             DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
-                let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
-                if !content.isEmpty {
-                    processContent(content)
+                let value = keystrokeInjector.readContent(terminalApp: termApp,
+                                                          cgWindowNumber: wn,
+                                                          iterm2SessionId: sessionId)
+                guard let content = value, !content.isEmpty else {
+                    // Was a silent return. Same three-way split as the settle
+                    // path, so this shortcut cannot hide a broken read either.
+                    let why = value == nil
+                        ? (termApp == .iterm2 && sessionId == nil
+                            ? "no iTerm2 session id for this window (stale session map, NOT permissions)"
+                            : "the content read failed")
+                        : "reads succeeded but the buffer was empty"
+                    KokoroTTSDebug.log("TTS DROPPED for \(windowId) on the skip-stable-wait path: \(why).")
+                    return
                 }
+                processContent(content)
             }
             return
         }
 
-        waitForStableContent(termApp: termApp, windowNumber: wn, iterm2SessionId: window.iterm2SessionId) { stableContent in
-            guard let content = stableContent else {
-                // nil here does NOT mean "the window was quiet" — it means every
-                // read across the whole settle deadline came back empty, i.e.
-                // the AppleScript/CG read itself failed. That is the difference
-                // between "nothing to say" and "we could not look", and until
-                // now both ended the same silent way: TTS simply never spoke.
+        waitForStableContent(termApp: termApp, windowNumber: wn, iterm2SessionId: window.iterm2SessionId) { outcome in
+            switch outcome {
+            case .stable(let content):
+                DispatchQueue.main.async { [self] in
+                    doTriggerTTSBody(windowId: windowId, name: name, content: content)
+                }
+            case .noSessionId:
+                // The window is tracked but unmapped. Points at the session map,
+                // NOT at permissions — the distinction this message used to get
+                // wrong, and the one that cost a session of debugging.
                 KokoroTTSDebug.log(
-                    "TTS DROPPED for \(windowId): window content read empty for the whole "
-                    + "settle window — the terminal read failed, not the agent staying quiet. "
+                    "TTS DROPPED for \(windowId): no iTerm2 session id for this window, so there "
+                    + "was nothing to read. The session map is stale or was cleared — see "
+                    + "injection.log for sends failing the same way. This is NOT a permissions problem."
+                )
+            case .unreadable:
+                KokoroTTSDebug.log(
+                    "TTS DROPPED for \(windowId): every content read across the settle window "
+                    + "failed — we could not look, as distinct from the agent staying quiet. "
                     + "Suspect a revoked Automation/Accessibility grant or a closed window."
                 )
-                return
-            }
-            DispatchQueue.main.async { [self] in
-                doTriggerTTSBody(windowId: windowId, name: name, content: content)
+            case .empty:
+                // Reads worked and the buffer really was empty. Benign, and
+                // deliberately logged at all so the file distinguishes a quiet
+                // agent from a broken read rather than leaving both as silence.
+                KokoroTTSDebug.log(
+                    "TTS skipped for \(windowId): reads succeeded but the buffer stayed empty — "
+                    + "the agent had nothing to say."
+                )
             }
         }
     }
@@ -3361,22 +3424,43 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                       iterm2SessionId: String? = nil,
                                       pollInterval: TimeInterval = 0.2,
                                       maxWaitSeconds: TimeInterval = 2.5,
-                                      completion: @Sendable @escaping (String?) -> Void) {
+                                      completion: @Sendable @escaping (ContentSettleOutcome) -> Void) {
+        // An iTerm2 window with no session id has nothing to target: every read
+        // would return nil and we would spend the full settle window proving it.
+        // Answer immediately, and name the real cause.
+        if termApp == .iterm2 && iterm2SessionId == nil {
+            DispatchQueue.main.async { completion(.noSessionId) }
+            return
+        }
         // Run the heavy AppleScript reads on a background thread so they
         // don't block main and starve tunnel message delivery.
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
             let deadline = Date().addingTimeInterval(maxWaitSeconds)
-            var previous = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber, iterm2SessionId: iterm2SessionId) ?? ""
+            // Tracked rather than inferred from the content: a successful read
+            // of an empty buffer is NOT a failed read, and conflating the two is
+            // the whole reason this type exists.
+            var anyReadSucceeded = false
+            func read() -> String {
+                let value = keystrokeInjector.readContent(terminalApp: termApp,
+                                                         cgWindowNumber: windowNumber,
+                                                         iterm2SessionId: iterm2SessionId)
+                if value != nil { anyReadSucceeded = true }
+                return value ?? ""
+            }
+
+            var previous = read()
 
             while true {
                 Thread.sleep(forTimeInterval: pollInterval)
-                let current = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: windowNumber, iterm2SessionId: iterm2SessionId) ?? ""
+                let current = read()
                 if current == previous && !current.isEmpty {
-                    DispatchQueue.main.async { completion(current) }
+                    DispatchQueue.main.async { completion(.stable(current)) }
                     return
                 }
                 if Date() >= deadline {
-                    DispatchQueue.main.async { completion(current.isEmpty ? nil : current) }
+                    let outcome = ContentSettleOutcome.atDeadline(finalContent: current,
+                                                                 anyReadSucceeded: anyReadSucceeded)
+                    DispatchQueue.main.async { completion(outcome) }
                     return
                 }
                 previous = current
