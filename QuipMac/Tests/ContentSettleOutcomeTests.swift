@@ -46,6 +46,36 @@ final class ContentSettleOutcomeTests: XCTestCase {
     /// Content that is only whitespace is still content: `atDeadline` must not
     /// start trimming, because `readContent` already dropped trailing blank
     /// lines and a second opinion here would diverge from what the phone saw.
+    /// The case the sentinel exists for: the iTerm2 read script ran fine but the
+    /// session id we hold is not in its session tree any more. Reads did NOT
+    /// succeed, and the old walk-miss `return ""` made this arrive as `.empty` —
+    /// "the agent had nothing to say" about a window we could not read at all.
+    func testSessionGoneIsNotEmptyAndNotUnreadable() {
+        XCTAssertEqual(
+            ContentSettleOutcome.atDeadline(finalContent: "", anyReadSucceeded: false,
+                                            sessionGone: true),
+            .sessionGone)
+    }
+
+    /// A session that came back mid-window (a self-heal landed between polls)
+    /// must not be reported gone — only the last read decides, and content wins
+    /// over every failure signal.
+    func testContentWinsOverAStaleSessionGoneSignal() {
+        XCTAssertEqual(
+            ContentSettleOutcome.atDeadline(finalContent: "hello", anyReadSucceeded: true,
+                                            sessionGone: true),
+            .stable("hello"))
+    }
+
+    /// `sessionGone` is the more specific diagnosis and outranks `unreadable`:
+    /// one names the session map, the other sends the reader to System Settings.
+    func testSessionGoneOutranksUnreadable() {
+        XCTAssertNotEqual(
+            ContentSettleOutcome.atDeadline(finalContent: "", anyReadSucceeded: false,
+                                            sessionGone: true),
+            ContentSettleOutcome.atDeadline(finalContent: "", anyReadSucceeded: false))
+    }
+
     func testWhitespaceOnlyContentCountsAsStable() {
         XCTAssertEqual(
             ContentSettleOutcome.atDeadline(finalContent: " ", anyReadSucceeded: true),

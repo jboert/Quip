@@ -129,6 +129,12 @@ enum ContentSettleOutcome: Sendable, Equatable {
     /// itself failed. A revoked Automation/Accessibility grant is the usual
     /// cause.
     case unreadable
+    /// The script ran fine, but the session id we hold is not in iTerm2's
+    /// session tree any more — the session was recreated under us. Distinct
+    /// from `.noSessionId` (we never had one) and, crucially, from `.empty`:
+    /// the iTerm2 read script used to return "" for this, so a window we could
+    /// not read at all was reported as a quiet agent. Self-healable.
+    case sessionGone
     /// Reads succeeded; the buffer was genuinely empty the whole time. The
     /// agent really did stay quiet.
     case empty
@@ -139,8 +145,12 @@ enum ContentSettleOutcome: Sendable, Equatable {
     /// `anyReadSucceeded` means at least one `readContent` returned non-nil —
     /// including a successful read of an empty buffer, which is exactly the
     /// distinction the `?? ""` collapse destroyed.
-    static func atDeadline(finalContent: String, anyReadSucceeded: Bool) -> ContentSettleOutcome {
+    /// `sessionGone` outranks `unreadable` when the content is empty: it is the
+    /// more specific, and the actionable, diagnosis.
+    static func atDeadline(finalContent: String, anyReadSucceeded: Bool,
+                           sessionGone: Bool = false) -> ContentSettleOutcome {
         if !finalContent.isEmpty { return .stable(finalContent) }
+        if sessionGone { return .sessionGone }
         return anyReadSucceeded ? .empty : .unreadable
     }
 }
@@ -218,6 +228,12 @@ struct QuipMacApp: App {
     // fetch instead of racing multiple background fetchIterm2SessionIds calls.
     @State private var iterm2ResolveInFlight: Set<String> = []
     @State private var pendingIterm2Resolves: [String: [PendingResolve]] = [:]
+    /// One session-map heal at a time. A stale id is discovered by whichever
+    /// poll happens to touch the window, and those run every 2s across every
+    /// tracked window — without this, one dead session would queue a fetch per
+    /// poll per window onto the single AppleScript queue, in front of the
+    /// keystrokes the user is waiting on.
+    @State private var iterm2SessionHealInFlight = false
 /// (#6) Per-window timestamp of the last `waiting_for_input` scrape, so
 /// rapid waiting↔thinking↔waiting bursts don't AppleScript-storm. Cached
 /// options/fingerprint reused inside `recentScrapeTTL`.
@@ -989,22 +1005,37 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 doTriggerTTSBody(windowId: windowId, name: name, content: content)
             }
         }
+        // Hops to the main actor, so the background read path never touches
+        // @State directly.
+        let healSessionMap: @Sendable () -> Void = {
+            Task { @MainActor [self] in
+                healIterm2SessionMap(triggeredBy: windowId)
+            }
+        }
 
         if skipStableWait {
             let sessionId = window.iterm2SessionId
             DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
-                let value = keystrokeInjector.readContent(terminalApp: termApp,
-                                                          cgWindowNumber: wn,
-                                                          iterm2SessionId: sessionId)
-                guard let content = value, !content.isEmpty else {
-                    // Was a silent return. Same three-way split as the settle
+                let value = keystrokeInjector.readContentDetailed(terminalApp: termApp,
+                                                                  cgWindowNumber: wn,
+                                                                  iterm2SessionId: sessionId)
+                guard case .ok(let content) = value, !content.isEmpty else {
+                    // Was a silent return. Same four-way split as the settle
                     // path, so this shortcut cannot hide a broken read either.
-                    let why = value == nil
-                        ? (termApp == .iterm2 && sessionId == nil
+                    let why: String
+                    switch value {
+                    case .sessionGone:
+                        why = sessionId == nil
                             ? "no iTerm2 session id for this window (stale session map, NOT permissions)"
-                            : "the content read failed")
-                        : "reads succeeded but the buffer was empty"
+                            : "the iTerm2 session id no longer resolves — the session was recreated "
+                              + "(stale session map, NOT permissions)"
+                    case .failed:
+                        why = "the content read failed"
+                    case .ok:
+                        why = "reads succeeded but the buffer was empty"
+                    }
                     KokoroTTSDebug.log("TTS DROPPED for \(windowId) on the skip-stable-wait path: \(why).")
+                    if case .sessionGone = value, sessionId != nil { healSessionMap() }
                     return
                 }
                 processContent(content)
@@ -1027,6 +1058,19 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     + "was nothing to read. The session map is stale or was cleared — see "
                     + "injection.log for sends failing the same way. This is NOT a permissions problem."
                 )
+            case .sessionGone:
+                // The id we hold is not in iTerm2's session tree any more. Before
+                // the sentinel this arrived as `.empty` and was reported as a
+                // quiet agent — the same misdiagnosis, pointed the other way.
+                KokoroTTSDebug.log(
+                    "TTS DROPPED for \(windowId): the iTerm2 session id no longer resolves — the "
+                    + "session was recreated under us, so there was nothing to read. Refreshing the "
+                    + "session map; see injection.log for sends failing the same way. This is NOT a "
+                    + "permissions problem."
+                )
+                DispatchQueue.main.async { [self] in
+                    healIterm2SessionMap(triggeredBy: windowId)
+                }
             case .unreadable:
                 KokoroTTSDebug.log(
                     "TTS DROPPED for \(windowId): every content read across the settle window "
@@ -3438,14 +3482,27 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             let deadline = Date().addingTimeInterval(maxWaitSeconds)
             // Tracked rather than inferred from the content: a successful read
             // of an empty buffer is NOT a failed read, and conflating the two is
-            // the whole reason this type exists.
+            // the whole reason this type exists. `readContentDetailed` is what
+            // keeps a stale session id out of both buckets.
             var anyReadSucceeded = false
+            var lastReadWasSessionGone = false
             func read() -> String {
-                let value = keystrokeInjector.readContent(terminalApp: termApp,
-                                                         cgWindowNumber: windowNumber,
-                                                         iterm2SessionId: iterm2SessionId)
-                if value != nil { anyReadSucceeded = true }
-                return value ?? ""
+                switch keystrokeInjector.readContentDetailed(terminalApp: termApp,
+                                                             cgWindowNumber: windowNumber,
+                                                             iterm2SessionId: iterm2SessionId) {
+                case .ok(let content):
+                    anyReadSucceeded = true
+                    lastReadWasSessionGone = false
+                    return content
+                case .sessionGone:
+                    // Only the LAST read decides: a session that came back
+                    // (self-heal landed mid-window) must not be reported gone.
+                    lastReadWasSessionGone = true
+                    return ""
+                case .failed:
+                    lastReadWasSessionGone = false
+                    return ""
+                }
             }
 
             var previous = read()
@@ -3459,7 +3516,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 }
                 if Date() >= deadline {
                     let outcome = ContentSettleOutcome.atDeadline(finalContent: current,
-                                                                 anyReadSucceeded: anyReadSucceeded)
+                                                                 anyReadSucceeded: anyReadSucceeded,
+                                                                 sessionGone: lastReadWasSessionGone)
                     DispatchQueue.main.async { completion(outcome) }
                     return
                 }
@@ -3552,6 +3610,31 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 perform(refreshed)
                 for p in queued { p.perform(refreshed) }
             }
+        }
+    }
+
+    /// Refresh the iTerm2 session map after a read discovered a stale id.
+    ///
+    /// `ensureITermSessionResolved` only covers windows whose id is *nil* — a
+    /// window that still holds a non-nil id that no longer resolves never
+    /// reaches it, so before this the map stayed stale until some unrelated poll
+    /// happened to correct it. Fetch failures are dropped by
+    /// `applyIterm2SessionFetch`, so a heal can never be the thing that unmaps
+    /// the window it was called to fix.
+    ///
+    /// Coalesced: one fetch in flight at a time, app-wide. The fetch reads every
+    /// iTerm2 window anyway, so a second one would learn nothing new while
+    /// sitting in front of the user's next keystroke on the AppleScript queue.
+    @MainActor
+    private func healIterm2SessionMap(triggeredBy windowId: String) {
+        guard !iterm2SessionHealInFlight else { return }
+        iterm2SessionHealInFlight = true
+        Task { @MainActor in
+            defer { iterm2SessionHealInFlight = false }
+            await windowManager.refreshIterm2SessionIds()
+            let healed = windowManager.windows.first(where: { $0.id == windowId })?.iterm2SessionId
+            KokoroTTSDebug.log("iTerm2 session map refreshed after a stale id on \(windowId) — "
+                               + "now \(healed ?? "still unmapped").")
         }
     }
 

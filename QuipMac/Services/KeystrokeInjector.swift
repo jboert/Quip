@@ -1168,7 +1168,38 @@ final class KeystrokeInjector {
 
     // MARK: - Read Terminal Content
 
+    /// What one `readContent` call actually learned.
+    ///
+    /// The third case is the point. A cached iTerm2 session id that no longer
+    /// resolves — the session was recreated, which is the self-healable failure
+    /// this whole path exists to survive — used to be indistinguishable from a
+    /// quiet terminal: the session walk found no match, fell off the end of the
+    /// script, and returned `""` from a *successful* AppleScript run. Callers
+    /// then reported "reads succeeded but the buffer stayed empty — the agent
+    /// had nothing to say" about a window they could not read at all.
+    enum ContentRead: Sendable, Equatable {
+        /// The read worked. `""` here means the buffer really was empty.
+        case ok(String)
+        /// The AppleScript itself errored — usually a revoked Automation grant.
+        case failed
+        /// The script ran, but the session id we were given is not in iTerm2's
+        /// window → tab → session tree (or we had none). Points at the session
+        /// map, not at permissions.
+        case sessionGone
+    }
+
+    /// Emitted by the iTerm2 read script when the session walk completes without
+    /// matching, so "no such session" stops looking like "empty buffer".
+    ///
+    /// Compared against the RAW script output, before trimming or redaction, and
+    /// only as a whole-string equality: a terminal that happened to display this
+    /// token would also be displaying a prompt around it and so could not match.
+    nonisolated static let sessionGoneSentinel = "___QUIP_SESSION_NOT_FOUND___"
+
     /// Read the visible/recent text content from a terminal window via AppleScript.
+    ///
+    /// Returns nil for both "could not look" and "the session is gone" — see
+    /// `readContentDetailed` for the caller that needs to tell them apart.
     ///
     /// Synchronous, and therefore OFF-MAIN ONLY — every caller (the mode poll,
     /// the TTS/prompt scrapes, the request_content handler) already dispatches to
@@ -1176,10 +1207,19 @@ final class KeystrokeInjector {
     /// Quip runs most often: one per tracked window every 2s. Calling it on main
     /// would put the UI behind all of them.
     nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> String? {
+        guard case .ok(let content) = readContentDetailed(terminalApp: terminalApp,
+                                                          cgWindowNumber: cgWindowNumber,
+                                                          iterm2SessionId: iterm2SessionId)
+        else { return nil }
+        return content
+    }
+
+    /// `readContent` without the lossy `String?` collapse. Same thread rules.
+    nonisolated func readContentDetailed(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> ContentRead {
         let script: String
         switch terminalApp {
         case .claudeDesktop:
-            return nil
+            return .failed
         case .terminal:
             // Terminal.app's AppleScript `id of window` IS the CGWindowID —
             // verified against CGWindowListCopyWindowInfo (ids 72 and 968 matched
@@ -1213,7 +1253,10 @@ final class KeystrokeInjector {
             // whichever iTerm2 window happened to be frontmost — that's how
             // the phone ended up displaying another window's buffer while the
             // user thought they were looking at their selection.
-            guard let sessionId = iterm2SessionId else { return nil }
+            //
+            // No id is the same class of answer as an id that no longer
+            // resolves: the session map, not permissions.
+            guard let sessionId = iterm2SessionId else { return .sessionGone }
             let escapedId = sessionId
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
@@ -1236,13 +1279,20 @@ final class KeystrokeInjector {
                         end repeat
                     end tell
                 end repeat
-                return ""
+                -- Walking off the end means the id is stale (session recreated),
+                -- NOT that the buffer is empty. Returning "" here made those two
+                -- indistinguishable to every caller.
+                return "\(Self.sessionGoneSentinel)"
             end tell
             """
         }
 
         let result = AppleScriptRunner.run(script)
-        if result.failed { return nil }
+        if result.failed { return .failed }
+        guard let raw = result.stringValue else { return .failed }
+        // Checked against the raw output, before trimming/redaction, so neither
+        // transform can hide or manufacture the marker.
+        if raw == Self.sessionGoneSentinel { return .sessionGone }
         // Redact HERE, not at the broadcast, so the Mac reasons over exactly the
         // bytes the phone was shown. Prompt fingerprints are hashes of on-screen
         // text: the phone can only ever hash redacted content, so if the Mac
@@ -1251,9 +1301,7 @@ final class KeystrokeInjector {
         // dropped as "Prompt changed — not sent". One canonical form removes the
         // whole class. `redact` is a fixed set of regex substitutions — same
         // input, same output — so hashes stay stable.
-        return result.stringValue
-            .map(Self.trimTrailingBlankLines)
-            .map(SecretRedactor.redact)
+        return .ok(SecretRedactor.redact(Self.trimTrailingBlankLines(raw)))
     }
 
     /// Drop the blank lines a terminal pads its buffer with below the last
