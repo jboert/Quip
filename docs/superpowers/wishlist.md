@@ -2,6 +2,105 @@
 
 Future features, improvements, and known bugs tracked for eventual implementation. Each item here is a candidate for a GitHub issue or sprint work. When you're ready to implement one, it should graduate to a spec in `docs/superpowers/specs/` and a plan in `docs/superpowers/plans/`, then land as a commit on a working branch.
 
+---
+
+## Session log — 2026-09-11 (iTerm2 unmapping fixed; injection logging added)
+
+**Shipped on `eb-branch`, installed, hardware-confirmed. Not pushed.**
+
+- `00d2f1e` — `fix(iterm2)`: a failed AppleScript no longer unmaps every window.
+- `9a4ac75` — `feat(diagnostics)`: failed injections now write `injection.log`.
+
+### The bug: one timed-out AppleEvent unmapped nine windows
+
+Reported as a red toast on the phone: `Text send failed: iTerm2 session not yet
+mapped for window com.googlecode.iterm2.808`.
+
+It was neither a Spaces regression nor a lost TCC grant, and both were ruled out
+by measurement rather than argument: iTerm2's `id of w` equals the CGWindowID for
+all nine windows (808 included) with bounds identical to the pixel, so the
+matcher and the Automation grant were both healthy.
+
+The defect was one collapsed return value. `fetchIterm2SessionIds()` handed back
+a bare `[Iterm2SessionInfo]`, so **"the AppleScript failed" and "iTerm2 has no
+windows" were the same value** — `AppleScriptRunner.Output.failed` was computed
+and then discarded. `applyIterm2SessionIds` opens by clearing every mapping
+before re-matching, so a single failed fetch unmapped all nine at once, and every
+send failed until some later fetch happened to succeed.
+
+`ensureITermSessionResolved` — written specifically to heal this — made it worse,
+because it calls the same fetch. A failed heal did the wiping, then ran
+`perform(refreshed)` on a still-nil window. That is the call that fired the toast.
+
+Corroborating evidence in `kokoro.log`: windows 246, 247 and 808 all read empty
+**within the same second** (15:03:25Z). One failure burst, not three faults.
+
+Fix: `Iterm2SessionFetch { ok([Iterm2SessionInfo]), failed }` plus
+`applyIterm2SessionFetch`, which drops a `.failed` pass and keeps the last good
+mapping. `.ok([])` still clears, so a quit iTerm2 cannot pin a dead session id.
+**All ten call sites had the bug**; all ten migrated.
+
+The generalisable lesson, worth carrying past this bug: *a function that returns
+a collection cannot report failure.* Every `guard … else { return [] }` over an
+I/O boundary is this bug waiting for a caller that treats empty as authoritative.
+`applyIterm2SessionIds` was exactly that caller.
+
+### Injection had no log at all
+
+Chasing the above surfaced a second gap. `KeystrokeInjector`'s only record of a
+failure was `print`, which reaches neither `~/Library/Logs/Quip/` nor the unified
+log — verified: `log show --predicate 'process == "Quip"'` returns **zero lines**
+for a Quip launched from Finder. So every "not yet mapped" and every TCC denial
+went on the floor, and "did the keystrokes land?" was answerable only by looking
+at the user's screen.
+
+`injection.log` now takes one line per FAILED injection:
+
+```
+DROPPED op=sendText window=com.googlecode.iterm2.808 app=iTerm2 kind=sessionNotFound msg="…"
+```
+
+`kind` renders the existing `InjectionError` as a closed vocabulary
+(`sessionNotFound | tccDenied | windowClosed | unknown | unclassified`) so a
+stale session id (self-heals) greps apart from a TCC denial (needs a human).
+Successes stay out — `latency.log` already has them with timing. Six sites wired:
+the five iTerm2 session guards plus `executeAppleScript`, where TCC denials and
+AppleEvent timeouts surface. Three guards that returned an unclassified result
+now carry `kind: .sessionNotFound`, which they always were — so the self-heal
+path can finally see them.
+
+### Verified
+
+| Claim | Evidence |
+|---|---|
+| Desktop chips render with real counts | **Owner-confirmed on hardware** — This Desktop 10 / Other Desktops 2 / All Desktops 12. Closes half of 2026-09-10 open thread 1. |
+| The unmapping fix works end to end | **Confirmed on hardware.** `send_text` to window 808 at 17:17:25Z landed with no toast and no `injection.log` entry. |
+| `Iterm2SessionFetch` semantics | **Test-verified, proven non-vacuous.** Reverting the guard fails with `nil is not equal to Optional("UUID-808")` — the reported symptom exactly. |
+| `injection.log` line format | **Test-verified.** 6 cases via a pure static builder, including that a quote or newline in an AppleScript error is escaped rather than forging a second log line. |
+| Full gate | **Green.** harness 62 checks, QuipMac 808 tests, QuipiOS 800 tests. |
+| Phone authenticates over LAN | **Observed at last.** `client live: 192.168.4.42:54980 (auth=pin)` at 16:33:08Z. The 2026-09-10 handoff had this as never-seen. |
+| `injection.log` actually writes | **NOT verified.** The format is unit-tested; the append path has never run, because nothing has failed since install. It is created on first failure. |
+
+### Open threads
+
+1. **Walk the chip interactions past the row.** Still the oldest open item. The
+   row renders with correct counts; untested are tapping "Other Desktops" to
+   filter, tapping a card on another desktop to switch Space and raise it
+   (`activate(options: [.activateAllWindows])` + AX raise), and returning via
+   "All Desktops".
+2. **`injection.log`'s write path is unexercised.** First real failure proves it.
+   If it matters sooner, force one by sending to a window id that no longer
+   exists.
+3. **Dual-path flap still shows up.** A `CLOSE_WAIT` sat beside the live LAN
+   socket at 16:33 and collapsed on its own. Related to
+   `project_dual_path_reap_deadlock`; not chased.
+4. **Nothing pushed.** Both commits are local on `eb-branch`.
+5. **`TTS DROPPED — window content read empty`** recurs in `kokoro.log` and dates
+   back to 2026-08-11, so it predates all of this. Never diagnosed. Given what
+   the session found, the same "empty means failure" shape is worth suspecting
+   in the content-read path before assuming a TCC cause.
+
+
 **Scrub history:** 2026-05-05 — collapsed verbose ✅ Done bodies to status line + commit hash. Original context lives in git log + code; the entries here track *what shipped* not *how*. Wishlist / In Progress / Blocked items kept full. Tabled §55 (Universal Clipboard already covers it) and §52 (no iPad).
 
 ---
