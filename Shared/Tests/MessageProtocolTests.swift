@@ -1186,6 +1186,60 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertNil(SpaceActivity.resolvedSelection(nil, activeSpaces: active))
     }
 
+    // MARK: - SpaceActivity: the collapsed chip
+
+    /// Collapsed, the chip is the row's ONLY evidence of what the grid is
+    /// showing. If it read "All Desktops" while a desktop filter was active, it
+    /// would quietly lie about why windows are missing from the grid below it.
+    func testCollapsedTitleNamesThePinnedDesktop() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: "space-3"),
+            "space-3")
+    }
+
+    func testCollapsedTitleReadsAllDesktopsWhenTheFilterIsOff() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: nil),
+            "All Desktops")
+    }
+
+    /// Belt and braces with `resolvedSelection`: even handed an id that is no
+    /// longer active, the collapsed chip must not name a desktop the grid is
+    /// not filtered to.
+    func testCollapsedTitleFallsBackWhenTheIdIsNoLongerActive() {
+        let active = [space("space-1")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: "space-3"),
+            "All Desktops")
+    }
+
+    /// The badge must match the number of cards rendered below it — a count
+    /// that disagrees with the grid is worse than no count.
+    func testCollapsedCountCountsOnlyThePinnedDesktopsWindows() {
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: "space-3"),
+                       spaceWindow("c", spaceID: "space-3")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedCount(windows: windows, effectiveSpaceID: "space-3"), 2)
+    }
+
+    func testCollapsedCountCountsEveryWindowWhenTheFilterIsOff() {
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: nil)]
+        XCTAssertEqual(
+            SpaceActivity.collapsedCount(windows: windows, effectiveSpaceID: nil), 2)
+    }
+
+    /// A window the Mac could not place on a Space counts toward no desktop,
+    /// matching `active(spaces:windows:)`.
+    func testCollapsedCountIgnoresWindowsWithNoSpaceMetadata() {
+        let windows = [spaceWindow("a", spaceID: nil)]
+        XCTAssertEqual(
+            SpaceActivity.collapsedCount(windows: windows, effectiveSpaceID: "space-1"), 0)
+    }
+
     // MARK: - PreferencesSnapshot: dictation auto-send
 
     func testPreferencesSnapshotRoundTripsDictationAutoSend() throws {

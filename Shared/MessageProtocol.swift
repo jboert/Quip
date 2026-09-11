@@ -190,6 +190,31 @@ enum SpaceActivity {
         else { return nil }
         return selected
     }
+
+    /// The label the COLLAPSED space chip carries: the pinned desktop's name,
+    /// or `allTitle` when the filter is off.
+    ///
+    /// Collapsed, the chip is the row's only evidence of what the grid is
+    /// showing, so it must never read "All Desktops" while a desktop filter is
+    /// active — that would quietly lie about why windows are missing. It takes
+    /// the already-resolved selection rather than the raw one so a pick that
+    /// went quiet reads as "All Desktops" here exactly as it does in the grid.
+    static func collapsedTitle(activeSpaces: [SpaceState],
+                               effectiveSpaceID: String?,
+                               allTitle: String = "All Desktops") -> String {
+        guard let effectiveSpaceID,
+              let space = activeSpaces.first(where: { $0.id == effectiveSpaceID })
+        else { return allTitle }
+        return space.name
+    }
+
+    /// Windows the collapsed chip should count: those on the pinned desktop, or
+    /// every window when the filter is off. Mirrors what the grid renders, so
+    /// the badge can never disagree with the number of cards below it.
+    static func collapsedCount(windows: [WindowState], effectiveSpaceID: String?) -> Int {
+        guard let effectiveSpaceID else { return windows.count }
+        return windows.filter { $0.spaceID == effectiveSpaceID }.count
+    }
 }
 
 // MARK: - Claude Code Mode

@@ -1386,6 +1386,11 @@ struct MainiOSView: View {
     /// current connection's first degraded snapshot. Reset on disconnect so a
     /// reconnect can re-pop if Mac is still degraded — but the 5s update
     /// stream doesn't keep re-popping after the user dismisses.
+    /// Whether the desktop chips are showing in full. Collapsed by default and
+    /// deliberately NOT persisted: it is a momentary "let me see my options"
+    /// state, not a preference, so it costs no `PreferencesSnapshot` field and
+    /// nothing to restore on a reinstall.
+    @State private var spaceChipsExpanded = false
     @State private var hasAutoShownPermsForConnection = false
 
     @AppStorage("lastURL") private var urlText: String = ""
@@ -3664,13 +3669,42 @@ struct MainiOSView: View {
 
     private var windowLayout: some View {
         // The chips are the whole multi-screen affordance, and they cost zero
-        // vertical space on a one-screen Mac (see `screenChips`). Inside
-        // windowLayout rather than at each of its four call sites so every
-        // layout — portrait, landscape, expanded — gets them for free.
+        // vertical space on a one-screen, one-desktop Mac (see `filterChips`).
+        // Inside windowLayout rather than at each of its four call sites so
+        // every layout — portrait, landscape, expanded — gets them for free.
         VStack(spacing: 0) {
-            spaceChips
-            screenChips
+            filterChips
             windowCanvas
+        }
+    }
+
+    /// Desktop and display filters on ONE 26pt row.
+    ///
+    /// They used to be two stacked rows, so a multi-display Mac with windows on
+    /// more than one desktop spent 52pt of the grid on chrome. They are also
+    /// both horizontal scrolls, so a single row loses nothing: what does not fit
+    /// scrolls, exactly as it already did.
+    ///
+    /// The desktop side collapses to a single chip naming the active filter,
+    /// because the desktop chips are the ones that multiply — a Mac has two or
+    /// three displays but can have any number of desktops.
+    @ViewBuilder
+    private var filterChips: some View {
+        if activeSpaces.count > 1 || displays.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    spaceChipGroup
+                    if activeSpaces.count > 1 && displays.count > 1 {
+                        // The two kinds filter different things; without a rule
+                        // they read as one undifferentiated run of capsules.
+                        Divider().frame(height: 12)
+                    }
+                    displayChipGroup
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+            }
+            .frame(height: 26)
         }
     }
 
@@ -3678,26 +3712,19 @@ struct MainiOSView: View {
     /// the Mac actually has more than one screen — a single-display desk sees
     /// nothing at all, not a row with one useless chip.
     @ViewBuilder
-    private var screenChips: some View {
+    private var displayChipGroup: some View {
         if displays.count > 1 {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 5) {
-                    ForEach(displays) { display in
-                        screenChip(title: display.name,
-                                   count: windows.filter { effectiveDisplayID($0) == display.id }.count,
-                                   isOn: selectedDisplayID == display.id) {
-                            selectDisplay(display.id)
-                        }
-                    }
-                    screenChip(title: "All", count: windows.count,
-                               isOn: selectedDisplayID == nil) {
-                        selectDisplay(nil)
-                    }
+            ForEach(displays) { display in
+                screenChip(title: display.name, icon: Self.displayChipIcon,
+                           count: windows.filter { effectiveDisplayID($0) == display.id }.count,
+                           isOn: selectedDisplayID == display.id) {
+                    selectDisplay(display.id)
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
             }
-            .frame(height: 26)
+            screenChip(title: "All", icon: Self.displayChipIcon, count: windows.count,
+                       isOn: selectedDisplayID == nil) {
+                selectDisplay(nil)
+            }
         }
     }
 
@@ -3709,42 +3736,90 @@ struct MainiOSView: View {
         SpaceActivity.active(spaces: spaces, windows: windows)
     }
 
+    /// SF Symbols for the two chip kinds. They used to share `display`, which
+    /// made a desktop chip and a monitor chip indistinguishable at a glance —
+    /// the main reason the area read as noise rather than as two filters.
+    private static let spaceChipIcon = "macwindow.on.rectangle"
+    private static let displayChipIcon = "display"
+
+    /// The desktop filter: one chip when collapsed, the full set when expanded.
+    ///
+    /// Collapsed is the default because the desktop chips are the ones that
+    /// multiply. The collapsed chip carries a chevron and names the active
+    /// filter, so the row always says what the grid is showing even at its
+    /// smallest.
     @ViewBuilder
-    private var spaceChips: some View {
+    private var spaceChipGroup: some View {
         if activeSpaces.count > 1 {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 5) {
-                    ForEach(activeSpaces) { space in
-                        screenChip(title: space.name,
-                                   count: windows.filter { $0.spaceID == space.id }.count,
-                                   isOn: effectiveSpaceID == space.id) {
-                            withAnimation(.easeOut(duration: 0.15)) { selectedSpaceID = space.id }
-                        }
-                    }
-                    screenChip(title: "All Desktops", count: windows.count,
-                               isOn: effectiveSpaceID == nil) {
-                        withAnimation(.easeOut(duration: 0.15)) { selectedSpaceID = nil }
+            if spaceChipsExpanded {
+                ForEach(activeSpaces) { space in
+                    screenChip(title: space.name, icon: Self.spaceChipIcon,
+                               count: windows.filter { $0.spaceID == space.id }.count,
+                               isOn: effectiveSpaceID == space.id) {
+                        selectSpace(space.id)
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                screenChip(title: "All Desktops", icon: Self.spaceChipIcon,
+                           count: windows.count,
+                           isOn: effectiveSpaceID == nil) {
+                    selectSpace(nil)
+                }
+                // Collapsing is otherwise only reachable by picking a filter,
+                // which forces a selection change just to tidy the row.
+                screenChip(title: "", icon: "chevron.left", count: nil, isOn: false) {
+                    withAnimation(.easeOut(duration: 0.15)) { spaceChipsExpanded = false }
+                }
+            } else {
+                screenChip(
+                    title: SpaceActivity.collapsedTitle(activeSpaces: activeSpaces,
+                                                        effectiveSpaceID: effectiveSpaceID),
+                    icon: Self.spaceChipIcon,
+                    count: SpaceActivity.collapsedCount(windows: windows,
+                                                        effectiveSpaceID: effectiveSpaceID),
+                    isOn: effectiveSpaceID != nil,
+                    trailingIcon: "chevron.right"
+                ) {
+                    withAnimation(.easeOut(duration: 0.15)) { spaceChipsExpanded = true }
+                }
             }
-            .frame(height: 26)
         }
     }
 
-    private func screenChip(title: String, count: Int, isOn: Bool,
+    /// Pick a desktop and collapse in one gesture — an expanded row that stayed
+    /// open after a choice would cost the space the collapse exists to save.
+    private func selectSpace(_ id: String?) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            selectedSpaceID = id
+            spaceChipsExpanded = false
+        }
+    }
+
+    /// One filter capsule. `icon` distinguishes a desktop chip from a display
+    /// chip; `count` is optional so a bare control (the collapse affordance)
+    /// can reuse the same shape instead of growing a second chip style;
+    /// `trailingIcon` carries the disclosure chevron when collapsed.
+    private func screenChip(title: String, icon: String, count: Int?, isOn: Bool,
+                            trailingIcon: String? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 3) {
-                Image(systemName: "display")
+                Image(systemName: icon)
                     .font(.system(size: 8, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 10, weight: isOn ? .semibold : .regular))
-                    .lineLimit(1)
-                Text("\(count)")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(isOn ? Color.white.opacity(0.75) : colors.textFaint)
+                if !title.isEmpty {
+                    Text(title)
+                        .font(.system(size: 10, weight: isOn ? .semibold : .regular))
+                        .lineLimit(1)
+                }
+                if let count {
+                    Text("\(count)")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(isOn ? Color.white.opacity(0.75) : colors.textFaint)
+                }
+                if let trailingIcon {
+                    Image(systemName: trailingIcon)
+                        .font(.system(size: 7, weight: .semibold))
+                        .foregroundStyle(isOn ? Color.white.opacity(0.75) : colors.textFaint)
+                }
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
