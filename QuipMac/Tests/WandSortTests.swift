@@ -179,6 +179,78 @@ final class WandSortTests: XCTestCase {
         XCTAssertFalse(onlyITerm.contains(.terminalApp))
         XCTAssertFalse(onlyITerm.contains(.simulator))
     }
+
+    // MARK: - Tier derivation follows the configured kinds
+
+    /// The bug this closes: `WandTargetKinds` governed which windows the wand
+    /// SWITCHES ON, while the sort still used a hardcoded table where
+    /// `isTerminal` (iTerm2 OR Terminal.app) was one tier. Narrow the wand to
+    /// iTerm2 and Terminal.app windows still rose above your simulators — they
+    /// just did not get enabled. One setting, two meanings.
+    func testAnUnconfiguredTerminalAppSinksBelowAConfiguredSimulator() {
+        // The reported case: the wand is set to iTerm2 + simulators, so
+        // Terminal.app windows must stop leading the list. Under the old fixed
+        // table `isTerminal` made them tier 0 regardless.
+        let configured: WandTargetKinds = [.iterm2, .simulator]
+        XCTAssertEqual(WandSort.tier(of: .iterm2, configured: configured), 0)
+        XCTAssertEqual(WandSort.tier(of: .simulator, configured: configured), 1)
+        XCTAssertLessThan(WandSort.tier(of: .simulator, configured: configured),
+                          WandSort.tier(of: .terminalApp, configured: configured),
+                          "Terminal.app is not configured, so it must not outrank a simulator")
+    }
+
+    /// Narrowing to iTerm2 alone leaves Terminal.app and simulators both
+    /// unconfigured. Their order relative to each OTHER is a don't-care; what
+    /// matters is that neither ties with iTerm2 any more.
+    func testNarrowingToIterm2DemotesEveryOtherKindBelowIt() {
+        let configured: WandTargetKinds = [.iterm2]
+        let iterm = WandSort.tier(of: .iterm2, configured: configured)
+        XCTAssertEqual(iterm, 0)
+        for kind in [WandWindowKind.terminalApp, .simulator, .other] {
+            XCTAssertGreaterThan(WandSort.tier(of: kind, configured: configured), iterm,
+                                 "\(kind) must not tie with or outrank the only configured kind")
+        }
+    }
+
+    /// Configured kinds rank in declaration order so the result is predictable
+    /// rather than dependent on which bit happens to be set.
+    func testConfiguredKindsRankInDeclarationOrder() {
+        let configured: WandTargetKinds = [.simulator, .terminalApp]
+        XCTAssertEqual(WandSort.tier(of: .terminalApp, configured: configured), 0)
+        XCTAssertEqual(WandSort.tier(of: .simulator, configured: configured), 1)
+    }
+
+    /// An unconfigured window is not excluded from the ordering, only demoted —
+    /// the sidebar still lists it, so it still needs a defined position.
+    func testUnconfiguredKindsKeepTheirRelativeOrderBelowConfiguredOnes() {
+        let configured: WandTargetKinds = [.simulator]
+        XCTAssertEqual(WandSort.tier(of: .simulator, configured: configured), 0)
+        XCTAssertEqual(WandSort.tier(of: .iterm2, configured: configured), 1)
+        XCTAssertEqual(WandSort.tier(of: .terminalApp, configured: configured), 2)
+    }
+
+    /// `.other` is always last: it is the one kind the setting can never name.
+    func testOtherIsAlwaysLast() {
+        for configured: WandTargetKinds in [[.iterm2], [.simulator], .default, []] {
+            let other = WandSort.tier(of: .other, configured: configured)
+            for kind in [WandWindowKind.iterm2, .terminalApp, .simulator] {
+                XCTAssertLessThan(WandSort.tier(of: kind, configured: configured), other,
+                                  "\(kind) must outrank .other for \(configured.rawValue)")
+            }
+        }
+    }
+
+    /// The default install must keep the ordering it has always had:
+    /// terminals, then simulators, then everything else.
+    func testDefaultKeepsTerminalsAboveSimulatorsAboveRest() {
+        let d = WandTargetKinds.default
+        XCTAssertLessThan(WandSort.tier(of: .iterm2, configured: d),
+                          WandSort.tier(of: .simulator, configured: d))
+        XCTAssertLessThan(WandSort.tier(of: .terminalApp, configured: d),
+                          WandSort.tier(of: .simulator, configured: d))
+        XCTAssertLessThan(WandSort.tier(of: .simulator, configured: d),
+                          WandSort.tier(of: .other, configured: d))
+    }
 }
 
 /// The activity signal behind `.mostActive`.

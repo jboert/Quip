@@ -152,10 +152,22 @@ struct WindowListSidebar: View {
     /// Three-tier grouping used for BOTH the magic-wand sort and the sidebar's
     /// visual row-group dividers: terminals (iTerm2 + Terminal.app) first, then
     /// simulators, then everything else. This is the user's dev-focused order.
+    /// What this window is, for the wand's ranking. The single place a
+    /// `ManagedWindow` is reduced to a `WandWindowKind` — kept here rather than
+    /// in `WandSort` so the ordering rules stay free of window internals.
+    private func wandKind(_ window: ManagedWindow) -> WandWindowKind {
+        if window.targetKind == "simulator" { return .simulator }
+        if window.bundleId == TerminalApp.iterm2.bundleIdentifier { return .iterm2 }
+        if window.bundleId == TerminalApp.terminal.bundleIdentifier { return .terminalApp }
+        return .other
+    }
+
+    /// Rank under the CONFIGURED kinds, not a fixed table. `wandTargets()` has
+    /// always honoured the setting; this is what makes the sort honour it too,
+    /// so "switches on iTerm2 only" also means "iTerm2 rises first".
     private func windowTier(_ window: ManagedWindow) -> Int {
-        if window.isTerminal { return 0 }
-        if window.targetKind == "simulator" { return 1 }
-        return 2
+        WandSort.tier(of: wandKind(window),
+                      configured: WandTargetKinds.fromStored(wandTargetKindsRaw))
     }
 
     private func isWaitingForInput(_ window: ManagedWindow) -> Bool {
@@ -179,10 +191,12 @@ struct WindowListSidebar: View {
     private func wandTargets() -> [ManagedWindow] {
         let kinds = WandTargetKinds.fromStored(wandTargetKindsRaw)
         return windowManager.windows.filter { window in
-            if window.targetKind == "simulator" { return kinds.contains(.simulator) }
-            if window.bundleId == TerminalApp.iterm2.bundleIdentifier { return kinds.contains(.iterm2) }
-            if window.bundleId == TerminalApp.terminal.bundleIdentifier { return kinds.contains(.terminalApp) }
-            return false
+            switch wandKind(window) {
+            case .simulator:   return kinds.contains(.simulator)
+            case .iterm2:      return kinds.contains(.iterm2)
+            case .terminalApp: return kinds.contains(.terminalApp)
+            case .other:       return false
+            }
         }
     }
 

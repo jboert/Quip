@@ -70,12 +70,62 @@ struct WandTargetKinds: OptionSet, Sendable {
     /// opts into something narrower.
     static let `default`: WandTargetKinds = [.iterm2, .terminalApp, .simulator]
 
-    /// A stored 0 means "no kinds", which would make the wand do nothing at all
-    /// and read as a broken button. Treat it as the default instead — the
-    /// setting is a filter, not an off switch.
+    /// Defence-in-depth for a corrupt or pre-migration stored value. The
+    /// Settings UI refuses to let the last kind be unchecked, so an empty set
+    /// should be unreachable from the app; if one arrives anyway, a wand that
+    /// does nothing reads as a broken button, so fall back to the default.
     static func fromStored(_ raw: Int) -> WandTargetKinds {
         raw == 0 ? .default : WandTargetKinds(rawValue: raw)
     }
+
+    /// The kinds in the order they rank, which is also the order the Settings
+    /// checkboxes appear in — so "first in the list" means the same thing in
+    /// both places.
+    static let ordered: [WandTargetKinds] = [.iterm2, .terminalApp, .simulator]
+
+    /// Which kind a window is, or nil for an app the wand does not act on.
+    ///
+    /// Pure, and deliberately taking the two raw fields rather than a
+    /// `ManagedWindow`, so the classification that answers "why didn't the wand
+    /// pick just my iTerm2 windows" is testable without AppKit.
+    ///
+    /// Simulator is checked FIRST and by `targetKind`, which is itself derived
+    /// from `bundleId`. The two can never collide today — the simulator bundle
+    /// id is neither terminal — but the order is load-bearing if `targetKind`
+    /// ever widens (its own docs plan a `"browser_localhost"`), so it stays
+    /// explicit rather than incidental.
+    static func kind(bundleId: String, targetKind: String?) -> WandTargetKinds? {
+        if targetKind == "simulator" { return .simulator }
+        if bundleId == TerminalApp.iterm2.bundleIdentifier { return .iterm2 }
+        if bundleId == TerminalApp.terminal.bundleIdentifier { return .terminalApp }
+        return nil
+    }
+
+    /// Whether this configuration acts on that window.
+    func matches(bundleId: String, targetKind: String?) -> Bool {
+        guard let kind = WandTargetKinds.kind(bundleId: bundleId, targetKind: targetKind)
+        else { return false }
+        return contains(kind)
+    }
+
+    /// True for the kinds where "waiting for input" means an agent is waiting on
+    /// YOU. A simulator has no prompt to wait at.
+    static func isTerminal(_ kind: WandTargetKinds?) -> Bool {
+        kind == .iterm2 || kind == .terminalApp
+    }
+}
+
+/// What a window is, as far as the wand is concerned.
+///
+/// Separate from `WandTargetKinds` because that is a SET (what the user asked
+/// for) and this is a single value (what a given window happens to be). `other`
+/// has no `WandTargetKinds` counterpart on purpose: the setting can never name
+/// it, so it can never be configured and always ranks last.
+enum WandWindowKind: Sendable, Equatable, CaseIterable {
+    case iterm2
+    case terminalApp
+    case simulator
+    case other
 }
 
 /// One window, reduced to what the sort actually needs.
@@ -85,7 +135,10 @@ struct WandTargetKinds: OptionSet, Sendable {
 /// or anything else that would drag AppKit into a unit test.
 struct WandSortItem: Sendable, Equatable {
     let id: String
-    /// 0 = terminal, 1 = simulator, 2 = everything else.
+    /// Rank of this window's kind under the wand's configured target kinds —
+    /// see `WandSort.tier(of:configured:)`. Lower sorts first. NOT a fixed
+    /// table: which kinds lead depends on what the user asked the wand to
+    /// care about.
     let tier: Int
     let subtitle: String
     let isWaitingForInput: Bool
@@ -93,6 +146,43 @@ struct WandSortItem: Sendable, Equatable {
 }
 
 enum WandSort {
+
+    /// The kinds the setting can name, in the order they rank. Declaration
+    /// order rather than `rawValue` order so the ranking is something a reader
+    /// can see rather than derive from bit positions.
+    private static let rankableKinds: [(option: WandTargetKinds, kind: WandWindowKind)] = [
+        (.iterm2, .iterm2),
+        (.terminalApp, .terminalApp),
+        (.simulator, .simulator),
+    ]
+
+    /// Where a window of `kind` sorts, given the wand's configured target kinds.
+    ///
+    /// Configured kinds lead, in the order above; unconfigured ones follow in
+    /// the same order; `.other` is always last. One setting therefore means one
+    /// thing — "these are the windows I care about" — governing both what rises
+    /// and what gets switched on.
+    ///
+    /// Previously the tier came from a fixed table in the sidebar where
+    /// `isTerminal` lumped iTerm2 and Terminal.app together, so narrowing the
+    /// wand to iTerm2 changed what it enabled but not what sorted first: your
+    /// Terminal.app windows still outranked your simulators.
+    ///
+    /// Unconfigured kinds are demoted rather than dropped, because the sidebar
+    /// still lists those windows and every listed window needs a position.
+    ///
+    /// The default (`.iterm2, .terminalApp, .simulator`) preserves the historical
+    /// ordering — terminals, then simulators, then the rest. The one change is
+    /// that iTerm2 now ranks strictly above Terminal.app instead of tying with
+    /// it; the tie used to be broken by subtitle, so this only ever moves
+    /// Terminal.app windows below iTerm2 ones.
+    static func tier(of kind: WandWindowKind, configured: WandTargetKinds) -> Int {
+        let selected = rankableKinds.filter { configured.contains($0.option) }
+        if let i = selected.firstIndex(where: { $0.kind == kind }) { return i }
+        let rest = rankableKinds.filter { !configured.contains($0.option) }
+        if let i = rest.firstIndex(where: { $0.kind == kind }) { return selected.count + i }
+        return rankableKinds.count
+    }
 
     /// Order `items` for `mode`, returning window ids.
     ///
