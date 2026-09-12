@@ -6,7 +6,18 @@ import SwiftUI
 struct WindowListSidebar: View {
     @Environment(WindowManager.self) private var windowManager
     @Environment(TerminalStateDetector.self) private var stateDetector
+    @Environment(OutputActivityTracker.self) private var outputActivity
     @Binding var selectedWindowId: String?
+
+    /// Which window kinds the wand switches on, and which orders it rotates
+    /// through. Both were hardcoded; see `WandTargetKinds` for why the old
+    /// hardcoding meant a wand tap could never select the iTerm2 windows alone.
+    @AppStorage("wandTargetKinds") private var wandTargetKindsRaw: Int = WandTargetKinds.default.rawValue
+    @AppStorage("wandSortModes") private var wandSortModesRaw: String = WandSortMode.stored(WandSortMode.allCases)
+    /// Where the rotation stands. Persisted so the wand does not silently
+    /// restart at "Dev" on every launch while the header still reads the mode
+    /// from the last session.
+    @AppStorage("wandSortModeIndex") private var wandSortModeIndex: Int = 0
 
     @State private var showingAddPopover = false
     @State private var newTerminalApp: TerminalApp = .iterm2
@@ -37,14 +48,30 @@ struct WindowListSidebar: View {
             Spacer()
 
             Button {
-                magicSort()
+                // Option-click keeps the "turn everything off" the rotation
+                // took away. It was the old second tap, which is exactly why a
+                // double-click used to end with nothing selected.
+                if NSEvent.modifierFlags.contains(.option) {
+                    disableAllTargets()
+                } else {
+                    magicSort()
+                }
             } label: {
-                Image(systemName: "wand.and.stars")
-                    .font(.title3)
+                HStack(spacing: 3) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.title3)
+                    // Without this the rotation is invisible and the button is
+                    // back to doing something the user cannot predict.
+                    Text(currentWandMode.label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Auto-sort and toggle dev windows")
-            .help("Auto-sort + toggle your dev windows — terminals (attention-needed first) and simulators sort to the top and turn on; tap again to turn them off. Other windows just get sorted.")
+            .accessibilityLabel("Sort windows: \(currentWandMode.label)")
+            .help("Sort + switch on your windows — \(currentWandMode.help). "
+                  + "Click again for the next order. Option-click to switch them all off. "
+                  + "Configure in Settings → General.")
 
             Button {
                 showingAddPopover.toggle()
@@ -135,50 +162,72 @@ struct WindowListSidebar: View {
         stateDetector.windowStates[window.id] == .waitingForInput
     }
 
-    /// Magic-wand one-tap sort + enable-toggle. Snapshots the current
-    /// arrangement into a dev-focused order and writes it through
-    /// `WindowManager.setOrder` (which the sidebar renders verbatim, so it
-    /// sticks and stays drag-tweakable afterward):
-    ///   1. Terminals — and within them, windows where Claude is WAITING FOR
-    ///      INPUT bubble to the very top (the one that needs you is #1).
-    ///   2. Simulators.
-    ///   3. Everything else.
-    /// Secondary key: the project subtitle, then the prior order for stability.
+    /// The rotation the wand walks, and where it currently stands.
+    private var wandRotation: [WandSortMode] {
+        WandSortMode.rotation(fromStored: wandSortModesRaw)
+    }
+
+    private var currentWandMode: WandSortMode {
+        WandSort.mode(at: wandSortModeIndex, rotation: wandRotation)
+    }
+
+    /// Windows this wand acts on, per the configured kinds.
     ///
-    /// In the SAME tap it also toggles the enabled-state of every dev window
-    /// (tier 0 terminals + tier 1 simulators): if every target is already on it
-    /// turns them all off, otherwise it turns them all on. Tier-2 ("everything
-    /// else") windows are never touched. The flip goes through the same
-    /// windowManager.toggleWindow path the row checkbox and the phone use, so
-    /// the checkboxes follow automatically — no private @State mirror.
+    /// The old rule was `windowTier($0) <= 1`, which silently meant iTerm2 AND
+    /// Terminal.app AND simulators together — there was no way to ask for one
+    /// of them.
+    private func wandTargets() -> [ManagedWindow] {
+        let kinds = WandTargetKinds.fromStored(wandTargetKindsRaw)
+        return windowManager.windows.filter { window in
+            if window.targetKind == "simulator" { return kinds.contains(.simulator) }
+            if window.bundleId == TerminalApp.iterm2.bundleIdentifier { return kinds.contains(.iterm2) }
+            if window.bundleId == TerminalApp.terminal.bundleIdentifier { return kinds.contains(.terminalApp) }
+            return false
+        }
+    }
+
+    /// Magic-wand one-tap sort. Snapshots the current arrangement into the
+    /// rotation's next order and writes it through `WindowManager.setOrder`
+    /// (which the sidebar renders verbatim, so it sticks and stays
+    /// drag-tweakable afterward), then switches the configured target kinds on.
     ///
-    /// One-shot by design — it does NOT keep re-sorting as states change; tap
-    /// again to re-snap (and to flip the targets back off).
+    /// Targets are enabled on EVERY tap and never flipped off. The old
+    /// behaviour toggled — tap once to enable everything, tap again to disable
+    /// everything — so clicking the wand twice reliably ended with nothing
+    /// selected, which read as the button not working. Switching everything off
+    /// is still available on Option-click.
+    ///
+    /// One-shot by design: it does NOT keep re-sorting as states change. Tap
+    /// again for the next order in the rotation.
     private func magicSort() {
         let windows = windowManager.windows
-        let sorted = windows.enumerated().sorted { lhs, rhs in
-            let a = lhs.element, b = rhs.element
-            let ta = windowTier(a), tb = windowTier(b)
-            if ta != tb { return ta < tb }
-            if ta == 0 {  // terminals: attention-needed (waiting for input) first
-                let aw = isWaitingForInput(a) ? 0 : 1
-                let bw = isWaitingForInput(b) ? 0 : 1
-                if aw != bw { return aw < bw }
-            }
-            let sa = a.subtitle.lowercased(), sb = b.subtitle.lowercased()
-            if sa != sb { return sa < sb }
-            return lhs.offset < rhs.offset
-        }.map(\.element.id)
-
-        // Dev windows the wand enables/disables: terminals + simulators only.
-        let targets = windows.filter { windowTier($0) <= 1 }
-        let allOn = !targets.isEmpty && targets.allSatisfy { $0.isEnabled }
-        let enableAll = !allOn
+        let mode = currentWandMode
+        let items = windows.map { window in
+            WandSortItem(id: window.id,
+                         tier: windowTier(window),
+                         subtitle: window.subtitle,
+                         isWaitingForInput: isWaitingForInput(window),
+                         lastOutputChangeAt: outputActivity.lastOutputChangeAt[window.id])
+        }
+        let sorted = WandSort.order(items, mode: mode)
+        let targets = wandTargets()
 
         withAnimation(.easeOut(duration: 0.22)) {
             windowManager.setOrder(sorted)
-            for target in targets {
-                windowManager.toggleWindow(target.id, enabled: enableAll)
+            for target in targets where !target.isEnabled {
+                windowManager.toggleWindow(target.id, enabled: true)
+            }
+        }
+        wandSortModeIndex = WandSort.advance(index: wandSortModeIndex, rotation: wandRotation)
+    }
+
+    /// Option-click: switch every configured target off. Preserves the one
+    /// useful half of the old toggle without making it the thing a second
+    /// ordinary click does.
+    private func disableAllTargets() {
+        withAnimation(.easeOut(duration: 0.22)) {
+            for target in wandTargets() where target.isEnabled {
+                windowManager.toggleWindow(target.id, enabled: false)
             }
         }
     }

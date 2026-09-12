@@ -888,6 +888,88 @@ private struct PromptsTab: View {
 
 // MARK: - General Tab
 
+/// Settings for the sidebar's magic-wand button.
+///
+/// Its own struct so the four `@AppStorage` keys stay together and out of
+/// `GeneralTab`, which already carries a dozen.
+private struct WandSection: View {
+    @AppStorage("wandTargetKinds") private var targetKindsRaw: Int = WandTargetKinds.default.rawValue
+    @AppStorage("wandSortModes") private var sortModesRaw: String = WandSortMode.stored(WandSortMode.allCases)
+    @AppStorage("wandSortModeIndex") private var sortModeIndex: Int = 0
+
+    private var kinds: WandTargetKinds { WandTargetKinds.fromStored(targetKindsRaw) }
+    private var rotation: [WandSortMode] { WandSortMode.rotation(fromStored: sortModesRaw) }
+
+    var body: some View {
+        Section("Sort button") {
+            Text("The wand in the sidebar sorts your windows and switches them on. Each click moves to the next order below. Option-click switches them all off.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("Switches on") {
+                VStack(alignment: .leading, spacing: 2) {
+                    kindToggle("iTerm2", .iterm2)
+                    kindToggle("Terminal.app", .terminalApp)
+                    kindToggle("Simulators", .simulator)
+                }
+            }
+
+            LabeledContent("Orders") {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(WandSortMode.allCases) { mode in
+                        Toggle(isOn: modeBinding(mode)) {
+                            // The mode's own description, rather than a second
+                            // caption line per row — the sidebar's tooltip shows
+                            // the same text, so they stay in step.
+                            Text("\(mode.label) — \(mode.help)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func kindToggle(_ title: String, _ kind: WandTargetKinds) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { kinds.contains(kind) },
+            set: { on in
+                var next = kinds
+                if on { next.insert(kind) } else { next.remove(kind) }
+                // An empty set would make the wand a dead button, so it reads
+                // back as the default — see `WandTargetKinds.fromStored`. Store
+                // the raw value anyway so unchecking the last box is visible
+                // rather than silently snapping back.
+                targetKindsRaw = next.rawValue
+            }
+        ))
+    }
+
+    /// Unchecking the last order restores the full rotation rather than leaving
+    /// the wand with nothing to apply; `WandSortMode.rotation` enforces the same
+    /// rule on read, so the two cannot disagree.
+    private func modeBinding(_ mode: WandSortMode) -> Binding<Bool> {
+        Binding(
+            get: { rotation.contains(mode) },
+            set: { on in
+                var next = rotation
+                if on {
+                    guard !next.contains(mode) else { return }
+                    // Keep the canonical order so the rotation is predictable
+                    // no matter which order the boxes were ticked in.
+                    next = WandSortMode.allCases.filter { next.contains($0) || $0 == mode }
+                } else {
+                    next.removeAll { $0 == mode }
+                }
+                sortModesRaw = WandSortMode.stored(next)
+                // The stored index can now point past the end of a shortened
+                // rotation. Reset rather than relying on the read-side clamp, so
+                // the sidebar caption matches what the next click will do.
+                sortModeIndex = 0
+            }
+        )
+    }
+}
+
 private struct GeneralTab: View {
     @Environment(WhisperStatusStore.self) private var whisperStatus
     @Environment(MacPermissionsStore.self) private var permissionsStore
@@ -932,6 +1014,8 @@ private struct GeneralTab: View {
                     }
                 }
             }
+
+            WandSection()
 
             // Folded in from the former Colors tab — terminal background tints
             // keyed to Claude Code's state. Lives in its own struct so its

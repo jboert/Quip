@@ -162,6 +162,9 @@ struct QuipMacApp: App {
     @State private var bonjourAdvertiser = BonjourAdvertiser()
     @State private var terminalStateDetector = TerminalStateDetector()
     @State private var claudeModeDetector = ClaudeModeDetector()
+    /// Which windows are producing output, for the sidebar wand's "most active"
+    /// sort. Fed by the mode poll's buffer reads — no extra AppleScript.
+    @State private var outputActivity = OutputActivityTracker()
     @State private var terminalColorManager = TerminalColorManager()
     @State private var keystrokeInjector = KeystrokeInjector()
     private let imageUploadHandler = ImageUploadHandler.defaultProduction()
@@ -305,6 +308,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
                 .environment(terminalStateDetector)
+        .environment(outputActivity)
                 .environment(terminalColorManager)
                 .environment(keystrokeInjector)
                 .environment(tunnel)
@@ -720,6 +724,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // iOS clients see plan/autoAccept toggles land within one poll cycle.
         claudeModeDetector.onModeChange = { [self] _, _, _ in
             broadcastLayout()
+        }
+        claudeModeDetector.onContentRead = { [outputActivity] windowId, content in
+            outputActivity.record(windowId: windowId, content: content)
         }
         claudeModeDetector.startMonitoring(keystrokeInjector: keystrokeInjector)
         windowManager.refreshDisplays()
@@ -3734,6 +3741,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         pendingInputForWindow = pendingInputForWindow.intersection(allCurrentIds)
         thinkingWindows = thinkingWindows.intersection(allCurrentIds)
         claudeModeDetector.windowModes = claudeModeDetector.windowModes.filter { allCurrentIds.contains($0.key) }
+        outputActivity.prune(toTracked: allCurrentIds)
         if let selected = clientSelectedWindowId, !allCurrentIds.contains(selected) {
             // §7 diagnostic — selected window vanished from snapshot (iTerm
             // respawn, window close, layout swap). Phone keeps its
