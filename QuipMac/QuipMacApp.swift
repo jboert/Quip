@@ -972,6 +972,18 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
     }
 
+    /// One phrase naming why a `ContentRead` produced nothing, for log lines
+    /// that need to say which of the two failures happened. `.ok` never reaches
+    /// here; it is spelled out rather than crashed on so a logger can't take a
+    /// caller down.
+    private nonisolated static func readFailureReason(_ read: KeystrokeInjector.ContentRead) -> String {
+        switch read {
+        case .ok: return "the read actually succeeded"
+        case .failed: return "the content read failed (suspect a revoked Automation/Accessibility grant)"
+        case .sessionGone: return "the iTerm2 session id is not in iTerm's session tree (stale session map, NOT permissions)"
+        }
+    }
+
     /// Return the text of the LAST Claude Code response marker (⏺ prose line),
     /// or empty string if none found. Used to detect when a new response has been added.
     private nonisolated func lastResponseMarkerText(in text: String) -> String {
@@ -1949,9 +1961,28 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 if let window = windowManager.windows.first(where: { $0.id == wid }) {
                     let termApp = terminalAppForWindow(window)
                     let wn = window.windowNumber
+                    let sessionId = window.iterm2SessionId
                     DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
-                        let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId) ?? ""
+                        let read = keystrokeInjector.readContentDetailed(terminalApp: termApp,
+                                                                        cgWindowNumber: wn,
+                                                                        iterm2SessionId: sessionId)
                         DispatchQueue.main.async { [self] in
+                            // A failed read must NOT become an empty baseline. The
+                            // high-water mark is what keeps the next TTS delta to
+                            // content written after this point; seeding it with ""
+                            // makes `computeDelta` measure against nothing and speak
+                            // up to 25 lines that predate the send — the exact replay
+                            // the mark exists to prevent. Leaving the previous mark in
+                            // place is the conservative answer: at worst the next
+                            // delta is measured from slightly older content.
+                            guard case .ok(let content) = read else {
+                                KokoroTTSDebug.log(
+                                    "stt baseline NOT updated for \(wid): \(Self.readFailureReason(read)). "
+                                    + "Keeping the previous high-water mark rather than replaying old output."
+                                )
+                                schedulePendingInputResponseCheck(windowId: wid, attempt: 0)
+                                return
+                            }
                             sttBaselineContent[wid] = content
                             outputHighWaterMarks[wid] = content
                             schedulePendingInputResponseCheck(windowId: wid, attempt: 0)
@@ -1990,8 +2021,24 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             // padding already dropped and secrets already
                             // redacted, so the phone and the Mac's own detectors
                             // reason over identical bytes (see readContent).
-                            let content = keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? ""
-                            redacted = content.components(separatedBy: "\n").suffix(200).joined(separator: "\n")
+                            let read = keystrokeInjector.readContentDetailed(terminalApp: termApp,
+                                                                            cgWindowNumber: wn,
+                                                                            iterm2SessionId: sessionId)
+                            // A failed read used to ship "" and the phone drew an
+                            // empty terminal — indistinguishable from a window that
+                            // genuinely has nothing in it, and with no hint that
+                            // anything went wrong. Say so instead, in the pane, where
+                            // the person looking at the blank screen actually is.
+                            switch read {
+                            case .ok(let content):
+                                redacted = content.components(separatedBy: "\n").suffix(200).joined(separator: "\n")
+                            case .failed:
+                                KokoroTTSDebug.log("request_content read failed for \(wid)")
+                                redacted = "[Quip could not read this window — check Automation/Accessibility permissions for Quip]"
+                            case .sessionGone:
+                                KokoroTTSDebug.log("request_content session gone for \(wid)")
+                                redacted = "[Quip lost track of this iTerm2 session — it should recover on its own in a moment]"
+                            }
                         } else {
                             redacted = "[non-terminal window — screenshot requires Screen Recording permission for Quip]"
                         }
@@ -3020,9 +3067,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // Reads target the exact window on both terminals now (Terminal.app
             // by CGWindowID, iTerm2 by session id), so what gets validated here
             // is the same window `focusWindow` raises below before injecting.
-            let content = isTerminal
-                ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
-                : ""
+            let read: KeystrokeInjector.ContentRead = isTerminal
+                ? keystrokeInjector.readContentDetailed(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                : .ok("")
+            // Refusing to inject on a failed read is the right call — but it used
+            // to arrive at the phone as "Prompt changed", which blames the prompt
+            // for a screen we could not read. Same refusal, honest reason.
+            if case .ok = read {} else {
+                KokoroTTSDebug.log("answer revalidation skipped for \(wid): \(Self.readFailureReason(read))")
+            }
+            let content: String = { if case .ok(let c) = read { return c } else { return "" } }()
             let ok = Self.answerStillValid(action: action, expectedFingerprint: expectedFingerprint, liveContent: content)
             // #3 — re-fire a fresh push with the now-current options so the
             // user just taps again. Recompute now (still on bg) so the main
@@ -3322,11 +3376,20 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             let sessionId = window.iterm2SessionId
             let isTerminal = window.isTerminal
             DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
-                let content = isTerminal
-                    ? (keystrokeInjector.readContent(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId) ?? "")
-                    : ""
+                let read: KeystrokeInjector.ContentRead = isTerminal
+                    ? keystrokeInjector.readContentDetailed(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                    : .ok("")
+                let content: String = { if case .ok(let c) = read { return c } else { return "" } }()
                 guard AutosuggestDetector.shouldAccept(liveContent: content) else {
-                    print("[Quip] press_right DROPPED (no autosuggestion at inject time): window=\(wid)")
+                    // "no autosuggestion" and "we could not read the screen" are
+                    // different facts, and `print` reaches neither ~/Library/Logs/
+                    // Quip nor the unified log — so this used to be recorded
+                    // nowhere at all.
+                    if case .ok = read {
+                        KokoroTTSDebug.log("press_right DROPPED for \(wid): no autosuggestion on screen at inject time")
+                    } else {
+                        KokoroTTSDebug.log("press_right DROPPED for \(wid): \(Self.readFailureReason(read))")
+                    }
                     return
                 }
                 DispatchQueue.main.async {
