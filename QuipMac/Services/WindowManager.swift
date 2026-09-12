@@ -119,6 +119,26 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
 
 // MARK: - WindowManager
 
+/// Append one line to `injection.log` about the iTerm2 session map. Append-only,
+/// failures swallowed — same contract as the injector's own appender.
+///
+/// It shares the injector's file on purpose: someone reading that file is
+/// already chasing "iTerm2 session not yet mapped", and a fetch that keeps
+/// failing is the reason the mappings behind those sends went stale.
+fileprivate func appendSessionMapLog(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = LogPaths.injectionPath
+    LogPaths.rotateIfNeeded(path: path)
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
+
 @MainActor
 @Observable
 final class WindowManager {
@@ -1218,11 +1238,44 @@ final class WindowManager {
         }
     }
 
+    /// Consecutive `.failed` fetches. Drives the log throttle below — and it is
+    /// the only reason anyone can tell a healthy session map from a frozen one.
+    private var failedSessionFetchStreak = 0
+
+    /// Log the first failure, then every `sessionFetchLogEvery`-th. The poll
+    /// runs every 2s, so an unthrottled line per drop would bury the file it
+    /// writes to within minutes of a revoked Automation grant.
+    private static let sessionFetchLogEvery = 30
+
     /// Apply a fetch outcome. A `.failed` pass is dropped on the floor: the
     /// last good mapping is a better answer than no mapping, and the poll runs
     /// again shortly. `.ok` (including `.ok([])`) is applied as truth.
+    ///
+    /// The drop is logged. Silently keeping the last good mapping means a
+    /// persistently failing fetch — a revoked Automation grant, a wedged
+    /// iTerm2 — looks exactly like a healthy system from the outside, while
+    /// every send runs against ids nothing is refreshing any more.
     func applyIterm2SessionFetch(_ fetch: Iterm2SessionFetch) {
-        guard case .ok(let sessions, let unreadable) = fetch else { return }
+        guard case .ok(let sessions, let unreadable) = fetch else {
+            failedSessionFetchStreak += 1
+            if failedSessionFetchStreak == 1
+                || failedSessionFetchStreak % Self.sessionFetchLogEvery == 0 {
+                appendSessionMapLog(
+                    "SESSION_FETCH failed streak=\(failedSessionFetchStreak) "
+                    + "action=kept-last-good-mapping")
+            }
+            return
+        }
+        if failedSessionFetchStreak > 0 {
+            appendSessionMapLog("SESSION_FETCH recovered after=\(failedSessionFetchStreak)")
+            failedSessionFetchStreak = 0
+        }
+        if !unreadable.isEmpty {
+            // Not a throttled streak: this is per-pass and self-limiting, and it
+            // names windows whose mapping is deliberately older than the rest.
+            let ids = unreadable.sorted().map(String.init).joined(separator: ",")
+            appendSessionMapLog("SESSION_FETCH partial unreadable=\(ids) action=kept-their-mappings")
+        }
         applyIterm2SessionIds(sessions, preserving: unreadable)
     }
 

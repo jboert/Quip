@@ -74,6 +74,57 @@ final class InjectionLogTests: XCTestCase {
         XCTAssertTrue(line.hasSuffix("\""), "The msg field must still close")
     }
 
+    /// The field grammar is space separated, so an `op` carrying spaces breaks
+    /// every reader that splits on whitespace. This used to be the NORMAL case:
+    /// `executeAppleScript` passed its whole prose context down as the op, and
+    /// that is the path every classified failure takes, TCC denials included.
+    func testOpWithSpacesCannotBreakTheFieldGrammar() {
+        let line = KeystrokeInjector.injectionLogLine(
+            op: "sendText to com.googlecode.iterm2.808 [iTerm2]",
+            windowId: "com.googlecode.iterm2.808",
+            terminalApp: .iterm2, kind: .tccDenied, message: "denied")
+
+        let fields = line.components(separatedBy: " ")
+        XCTAssertEqual(fields[0], "DROPPED")
+        XCTAssertEqual(fields[2], "window=com.googlecode.iterm2.808",
+                       "The window field must stay in its position: \(line)")
+        XCTAssertEqual(fields[3], "app=iTerm2")
+    }
+
+    func testEmptyTokenReadsAsADashRatherThanCollapsingTheField() {
+        let line = KeystrokeInjector.injectionLogLine(
+            op: "spawnWindow", windowId: "", terminalApp: nil,
+            kind: nil, message: "boom")
+
+        XCTAssertTrue(line.contains("window=- "), line)
+    }
+
+    /// Everything that does not fit a bare token goes in `detail`, quoted and
+    /// escaped exactly like `msg` — so the spawn/scroll/keystroke context that
+    /// used to live in the op is still recorded, just parseably.
+    func testDetailIsQuotedAndOnlyPresentWhenGiven() {
+        let withDetail = KeystrokeInjector.injectionLogLine(
+            op: "sendKeystroke", windowId: "w1", terminalApp: .iterm2,
+            kind: .unknown("x"), message: "boom",
+            detail: "key=shift+tab cgWin=808")
+        XCTAssertTrue(withDetail.hasSuffix(#"detail="key=shift+tab cgWin=808""#), withDetail)
+
+        let without = KeystrokeInjector.injectionLogLine(
+            op: "sendKeystroke", windowId: "w1", terminalApp: .iterm2,
+            kind: .unknown("x"), message: "boom")
+        XCTAssertFalse(without.contains("detail="), without)
+    }
+
+    func testDetailCannotForgeASecondLineEither() {
+        let line = KeystrokeInjector.injectionLogLine(
+            op: "spawnWindow", windowId: "-", terminalApp: nil,
+            kind: nil, message: "boom",
+            detail: "cmd=echo \"hi\"\nDROPPED op=forged")
+
+        XCTAssertFalse(line.contains("\n"), "A newline must be escaped, not emitted")
+        XCTAssertTrue(line.hasSuffix("\""), "The detail field must still close")
+    }
+
     func testBackslashIsEscapedBeforeQuotes() {
         // Escaping quotes first would leave `\"` ambiguous with an escaped
         // backslash followed by a quote.
