@@ -3668,8 +3668,8 @@ struct MainiOSView: View {
     // MARK: - Window Layout
 
     private var windowLayout: some View {
-        // The chips are the whole multi-screen affordance, and they cost zero
-        // vertical space on a one-screen, one-desktop Mac (see `filterChips`).
+        // The chips are the whole multi-display affordance, and they cost zero
+        // vertical space on a one-display, one-desktop Mac (see `filterChips`).
         // Inside windowLayout rather than at each of its four call sites so
         // every layout — portrait, landscape, expanded — gets them for free.
         VStack(spacing: 0) {
@@ -3679,6 +3679,12 @@ struct MainiOSView: View {
     }
 
     /// Desktop and display filters on ONE 26pt row.
+    ///
+    /// Two axes, ANDed: a desktop (macOS Space) is not a display (a physical
+    /// monitor), a window has one of each, and the grid shows the windows both
+    /// filters allow. Each side carries its own "All …" chip, and every count is
+    /// scoped to what the other side is allowing, so the row states the rule
+    /// rather than leaving it to be inferred from missing cards.
     ///
     /// They used to be two stacked rows, so a multi-display Mac with windows on
     /// more than one desktop spent 52pt of the grid on chrome. They are also
@@ -3708,20 +3714,44 @@ struct MainiOSView: View {
         }
     }
 
-    /// Compact per-screen filter. One chip per display plus "All", only when
-    /// the Mac actually has more than one screen — a single-display desk sees
-    /// nothing at all, not a row with one useless chip.
+    /// Windows the OTHER axis is currently letting through.
+    ///
+    /// Every chip count is computed against these, never against the raw list.
+    /// The two filters AND together, so a display chip that counted every window
+    /// on that display while a desktop filter was also narrowing the grid
+    /// described a set the grid was not showing: the badges never summed to the
+    /// number of cards, and the row gave no clue that the other filter was the
+    /// reason. Counted this way, the badges ARE the rule — each side shows the
+    /// breakdown of what the other side is already allowing, and a 0 says
+    /// plainly "nothing here, given the other filter".
+    private var windowsPassingSpaceFilter: [WindowState] {
+        guard let id = effectiveSpaceID else { return displayWindows }
+        return displayWindows.filter { $0.spaceID == id }
+    }
+
+    private var windowsPassingDisplayFilter: [WindowState] {
+        guard let id = selectedDisplayID else { return displayWindows }
+        return displayWindows.filter { effectiveDisplayID($0) == id }
+    }
+
+    /// Compact per-display filter. One chip per display plus "All Displays",
+    /// only when the Mac actually has more than one display — a single-display
+    /// desk sees nothing at all, not a row with one useless chip.
     @ViewBuilder
     private var displayChipGroup: some View {
         if displays.count > 1 {
             ForEach(displays) { display in
-                screenChip(title: display.name, icon: Self.displayChipIcon,
-                           count: windows.filter { effectiveDisplayID($0) == display.id }.count,
+                filterChip(title: display.name, icon: Self.displayChipIcon,
+                           count: windowsPassingSpaceFilter
+                               .filter { effectiveDisplayID($0) == display.id }.count,
                            isOn: selectedDisplayID == display.id) {
                     selectDisplay(display.id)
                 }
             }
-            screenChip(title: "All", icon: Self.displayChipIcon, count: windows.count,
+            // Named, not bare "All": with a desktop "All Desktops" chip on the
+            // same row, one unqualified "All" read as a reset for both.
+            filterChip(title: "All Displays", icon: Self.displayChipIcon,
+                       count: windowsPassingSpaceFilter.count,
                        isOn: selectedDisplayID == nil) {
                 selectDisplay(nil)
             }
@@ -3731,13 +3761,17 @@ struct MainiOSView: View {
     /// Desktops holding at least one window. A Space the user has nothing open
     /// on would only offer a chip leading to a blank grid, and dropping the
     /// empties can take the row back down to one — at which point it hides
-    /// entirely, exactly like `screenChips` on a single-display desk.
+    /// entirely, exactly like `displayChipGroup` on a single-display desk.
+    ///
+    /// Deliberately computed from ALL windows, not from the display filter's
+    /// survivors: a filter row that reshuffles itself as you use it is worse
+    /// than one that keeps a stable set of chips and shows a 0 count.
     private var activeSpaces: [SpaceState] {
         SpaceActivity.active(spaces: spaces, windows: windows)
     }
 
     /// SF Symbols for the two chip kinds. They used to share `display`, which
-    /// made a desktop chip and a monitor chip indistinguishable at a glance —
+    /// made a desktop chip and a display chip indistinguishable at a glance —
     /// the main reason the area read as noise rather than as two filters.
     private static let spaceChipIcon = "macwindow.on.rectangle"
     private static let displayChipIcon = "display"
@@ -3753,28 +3787,29 @@ struct MainiOSView: View {
         if activeSpaces.count > 1 {
             if spaceChipsExpanded {
                 ForEach(activeSpaces) { space in
-                    screenChip(title: space.name, icon: Self.spaceChipIcon,
-                               count: windows.filter { $0.spaceID == space.id }.count,
+                    filterChip(title: space.name, icon: Self.spaceChipIcon,
+                               count: windowsPassingDisplayFilter
+                                   .filter { $0.spaceID == space.id }.count,
                                isOn: effectiveSpaceID == space.id) {
                         selectSpace(space.id)
                     }
                 }
-                screenChip(title: "All Desktops", icon: Self.spaceChipIcon,
-                           count: windows.count,
+                filterChip(title: "All Desktops", icon: Self.spaceChipIcon,
+                           count: windowsPassingDisplayFilter.count,
                            isOn: effectiveSpaceID == nil) {
                     selectSpace(nil)
                 }
                 // Collapsing is otherwise only reachable by picking a filter,
                 // which forces a selection change just to tidy the row.
-                screenChip(title: "", icon: "chevron.left", count: nil, isOn: false) {
+                filterChip(title: "", icon: "chevron.left", count: nil, isOn: false) {
                     withAnimation(.easeOut(duration: 0.15)) { spaceChipsExpanded = false }
                 }
             } else {
-                screenChip(
+                filterChip(
                     title: SpaceActivity.collapsedTitle(activeSpaces: activeSpaces,
                                                         effectiveSpaceID: effectiveSpaceID),
                     icon: Self.spaceChipIcon,
-                    count: SpaceActivity.collapsedCount(windows: windows,
+                    count: SpaceActivity.collapsedCount(windows: windowsPassingDisplayFilter,
                                                         effectiveSpaceID: effectiveSpaceID),
                     isOn: effectiveSpaceID != nil,
                     trailingIcon: "chevron.right"
@@ -3794,11 +3829,12 @@ struct MainiOSView: View {
         }
     }
 
-    /// One filter capsule. `icon` distinguishes a desktop chip from a display
-    /// chip; `count` is optional so a bare control (the collapse affordance)
-    /// can reuse the same shape instead of growing a second chip style;
-    /// `trailingIcon` carries the disclosure chevron when collapsed.
-    private func screenChip(title: String, icon: String, count: Int?, isOn: Bool,
+    /// One filter capsule, used by both axes. `icon` distinguishes a desktop
+    /// chip from a display chip; `count` is optional so a bare control (the
+    /// collapse affordance) can reuse the same shape instead of growing a
+    /// second chip style; `trailingIcon` carries the disclosure chevron when
+    /// collapsed.
+    private func filterChip(title: String, icon: String, count: Int?, isOn: Bool,
                             trailingIcon: String? = nil,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -3849,15 +3885,15 @@ struct MainiOSView: View {
         window.displayID ?? displays.first(where: { $0.isPrimary })?.id ?? displays.first?.id
     }
 
-    /// The display the chips are currently showing, or nil for "All".
+    /// The display the chips are currently showing, or nil for "All Displays".
     private var activeDisplay: DisplayState? {
         guard let id = selectedDisplayID else { return nil }
         return displays.first { $0.id == id }
     }
 
-    /// Aspect of the canvas the windows are drawn on: the chosen screen's own
-    /// aspect, or the whole desk's span when "All" is showing. Falls back to
-    /// `screenAspect` (the primary) for a single-screen Mac.
+    /// Aspect of the canvas the windows are drawn on: the chosen display's own
+    /// aspect, or the whole desk's span when "All Displays" is showing. Falls
+    /// back to `screenAspect` (the primary) for a single-display Mac.
     private var canvasAspect: Double {
         if let display = activeDisplay, display.aspect > 0 { return display.aspect }
         if displays.count > 1, spanAspect > 0 { return spanAspect }
@@ -3871,8 +3907,35 @@ struct MainiOSView: View {
         SpaceActivity.resolvedSelection(selectedSpaceID, activeSpaces: activeSpaces)
     }
 
-    /// Windows for the chosen screen. "All" shows everything.
-    private var screenFilteredWindows: [WindowState] {
+    /// Every filter currently narrowing the grid, named the way its chip is.
+    /// nil when nothing is filtering, so the caller can tell "the filters hid
+    /// them" from "there is genuinely nothing".
+    ///
+    /// Both are listed when both are on: the AND is the part people miss, and
+    /// naming one filter while another is also active is what makes the row
+    /// look broken.
+    private var activeFilterSummary: String? {
+        var parts: [String] = []
+        if let id = effectiveSpaceID,
+           let space = activeSpaces.first(where: { $0.id == id }) {
+            parts.append(space.name)
+        }
+        if let display = activeDisplay { parts.append(display.name) }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " + ")
+    }
+
+    /// One reset for both axes. Two separate "All" chips meant clearing the
+    /// view took two taps in two places, and neither chip admitted the other
+    /// existed.
+    private func clearWindowFilters() {
+        selectSpace(nil)
+        selectDisplay(nil)
+    }
+
+    /// Windows the grid shows: both filters applied. "All" on an axis is no
+    /// filter on that axis.
+    private var filteredWindows: [WindowState] {
         let bySpace = effectiveSpaceID.map { id in displayWindows.filter { $0.spaceID == id } } ?? displayWindows
         guard let id = selectedDisplayID else { return bySpace }
         return bySpace.filter { effectiveDisplayID($0) == id }
@@ -3927,27 +3990,32 @@ struct MainiOSView: View {
                                 }
                             }
                         }
-                    } else if screenFilteredWindows.isEmpty, let display = activeDisplay {
-                        // The Mac has windows, just none on the pinned screen.
-                        // Without this the canvas rendered blank and looked
-                        // like a dead connection.
+                    } else if filteredWindows.isEmpty, let filterSummary = activeFilterSummary {
+                        // The Mac has windows, just none that BOTH filters
+                        // allow. This used to fire only for a pinned display, so
+                        // a desktop filter that emptied the grid rendered blank
+                        // and looked like a dead connection — and nothing said
+                        // the two filters combine, which is exactly when that
+                        // matters. Name every active filter and clear them all
+                        // in one tap.
                         VStack(spacing: 6) {
-                            Image(systemName: "display")
+                            Image(systemName: "line.3.horizontal.decrease.circle")
                                 .font(.system(size: 20, weight: .light))
                                 .foregroundStyle(colors.textFaint)
-                            Text("Nothing on \(display.name)")
+                            Text("Nothing on \(filterSummary)")
                                 .font(.system(size: 10))
+                                .multilineTextAlignment(.center)
                                 .foregroundStyle(colors.textFaint)
-                            Button("Show all screens") { selectDisplay(nil) }
+                            Button("Show everything") { clearWindowFilters() }
                                 .font(.system(size: 11, weight: .medium))
                         }
                     } else {
-                        ForEach(Array(screenFilteredWindows.enumerated()), id: \.element.id) { index, window in
+                        ForEach(Array(filteredWindows.enumerated()), id: \.element.id) { index, window in
                             // A phone-side override (manual drag / auto-arrange)
                             // is already canvas-space, so it must NOT be run
                             // through the span composition again.
                             let effectiveFrame = phoneLayoutFrame(for: window, index: index,
-                                                                  total: screenFilteredWindows.count)
+                                                                  total: filteredWindows.count)
                                 ?? canvasFrame(for: window)
                             let rect = windowRect(frame: effectiveFrame, in: mac.size, inset: 3)
                             let isDragging = draggingWindowId == window.id
