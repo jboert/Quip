@@ -8,9 +8,12 @@ import XCTest
 /// and its "terminals" set silently included Terminal.app and simulators.
 final class WandSortTests: XCTestCase {
 
-    private func item(_ id: String, tier: Int = 0, subtitle: String = "",
-                      waiting: Bool = false, active: Date? = nil) -> WandSortItem {
-        WandSortItem(id: id, tier: tier, subtitle: subtitle,
+    /// `kind` defaults to `.iterm2` so the existing cases keep meaning what they
+    /// meant: a terminal, eligible for the waiting-for-input raise.
+    private func item(_ id: String, tier: Int = 0, kind: WandWindowKind = .iterm2,
+                      subtitle: String = "", waiting: Bool = false,
+                      active: Date? = nil) -> WandSortItem {
+        WandSortItem(id: id, kind: kind, tier: tier, subtitle: subtitle,
                      isWaitingForInput: waiting, lastOutputChangeAt: active)
     }
 
@@ -85,6 +88,79 @@ final class WandSortTests: XCTestCase {
 
         XCTAssertEqual(order, ["other", "term"],
                        "Activity is the whole point of this mode — kind does not override it")
+    }
+
+    /// Regression for `af86695`: the tier now MOVES with the configuration, so
+    /// under the default iTerm2 is tier 0 and Terminal.app is tier 1. The
+    /// waiting raise was keyed on `tier == 0`, which silently stopped applying
+    /// to Terminal.app windows the moment the tiers split.
+    func testAWaitingTerminalAppWindowIsStillRaisedEvenThoughItIsNotTierZero() {
+        let order = WandSort.order([
+            item("busy", tier: 1, kind: .terminalApp, subtitle: "a"),
+            item("needsYou", tier: 1, kind: .terminalApp, subtitle: "z", waiting: true)
+        ], mode: .devFocused)
+
+        XCTAssertEqual(order, ["needsYou", "busy"])
+    }
+
+    /// The raise belongs to terminals, not to whatever happens to rank first.
+    /// Configure the wand for simulators only and they become tier 0 — a
+    /// simulator has no prompt to wait at, so nothing should be raised.
+    func testASimulatorAtTierZeroGetsNoWaitingRaise() {
+        let order = WandSort.order([
+            item("simA", tier: 0, kind: .simulator, subtitle: "a"),
+            item("simB", tier: 0, kind: .simulator, subtitle: "z", waiting: true)
+        ], mode: .devFocused)
+
+        XCTAssertEqual(order, ["simA", "simB"],
+                       "Subtitle decides; waiting is meaningless for a simulator")
+    }
+
+    // MARK: - mostActive with no data
+
+    /// The common case, not an edge one: the activity signal only covers
+    /// windows the mode poll reads, so on launch, for anything switched off,
+    /// and for every simulator there is nothing to rank by. It must fall back
+    /// to the dev-focused grouping rather than dressing an alphabetical list up
+    /// as a ranking.
+    func testMostActiveWithNoDataFallsBackToTheDevFocusedGrouping() {
+        let order = WandSort.order([
+            item("other", tier: 3, kind: .other, subtitle: "a"),
+            item("sim", tier: 2, kind: .simulator, subtitle: "b"),
+            item("term", tier: 0, kind: .iterm2, subtitle: "c")
+        ], mode: .mostActive)
+
+        XCTAssertEqual(order, ["term", "sim", "other"],
+                       "Subtitle order would have been the exact reverse")
+    }
+
+    /// The fallback carries the waiting raise too — the tail of an unranked
+    /// list should still surface the window that needs you.
+    func testTheNoDataFallbackStillRaisesAWaitingTerminal() {
+        let order = WandSort.order([
+            item("busy", subtitle: "a"),
+            item("needsYou", subtitle: "z", waiting: true)
+        ], mode: .mostActive)
+
+        XCTAssertEqual(order, ["needsYou", "busy"])
+    }
+
+    /// Windows WITH data still lead, and the dataless tail keeps its grouping
+    /// behind them — the two rules must not fight.
+    func testRankedWindowsLeadAndTheDatalessTailKeepsItsGrouping() {
+        let now = Date()
+        let order = WandSort.order([
+            item("noDataOther", tier: 3, kind: .other, subtitle: "a"),
+            item("noDataTerm", tier: 0, kind: .iterm2, subtitle: "b"),
+            item("ranked", tier: 2, kind: .simulator, subtitle: "c", active: now)
+        ], mode: .mostActive)
+
+        XCTAssertEqual(order, ["ranked", "noDataTerm", "noDataOther"])
+    }
+
+    func testHasActivityDataReportsWhetherAnythingCanBeRanked() {
+        XCTAssertFalse(WandSort.hasActivityData([item("a"), item("b")]))
+        XCTAssertTrue(WandSort.hasActivityData([item("a"), item("b", active: Date())]))
     }
 
     // MARK: - attentionFirst

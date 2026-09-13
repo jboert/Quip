@@ -64,12 +64,21 @@ struct WindowListSidebar: View {
                     // back to doing something the user cannot predict.
                     Text(currentWandMode.label)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        // Dimmed when the mode has no data to rank by, so an
+                        // unranked list is legible as one. `.mostActive` is
+                        // blind to every window the mode poll does not read —
+                        // anything switched off, and every simulator — and
+                        // without this it looks identical to a real ranking.
+                        .foregroundStyle(wandModeHasData ? AnyShapeStyle(.secondary)
+                                                         : AnyShapeStyle(.tertiary))
                 }
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Sort windows: \(currentWandMode.label)")
             .help("Sort + switch on your windows — \(currentWandMode.help). "
+                  + (wandModeHasData ? ""
+                     : "No activity seen yet — only windows that are switched on are watched, "
+                       + "so this order has nothing to rank by. ")
                   + "Click again for the next order. Option-click to switch them all off. "
                   + "Configure in Settings → General.")
 
@@ -183,6 +192,14 @@ struct WindowListSidebar: View {
         WandSort.mode(at: wandSortModeIndex, rotation: wandRotation)
     }
 
+    /// Whether the mode about to be applied has anything to go on. Only
+    /// `.mostActive` can come up empty — the other two read state that always
+    /// exists.
+    private var wandModeHasData: Bool {
+        guard currentWandMode == .mostActive else { return true }
+        return !outputActivity.lastOutputChangeAt.isEmpty
+    }
+
     /// Windows this wand acts on, per the configured kinds.
     ///
     /// The old rule was `windowTier($0) <= 1`, which silently meant iTerm2 AND
@@ -218,6 +235,7 @@ struct WindowListSidebar: View {
         let mode = currentWandMode
         let items = windows.map { window in
             WandSortItem(id: window.id,
+                         kind: wandKind(window),
                          tier: windowTier(window),
                          subtitle: window.subtitle,
                          isWaitingForInput: isWaitingForInput(window),

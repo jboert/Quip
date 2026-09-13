@@ -923,30 +923,41 @@ private struct WandSection: View {
                             // the same text, so they stay in step.
                             Text("\(mode.label) — \(mode.help)")
                         }
+                        .disabled(isLastCheckedMode(mode))
+                        .help(isLastCheckedMode(mode)
+                              ? "The wand has to sort somehow — check another order first." : "")
                     }
                 }
             }
         }
     }
 
+    /// The last checked box is DISABLED rather than merely un-storable.
+    ///
+    /// Unchecking it used to write a raw 0, which `WandTargetKinds.fromStored`
+    /// maps back to `.default` — so the write landed, the read undid it, and all
+    /// three boxes silently re-checked themselves with no explanation. Making
+    /// the empty state unreachable is the honest version of the same rule: the
+    /// wand always acts on something, and now you can see why the box will not
+    /// turn off.
     private func kindToggle(_ title: String, _ kind: WandTargetKinds) -> some View {
-        Toggle(title, isOn: Binding(
+        let isLastChecked = kinds == WandTargetKinds(rawValue: kind.rawValue)
+        return Toggle(title, isOn: Binding(
             get: { kinds.contains(kind) },
             set: { on in
                 var next = kinds
                 if on { next.insert(kind) } else { next.remove(kind) }
-                // An empty set would make the wand a dead button, so it reads
-                // back as the default — see `WandTargetKinds.fromStored`. Store
-                // the raw value anyway so unchecking the last box is visible
-                // rather than silently snapping back.
+                guard !next.isEmpty else { return }
                 targetKindsRaw = next.rawValue
             }
         ))
+        .disabled(isLastChecked)
+        .help(isLastChecked ? "The wand has to switch something on — check another kind first." : "")
     }
 
-    /// Unchecking the last order restores the full rotation rather than leaving
-    /// the wand with nothing to apply; `WandSortMode.rotation` enforces the same
-    /// rule on read, so the two cannot disagree.
+    /// Same rule as `kindToggle`: the last checked order cannot be unchecked,
+    /// and the row says so, rather than storing an empty rotation that
+    /// `WandSortMode.rotation` quietly reads back as the full set.
     private func modeBinding(_ mode: WandSortMode) -> Binding<Bool> {
         Binding(
             get: { rotation.contains(mode) },
@@ -960,6 +971,7 @@ private struct WandSection: View {
                 } else {
                     next.removeAll { $0 == mode }
                 }
+                guard !next.isEmpty else { return }
                 sortModesRaw = WandSortMode.stored(next)
                 // The stored index can now point past the end of a shortened
                 // rotation. Reset rather than relying on the read-side clamp, so
@@ -967,6 +979,10 @@ private struct WandSection: View {
                 sortModeIndex = 0
             }
         )
+    }
+
+    private func isLastCheckedMode(_ mode: WandSortMode) -> Bool {
+        rotation == [mode]
     }
 }
 

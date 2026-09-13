@@ -78,41 +78,6 @@ struct WandTargetKinds: OptionSet, Sendable {
         raw == 0 ? .default : WandTargetKinds(rawValue: raw)
     }
 
-    /// The kinds in the order they rank, which is also the order the Settings
-    /// checkboxes appear in — so "first in the list" means the same thing in
-    /// both places.
-    static let ordered: [WandTargetKinds] = [.iterm2, .terminalApp, .simulator]
-
-    /// Which kind a window is, or nil for an app the wand does not act on.
-    ///
-    /// Pure, and deliberately taking the two raw fields rather than a
-    /// `ManagedWindow`, so the classification that answers "why didn't the wand
-    /// pick just my iTerm2 windows" is testable without AppKit.
-    ///
-    /// Simulator is checked FIRST and by `targetKind`, which is itself derived
-    /// from `bundleId`. The two can never collide today — the simulator bundle
-    /// id is neither terminal — but the order is load-bearing if `targetKind`
-    /// ever widens (its own docs plan a `"browser_localhost"`), so it stays
-    /// explicit rather than incidental.
-    static func kind(bundleId: String, targetKind: String?) -> WandTargetKinds? {
-        if targetKind == "simulator" { return .simulator }
-        if bundleId == TerminalApp.iterm2.bundleIdentifier { return .iterm2 }
-        if bundleId == TerminalApp.terminal.bundleIdentifier { return .terminalApp }
-        return nil
-    }
-
-    /// Whether this configuration acts on that window.
-    func matches(bundleId: String, targetKind: String?) -> Bool {
-        guard let kind = WandTargetKinds.kind(bundleId: bundleId, targetKind: targetKind)
-        else { return false }
-        return contains(kind)
-    }
-
-    /// True for the kinds where "waiting for input" means an agent is waiting on
-    /// YOU. A simulator has no prompt to wait at.
-    static func isTerminal(_ kind: WandTargetKinds?) -> Bool {
-        kind == .iterm2 || kind == .terminalApp
-    }
 }
 
 /// What a window is, as far as the wand is concerned.
@@ -126,6 +91,15 @@ enum WandWindowKind: Sendable, Equatable, CaseIterable {
     case terminalApp
     case simulator
     case other
+
+    /// Where "waiting for input" means an agent is waiting on YOU. A simulator
+    /// has no prompt to wait at, and neither does an arbitrary app.
+    ///
+    /// The sort keys its waiting rule on this rather than on `tier == 0`,
+    /// because the tier now moves with the configuration: under the default
+    /// config iTerm2 is tier 0 and Terminal.app is tier 1, so a tier test would
+    /// silently stop raising a waiting Terminal.app window.
+    var isTerminal: Bool { self == .iterm2 || self == .terminalApp }
 }
 
 /// One window, reduced to what the sort actually needs.
@@ -135,6 +109,11 @@ enum WandWindowKind: Sendable, Equatable, CaseIterable {
 /// or anything else that would drag AppKit into a unit test.
 struct WandSortItem: Sendable, Equatable {
     let id: String
+    /// What the window is. The tier below is derived from this plus the
+    /// configuration; the kind itself is still needed because some rules (the
+    /// waiting-for-input raise) depend on what a window IS, not on where the
+    /// current configuration happens to rank it.
+    let kind: WandWindowKind
     /// Rank of this window's kind under the wand's configured target kinds —
     /// see `WandSort.tier(of:configured:)`. Lower sorts first. NOT a fixed
     /// table: which kinds lead depends on what the user asked the wand to
@@ -190,25 +169,45 @@ enum WandSort {
     /// position — so a tap is stable: tapping twice in the same mode never
     /// reshuffles equal windows, which would make the button feel random.
     static func order(_ items: [WandSortItem], mode: WandSortMode) -> [String] {
-        items.enumerated().sorted { lhs, rhs in
+        /// Tier, then the waiting raise within terminals. Shared, because it is
+        /// both `.devFocused`'s whole rule and the fallback `.mostActive` needs
+        /// for windows it has no activity data about. nil = indistinguishable.
+        func byKindThenAttention(_ a: WandSortItem, _ b: WandSortItem) -> Bool? {
+            if a.tier != b.tier { return a.tier < b.tier }
+            // Keyed on the KIND, not on `tier == 0`. The tier moves with the
+            // configuration — under the default, iTerm2 is 0 and Terminal.app
+            // is 1 — so a tier test would quietly stop raising a waiting
+            // Terminal.app window.
+            if a.kind.isTerminal, b.kind.isTerminal,
+               a.isWaitingForInput != b.isWaitingForInput {
+                return a.isWaitingForInput
+            }
+            return nil
+        }
+
+        return items.enumerated().sorted { lhs, rhs in
             let a = lhs.element, b = rhs.element
             switch mode {
             case .devFocused:
-                if a.tier != b.tier { return a.tier < b.tier }
-                // Within terminals only: the one that needs you is #1.
-                if a.tier == 0, a.isWaitingForInput != b.isWaitingForInput {
-                    return a.isWaitingForInput
-                }
+                if let decided = byKindThenAttention(a, b) { return decided }
             case .mostActive:
-                if a.lastOutputChangeAt != b.lastOutputChangeAt {
-                    // A window never observed to change is not "changed long
-                    // ago" — it goes last, behind everything that has moved.
-                    switch (a.lastOutputChangeAt, b.lastOutputChangeAt) {
-                    case let (l?, r?): return l > r
-                    case (nil, _?):    return false
-                    case (_?, nil):    return true
-                    case (nil, nil):   break
-                    }
+                switch (a.lastOutputChangeAt, b.lastOutputChangeAt) {
+                case let (l?, r?):
+                    if l != r { return l > r }
+                // A window never observed to change is not one that changed long
+                // ago: it sorts behind everything that has moved.
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil):
+                    // Neither has data, and that is the COMMON case, not an edge
+                    // one. The signal only covers windows the mode poll reads —
+                    // enabled terminals — so on launch, for anything switched
+                    // off, and for every simulator there is nothing to rank by.
+                    // Falling straight through to the subtitle tiebreak there
+                    // dressed an alphabetical list up as a ranking; fall back to
+                    // the dev-focused grouping instead, so the unranked tail is
+                    // at least ordered the way the user would otherwise expect.
+                    if let decided = byKindThenAttention(a, b) { return decided }
                 }
             case .attentionFirst:
                 if a.isWaitingForInput != b.isWaitingForInput { return a.isWaitingForInput }
@@ -218,6 +217,14 @@ enum WandSort {
             if sa != sb { return sa < sb }
             return lhs.offset < rhs.offset
         }.map(\.element.id)
+    }
+
+    /// Whether `.mostActive` has anything to rank by. The sidebar uses it to say
+    /// so, because an unranked list and a ranked one are otherwise identical on
+    /// screen — which is how "most active" could look like it was working while
+    /// having no data at all.
+    static func hasActivityData(_ items: [WandSortItem]) -> Bool {
+        items.contains { $0.lastOutputChangeAt != nil }
     }
 
     /// The next mode in the rotation. Wraps, and survives a rotation the user
