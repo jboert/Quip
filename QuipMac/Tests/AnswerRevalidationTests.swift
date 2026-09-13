@@ -235,4 +235,101 @@ final class AnswerRevalidationTests: XCTestCase {
         XCTAssertEqual(QuipMacApp.multiSelectDigitKeys(picks: [2, 1]), ["1", "2", "return"])
         XCTAssertEqual(QuipMacApp.multiSelectDigitKeys(picks: []), [])
     }
+
+    // MARK: - shouldPressReturnAfterPick
+
+    /// Codex's `/model`: the digit selected a model AND advanced to the
+    /// reasoning-level step. A Return here would confirm that step's default —
+    /// captured live, which is how the bug was found.
+    func test_pickCommit_screenAdvanced_sendsNothing() {
+        let before = "Select Model and Effort\n› 1. sol (current)\n  2. terra\n  3. luna"
+        let after = "Select Reasoning Level for luna\n  1. Low\n› 2. Medium (default)\n  3. High"
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: before))
+        XCTAssertFalse(QuipMacApp.shouldPressReturnAfterPick(liveContent: after, expectedFingerprint: fp))
+    }
+
+    /// A menu that ignores a bare digit is still on screen — commit it.
+    func test_pickCommit_samePromptStillUp_sendsReturn() {
+        let fp = try! XCTUnwrap(NumberedPromptDetector.fingerprint(in: numbered))
+        XCTAssertTrue(QuipMacApp.shouldPressReturnAfterPick(liveContent: numbered, expectedFingerprint: fp))
+    }
+
+    /// Claude's review step: the user's tap already committed to submitting.
+    func test_pickCommit_reviewStep_sendsReturn() {
+        let review = """
+        Review your answers
+
+         ● Which one you pick?
+           → Beta
+
+        Ready to submit your answers?
+
+        ❯ 1. Submit answers
+          2. Cancel
+        """
+        XCTAssertTrue(QuipMacApp.shouldPressReturnAfterPick(liveContent: review,
+                                                            expectedFingerprint: "stale-hash"))
+    }
+
+    /// The prompt is gone entirely (Claude's single-select answers on the digit
+    /// alone) — anything typed now lands in the next prompt's input box.
+    func test_pickCommit_promptGone_sendsNothing() {
+        XCTAssertFalse(QuipMacApp.shouldPressReturnAfterPick(
+            liveContent: "⏺ User answered Claude's questions:\n  ⎿  · Which one you pick? → Beta",
+            expectedFingerprint: "stale-hash"))
+    }
+
+    // MARK: - imageInjectionRoute
+
+    /// Codex on iTerm2 keeps the proven clipboard-bytes route.
+    func test_imageRoute_codexOnITerm2_pastesBytes() {
+        XCTAssertEqual(QuipMacApp.imageInjectionRoute(cliKind: .codex, terminalApp: .iterm2),
+                       .pasteImage)
+    }
+
+    /// The regression this fixes: Codex under Terminal.app used to take the
+    /// paste route, which can only drive iTerm2, so the upload failed outright.
+    /// Codex reads a typed absolute path itself (measured on codex-cli 0.146.0).
+    func test_imageRoute_codexOnTerminalApp_fallsBackToTypedPath() {
+        XCTAssertEqual(QuipMacApp.imageInjectionRoute(cliKind: .codex, terminalApp: .terminal),
+                       .sendTextPath)
+    }
+
+    /// Every other CLI types the path on every host, as before.
+    func test_imageRoute_nonCodex_alwaysTypesPath() {
+        for kind in CLIKind.allCases where kind != .codex {
+            for app in [TerminalApp.iterm2, .terminal, .claudeDesktop] {
+                XCTAssertEqual(QuipMacApp.imageInjectionRoute(cliKind: kind, terminalApp: app),
+                               .sendTextPath, "\(kind)/\(app) must type the path")
+            }
+        }
+    }
+
+    /// pasteImage can only drive iTerm2, so no route may send another host to it.
+    func test_imageRoute_pasteOnlyEverTargetsITerm2() {
+        for kind in CLIKind.allCases {
+            for app in [TerminalApp.terminal, .claudeDesktop] {
+                XCTAssertNotEqual(QuipMacApp.imageInjectionRoute(cliKind: kind, terminalApp: app),
+                                  .pasteImage, "\(kind)/\(app) would paste into a host that can't")
+            }
+        }
+    }
+
+    // MARK: - trimTrailingBlankLines
+
+    /// Terminals pad the buffer to the full window height. Unless that padding
+    /// is dropped, the prompt sits past the detector's trailing scan window and
+    /// EVERY re-validation fails.
+    func test_trimTrailingBlankLines_restoresDetection() {
+        let padded = numbered + String(repeating: "\n   ", count: 40)
+        XCTAssertNil(NumberedPromptDetector.fingerprint(in: padded))
+        let trimmed = KeystrokeInjector.trimTrailingBlankLines(padded)
+        XCTAssertEqual(NumberedPromptDetector.fingerprint(in: trimmed),
+                       NumberedPromptDetector.fingerprint(in: numbered))
+    }
+
+    func test_trimTrailingBlankLines_keepsInteriorBlanks() {
+        XCTAssertEqual(KeystrokeInjector.trimTrailingBlankLines("a\n\nb\n\n  \n"), "a\n\nb")
+        XCTAssertEqual(KeystrokeInjector.trimTrailingBlankLines(""), "")
+    }
 }

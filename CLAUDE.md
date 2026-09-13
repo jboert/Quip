@@ -2,12 +2,14 @@
 
 ## Log file locations
 
-All Mac diagnostic logs live under `~/Library/Logs/Quip/`. They survive reboots and are indexed by `Console.app` (filter on "Quip"). The three append-only files are:
+All Mac diagnostic logs live under `~/Library/Logs/Quip/`. They survive reboots and are indexed by `Console.app` (filter on "Quip"). The main append-only files are:
 
 - `~/Library/Logs/Quip/websocket.log` — WS handshake / message arrival, oversized-drop notices, auth events
 - `~/Library/Logs/Quip/push.log` — APNs push pipeline (the "I didn't get a notification" debugging path)
 - `~/Library/Logs/Quip/kokoro.log` — Kokoro TTS daemon lifecycle and synth events
 - `~/Library/Logs/Quip/qa-mode.log` — QA-mode pair lifecycle (set/clear/lost) + throttled broadcast_filter window counts
+- `~/Library/Logs/Quip/injection.log` — FAILED keystroke/text injections, one line each: `DROPPED op=… window=… app=… kind=… msg="…" [detail="…"]`. The "I tapped send and nothing happened" path. Fields are space separated; `op` and `window` are bare tokens (never contain spaces — anything that would goes in the quoted `detail`), `msg` and `detail` are quoted and escaped. `kind` is a closed vocabulary — `sessionNotFound | tccDenied | windowClosed | unknown | unclassified` — so a stale session id (self-heals on the next fetch) greps apart from a TCC denial (needs a human to re-grant). `msg`/`detail` pass through `SecretRedactor`. Successes are not written here; they are in `latency.log` with timing.
+  The same file carries the iTerm2 session-map health lines: `SESSION_FETCH failed streak=N action=kept-last-good-mapping` (throttled to the 1st and every 30th), `SESSION_FETCH recovered after=N`, and `SESSION_FETCH partial unreadable=<ids> action=kept-their-mappings`. A window listed there kept an older mapping on purpose — the fetch could not read it, which is not the same as it having no session.
 
 On Linux, the equivalents live under `$XDG_STATE_HOME/quip/` (default `~/.local/state/quip/`).
 
@@ -49,3 +51,43 @@ Sim is read-only in v1: send button + TextField disabled when Sim is selected; P
 Mac broadcast paths:
 - Fast path (no QA pair anywhere) — encode `LayoutUpdate` once, broadcast.
 - Per-client path (≥1 phone in QA mode) — encode per client with the right filter (paired phones get 2 windows, others get the unfiltered list). Tunnel broadcasters always get unfiltered (no per-tunnel pair state).
+
+## Verifying a change locally
+
+`tools/check.sh` runs only the suites a change can affect, using the same
+path→scope mapping CI uses (`.github/scripts/changed-scopes.sh`), so the two can
+never disagree about what a diff touches. It also handles the xcodegen/pbxproj
+dance (US-005) and always prints what it skipped and why.
+
+```bash
+tools/check.sh                 # uncommitted work + commits not yet pushed
+tools/check.sh --all           # every suite
+tools/check.sh --since REF     # everything since REF
+printf 'QuipMac/Foo.swift\n' | tools/check.sh --files -   # explicit list
+```
+
+Costs, for reference: swiftc harness ~2s, QuipMac suite ~22s, QuipiOS simulator
+suite ~10s. A QuipMac-only change no longer pays for the simulator; a docs-only
+change pays nothing. `QUIP_QA_SIM_UDID` overrides the QA simulator.
+
+QuipLinux and QuipAndroid are reported as skipped rather than run — they are not
+built on this machine, and an unrun suite must never be reported as green.
+
+### At commit time
+
+`tools/install-git-hooks.sh` installs a `pre-commit` hook that runs the same
+gate over the **staged** paths, so a broken suite cannot reach a commit. Hooks
+are per-clone and opt-in; the installer symlinks into whatever `core.hooksPath`
+resolves to rather than repointing it, and refuses to clobber a hook it did not
+create.
+
+```bash
+tools/install-git-hooks.sh              # install
+tools/install-git-hooks.sh --status
+tools/install-git-hooks.sh --uninstall
+QUIP_SKIP_CHECK=1 git commit            # skip once (git commit --no-verify also works)
+```
+
+A docs-only commit costs nothing; a `Shared/` commit pays for all three suites.
+Note the hook tests the **working tree**, not the index — if you stage only part
+of your edits, what runs is not exactly what you are committing.

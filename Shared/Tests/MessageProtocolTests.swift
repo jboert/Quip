@@ -1127,4 +1127,143 @@ final class MessageProtocolTests: XCTestCase {
         let decoded = try! MessageCoder.decoder.decode(WindowState.self, from: data)
         XCTAssertEqual(decoded.targetKind, "simulator")
     }
+
+    // MARK: - SpaceActivity
+
+    private func spaceWindow(_ id: String, spaceID: String?) -> WindowState {
+        WindowState(id: id, name: id, app: "Test", enabled: true,
+                    frame: WindowFrame(x: 0, y: 0, width: 1, height: 1),
+                    state: "idle", color: "#000000", spaceID: spaceID)
+    }
+
+    private func space(_ id: String, current: Bool = false) -> SpaceState {
+        SpaceState(id: id, name: id, isCurrent: current)
+    }
+
+    func testActiveSpacesDropsDesktopsWithNoWindows() {
+        let spaces = [space("space-1", current: true), space("space-3")]
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: "space-1")]
+        XCTAssertEqual(SpaceActivity.active(spaces: spaces, windows: windows).map(\.id),
+                       ["space-1"])
+    }
+
+    func testActiveSpacesKeepsEveryDesktopThatHasAWindow() {
+        let spaces = [space("space-1", current: true), space("space-3")]
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: "space-3")]
+        XCTAssertEqual(SpaceActivity.active(spaces: spaces, windows: windows).map(\.id),
+                       ["space-1", "space-3"])
+    }
+
+    func testActiveSpacesPreservesTheMacsSpaceOrder() {
+        let spaces = [space("space-1"), space("space-3"), space("space-7")]
+        let windows = [spaceWindow("a", spaceID: "space-7"),
+                       spaceWindow("b", spaceID: "space-1")]
+        XCTAssertEqual(SpaceActivity.active(spaces: spaces, windows: windows).map(\.id),
+                       ["space-1", "space-7"])
+    }
+
+    func testActiveSpacesIgnoresWindowsWithNoSpaceMetadata() {
+        let spaces = [space("space-1"), space("space-3")]
+        let windows = [spaceWindow("a", spaceID: nil)]
+        XCTAssertTrue(SpaceActivity.active(spaces: spaces, windows: windows).isEmpty)
+    }
+
+    func testResolvedSelectionKeepsAPickThatStillHasActivity() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertEqual(SpaceActivity.resolvedSelection("space-3", activeSpaces: active),
+                       "space-3")
+    }
+
+    func testResolvedSelectionFallsBackToAllWhenThePickedDesktopWentQuiet() {
+        let active = [space("space-1")]
+        XCTAssertNil(SpaceActivity.resolvedSelection("space-3", activeSpaces: active))
+    }
+
+    func testResolvedSelectionLeavesAllDesktopsAlone() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertNil(SpaceActivity.resolvedSelection(nil, activeSpaces: active))
+    }
+
+    // MARK: - SpaceActivity: the collapsed chip
+
+    /// Collapsed, the chip is the row's ONLY evidence of what the grid is
+    /// showing. If it read "All Desktops" while a desktop filter was active, it
+    /// would quietly lie about why windows are missing from the grid below it.
+    func testCollapsedTitleNamesThePinnedDesktop() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: "space-3"),
+            "space-3")
+    }
+
+    func testCollapsedTitleReadsAllDesktopsWhenTheFilterIsOff() {
+        let active = [space("space-1"), space("space-3")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: nil),
+            "All Desktops")
+    }
+
+    /// Belt and braces with `resolvedSelection`: even handed an id that is no
+    /// longer active, the collapsed chip must not name a desktop the grid is
+    /// not filtered to.
+    func testCollapsedTitleFallsBackWhenTheIdIsNoLongerActive() {
+        let active = [space("space-1")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: "space-3"),
+            "All Desktops")
+    }
+
+    /// The badge must match the number of cards rendered below it — a count
+    /// that disagrees with the grid is worse than no count.
+    func testCollapsedCountCountsOnlyThePinnedDesktopsWindows() {
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: "space-3"),
+                       spaceWindow("c", spaceID: "space-3")]
+        XCTAssertEqual(
+            SpaceActivity.collapsedCount(windows: windows, effectiveSpaceID: "space-3"), 2)
+    }
+
+    func testCollapsedCountCountsEveryWindowWhenTheFilterIsOff() {
+        let windows = [spaceWindow("a", spaceID: "space-1"),
+                       spaceWindow("b", spaceID: nil)]
+        XCTAssertEqual(
+            SpaceActivity.collapsedCount(windows: windows, effectiveSpaceID: nil), 2)
+    }
+
+    /// A window the Mac could not place on a Space counts toward no desktop,
+    /// matching `active(spaces:windows:)`.
+    func testCollapsedCountIgnoresWindowsWithNoSpaceMetadata() {
+        let windows = [spaceWindow("a", spaceID: nil)]
+        XCTAssertEqual(
+            SpaceActivity.collapsedCount(windows: windows, effectiveSpaceID: "space-1"), 0)
+    }
+
+    // MARK: - PreferencesSnapshot: dictation auto-send
+
+    func testPreferencesSnapshotRoundTripsDictationAutoSend() throws {
+        let snapshot = PreferencesSnapshot(dictationAutoSend: true)
+        let data = try MessageCoder.encoder.encode(snapshot)
+        let decoded = try MessageCoder.decoder.decode(PreferencesSnapshot.self, from: data)
+        XCTAssertEqual(decoded.dictationAutoSend, true)
+    }
+
+    /// A Mac that predates the setting simply omits the key; the phone must
+    /// read that as "no opinion" and keep its own value rather than being
+    /// reset to off on every restore.
+    func testPreferencesSnapshotDecodesAbsentDictationAutoSendAsNil() throws {
+        let json = "{\"ttsEnabled\":true}"
+        let decoded = try MessageCoder.decoder.decode(PreferencesSnapshot.self,
+                                                      from: Data(json.utf8))
+        XCTAssertNil(decoded.dictationAutoSend)
+        XCTAssertEqual(decoded.ttsEnabled, true)
+    }
+
+    func testPreferencesSnapshotCarriesDictationAutoSendWhenOff() throws {
+        let snapshot = PreferencesSnapshot(dictationAutoSend: false)
+        let data = try MessageCoder.encoder.encode(snapshot)
+        let decoded = try MessageCoder.decoder.decode(PreferencesSnapshot.self, from: data)
+        XCTAssertEqual(decoded.dictationAutoSend, false)
+    }
 }

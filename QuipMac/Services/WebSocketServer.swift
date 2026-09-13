@@ -469,6 +469,17 @@ final class WebSocketServer {
         }
         connection.start(queue: networkQueue)
         Self.wslog("connection.start() called immediately")
+        // Bound the wait for the WS upgrade. Without this an accepted socket
+        // that never handshakes is held forever — the phone's TCP-only latency
+        // probes leaked one per alt URL per minute, and each leak later took an
+        // RST from the peer's FIN_WAIT_2 timer that we logged as a failed dial.
+        // Same queue as the state handler, so `handshake` stays single-threaded.
+        networkQueue.asyncAfter(deadline: .now() + PreHandshakeReapPolicy.deadline) {
+            guard PreHandshakeReapPolicy.shouldReap(reachedReady: handshake.reachedReady) else { return }
+            Self.wslog("reaping connection from \(connection.endpoint) — no WebSocket handshake "
+                       + "within \(Int(PreHandshakeReapPolicy.deadline))s (probe or abandoned dial)")
+            connection.cancel()
+        }
     }
 
     /// Schedule a single-shot retry of `start()`. Idempotent — replaces any
@@ -583,6 +594,35 @@ final class WebSocketServer {
         print("[WebSocketServer] Tunnel client unregistered. \(count) tunnel client(s)")
     }
 
+    /// Keyed by message type, not by connection: the same kind of message
+    /// failing for the same reason is one story regardless of which client it
+    /// was headed for, and the phone reconnects often enough that a
+    /// per-connection key would report the same fault on every new socket.
+    nonisolated private static let unicastDropGate = LogTransitionGate<String>()
+
+    /// One line when a unicast starts being dropped, one when it recovers, and
+    /// nothing in between. `cause == nil` means this send went through.
+    nonisolated private static func reportUnicastDrop(kind: String, cause: String?, bytes: Int) {
+        switch unicastDropGate.evaluate(kind, cause: cause) {
+        case .stayQuiet:
+            return
+        case .report:
+            guard let cause else { return }  // unreachable: .report implies a cause
+            QuipLog.write(
+                severity: .warn, subsystem: "ws",
+                message: "unicast \(kind) (\(bytes) bytes) DROPPED: \(cause). "
+                       + "The phone will not receive this update.",
+                to: LogPaths.webSocketPath
+            )
+        case .reportRecovery:
+            QuipLog.write(
+                severity: .info, subsystem: "ws",
+                message: "unicast \(kind) is being delivered again.",
+                to: LogPaths.webSocketPath
+            )
+        }
+    }
+
     /// Send a `LayoutUpdate` (or any other message) to a specific
     /// authenticated connection. Used by `broadcastLayout` when at least
     /// one phone is in QA mode and each client needs a per-pair filtered
@@ -599,9 +639,26 @@ final class WebSocketServer {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
         let payloadSize = data.count
+        // Both drops below used to be silent, while the encode failure eight
+        // lines up logged — so a unicast that never arrived looked identical to
+        // one that was never attempted. Gated per reason: a client stuck
+        // unauthenticated or wedged behind backpressure fails EVERY send, and an
+        // unthrottled line would bury the signal it exists to give.
         guard let idx = clients.firstIndex(where: { $0.connection === connection }),
-              clients[idx].isAuthenticated else { return }
-        if clients[idx].pendingBytes + payloadSize > ClientConnection.maxPendingBytes { return }
+              clients[idx].isAuthenticated else {
+            Self.reportUnicastDrop(kind: String(describing: T.self),
+                                   cause: "no authenticated client for this connection",
+                                   bytes: payloadSize)
+            return
+        }
+        if clients[idx].pendingBytes + payloadSize > ClientConnection.maxPendingBytes {
+            Self.reportUnicastDrop(kind: String(describing: T.self),
+                                   cause: "backpressure — client is over the in-flight cap "
+                                        + "of \(ClientConnection.maxPendingBytes) bytes",
+                                   bytes: payloadSize)
+            return
+        }
+        Self.reportUnicastDrop(kind: String(describing: T.self), cause: nil, bytes: payloadSize)
         clients[idx].pendingBytes += payloadSize
         let conn = connection
         conn.send(content: data, contentContext: context, isComplete: true,
@@ -626,15 +683,38 @@ final class WebSocketServer {
         }
     }
 
-    func broadcast<T: Encodable & Sendable>(_ message: T) {
-        let data: Data
-        do {
-            data = try JSONEncoder().encode(message)
-        } catch {
-            print("[WebSocketServer] broadcast encode FAILED kind=\(String(describing: T.self)) err=\(error)")
-            return
-        }
+    /// Serial, and that is load-bearing. `JSONEncoder().encode` ran on the
+    /// MainActor for payloads up to 4 MiB — `TTSAudioMessage` is 300-700 KB per
+    /// chunk, screenshots and diagnostics bundles are larger — so every
+    /// broadcast blocked the UI for the length of its own encode. Moving it off
+    /// main must not reorder anything: TTS chunks have to reach the phone in
+    /// sequence. A serial queue encodes in submission order, and each item hops
+    /// back with `DispatchQueue.main.async`, which is FIFO — so sends happen in
+    /// call order. A concurrent queue, or a `Task { @MainActor }` hop (unordered
+    /// by design), would silently scramble audio.
+    private let encodeQueue = DispatchQueue(label: "com.quip.ws.encode", qos: .userInitiated)
 
+    func broadcast<T: Encodable & Sendable>(_ message: T) {
+        let kind = String(describing: T.self)
+        encodeQueue.async { [weak self] in
+            let data: Data
+            do {
+                data = try JSONEncoder().encode(message)
+            } catch {
+                print("[WebSocketServer] broadcast encode FAILED kind=\(kind) err=\(error)")
+                return
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.deliverBroadcast(data)
+            }
+        }
+    }
+
+    /// The send half of `broadcast`, once the message is already bytes.
+    /// Snapshotting `clients` here rather than at call time is deliberate: a
+    /// client that dropped while its payload was encoding should not be sent to.
+    private func deliverBroadcast(_ data: Data) {
         // Send to authenticated direct WebSocket clients
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])

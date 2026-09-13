@@ -13,6 +13,7 @@ private func quipPushLog(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.pushPath
+        LogPaths.rotateIfNeeded(path: path)
         if let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(data)

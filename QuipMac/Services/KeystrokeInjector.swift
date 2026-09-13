@@ -19,6 +19,27 @@ enum TextInjectionRoute: String, Sendable {
     }
 }
 
+/// Append one line per FAILED injection to `injection.log`. Append-only,
+/// failures swallowed — a logger must never take the injector down. Same
+/// contract as `appendClassifyLog` / `appendImageUploadDiagnostic`.
+///
+/// Only failures are written. Successful sends are already recorded, with
+/// timing, in `latency.log`; duplicating them here would bury the one line
+/// someone opens this file to find.
+fileprivate func appendInjectionLog(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = LogPaths.injectionPath
+    LogPaths.rotateIfNeeded(path: path)
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
+
 @MainActor
 @Observable
 final class KeystrokeInjector {
@@ -55,6 +76,81 @@ final class KeystrokeInjector {
 
     /// Classify a raw AppleScript error message into a structured `InjectionError`.
     /// Pulled out for testing; runs on every executeAppleScript failure. (#4)
+    /// Build one `injection.log` line. Pure and static so the format is unit-
+    /// testable without touching the filesystem.
+    ///
+    /// `op` names the injector entry point (sendText / pasteText / …) so a
+    /// reader can tell a text send from a quick-action keystroke; `kind` is the
+    /// structured classification, which is what distinguishes a stale session
+    /// id (self-healable) from a TCC denial (needs a human).
+    nonisolated static func injectionLogLine(op: String,
+                                             windowId: String,
+                                             terminalApp: TerminalApp?,
+                                             kind: InjectionError?,
+                                             message: String,
+                                             detail: String = "") -> String {
+        let kindText: String
+        switch kind {
+        case .some(.sessionNotFound): kindText = "sessionNotFound"
+        case .some(.tccDenied):       kindText = "tccDenied"
+        case .some(.windowClosed):    kindText = "windowClosed"
+        case .some(.unknown):         kindText = "unknown"
+        case nil:                     kindText = "unclassified"
+        }
+        // `op` is a bare identifier by contract — the fields are space
+        // separated, so an op carrying spaces (which is what passing the whole
+        // AppleScript `context` down here produced) silently breaks every
+        // reader that splits the line. Anything with spaces belongs in the
+        // quoted `detail` field.
+        let line = "DROPPED op=\(injectionLogToken(op)) window=\(injectionLogToken(windowId)) "
+            + "app=\(terminalApp?.rawValue ?? "-") "
+            + "kind=\(kindText) msg=\"\(injectionLogValue(message))\""
+        return detail.isEmpty ? line : line + " detail=\"\(injectionLogValue(detail))\""
+    }
+
+    /// Keep an unquoted field parseable: no spaces, no empties. A value that
+    /// needs more than this is a `detail`, not a token.
+    nonisolated static func injectionLogToken(_ value: String) -> String {
+        let collapsed = value
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: "_")
+        return collapsed.isEmpty ? "-" : collapsed
+    }
+
+    /// Escape a message for the quoted `msg="…"` field so an AppleScript error
+    /// containing a quote or a newline can't forge a second log line.
+    nonisolated static func injectionLogValue(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
+    /// Record a failed injection. The single place the injector writes evidence.
+    ///
+    /// `message` and `detail` are redacted on the way in. An AppleScript runtime
+    /// error can echo the offending expression back, and the send scripts embed
+    /// the user's own text in their source — so without this the file could
+    /// accumulate prompt content in plaintext, under a path that survives
+    /// reboots and is indexed by Console.app. Every other route that touches
+    /// buffer content already goes through `SecretRedactor`; this one now does
+    /// too. The redactor is a fixed set of substitutions, so an ordinary
+    /// AppleScript error passes through unchanged.
+    nonisolated static func logInjectionFailure(op: String,
+                                                windowId: String,
+                                                terminalApp: TerminalApp?,
+                                                kind: InjectionError?,
+                                                message: String,
+                                                detail: String = "") {
+        appendInjectionLog(injectionLogLine(op: op, windowId: windowId,
+                                            terminalApp: terminalApp,
+                                            kind: kind,
+                                            message: SecretRedactor.redact(message),
+                                            detail: detail.isEmpty ? "" : SecretRedactor.redact(detail)))
+    }
+
     nonisolated static func classifyAppleScriptError(_ message: String) -> InjectionError {
         let lower = message.lowercased()
         if lower.contains("not found") { return .sessionNotFound }
@@ -185,7 +281,8 @@ final class KeystrokeInjector {
                 end tell
             end tell
             """
-            return await executeAppleScriptOffMain(pasteScript, context: "sendText to \(windowId) [Claude Desktop paste]")
+            return await executeAppleScriptOffMain(pasteScript, op: "sendText", windowId: windowId,
+                                                   terminalApp: terminalApp, detail: "Claude Desktop paste")
 
         case .terminal:
             // Always use System Events keystrokes for Terminal.app to avoid
@@ -225,8 +322,10 @@ final class KeystrokeInjector {
             // heal things; the phone can retry.
             guard let sessionId = iterm2SessionId else {
                 let err = "iTerm2 session not yet mapped for window \(windowId)"
-                print("[KeystrokeInjector] sendText DROPPED: \(err)")
-                return InjectionResult(success: false, error: err)
+                Self.logInjectionFailure(op: "sendText", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let escapedId = escapeForAppleScript(sessionId)
             // iTerm2's AppleScript hierarchy is window → tab → session. The
@@ -264,7 +363,8 @@ final class KeystrokeInjector {
             """
         }
 
-        return await executeAppleScriptOffMain(script, context: "sendText to \(windowId)")
+        return await executeAppleScriptOffMain(script, op: "sendText", windowId: windowId,
+                                               terminalApp: terminalApp)
     }
 
     // MARK: - Paste Image (Codex CLI path)
@@ -284,6 +384,43 @@ final class KeystrokeInjector {
     /// Returns failure if the image can't be loaded; success codepath
     /// trusts AppleScript (same as `sendText`'s iTerm2 path).
     @discardableResult
+    /// Put an image on `pasteboard` in every representation a paste target is
+    /// likely to ask for, as ONE item.
+    ///
+    /// `writeObjects([NSImage])` alone offers only `public.tiff`, so a target
+    /// that reads PNG (or wants a file rather than raw bytes) finds nothing and
+    /// the paste silently does nothing. TIFF is still written first and stays
+    /// the primary representation — it is what the proven iTerm2 + Codex path
+    /// consumes today — and PNG plus the file URL are added alongside it, so
+    /// this can only widen what a target can accept, never narrow it.
+    ///
+    /// One item with several types (not several items): a multi-item pasteboard
+    /// reads as a multi-file paste to some targets.
+    nonisolated static func writeImagePayload(_ image: NSImage, fileURL: URL,
+                                              to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        var wroteAnyBytes = false
+        if let tiff = image.tiffRepresentation {
+            item.setData(tiff, forType: .tiff)
+            wroteAnyBytes = true
+            // PNG is derived from the same bitmap so the two always agree.
+            if let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                item.setData(png, forType: .png)
+            }
+        }
+        // Lets a target treat this as "a file was pasted" — how editors and
+        // several TUIs prefer to attach an image.
+        item.setString(fileURL.absoluteString, forType: .fileURL)
+        pasteboard.writeObjects([item])
+        // Belt and braces: if the image had no bitmap to hand (vector-only, or
+        // a load that produced no representation), fall back to the old call so
+        // the pasteboard is never left with just a URL.
+        if !wroteAnyBytes {
+            pasteboard.writeObjects([image])
+        }
+    }
+
     func pasteImage(at imageURL: URL, to windowId: String, terminalApp: TerminalApp,
                     iterm2SessionId: String?) async -> InjectionResult {
         guard let image = NSImage(contentsOf: imageURL) else {
@@ -298,15 +435,18 @@ final class KeystrokeInjector {
         // Shared coordinator: restore once after the burst even if a text
         // paste overlaps this image paste (both touch NSPasteboard.general).
         Self.beginClipboardInjection()
-        pb.clearContents()
-        pb.writeObjects([image])
+        Self.writeImagePayload(image, fileURL: imageURL, to: pb)
         // 0.6s: floor before Cmd+V lands; iTerm2 paste-confirm may extend past it.
         defer { Self.endClipboardInjection(after: 0.6) }
 
         switch terminalApp {
         case .iterm2:
             guard let sessionId = iterm2SessionId else {
-                return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+                let err = "iTerm2 session not yet mapped for window \(windowId)"
+                Self.logInjectionFailure(op: "pasteImage", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let escapedId = escapeForAppleScript(sessionId)
             // iTerm2 needs to be activated AND the target session selected
@@ -345,11 +485,16 @@ final class KeystrokeInjector {
                 end tell
             end tell
             """
-            return await executeAppleScriptOffMain(script, context: "pasteImage to \(windowId) [iTerm2]")
+            return await executeAppleScriptOffMain(script, op: "pasteImage", windowId: windowId,
+                                                   terminalApp: terminalApp)
 
         case .terminal:
-            // Terminal.app doesn't support image paste (text-only); the
-            // caller should fall back to path-typing for this host.
+            // Terminal.app is text-only, so there is nothing for Cmd+V to
+            // deliver. Callers must not reach this — `imageInjectionRoute`
+            // sends Terminal.app windows down the typed-path route, which
+            // Codex handles by reading the file itself. Kept as a guard so a
+            // future caller that forgets fails loudly instead of silently
+            // pasting nothing.
             return InjectionResult(success: false, error: "Terminal.app does not accept pasted images")
 
         case .claudeDesktop:
@@ -400,10 +545,15 @@ final class KeystrokeInjector {
         switch terminalApp {
         case .iterm2:
             guard let sessionId = iterm2SessionId else {
-                return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+                let err = "iTerm2 session not yet mapped for window \(windowId)"
+                Self.logInjectionFailure(op: "pasteText", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let script = Self.pasteTextScript(iterm2SessionId: sessionId, pressReturn: pressReturn)
-            return executeAppleScript(script, context: "pasteText to \(windowId) [iTerm2]")
+            return executeAppleScript(script, op: "pasteText", windowId: windowId,
+                                      terminalApp: terminalApp)
 
         case .terminal:
             // Terminal.app accepts both keystroke chars AND clipboard paste;
@@ -507,8 +657,10 @@ final class KeystrokeInjector {
             // in the wrong terminal kills whatever's running there.
             guard let sessionId = iterm2SessionId else {
                 let err = "iTerm2 session not yet mapped for window \(windowId)"
-                print("[KeystrokeInjector] sendKeystroke DROPPED: \(err)")
-                return InjectionResult(success: false, error: err)
+                Self.logInjectionFailure(op: "sendKeystroke", windowId: windowId,
+                                         terminalApp: terminalApp, kind: .sessionNotFound,
+                                         message: err)
+                return InjectionResult(success: false, error: err, kind: .sessionNotFound)
             }
             let escapedId = escapeForAppleScript(sessionId)
             // Walks window → tab → session (same reason as sendText: iTerm2's
@@ -546,7 +698,9 @@ final class KeystrokeInjector {
                 end if
             end tell
             """
-            return await executeAppleScriptOffMain(script, context: "sendKeystroke \(key) to \(windowId) [iTerm2 write text, expr=\(writeExpr)]")
+            return await executeAppleScriptOffMain(script, op: "sendKeystroke", windowId: windowId,
+                                                   terminalApp: terminalApp,
+                                                   detail: "key=\(key) iTerm2 write text expr=\(writeExpr)")
         }
 
         // Terminal.app: legacy System Events keystroke path.
@@ -624,7 +778,174 @@ final class KeystrokeInjector {
             return InjectionResult(success: false, error: "Unknown key: \(key)")
         }
 
-        return await executeAppleScriptOffMain(script, context: "sendKeystroke \(key) to \(windowId) (cgWin=\(cgWindowNumber))")
+        return await executeAppleScriptOffMain(script, op: "sendKeystroke", windowId: windowId,
+                                               terminalApp: terminalApp,
+                                               detail: "key=\(key) cgWin=\(cgWindowNumber)")
+    }
+
+    // MARK: - Generic Apps (anything that isn't iTerm2 / Terminal / Claude)
+
+    /// Bundle ids Quip has a first-class injection path for. Everything else
+    /// must go through `sendTextToApp` / `sendKeystrokeToApp`.
+    ///
+    /// Why this exists: `terminalAppForWindow` maps every unrecognized bundle
+    /// id to `.terminal`, and the `.terminal` path does
+    /// `tell application "Terminal" to activate` + keystroke into
+    /// `process "Terminal"`. So dictating into a Slack or Xcode card on the
+    /// phone typed the text into Terminal.app instead — a silent misroute into
+    /// a shell prompt. Callers ask this first and branch.
+    nonisolated static func isFirstClassHost(bundleId: String) -> Bool {
+        TerminalApp.allCases.contains { $0.bundleIdentifier == bundleId }
+    }
+
+    /// The System Events command for one key, for a generic (non-terminal) app.
+    /// Same key vocabulary as `sendKeystroke`'s Terminal.app path so the phone
+    /// speaks one language regardless of what the target app is. Returns nil
+    /// for an unknown key so the caller can report it instead of injecting
+    /// keycode 0 (the `a` key).
+    ///
+    /// `nonisolated static` + pure so the whole table is unit-testable.
+    nonisolated static func genericKeystrokeCommand(for key: String) -> String? {
+        // (System Events key name or literal, modifier list)
+        let mapping: (key: String, modifiers: String)?
+        switch key.lowercased() {
+        case "return", "enter":     mapping = ("return", "")
+        case "escape", "esc":       mapping = ("escape", "")
+        case "tab":                 mapping = ("tab", "")
+        case "shift+tab":           mapping = ("tab", "shift down")
+        case "space":               mapping = ("space", "")
+        case "up", "down", "left", "right":
+                                    mapping = (key.lowercased(), "")
+        case "backspace", "delete": mapping = ("delete", "")
+        case "ctrl+c":              mapping = ("c", "control down")
+        case "ctrl+d":              mapping = ("d", "control down")
+        case "ctrl+u":              mapping = ("u", "control down")
+        default:                    mapping = nil
+        }
+        guard let mapping else { return nil }
+        // Same keyCodeFor-driven split as `keystrokeScript`: a key with a real
+        // virtual keycode goes as `key code N`, everything else as a literal
+        // `keystroke "x"`. One table, so the two paths can't drift.
+        if let code = keyCodeFor(mapping.key) {
+            return mapping.modifiers.isEmpty
+                ? "key code \(code)"
+                : "key code \(code) using {\(mapping.modifiers)}"
+        }
+        return mapping.modifiers.isEmpty
+            ? "keystroke \"\(mapping.key)\""
+            : "keystroke \"\(mapping.key)\" using {\(mapping.modifiers)}"
+    }
+
+    /// AppleScript that runs `body` inside the process with this unix id.
+    ///
+    /// Targets by **unix id, not by name**: a process's System Events name is
+    /// not its app name (`Code` vs "Visual Studio Code", localized names, apps
+    /// with two processes), and a name miss either errors or — worse — hits a
+    /// different app. The pid comes straight from the CG window list, so it is
+    /// exactly the process owning the window the phone tapped.
+    ///
+    /// `nonisolated static` so tests can lock the script shape.
+    nonisolated static func genericAppScript(pid: pid_t, body: String, activateDelay: Double = 0.15) -> String {
+        """
+        tell application "System Events"
+            set quipProcs to (every application process whose unix id is \(pid))
+            if quipProcs is {} then error "Quip: no process with unix id \(pid)"
+            set quipProc to item 1 of quipProcs
+            set frontmost of quipProc to true
+            delay \(activateDelay)
+            tell quipProc
+                \(body)
+            end tell
+        end tell
+        """
+    }
+
+    /// Type text into an arbitrary app's focused window via System Events.
+    ///
+    /// The caller must have raised the target window first
+    /// (`WindowManager.focusWindow`) — this addresses the *process*, and System
+    /// Events types into whatever window that process has focused. Multi-window
+    /// apps therefore depend on the AX raise, exactly like the Terminal.app path.
+    ///
+    /// Newlines are typed as Return between lines rather than as a literal
+    /// `\n` in one keystroke, because a chat app (Slack, Messages) sends the
+    /// message on Return — so a multi-line transcript becomes several sends,
+    /// which is what a person typing it would get too.
+    @discardableResult
+    func sendTextToApp(_ text: String, to windowId: String, pressReturn: Bool,
+                       pid: pid_t, appName: String) async -> InjectionResult {
+        let lines = text.components(separatedBy: "\n")
+        var cmds: [String] = []
+        for (i, line) in lines.enumerated() {
+            if !line.isEmpty {
+                cmds.append("keystroke \"\(escapeForAppleScript(line))\"")
+            }
+            if i < lines.count - 1 { cmds.append("key code 36") }
+        }
+        if pressReturn { cmds.append("key code 36") }
+        guard !cmds.isEmpty else {
+            return InjectionResult(success: true, error: nil)
+        }
+        let script = Self.genericAppScript(
+            pid: pid,
+            body: cmds.joined(separator: "\n                ")
+        )
+        return await executeAppleScriptOffMain(
+            script, op: "sendTextToApp", windowId: windowId, terminalApp: nil,
+            detail: "app=\(appName) pid=\(pid)"
+        )
+    }
+
+    /// Send one keystroke to an arbitrary app. Generic counterpart of
+    /// `sendKeystroke`, which only speaks iTerm2 / Terminal.app.
+    @discardableResult
+    func sendKeystrokeToApp(_ key: String, to windowId: String,
+                            pid: pid_t, appName: String) async -> InjectionResult {
+        guard let cmd = Self.genericKeystrokeCommand(for: key) else {
+            return InjectionResult(success: false, error: "Unknown key: \(key)")
+        }
+        let script = Self.genericAppScript(pid: pid, body: cmd)
+        return await executeAppleScriptOffMain(
+            script, op: "sendKeystrokeToApp", windowId: windowId, terminalApp: nil,
+            detail: "key=\(key) app=\(appName) pid=\(pid)"
+        )
+    }
+
+    /// Paste an image into an arbitrary app: image bytes onto the clipboard,
+    /// then Cmd+V into that pid. Generic counterpart of `pasteImage`, which
+    /// only knows iTerm2's paste-confirm dance.
+    ///
+    /// The user's clipboard is snapshotted and restored through the same shared
+    /// coordinator the terminal paths use, so an overlapping text paste can't
+    /// leave the injected image sitting on the clipboard.
+    @discardableResult
+    func pasteImageToApp(at imageURL: URL, to windowId: String,
+                         pid: pid_t, appName: String) async -> InjectionResult {
+        guard let image = NSImage(contentsOf: imageURL) else {
+            return InjectionResult(success: false, error: "couldn't load image at \(imageURL.path)")
+        }
+        Self.beginClipboardInjection()
+        Self.writeImagePayload(image, fileURL: imageURL, to: NSPasteboard.general)
+        // Same 0.6s floor as `pasteImage`: the delay must outlast Cmd+V landing
+        // in the target app, or the restore races the paste and pastes nothing.
+        defer { Self.endClipboardInjection(after: 0.6) }
+        return await pasteClipboardToApp(to: windowId, pressReturn: false,
+                                         pid: pid, appName: appName)
+    }
+
+    /// Paste the clipboard into an arbitrary app (Cmd+V), optionally pressing
+    /// Return after. Used for the image path: a generic app has no PTY to
+    /// write bytes into, so pasted bytes are the only route.
+    @discardableResult
+    func pasteClipboardToApp(to windowId: String, pressReturn: Bool,
+                             pid: pid_t, appName: String) async -> InjectionResult {
+        var body = "keystroke \"v\" using {command down}"
+        if pressReturn { body += "\n                key code 36" }
+        let script = Self.genericAppScript(pid: pid, body: body)
+        return await executeAppleScriptOffMain(
+            script, op: "pasteClipboardToApp", windowId: windowId, terminalApp: nil,
+            detail: "app=\(appName) pid=\(pid)"
+        )
     }
 
     /// Map a key descriptor to an AppleScript expression suitable as the
@@ -704,7 +1025,12 @@ final class KeystrokeInjector {
                       to windowId: String,
                       iterm2SessionId: String?) async -> InjectionResult {
         guard let sessionId = iterm2SessionId else {
-            return InjectionResult(success: false, error: "iTerm2 session not yet mapped for window \(windowId)")
+            let err = "iTerm2 session not yet mapped for window \(windowId)"
+            // iTerm2-only by construction — the phone hides scroll for other hosts.
+            Self.logInjectionFailure(op: "iterm2Scroll", windowId: windowId,
+                                     terminalApp: .iterm2, kind: .sessionNotFound,
+                                     message: err)
+            return InjectionResult(success: false, error: err, kind: .sessionNotFound)
         }
         let escapedId = escapeForAppleScript(sessionId)
         let (keyCode, modifiers) = direction.iTerm2Keystroke
@@ -742,7 +1068,9 @@ final class KeystrokeInjector {
             end tell
         end tell
         """
-        return await executeAppleScriptOffMain(script, context: "iterm2Scroll(\(direction.rawValue)) to \(windowId)")
+        return await executeAppleScriptOffMain(script, op: "iterm2Scroll", windowId: windowId,
+                                               terminalApp: .iterm2,
+                                               detail: "direction=\(direction.rawValue)")
     }
 
     // MARK: - Spawn Terminal
@@ -754,7 +1082,9 @@ final class KeystrokeInjector {
     /// - Returns: Result indicating success or failure
     @discardableResult
     func spawnTerminal(in directory: String, terminalApp: TerminalApp) async -> InjectionResult {
-        let escapedDir = escapeForAppleScript(directory)
+        // Shell first, then AppleScript — the directory lands inside `cd "…"`,
+        // so a `$` or a backtick in the path would otherwise expand or run.
+        let escapedDir = escapeForAppleScript(escapeForShell(directory))
         let script: String
 
         switch terminalApp {
@@ -781,7 +1111,8 @@ final class KeystrokeInjector {
             """
         }
 
-        return await executeAppleScriptOffMain(script, context: "spawnTerminal in \(directory)")
+        return await executeAppleScriptOffMain(script, op: "spawnTerminal", windowId: "-",
+                                               terminalApp: nil, detail: "dir=\(directory)")
     }
 
     /// Open a new iTerm2 window (not tab), `cd` to the given directory, and
@@ -830,7 +1161,9 @@ final class KeystrokeInjector {
         end tell
         """
 
-        return await executeAppleScriptOffMain(script, context: "spawnWindow in \(directory), cmd=\(command)")
+        return await executeAppleScriptOffMain(script, op: "spawnWindow", windowId: "-",
+                                               terminalApp: nil,
+                                               detail: "dir=\(directory) cmd=\(command)")
     }
 
     /// Destructively close an iTerm2 window whose title matches `windowName`.
@@ -876,12 +1209,44 @@ final class KeystrokeInjector {
         end tell
         """
 
-        return await executeAppleScriptOffMain(script, context: "closeWindow \(windowName)")
+        return await executeAppleScriptOffMain(script, op: "closeWindow", windowId: "-",
+                                               terminalApp: nil, detail: "name=\(windowName)")
     }
 
     // MARK: - Read Terminal Content
 
+    /// What one `readContent` call actually learned.
+    ///
+    /// The third case is the point. A cached iTerm2 session id that no longer
+    /// resolves — the session was recreated, which is the self-healable failure
+    /// this whole path exists to survive — used to be indistinguishable from a
+    /// quiet terminal: the session walk found no match, fell off the end of the
+    /// script, and returned `""` from a *successful* AppleScript run. Callers
+    /// then reported "reads succeeded but the buffer stayed empty — the agent
+    /// had nothing to say" about a window they could not read at all.
+    enum ContentRead: Sendable, Equatable {
+        /// The read worked. `""` here means the buffer really was empty.
+        case ok(String)
+        /// The AppleScript itself errored — usually a revoked Automation grant.
+        case failed
+        /// The script ran, but the session id we were given is not in iTerm2's
+        /// window → tab → session tree (or we had none). Points at the session
+        /// map, not at permissions.
+        case sessionGone
+    }
+
+    /// Emitted by the iTerm2 read script when the session walk completes without
+    /// matching, so "no such session" stops looking like "empty buffer".
+    ///
+    /// Compared against the RAW script output, before trimming or redaction, and
+    /// only as a whole-string equality: a terminal that happened to display this
+    /// token would also be displaying a prompt around it and so could not match.
+    nonisolated static let sessionGoneSentinel = "___QUIP_SESSION_NOT_FOUND___"
+
     /// Read the visible/recent text content from a terminal window via AppleScript.
+    ///
+    /// Returns nil for both "could not look" and "the session is gone" — see
+    /// `readContentDetailed` for the caller that needs to tell them apart.
     ///
     /// Synchronous, and therefore OFF-MAIN ONLY — every caller (the mode poll,
     /// the TTS/prompt scrapes, the request_content handler) already dispatches to
@@ -889,12 +1254,42 @@ final class KeystrokeInjector {
     /// Quip runs most often: one per tracked window every 2s. Calling it on main
     /// would put the UI behind all of them.
     nonisolated func readContent(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> String? {
+        guard case .ok(let content) = readContentDetailed(terminalApp: terminalApp,
+                                                          cgWindowNumber: cgWindowNumber,
+                                                          iterm2SessionId: iterm2SessionId)
+        else { return nil }
+        return content
+    }
+
+    /// `readContent` without the lossy `String?` collapse. Same thread rules.
+    nonisolated func readContentDetailed(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> ContentRead {
         let script: String
         switch terminalApp {
         case .claudeDesktop:
-            return nil
+            return .failed
         case .terminal:
-            script = """
+            // Terminal.app's AppleScript `id of window` IS the CGWindowID —
+            // verified against CGWindowListCopyWindowInfo (ids 72 and 968 matched
+            // exactly on two live windows). That makes an exact per-window read
+            // possible, and it reads a window that isn't frontmost just fine.
+            //
+            // It matters because the old `contents of front window` made every
+            // Terminal.app read window-blind: with two windows open, the prompt
+            // scrape that drives push notifications, the mode poll, and answer
+            // re-validation could all be looking at a different window than the
+            // one they were asked about. (iTerm2 has targeted by session id all
+            // along — this closes the same hole for Terminal.app.)
+            //
+            // `front window` stays as the fallback for a caller that has no
+            // window number, which is what every caller used to get anyway.
+            script = cgWindowNumber != 0 ? """
+            tell application "Terminal"
+                if (exists window id \(cgWindowNumber)) then
+                    return contents of window id \(cgWindowNumber)
+                end if
+                return contents of front window
+            end tell
+            """ : """
             tell application "Terminal"
                 return contents of front window
             end tell
@@ -905,7 +1300,10 @@ final class KeystrokeInjector {
             // whichever iTerm2 window happened to be frontmost — that's how
             // the phone ended up displaying another window's buffer while the
             // user thought they were looking at their selection.
-            guard let sessionId = iterm2SessionId else { return nil }
+            //
+            // No id is the same class of answer as an id that no longer
+            // resolves: the session map, not permissions.
+            guard let sessionId = iterm2SessionId else { return .sessionGone }
             let escapedId = sessionId
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
@@ -928,14 +1326,49 @@ final class KeystrokeInjector {
                         end repeat
                     end tell
                 end repeat
-                return ""
+                -- Walking off the end means the id is stale (session recreated),
+                -- NOT that the buffer is empty. Returning "" here made those two
+                -- indistinguishable to every caller.
+                return "\(Self.sessionGoneSentinel)"
             end tell
             """
         }
 
         let result = AppleScriptRunner.run(script)
-        if result.failed { return nil }
-        return result.stringValue
+        if result.failed { return .failed }
+        guard let raw = result.stringValue else { return .failed }
+        // Checked against the raw output, before trimming/redaction, so neither
+        // transform can hide or manufacture the marker.
+        if raw == Self.sessionGoneSentinel { return .sessionGone }
+        // Redact HERE, not at the broadcast, so the Mac reasons over exactly the
+        // bytes the phone was shown. Prompt fingerprints are hashes of on-screen
+        // text: the phone can only ever hash redacted content, so if the Mac
+        // re-hashed the raw buffer, any prompt containing something the redactor
+        // rewrites would never re-validate and every answer to it would be
+        // dropped as "Prompt changed — not sent". One canonical form removes the
+        // whole class. `redact` is a fixed set of regex substitutions — same
+        // input, same output — so hashes stay stable.
+        return .ok(SecretRedactor.redact(Self.trimTrailingBlankLines(raw)))
+    }
+
+    /// Drop the blank lines a terminal pads its buffer with below the last
+    /// painted row.
+    ///
+    /// This is not cosmetic. Both terminals return the FULL window height, so a
+    /// prompt drawn near the top of a tall window sits dozens of blank lines
+    /// above the end of the string — past `NumberedPromptDetector.scanLineLimit`,
+    /// which only ever looks at the trailing lines. Every detector then reports
+    /// "no prompt": one-tap answers got dropped as "Prompt changed — not sent"
+    /// (the phone hashes the TRIMMED content it was sent, the Mac re-hashed the
+    /// padded one and got nil) and multi-select fell through to the typed-text
+    /// path. Trimming here — the single choke point every reader goes through —
+    /// keeps all consumers looking at the same shape the phone does.
+    nonisolated static func trimTrailingBlankLines(_ content: String) -> String {
+        var lines = content.components(separatedBy: "\n")
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Capture Window Screenshot
@@ -1154,6 +1587,13 @@ final class KeystrokeInjector {
     /// at the shell level, and then the whole resulting string gets escaped
     /// again for the AppleScript string literal.
     private func escapeForShell(_ text: String) -> String {
+        Self.escapeForShellStatic(text)
+    }
+
+    /// Same rule, callable without an instance — the sidebar's "spawn a
+    /// terminal here" action builds its own AppleScript and needs it too.
+    /// `nonisolated` so tests and non-main-actor callers can reach it.
+    nonisolated static func escapeForShellStatic(_ text: String) -> String {
         text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -1167,13 +1607,23 @@ final class KeystrokeInjector {
     /// on the shared serial queue). `pasteText` is the one caller that qualifies
     /// — it is nonisolated and runs on `pasteInjectQueue`. Everything reachable
     /// from the main actor goes through `executeAppleScriptOffMain`.
-    nonisolated private func executeAppleScript(_ source: String, context: String) -> InjectionResult {
+    nonisolated private func executeAppleScript(_ source: String, op: String,
+                                                windowId: String,
+                                                terminalApp: TerminalApp?,
+                                                detail: String = "") -> InjectionResult {
         let result = AppleScriptRunner.run(source)
 
         if let message = result.errorMessage {
-            print("[KeystrokeInjector] \(context): \(message)")
-            return InjectionResult(success: false, error: message,
-                                   kind: Self.classifyAppleScriptError(message))
+            let kind = Self.classifyAppleScriptError(message)
+            // This is the path EVERY classified failure takes, TCC denials
+            // included — the one case injection.log exists to make greppable.
+            // It used to pass the whole prose context as `op` and "-" for the
+            // window and app, so the primary lines were both unparseable and
+            // missing data every caller already had in hand.
+            Self.logInjectionFailure(op: op, windowId: windowId,
+                                     terminalApp: terminalApp, kind: kind,
+                                     message: message, detail: detail)
+            return InjectionResult(success: false, error: message, kind: kind)
         }
 
         return InjectionResult(success: true, error: nil)
@@ -1186,9 +1636,13 @@ final class KeystrokeInjector {
     /// blocked instead, it would wait out every mode poll already on the queue,
     /// and — when the target terminal is wedged, or the Automation consent dialog
     /// is up and unanswered — the whole AppleEvent timeout with it.
-    nonisolated private func executeAppleScriptOffMain(_ source: String, context: String) async -> InjectionResult {
+    nonisolated private func executeAppleScriptOffMain(_ source: String, op: String,
+                                                       windowId: String,
+                                                       terminalApp: TerminalApp?,
+                                                       detail: String = "") async -> InjectionResult {
         await AppleScriptRunner.offMain {
-            self.executeAppleScript(source, context: context)
+            self.executeAppleScript(source, op: op, windowId: windowId,
+                                    terminalApp: terminalApp, detail: detail)
         }
     }
 }

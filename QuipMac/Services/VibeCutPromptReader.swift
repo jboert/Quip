@@ -51,7 +51,11 @@ struct VibeCutPromptReader {
 
     /// Merged catalog plus the number of `.json` pack files that could not be
     /// decoded (surfaced to the phone so a corrupt import isn't silently ignored).
-    struct ReadResult {
+    /// `Sendable` so the whole read can be done off the main thread and the
+    /// result handed back — see `handleSyncVibeCut`. The read walks a packs
+    /// directory and decodes every JSON in it, which is not work the MainActor
+    /// should be doing.
+    struct ReadResult: Sendable {
         let catalog: VibeCutCatalog
         let skippedPacks: Int
     }

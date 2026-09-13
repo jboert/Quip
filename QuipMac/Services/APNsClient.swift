@@ -57,6 +57,12 @@ actor APNsClient {
     /// SecItemCopyMatching under XCTest raises a GUI authorization prompt
     /// that hung the whole Mac suite ~57 min (wishlist 2026-07-13; the old
     /// workaround was `-skip-testing:QuipMacTests/APNsJWTTests`).
+    ///
+    /// **Every test MUST pass `keyPEM:` explicitly** — including `nil` for the
+    /// missing-key case. The default argument is evaluated at the call site, so
+    /// one omission puts a Keychain read back inside the test host and the hang
+    /// returns. Verified 2026-08-03: no test omits it, and the suite runs
+    /// unskipped (7 APNs tests in 0.018s).
     init(keyId: String, teamId: String, bundleId: String, session: URLSession = .shared,
          keyPEM: Data? = APNsKeyStore.get()) throws {
         self.keyId = keyId

@@ -33,10 +33,30 @@ final class BackendSession {
         "qaPair.swapped.\(backendId)"
     }
 
+    /// Per-backend persistence for the screen chip selection. Namespaced by
+    /// backend id for the same reason as the QA-pair keys: two Macs have
+    /// different monitors, and one's choice must not leak into the other's.
+    static func screenFilterKey(forBackendId backendId: String) -> String {
+        "screenFilter.\(backendId)"
+    }
+
     var windows: [WindowState] = []
     var selectedWindowId: String?
     var monitorName: String = "Mac"
     var screenAspect: Double = 16.0 / 10.0
+    /// Every display connected to this Mac, newest `layout_update` wins.
+    /// Empty for a single-screen Mac or an older Mac build that doesn't send
+    /// the list — the screen chips hide themselves in both cases.
+    var displays: [DisplayState] = []
+    /// width / height of all displays combined, for the "All screens" canvas.
+    var spanAspect: Double = 16.0 / 10.0
+    /// Mission Control desktops reported by the Mac. Empty on older builds.
+    var spaces: [SpaceState] = []
+    /// Which screen's windows to show. nil = all screens. Persisted per
+    /// backend (`screenFilterKey`) so "the terminal screen" survives an app
+    /// relaunch — keyed by CGDirectDisplayID, so it can't drift onto the wrong
+    /// monitor when displays are reordered.
+    var selectedDisplayID: String?
     var terminalContentText: String?
     var terminalContentScreenshot: String?
     var terminalContentURLs: [String]?
@@ -60,6 +80,23 @@ final class BackendSession {
         if let blob = UserDefaults.standard.data(forKey: qaPairUserDefaultsKey),
            let pair = try? JSONDecoder().decode(QAPair.self, from: blob) {
             self.qaPair = pair
+        }
+        // Hydrate the screen chip selection. Validated against the live
+        // display list on the first layout_update — an unplugged monitor's id
+        // is dropped there, not here (no display list exists yet at init).
+        self.selectedDisplayID = UserDefaults.standard.string(
+            forKey: Self.screenFilterKey(forBackendId: backendID))
+    }
+
+    /// Mutate `selectedDisplayID` and write through to UserDefaults, so the
+    /// chosen screen survives a relaunch. nil means "all screens".
+    func updateSelectedDisplay(_ id: String?) {
+        self.selectedDisplayID = id
+        let key = Self.screenFilterKey(forBackendId: backendID)
+        if let id {
+            UserDefaults.standard.set(id, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
         }
     }
 

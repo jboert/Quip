@@ -48,6 +48,8 @@ enum QuipLog {
         let text = line(severity: severity, subsystem: subsystem, message: message)
         let data = Data(text.utf8)
 
+        LogPaths.rotateIfNeeded(path: path)
+
         writeLock.lock()
         defer { writeLock.unlock() }
 

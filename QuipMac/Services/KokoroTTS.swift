@@ -11,6 +11,7 @@ enum KokoroTTSDebug {
         let line = "[\(Date())] \(msg)\n"
         guard let data = line.data(using: .utf8) else { return }
         let path = self.path
+        LogPaths.rotateIfNeeded(path: path)
         lock.lock()
         defer { lock.unlock() }
         do {

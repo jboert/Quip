@@ -64,6 +64,25 @@ enum ContentMapMutations {
             urlsMap.removeValue(forKey: id)
         }
     }
+
+    /// Keep the potentially large screenshot/text caches aligned with the
+    /// current window snapshot. A window can disappear without entering QA
+    /// mode (quit, Space change, or backend switch), so pair-only cleanup is
+    /// not sufficient and would retain base64 screenshots forever.
+    static func pruneToWindowIDs(
+        _ activeIDs: Set<String>,
+        textMap: inout [String: String],
+        _ screenshotMap: inout [String: String],
+        _ urlsMap: inout [String: [String]],
+        _ updatedAtMap: inout [String: Date],
+        _ autosuggestMap: inout [String: Bool]
+    ) {
+        textMap.keys.filter { !activeIDs.contains($0) }.forEach { textMap.removeValue(forKey: $0) }
+        screenshotMap.keys.filter { !activeIDs.contains($0) }.forEach { screenshotMap.removeValue(forKey: $0) }
+        urlsMap.keys.filter { !activeIDs.contains($0) }.forEach { urlsMap.removeValue(forKey: $0) }
+        updatedAtMap.keys.filter { !activeIDs.contains($0) }.forEach { updatedAtMap.removeValue(forKey: $0) }
+        autosuggestMap.keys.filter { !activeIDs.contains($0) }.forEach { autosuggestMap.removeValue(forKey: $0) }
+    }
 }
 
 @main
@@ -101,6 +120,14 @@ struct QuipApp: App {
     @State private var selectedWindowId: String?
     @State private var monitorName: String = "Mac"
     @State private var screenAspect: Double = 16.0 / 10.0
+    /// Displays on the active Mac. Empty = one screen (or an older Mac build),
+    /// which hides the screen chips entirely.
+    @State private var displays: [DisplayState] = []
+    @State private var spanAspect: Double = 16.0 / 10.0
+    @State private var spaces: [SpaceState] = []
+    @State private var selectedSpaceID: String?
+    /// Chip selection: a `DisplayState.id`, or nil for "All screens".
+    @State private var selectedDisplayID: String?
     @State private var isRecording = false
     @State private var pttTracker = PTTWindowTracker()
     // Text input bar state owned here so PTT can drop the voice
@@ -139,6 +166,10 @@ struct QuipApp: App {
     @State private var macPermissions: MacPermissionsMessage? = nil
     @State private var errorToast: String?
     @AppStorage("ttsEnabled") private var ttsEnabled = false
+    /// Press Return for the user once a dictation finishes. Off by default:
+    /// the historical behaviour is to leave the transcript in the prompt so a
+    /// long dictation can be read back before it is sent.
+    @AppStorage("dictation.autoSend") private var dictationAutoSend = false
     /// Master toggle for the Dynamic Island / Lock Screen Live Activity.
     /// Default on — if the user's already wired up push they almost
     /// certainly want the island card too. Flipping it off tears down
@@ -215,6 +246,11 @@ struct QuipApp: App {
                 ttsOverlayTexts: ttsOverlayTexts,
                 monitorName: monitorName,
                 screenAspect: screenAspect,
+                displays: displays,
+                spanAspect: spanAspect,
+                spaces: spaces,
+                selectedSpaceID: $selectedSpaceID,
+                selectedDisplayID: $selectedDisplayID,
                 showTextInput: $showTextInput,
                 textInputValue: $textInputValue,
                 onStartRecording: { DispatchQueue.main.async { startRecording() } },
@@ -294,6 +330,19 @@ struct QuipApp: App {
                 selectedWindowId = s.selectedWindowId
                 monitorName = s.monitorName
                 screenAspect = s.screenAspect
+                displays = s.displays
+                spanAspect = s.spanAspect
+                spaces = s.spaces
+                selectedSpaceID = s.spaces.first(where: { $0.isCurrent })?.id
+                selectedDisplayID = s.selectedDisplayID
+                ContentMapMutations.pruneToWindowIDs(
+                    Set(s.windows.map(\.id)),
+                    textMap: &terminalContentTextById,
+                    &terminalContentScreenshotById,
+                    &terminalContentURLsById,
+                    &terminalContentUpdatedAtById,
+                    &terminalContentHasAutosuggestById
+                )
                 terminalContentText = s.terminalContentText
                 terminalContentScreenshot = s.terminalContentScreenshot
                 terminalContentURLs = s.terminalContentURLs
@@ -525,8 +574,28 @@ struct QuipApp: App {
             DispatchQueue.main.async {
                 let wasEmpty = windows.isEmpty
                 windows = update.windows
+                ContentMapMutations.pruneToWindowIDs(
+                    Set(update.windows.map(\.id)),
+                    textMap: &terminalContentTextById,
+                    &terminalContentScreenshotById,
+                    &terminalContentURLsById,
+                    &terminalContentUpdatedAtById,
+                    &terminalContentHasAutosuggestById
+                )
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
+                if let d = update.displays { displays = d }
+                if let span = update.spanAspect, span > 0 { spanAspect = span }
+                if let incomingSpaces = update.spaces {
+                    spaces = incomingSpaces
+                    if selectedSpaceID == nil {
+                        selectedSpaceID = incomingSpaces.first(where: { $0.isCurrent })?.id
+                    }
+                }
+                // The manager already dropped a filter pointing at an
+                // unplugged monitor; mirror its verdict so the chips and the
+                // canvas can't disagree about which screen is showing.
+                selectedDisplayID = manager.active.selectedDisplayID
                 volumeHandler.startMonitoring(windowCount: update.windows.count)
                 // Push window snapshot to the paired Apple Watch (no-op if
                 // no watch is paired or the app isn't installed).
@@ -949,15 +1018,20 @@ struct QuipApp: App {
             generator.impactOccurred(intensity: 1.0)
         }
         // Type the transcription straight into Claude Code's `>` prompt on
-        // the Mac — `pressReturn: false` keeps it in the input line rather
+        // the Mac. `pressReturn: false` keeps it in the input line rather
         // than submitting, so a long dictation shows up verbatim in the
         // terminal (and thus in the phone's content panel via the next
-        // refresh). User hits Return when they're ready.
+        // refresh) and the user hits Return when they're ready — the default.
+        // With "Auto-send dictation" on, Return is pressed for them instead,
+        // which is what makes hands-free work end to end.
         //
         // Trim trailing whitespace/newlines: a stray \n typed into Claude's
         // box would get swallowed by the box as a newline rather than
         // treated as "submit," and it breaks the render.
         let windowId = pttTracker.end()
+        // Read the toggle now, on the main actor, rather than inside the
+        // completion that fires from the speech worker.
+        let autoSend = dictationAutoSend
         // Defer SendTextMessage until the speech worker finishes its 300ms
         // trailing flush — otherwise the user's last word (captured during
         // the flush window) never makes it into the prompt.
@@ -968,7 +1042,8 @@ struct QuipApp: App {
             flushPendingImage(windowId: windowId) { [client] in
                 client.send(STTStateMessage.ended(windowId: windowId))
                 if !text.isEmpty {
-                    client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: false))
+                    client.send(SendTextMessage(windowId: windowId, text: text,
+                                                pressReturn: autoSend))
                 }
             }
         }
@@ -1292,6 +1367,15 @@ struct MainiOSView: View {
     var ttsOverlayTexts: [String: String]
     var monitorName: String
     var screenAspect: Double
+    /// Every display on the Mac, primary first. Empty or single-element =>
+    /// no screen chips (nothing to switch between).
+    var displays: [DisplayState]
+    /// width / height of all displays combined — the "All screens" canvas.
+    var spanAspect: Double
+    var spaces: [SpaceState]
+    @Binding var selectedSpaceID: String?
+    /// nil = show every screen on one merged canvas.
+    @Binding var selectedDisplayID: String?
     @Binding var showTextInput: Bool
     @Binding var textInputValue: String
     var onStartRecording: () -> Void
@@ -1302,6 +1386,11 @@ struct MainiOSView: View {
     /// current connection's first degraded snapshot. Reset on disconnect so a
     /// reconnect can re-pop if Mac is still degraded — but the 5s update
     /// stream doesn't keep re-popping after the user dismisses.
+    /// Whether the desktop chips are showing in full. Collapsed by default and
+    /// deliberately NOT persisted: it is a momentary "let me see my options"
+    /// state, not a preference, so it costs no `PreferencesSnapshot` field and
+    /// nothing to restore on a reinstall.
+    @State private var spaceChipsExpanded = false
     @State private var hasAutoShownPermsForConnection = false
 
     @AppStorage("lastURL") private var urlText: String = ""
@@ -3579,8 +3668,295 @@ struct MainiOSView: View {
     // MARK: - Window Layout
 
     private var windowLayout: some View {
+        // The chips are the whole multi-display affordance, and they cost zero
+        // vertical space on a one-display, one-desktop Mac (see `filterChips`).
+        // Inside windowLayout rather than at each of its four call sites so
+        // every layout — portrait, landscape, expanded — gets them for free.
+        VStack(spacing: 0) {
+            filterChips
+            windowCanvas
+        }
+    }
+
+    /// Desktop and display filters on ONE 26pt row.
+    ///
+    /// Two axes, ANDed: a desktop (macOS Space) is not a display (a physical
+    /// monitor), a window has one of each, and the grid shows the windows both
+    /// filters allow. Each side carries its own "All …" chip, and every count is
+    /// scoped to what the other side is allowing, so the row states the rule
+    /// rather than leaving it to be inferred from missing cards.
+    ///
+    /// They used to be two stacked rows, so a multi-display Mac with windows on
+    /// more than one desktop spent 52pt of the grid on chrome. They are also
+    /// both horizontal scrolls, so a single row loses nothing: what does not fit
+    /// scrolls, exactly as it already did.
+    ///
+    /// The desktop side collapses to a single chip naming the active filter,
+    /// because the desktop chips are the ones that multiply — a Mac has two or
+    /// three displays but can have any number of desktops.
+    @ViewBuilder
+    private var filterChips: some View {
+        if activeSpaces.count > 1 || displays.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    spaceChipGroup
+                    if activeSpaces.count > 1 && displays.count > 1 {
+                        // The two kinds filter different things; without a rule
+                        // they read as one undifferentiated run of capsules.
+                        Divider().frame(height: 12)
+                    }
+                    displayChipGroup
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+            }
+            .frame(height: 26)
+        }
+    }
+
+    /// Windows the OTHER axis is currently letting through.
+    ///
+    /// Every chip count is computed against these, never against the raw list.
+    /// The two filters AND together, so a display chip that counted every window
+    /// on that display while a desktop filter was also narrowing the grid
+    /// described a set the grid was not showing: the badges never summed to the
+    /// number of cards, and the row gave no clue that the other filter was the
+    /// reason. Counted this way, the badges ARE the rule — each side shows the
+    /// breakdown of what the other side is already allowing, and a 0 says
+    /// plainly "nothing here, given the other filter".
+    private var windowsPassingSpaceFilter: [WindowState] {
+        guard let id = effectiveSpaceID else { return displayWindows }
+        return displayWindows.filter { $0.spaceID == id }
+    }
+
+    private var windowsPassingDisplayFilter: [WindowState] {
+        guard let id = selectedDisplayID else { return displayWindows }
+        return displayWindows.filter { effectiveDisplayID($0) == id }
+    }
+
+    /// Compact per-display filter. One chip per display plus "All Displays",
+    /// only when the Mac actually has more than one display — a single-display
+    /// desk sees nothing at all, not a row with one useless chip.
+    @ViewBuilder
+    private var displayChipGroup: some View {
+        if displays.count > 1 {
+            ForEach(displays) { display in
+                filterChip(title: display.name, icon: Self.displayChipIcon,
+                           count: windowsPassingSpaceFilter
+                               .filter { effectiveDisplayID($0) == display.id }.count,
+                           isOn: selectedDisplayID == display.id) {
+                    selectDisplay(display.id)
+                }
+            }
+            // Named, not bare "All": with a desktop "All Desktops" chip on the
+            // same row, one unqualified "All" read as a reset for both.
+            filterChip(title: "All Displays", icon: Self.displayChipIcon,
+                       count: windowsPassingSpaceFilter.count,
+                       isOn: selectedDisplayID == nil) {
+                selectDisplay(nil)
+            }
+        }
+    }
+
+    /// Desktops holding at least one window. A Space the user has nothing open
+    /// on would only offer a chip leading to a blank grid, and dropping the
+    /// empties can take the row back down to one — at which point it hides
+    /// entirely, exactly like `displayChipGroup` on a single-display desk.
+    ///
+    /// Deliberately computed from ALL windows, not from the display filter's
+    /// survivors: a filter row that reshuffles itself as you use it is worse
+    /// than one that keeps a stable set of chips and shows a 0 count.
+    private var activeSpaces: [SpaceState] {
+        SpaceActivity.active(spaces: spaces, windows: windows)
+    }
+
+    /// SF Symbols for the two chip kinds. They used to share `display`, which
+    /// made a desktop chip and a display chip indistinguishable at a glance —
+    /// the main reason the area read as noise rather than as two filters.
+    private static let spaceChipIcon = "macwindow.on.rectangle"
+    private static let displayChipIcon = "display"
+
+    /// The desktop filter: one chip when collapsed, the full set when expanded.
+    ///
+    /// Collapsed is the default because the desktop chips are the ones that
+    /// multiply. The collapsed chip carries a chevron and names the active
+    /// filter, so the row always says what the grid is showing even at its
+    /// smallest.
+    @ViewBuilder
+    private var spaceChipGroup: some View {
+        if activeSpaces.count > 1 {
+            if spaceChipsExpanded {
+                ForEach(activeSpaces) { space in
+                    filterChip(title: space.name, icon: Self.spaceChipIcon,
+                               count: windowsPassingDisplayFilter
+                                   .filter { $0.spaceID == space.id }.count,
+                               isOn: effectiveSpaceID == space.id) {
+                        selectSpace(space.id)
+                    }
+                }
+                filterChip(title: "All Desktops", icon: Self.spaceChipIcon,
+                           count: windowsPassingDisplayFilter.count,
+                           isOn: effectiveSpaceID == nil) {
+                    selectSpace(nil)
+                }
+                // Collapsing is otherwise only reachable by picking a filter,
+                // which forces a selection change just to tidy the row.
+                filterChip(title: "", icon: "chevron.left", count: nil, isOn: false) {
+                    withAnimation(.easeOut(duration: 0.15)) { spaceChipsExpanded = false }
+                }
+            } else {
+                filterChip(
+                    title: SpaceActivity.collapsedTitle(activeSpaces: activeSpaces,
+                                                        effectiveSpaceID: effectiveSpaceID),
+                    icon: Self.spaceChipIcon,
+                    count: SpaceActivity.collapsedCount(windows: windowsPassingDisplayFilter,
+                                                        effectiveSpaceID: effectiveSpaceID),
+                    isOn: effectiveSpaceID != nil,
+                    trailingIcon: "chevron.right"
+                ) {
+                    withAnimation(.easeOut(duration: 0.15)) { spaceChipsExpanded = true }
+                }
+            }
+        }
+    }
+
+    /// Pick a desktop and collapse in one gesture — an expanded row that stayed
+    /// open after a choice would cost the space the collapse exists to save.
+    private func selectSpace(_ id: String?) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            selectedSpaceID = id
+            spaceChipsExpanded = false
+        }
+    }
+
+    /// One filter capsule, used by both axes. `icon` distinguishes a desktop
+    /// chip from a display chip; `count` is optional so a bare control (the
+    /// collapse affordance) can reuse the same shape instead of growing a
+    /// second chip style; `trailingIcon` carries the disclosure chevron when
+    /// collapsed.
+    private func filterChip(title: String, icon: String, count: Int?, isOn: Bool,
+                            trailingIcon: String? = nil,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 8, weight: .semibold))
+                if !title.isEmpty {
+                    Text(title)
+                        .font(.system(size: 10, weight: isOn ? .semibold : .regular))
+                        .lineLimit(1)
+                }
+                if let count {
+                    Text("\(count)")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(isOn ? Color.white.opacity(0.75) : colors.textFaint)
+                }
+                if let trailingIcon {
+                    Image(systemName: trailingIcon)
+                        .font(.system(size: 7, weight: .semibold))
+                        .foregroundStyle(isOn ? Color.white.opacity(0.75) : colors.textFaint)
+                }
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .foregroundStyle(isOn ? Color.white : colors.textFaint)
+            .background(
+                Capsule().fill(isOn ? Color.blue.opacity(0.75) : colors.surface.opacity(0.6))
+            )
+            .overlay(
+                Capsule().strokeBorder(isOn ? Color.clear : colors.surfaceBorder, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Write the chip choice through to the session so it persists per backend
+    /// and survives a backend switch.
+    private func selectDisplay(_ id: String?) {
+        withAnimation(.easeOut(duration: 0.15)) { selectedDisplayID = id }
+        manager.active.updateSelectedDisplay(id)
+    }
+
+    /// A window's display, defaulting to the primary. An older Mac build sends
+    /// no `displayID`, and everything it sends is normalized against the
+    /// primary — so treating nil as primary keeps those builds rendering
+    /// exactly as before.
+    private func effectiveDisplayID(_ window: WindowState) -> String? {
+        window.displayID ?? displays.first(where: { $0.isPrimary })?.id ?? displays.first?.id
+    }
+
+    /// The display the chips are currently showing, or nil for "All Displays".
+    private var activeDisplay: DisplayState? {
+        guard let id = selectedDisplayID else { return nil }
+        return displays.first { $0.id == id }
+    }
+
+    /// Aspect of the canvas the windows are drawn on: the chosen display's own
+    /// aspect, or the whole desk's span when "All Displays" is showing. Falls
+    /// back to `screenAspect` (the primary) for a single-display Mac.
+    private var canvasAspect: Double {
+        if let display = activeDisplay, display.aspect > 0 { return display.aspect }
+        if displays.count > 1, spanAspect > 0 { return spanAspect }
+        return screenAspect
+    }
+
+    /// The desktop filter actually in force. A pinned Space whose last window
+    /// just closed falls back to "All Desktops" rather than stranding the user
+    /// on an empty grid with the chip that got them there now gone.
+    private var effectiveSpaceID: String? {
+        SpaceActivity.resolvedSelection(selectedSpaceID, activeSpaces: activeSpaces)
+    }
+
+    /// Every filter currently narrowing the grid, named the way its chip is.
+    /// nil when nothing is filtering, so the caller can tell "the filters hid
+    /// them" from "there is genuinely nothing".
+    ///
+    /// Both are listed when both are on: the AND is the part people miss, and
+    /// naming one filter while another is also active is what makes the row
+    /// look broken.
+    private var activeFilterSummary: String? {
+        var parts: [String] = []
+        if let id = effectiveSpaceID,
+           let space = activeSpaces.first(where: { $0.id == id }) {
+            parts.append(space.name)
+        }
+        if let display = activeDisplay { parts.append(display.name) }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " + ")
+    }
+
+    /// One reset for both axes. Two separate "All" chips meant clearing the
+    /// view took two taps in two places, and neither chip admitted the other
+    /// existed.
+    private func clearWindowFilters() {
+        selectSpace(nil)
+        selectDisplay(nil)
+    }
+
+    /// Windows the grid shows: both filters applied. "All" on an axis is no
+    /// filter on that axis.
+    private var filteredWindows: [WindowState] {
+        let bySpace = effectiveSpaceID.map { id in displayWindows.filter { $0.spaceID == id } } ?? displayWindows
+        guard let id = selectedDisplayID else { return bySpace }
+        return bySpace.filter { effectiveDisplayID($0) == id }
+    }
+
+    /// Where a window is drawn on the current canvas.
+    ///
+    /// Mac-side frames are normalized against the window's OWN display, so
+    /// showing one screen needs no conversion at all. The merged "All" canvas
+    /// composes each display's `spanFrame` with the window's frame inside it —
+    /// the exact inverse of the split the Mac performs (`DisplayGeometry`).
+    private func canvasFrame(for window: WindowState) -> WindowFrame {
+        guard selectedDisplayID == nil, displays.count > 1,
+              let display = displays.first(where: { $0.id == effectiveDisplayID(window) })
+        else { return window.frame }
+        return DisplayGeometry.spanFrame(ofWindow: window.frame, onDisplay: display.spanFrame)
+    }
+
+    private var windowCanvas: some View {
         GeometryReader { geo in
-            let mac = hostScreenRect(in: geo.size, aspect: CGFloat(screenAspect))
+            let mac = hostScreenRect(in: geo.size, aspect: CGFloat(canvasAspect))
             ZStack(alignment: .topLeading) {
                 Color.clear
 
@@ -3614,9 +3990,33 @@ struct MainiOSView: View {
                                 }
                             }
                         }
+                    } else if filteredWindows.isEmpty, let filterSummary = activeFilterSummary {
+                        // The Mac has windows, just none that BOTH filters
+                        // allow. This used to fire only for a pinned display, so
+                        // a desktop filter that emptied the grid rendered blank
+                        // and looked like a dead connection — and nothing said
+                        // the two filters combine, which is exactly when that
+                        // matters. Name every active filter and clear them all
+                        // in one tap.
+                        VStack(spacing: 6) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                                .font(.system(size: 20, weight: .light))
+                                .foregroundStyle(colors.textFaint)
+                            Text("Nothing on \(filterSummary)")
+                                .font(.system(size: 10))
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(colors.textFaint)
+                            Button("Show everything") { clearWindowFilters() }
+                                .font(.system(size: 11, weight: .medium))
+                        }
                     } else {
-                        ForEach(Array(displayWindows.enumerated()), id: \.element.id) { index, window in
-                            let effectiveFrame = phoneLayoutFrame(for: window, index: index, total: displayWindows.count) ?? window.frame
+                        ForEach(Array(filteredWindows.enumerated()), id: \.element.id) { index, window in
+                            // A phone-side override (manual drag / auto-arrange)
+                            // is already canvas-space, so it must NOT be run
+                            // through the span composition again.
+                            let effectiveFrame = phoneLayoutFrame(for: window, index: index,
+                                                                  total: filteredWindows.count)
+                                ?? canvasFrame(for: window)
                             let rect = windowRect(frame: effectiveFrame, in: mac.size, inset: 3)
                             let isDragging = draggingWindowId == window.id
 
@@ -5621,7 +6021,11 @@ struct InlineTerminalContent: View {
             // detector finds an agent CLI's numeric choice menu, render one
             // in-app button per detected option so Codex/Claude prompts with
             // 1...N choices are answerable without typing.
-            if let options = NumberedPromptDetector.detect(in: content), options.count >= 2 {
+            // `answerableOptions`, not `detect`: the widget appends a free-text
+            // "Type something" row after the real options, and a chip for it
+            // opens an editor the phone cannot type into. Keystroke generation
+            // still sees the full run, so the walk to Submit is unaffected.
+            if let options = NumberedPromptDetector.answerableOptions(in: content), options.count >= 2 {
                 let fingerprint = NumberedPromptDetector.fingerprint(in: content)
                 if NumberedPromptDetector.isMultiSelect(in: content) {
                     // §18.2 — checkbox (multi-select) menu: accumulate picks on
@@ -6381,6 +6785,9 @@ struct SettingsSheet: View {
     /// was active at sheet open.)
     var windowIdProvider: () -> String? = { nil }
     @AppStorage("tintContentBorder") private var tintContentBorder = true
+    /// Same key the PTT path reads in QuipApp; @AppStorage keeps the two in
+    /// step without threading a binding through the settings hierarchy.
+    @AppStorage("dictation.autoSend") private var settingsDictationAutoSend = false
     @AppStorage("urlTrayEnabled") private var urlTrayEnabled = true
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
     @AppStorage("contentRenderMode") private var contentRenderModeRaw: String = ContentRenderMode.auto.rawValue
@@ -6498,8 +6905,11 @@ struct SettingsSheet: View {
                             tint: .teal
                         )
                     }
+                    Toggle("Auto-send dictation", isOn: $settingsDictationAutoSend)
                 } header: {
                     Text("Input")
+                } footer: {
+                    Text("Presses Return as soon as you stop speaking. Off leaves the transcript in the prompt so you can read it back first.")
                 }
 
                 Section {
@@ -8582,13 +8992,15 @@ struct LatencyDiagnosticsSheet: View {
                     Text("Recent (\(client.latencySamples.count) samples)")
                 }
 
-                // Phase 3: opt-in toggle for hot-swap routing. Off by default
-                // until hardware-verified across LAN / Tailscale / Cloudflare;
-                // user enables it from this row to opt into the experimental
-                // "always pick fastest path" behavior.
+                // Phase 3: hot-swap routing. ON unless the user opts out — the
+                // reader must agree with `BackendConnectionManager
+                // .autoSwapEnabled`, or this row would show OFF while the
+                // engine is running (which is exactly backwards from the bug
+                // this replaced, where the row showed OFF and the engine
+                // genuinely never ran for anyone).
                 Section {
                     Toggle("Auto-pick fastest path", isOn: Binding(
-                        get: { UserDefaults.standard.bool(forKey: BackendConnectionManager.autoSwapDefaultsKey) },
+                        get: { BackendConnectionManager.autoSwapEnabled() },
                         set: { UserDefaults.standard.set($0, forKey: BackendConnectionManager.autoSwapDefaultsKey) }
                     ))
                 } header: {
@@ -8874,7 +9286,7 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(isPresented: $creatingNew) {
-            PromptEditorSheet(initial: nil, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -8890,7 +9302,7 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(item: $generatedDraft) { draft in
-            PromptEditorSheet(initial: nil, draft: draft, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, draft: draft, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -9017,6 +9429,16 @@ struct PromptLibrarySheet: View {
         .contentShape(Rectangle())
         .onTapGesture { fire(entry, pressReturn: false) }
         .onLongPressGesture(minimumDuration: 0.4) { fire(entry, pressReturn: true) }
+        // Both actions are gesture-only, which VoiceOver cannot discover: the
+        // row reads as static text and long-press has no spoken equivalent at
+        // all. Declaring the button trait plus a named custom action makes
+        // "paste and send" reachable without the gesture.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(entry.label)
+        .accessibilityValue(hidden ? "Hidden" : entry.bodyPreview)
+        .accessibilityHint("Pastes this prompt into the active terminal")
+        .accessibilityAction(named: "Paste and send") { fire(entry, pressReturn: true) }
     }
 
     /// Compact provenance / state capsule, quieter than the label so the merged
@@ -9038,6 +9460,11 @@ struct PromptLibrarySheet: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             if lastFiredId == entry.id { lastFiredId = nil }
         }
+    }
+
+    /// Ids the Mac already holds, for the editor's collision warning.
+    private var existingPromptIDs: Set<String> {
+        Set(client.promptLibrary.map(\.id))
     }
 
     private func putPrompt(_ entry: PromptEntry, messageId: UUID) -> Bool {
@@ -9093,6 +9520,10 @@ struct PromptLibrarySheet: View {
 struct PromptEditorSheet: View {
     let initial: PromptEntry?
     var draft: PromptEntry? = nil
+    /// Ids already in the library, so the new-prompt flow can warn before a
+    /// save silently replaces a neighbour. Empty is safe — it just disables
+    /// the collision warning.
+    var existingIDs: Set<String> = []
     let latestAck: PutPromptAckMessage?
     let onSave: (_ entry: PromptEntry, _ messageId: UUID) -> Bool
     @Environment(\.dismiss) private var dismiss
@@ -9117,6 +9548,9 @@ struct PromptEditorSheet: View {
                         .foregroundStyle(initial != nil ? .secondary : .primary)
                     TextField("Display label (optional)", text: $labelText)
                         .autocorrectionDisabled(true)
+                    if initial == nil, !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        idPreviewRow
+                    }
                 } header: {
                     Text("Identity")
                 } footer: {
@@ -9163,7 +9597,9 @@ struct PromptEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        let id = idText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Send the id the Mac would derive anyway, so the phone's
+                        // local view of the library matches the file on disk.
+                        let id = initial?.id ?? sanitizedID
                         let label = labelText.trimmingCharacters(in: .whitespaces)
                         guard !id.isEmpty, !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                         let messageId = UUID()
@@ -9189,7 +9625,7 @@ struct PromptEditorSheet: View {
                             saveError = "Timed out waiting for the Mac to confirm save."
                         }
                     }
-                    .disabled(idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    .disabled((initial == nil && sanitizedID.isEmpty)
                               || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                               || isSaving)
                 }
@@ -9225,6 +9661,44 @@ struct PromptEditorSheet: View {
 
     private var metadataSource: PromptEntry? {
         initial ?? draft
+    }
+
+    /// What the Mac will actually name the file. Same function the Mac runs
+    /// (`Shared/PromptID.swift`), so this preview cannot drift from the write.
+    private var sanitizedID: String {
+        PromptID.sanitize(idText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// A new prompt whose sanitized id already exists would overwrite that
+    /// prompt's file. Warn rather than block: replacing is a legitimate edit,
+    /// but it must not be a surprise. Locked ids (edit flow) always "collide"
+    /// with themselves, so the check is new-prompt only.
+    private var collidesWithExisting: Bool {
+        initial == nil && !sanitizedID.isEmpty && existingIDs.contains(sanitizedID)
+    }
+
+    /// Save is impossible when nothing survives sanitization ("!!!", "///").
+    private var idIsUnsavable: Bool {
+        !idText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && sanitizedID.isEmpty
+    }
+
+    @ViewBuilder
+    private var idPreviewRow: some View {
+        if idIsUnsavable {
+            Label("No usable characters in that id — it can't become a filename.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+        } else if collidesWithExisting {
+            Label("Will save as \(sanitizedID).txt — replaces the existing “\(sanitizedID)” prompt.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+        } else {
+            Text("Will save as \(sanitizedID).txt")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func handleAckIfNeeded() {

@@ -62,13 +62,18 @@ Periodic broadcast (~2s) with current window layout.
       "state": "neutral",
       "color": "#FF6B6B",
       "isThinking": false,
-      "claudeMode": "normal"
+      "claudeMode": "normal",
+      "displayID": "display-123",
+      "spaceID": "space-3"
     }
+  ],
+  "spaces": [
+    { "id": "space-3", "name": "Desktop 1", "isCurrent": true }
   ]
 }
 ```
 
-`screenAspect`, `folder`, `isThinking`, and `claudeMode` are optional for backward-compat with older desktop builds; clients must tolerate their absence. `frame` coordinates are normalized 0.0–1.0 relative to the display bounds.
+`screenAspect`, `folder`, `isThinking`, `claudeMode`, `displayID`, `spaceID`, and `spaces` are optional for backward-compat with older desktop builds; clients must tolerate their absence. `frame` coordinates are normalized 0.0–1.0 relative to the window's display. The Mac omits `optionOnScreenOnly` when enumerating, so windows on inactive Mission Control desktops are included. The phone's Space chips filter those cards; tapping a card asks macOS to activate its owning desktop before raising the window.
 
 **Window state** values:
 - `"neutral"` — idle
@@ -578,6 +583,24 @@ Mac → iPhone. Sent after the delete either reaches disk or fails. The `message
   "error": "Prompt could not be deleted on the Mac."
 }
 ```
+
+### Prompt mutation timeouts and id sanitization
+
+Both acks are correlated by `messageId`; a client that sends one is expected to
+keep its UI in a pending state until the matching ack arrives. Quip's iPhone
+client waits **8 seconds**, then gives up and reports a timeout rather than
+assuming the write landed — a queued WebSocket send is not evidence of a disk
+write. Sending a mutation without a `messageId` is still accepted (older
+clients), but there is then no way to correlate the ack, so the sender cannot
+distinguish "saved" from "dropped".
+
+Prompt ids are sanitized before they become filenames: letters, digits, `-`,
+`_`, and `.` survive; spaces become `-`; everything else (path separators, shell
+metacharacters) is dropped; leading dots are stripped. An id that sanitizes to
+an empty string is rejected. The rule lives in `Shared/PromptID.swift` and both
+peers run the same function, so a client can show the resulting filename before
+sending. Two different raw ids can sanitize onto the same file — `put_prompt`
+then overwrites, so clients should warn before saving onto an existing id.
 
 ## Message Routing
 
