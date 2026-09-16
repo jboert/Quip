@@ -4,6 +4,96 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-09-16 (window filter row made opt-in; canvas aspect fixed)
+
+**Shipped on `eb-branch`. NOT installed — no paired device was reachable
+(`devicectl list devices` reported every device `unavailable`). NOT pushed.**
+
+- `f50a7a4` — `fix(grid)`: stop calling a minimized window "Other Desktops".
+- `1c2edf2` — `fix(grid)`: make the filter row opt-in and stop the canvas
+  distorting the desk.
+
+### Reported
+
+"The screens and displays don't work and are not reliable — toggle this and
+make it a setting to turn on." Owner picked, from a menu: the whole row is
+noise, and the all-displays canvas is wrong.
+
+### What was actually broken
+
+Three things, two of them measured on this machine rather than argued.
+
+**1. The desktop split was not a desktop split.** The Mac derived
+"This Desktop" / "Other Desktops" from the set difference between the full
+CoreGraphics window list and the one taken with `optionOnScreenOnly`, on the
+theory that that option is Space-scoped. It is not — it means "currently
+composited". Probe on a live single-Space desk: **76 layer-0 windows, 10 on
+screen, 66 declared to be on other desktops.** A second probe minimized a
+Finder window and watched it flip on-screen → off-screen → on-screen with no
+Space change at all. Since the phone defaults to the first bucket, minimizing
+a tracked terminal deleted its card from the grid and the row blamed another
+desktop. Naming the real Space needs `CGSCopySpacesForWindows` (private API),
+so the buckets now claim only what they measure: **On Screen** / **Hidden**,
+reset chip **All Windows**. Wire ids are unchanged.
+
+**2. The canvas lied about the desk by 45%.** `hostScreenRect` multiplied the
+height by 1.45 in the letterboxed branch "so the thumbnail isn't a narrow
+strip". Every card is a normalized frame multiplied by that rect, so the fudge
+drew every window 45% taller than the window it stands for. A portrait phone
+takes that branch on any desk wider than the canvas — and this desk is a single
+**3440×1440 ultrawide, aspect 2.39**, the worst case. True aspect in both
+branches now, covered by tests rather than by eye.
+
+**3. The display chips cannot appear on this desk at all.** `NSScreen.screens`
+reports one display, and `displayChipGroup` renders nothing below two. Half of
+what "screens and displays" names has never been visible here. No code change —
+recorded so the next session does not go hunting for a bug in it.
+
+### The setting
+
+`LabsFlags.windowFilters` → Settings → Quip Labs → **Window filters**, off by
+default. It gates the whole row and both axes. The gate is read once and routed
+through `effectiveSpaceID` / `pinnedDisplayID`, so the row, the grid and the
+canvas cannot disagree about whether filtering is on. The per-backend monitor
+pick is left in `UserDefaults` untouched, so turning the row back on restores
+the pinned monitor rather than resetting it.
+
+### Verified
+
+| Claim | Evidence |
+|---|---|
+| `optionOnScreenOnly` is not a Space test | **Measured twice.** 66 of 76 layer-0 windows misfiled; a Finder minimize/restore flips the flag with no Space change. |
+| Bucket labels no longer claim a desktop | **Test-verified**, both the `split` path and the `desktops(inSnapshot:)` path that actually feeds the broadcast. |
+| Canvas keeps the desk's aspect | **Test-verified**, 4 cases: ultrawide letterbox, pillarbox, a 16:10 desk on a portrait canvas, and the nonsense-aspect fallback. |
+| Full gate | **Green.** harness 62 checks, QuipMac 865 tests, QuipiOS 811 tests (806 before this session). |
+| Anything on hardware | **NOT verified.** No device was reachable; nothing has run on the phone or been installed to the Mac. |
+
+### Open threads
+
+1. **Nothing is installed.** Both commits are source-only. The Mac half (bucket
+   labels) needs a QuipMac rebuild to take effect, and that costs the Screen
+   Recording + Accessibility TCC grants — worth deferring, since the labels are
+   only visible with the Labs flag on, which is off by default.
+2. **Confirm the row is gone on the phone.** Acceptance: launch the app with no
+   Labs flag set and confirm no 26pt chip row above the grid and that every
+   window the Mac broadcasts has a card, including a minimized one.
+3. **Confirm the canvas matches the desk.** Acceptance: with the ultrawide
+   attached, check that a window occupying the left third of the desk occupies
+   the left third of the phone canvas, and that cards are no longer stretched
+   vertically. If the resulting band reads as too short to use, the arrange
+   modes are the intended answer — but say so, because reverting one line in
+   `hostScreenRect` brings the 1.45 back.
+4. **`body` is near the type-checker's budget.** One run of the iOS suite
+   mid-session failed with "the compiler is unable to type-check this expression
+   in reasonable time" pointing at a trivial line inside `MainiOSView.body`, and
+   the same tree compiled on the next run. Not chased. `MainiOSView.body` is the
+   thing to break up when it next refuses.
+5. **Display chips are still untested anywhere.** They need a second monitor.
+   The span composition (`DisplayGeometry.spanFrame`) has unit tests but has
+   never been seen on hardware.
+
+---
+
 ## Session log — 2026-09-11 (iTerm2 unmapping fixed; injection logging added)
 
 **Shipped on `eb-branch`, installed, hardware-confirmed. Not pushed.**
