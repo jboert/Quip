@@ -162,10 +162,9 @@ final class WindowOrderAndDisplayTests: XCTestCase {
         XCTAssertEqual(catalog.spaces.filter(\.isCurrent).count, 1)
     }
 
-    /// Everything on one desktop reports just that desktop — announcing an
-    /// "Other Desktops" entry holding nothing would put a chip on the phone
-    /// that filters to an empty grid, which is the defect this whole mechanism
-    /// replaced.
+    /// Everything on screen reports just that bucket — announcing a "Hidden"
+    /// entry holding nothing would put a chip on the phone that filters to an
+    /// empty grid, which is the defect this whole mechanism replaced.
     func testSpaceCatalogReportsOnlyTheCurrentDesktopWhenNothingIsElsewhere() {
         let catalog = WindowManager.SpaceCatalog.split(
             allWindows: [1, 2], onCurrentSpace: [1, 2])
@@ -180,9 +179,48 @@ final class WindowOrderAndDisplayTests: XCTestCase {
         XCTAssertNil(catalog.id(for: 99))
     }
 
-    /// The window ids CoreGraphics hands back for other Spaces are exactly the
-    /// ones missing from the on-screen list — the property the whole split
-    /// rests on.
+    /// The buckets must be named for what `optionOnScreenOnly` actually
+    /// measures — whether a window is composited right now — not for a Mission
+    /// Control Space.
+    ///
+    /// They were called "This Desktop" / "Other Desktops", which is a claim
+    /// CoreGraphics cannot support: minimizing a window on the desk you are
+    /// sitting at drops it from the on-screen list with no Space change at all
+    /// (measured: a Finder window flipped on-screen -> off-screen -> on-screen
+    /// across a minimize/restore, and a live single-Space desk reported 66 of
+    /// its 76 layer-0 windows as being on "other desktops"). The phone defaults
+    /// to the first bucket, so the wrong name came with a wrong default: a
+    /// minimized terminal's card vanished and the row said it was on another
+    /// desktop. Naming the Space needs `CGSCopySpacesForWindows`, which is
+    /// private API — so the labels claim only what is measured.
+    func testSpaceCatalogNamesBucketsForVisibilityNotForDesktops() {
+        let catalog = WindowManager.SpaceCatalog.split(
+            allWindows: [1, 2], onCurrentSpace: [1])
+        XCTAssertEqual(catalog.spaces.map(\.name), ["On Screen", "Hidden"])
+        XCTAssertFalse(catalog.spaces.contains { $0.name.lowercased().contains("desktop") },
+                       "a bucket named for a desktop is a claim about Spaces we cannot make")
+    }
+
+    /// `desktops(inSnapshot:)` is the path that actually feeds the broadcast —
+    /// `split` only stamps ids. Both must agree on the labels or the chips and
+    /// the cards describe different things.
+    func testSnapshotDerivedBucketsCarryTheSameNamesAsTheSplit() {
+        let raw = [
+            WindowManager.RawWindowInfo(
+                id: "a", name: "a", app: "T", bundleId: "com.t", pid: 1,
+                windowNumber: 1, bounds: .zero,
+                spaceID: WindowManager.SpaceCatalog.currentSpaceID),
+            WindowManager.RawWindowInfo(
+                id: "b", name: "b", app: "T", bundleId: "com.t", pid: 1,
+                windowNumber: 2, bounds: .zero,
+                spaceID: WindowManager.SpaceCatalog.otherSpaceID),
+        ]
+        XCTAssertEqual(WindowManager.SpaceCatalog.desktops(inSnapshot: raw).map(\.name),
+                       ["On Screen", "Hidden"])
+    }
+
+    /// Everything missing from the on-screen list lands in the second bucket —
+    /// the property the whole split rests on.
     func testSpaceCatalogTreatsEveryWindowMissingFromOnScreenAsElsewhere() {
         let catalog = WindowManager.SpaceCatalog.split(
             allWindows: [10, 20, 30], onCurrentSpace: [])

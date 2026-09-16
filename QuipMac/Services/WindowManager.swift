@@ -293,18 +293,26 @@ final class WindowManager {
         let spaceID: String?
     }
 
-    /// Which desktop a window sits on, to the precision macOS exposes without
-    /// private API.
+    /// Whether a window is currently drawn on the desk, to the precision macOS
+    /// exposes without private API.
     ///
-    /// The first attempt at this read `com.apple.spaces` and mapped windows via
-    /// `Space Properties[].windows`. Measured against a live desktop that list
-    /// held 30 window ids and covered 9 of 112 real windows — it does not carry
-    /// app windows, so nearly every window came back with no desktop at all.
+    /// This used to be presented as a DESKTOP (Mission Control Space) split —
+    /// "This Desktop" vs "Other Desktops" — on the theory that
+    /// `optionOnScreenOnly` is scoped to the active Space, so whatever it omits
+    /// must live on another one. That theory is wrong, and the phone paid for
+    /// it: `optionOnScreenOnly` means "currently composited", so a window the
+    /// user MINIMIZED on the desk they are sitting at is omitted too, and got
+    /// labelled as being on some other desktop. Measured on a live single-Space
+    /// desk: 76 layer-0 windows, 10 on screen, 66 declared "Other Desktops" —
+    /// and minimizing a Finder window flipped it from on-screen to off-screen
+    /// with no Space change at all. With the phone defaulting to "This Desktop",
+    /// minimizing a tracked terminal made its card disappear.
     ///
-    /// `optionOnScreenOnly` is scoped to the active Space, so the windows it
-    /// omits are exactly the ones living elsewhere. That supports an honest
-    /// two-way split — this desktop vs the rest — and nothing finer: naming a
-    /// specific other desktop needs `CGSCopySpacesForWindows`, which is private.
+    /// Naming the Space a window actually belongs to needs
+    /// `CGSCopySpacesForWindows`, which is private API. So the split now claims
+    /// only what it measures — on screen vs not — and the chips are named for
+    /// that. A minimized window reads as "Hidden", which is true, instead of
+    /// "Other Desktops", which was not.
     struct SpaceCatalog: Sendable {
         static let currentSpaceID = "space-current"
         static let otherSpaceID = "space-other"
@@ -320,8 +328,8 @@ final class WindowManager {
 
         /// Pure half of `read()`, so the split is testable without a
         /// WindowServer. Both entries are always reported when something is on
-        /// the current desktop; the phone drops an empty one and hides the row
-        /// when only one survives (`SpaceActivity`).
+        /// screen; the phone drops an empty one and hides the row when only one
+        /// survives (`SpaceActivity`).
         nonisolated static func split(allWindows: [CGWindowID],
                                       onCurrentSpace: [CGWindowID]) -> SpaceCatalog {
             let current = Set(onCurrentSpace)
@@ -331,27 +339,27 @@ final class WindowManager {
             }
             var states: [SpaceState] = []
             if byWindow.values.contains(currentSpaceID) {
-                states.append(SpaceState(id: currentSpaceID, name: "This Desktop",
+                states.append(SpaceState(id: currentSpaceID, name: "On Screen",
                                          isCurrent: true))
             }
             if byWindow.values.contains(otherSpaceID) {
-                states.append(SpaceState(id: otherSpaceID, name: "Other Desktops",
+                states.append(SpaceState(id: otherSpaceID, name: "Hidden",
                                          isCurrent: false))
             }
             return SpaceCatalog(spaces: states, byWindow: byWindow)
         }
 
-        /// The desktops represented in an already-stamped snapshot, in the
+        /// The buckets represented in an already-stamped snapshot, in the
         /// order the chips should appear.
         nonisolated static func desktops(inSnapshot raw: [RawWindowInfo]) -> [SpaceState] {
             let present = Set(raw.compactMap(\.spaceID))
             var states: [SpaceState] = []
             if present.contains(currentSpaceID) {
-                states.append(SpaceState(id: currentSpaceID, name: "This Desktop",
+                states.append(SpaceState(id: currentSpaceID, name: "On Screen",
                                          isCurrent: true))
             }
             if present.contains(otherSpaceID) {
-                states.append(SpaceState(id: otherSpaceID, name: "Other Desktops",
+                states.append(SpaceState(id: otherSpaceID, name: "Hidden",
                                          isCurrent: false))
             }
             return states

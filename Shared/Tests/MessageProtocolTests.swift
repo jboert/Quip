@@ -1189,8 +1189,8 @@ final class MessageProtocolTests: XCTestCase {
     // MARK: - SpaceActivity: the collapsed chip
 
     /// Collapsed, the chip is the row's ONLY evidence of what the grid is
-    /// showing. If it read "All Desktops" while a desktop filter was active, it
-    /// would quietly lie about why windows are missing from the grid below it.
+    /// showing. If it read "All Windows" while a filter was active, it would
+    /// quietly lie about why windows are missing from the grid below it.
     func testCollapsedTitleNamesThePinnedDesktop() {
         let active = [space("space-1"), space("space-3")]
         XCTAssertEqual(
@@ -1198,21 +1198,21 @@ final class MessageProtocolTests: XCTestCase {
             "space-3")
     }
 
-    func testCollapsedTitleReadsAllDesktopsWhenTheFilterIsOff() {
+    func testCollapsedTitleReadsAllWindowsWhenTheFilterIsOff() {
         let active = [space("space-1"), space("space-3")]
         XCTAssertEqual(
             SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: nil),
-            "All Desktops")
+            "All Windows")
     }
 
     /// Belt and braces with `resolvedSelection`: even handed an id that is no
-    /// longer active, the collapsed chip must not name a desktop the grid is
+    /// longer active, the collapsed chip must not name a bucket the grid is
     /// not filtered to.
     func testCollapsedTitleFallsBackWhenTheIdIsNoLongerActive() {
         let active = [space("space-1")]
         XCTAssertEqual(
             SpaceActivity.collapsedTitle(activeSpaces: active, effectiveSpaceID: "space-3"),
-            "All Desktops")
+            "All Windows")
     }
 
     /// The badge must match the number of cards rendered below it — a count

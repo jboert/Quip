@@ -163,25 +163,26 @@ struct SpaceState: Codable, Sendable, Equatable, Hashable, Identifiable {
     let isCurrent: Bool
 }
 
-/// Which desktops are worth offering as a filter, and which pick to honour.
+/// Which visibility buckets are worth offering as a filter, and which pick to
+/// honour.
 ///
-/// The Mac reports every Space macOS knows about, including ones the user has
-/// nothing open on. An empty desktop is noise rather than a destination — it
-/// gives the phone a chip that leads to a blank grid — so the chip row is
-/// built from the desktops that actually hold windows.
+/// The buckets are "On Screen" and "Hidden" — see `WindowManager.SpaceCatalog`
+/// for why this is NOT a Mission Control Space split. An empty bucket is noise
+/// rather than a destination — it gives the phone a chip that leads to a blank
+/// grid — so the chip row is built from the buckets that actually hold windows.
 enum SpaceActivity {
 
     /// `spaces` narrowed to those holding at least one of `windows`, in the
-    /// Mac's original order. Windows the Mac could not place on a Space
-    /// (`spaceID == nil`) count toward no desktop.
+    /// Mac's original order. Windows the Mac could not place (`spaceID == nil`)
+    /// count toward no bucket.
     static func active(spaces: [SpaceState], windows: [WindowState]) -> [SpaceState] {
         let occupied = Set(windows.compactMap(\.spaceID))
         return spaces.filter { occupied.contains($0.id) }
     }
 
-    /// The selection to honour once empty desktops drop out: the pick itself
-    /// while it still has activity, otherwise nil ("All Desktops"). Closing
-    /// the last window on the pinned desktop must not strand the user on a
+    /// The selection to honour once empty buckets drop out: the pick itself
+    /// while it still has activity, otherwise nil ("All Windows"). Closing
+    /// the last window in the pinned bucket must not strand the user on a
     /// filter with no way back — the same rule the display chips follow when
     /// a monitor is unplugged.
     static func resolvedSelection(_ selected: String?,
@@ -191,24 +192,24 @@ enum SpaceActivity {
         return selected
     }
 
-    /// The label the COLLAPSED space chip carries: the pinned desktop's name,
-    /// or `allTitle` when the filter is off.
+    /// The label the COLLAPSED visibility chip carries: the pinned bucket's
+    /// name, or `allTitle` when the filter is off.
     ///
     /// Collapsed, the chip is the row's only evidence of what the grid is
-    /// showing, so it must never read "All Desktops" while a desktop filter is
-    /// active — that would quietly lie about why windows are missing. It takes
-    /// the already-resolved selection rather than the raw one so a pick that
-    /// went quiet reads as "All Desktops" here exactly as it does in the grid.
+    /// showing, so it must never read "All Windows" while a filter is active —
+    /// that would quietly lie about why windows are missing. It takes the
+    /// already-resolved selection rather than the raw one so a pick that went
+    /// quiet reads as "All Windows" here exactly as it does in the grid.
     static func collapsedTitle(activeSpaces: [SpaceState],
                                effectiveSpaceID: String?,
-                               allTitle: String = "All Desktops") -> String {
+                               allTitle: String = "All Windows") -> String {
         guard let effectiveSpaceID,
               let space = activeSpaces.first(where: { $0.id == effectiveSpaceID })
         else { return allTitle }
         return space.name
     }
 
-    /// Windows the collapsed chip should count: those on the pinned desktop, or
+    /// Windows the collapsed chip should count: those in the pinned bucket, or
     /// every window when the filter is off. Mirrors what the grid renders, so
     /// the badge can never disagree with the number of cards below it.
     static func collapsedCount(windows: [WindowState], effectiveSpaceID: String?) -> Int {
