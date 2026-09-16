@@ -70,10 +70,26 @@ the pinned monitor rather than resetting it.
 
 ### Open threads
 
-1. **Nothing is installed.** Both commits are source-only. The Mac half (bucket
-   labels) needs a QuipMac rebuild to take effect, and that costs the Screen
-   Recording + Accessibility TCC grants — worth deferring, since the labels are
-   only visible with the Labs flag on, which is off by default.
+1. **Nothing is installed — blocked on the phone, not on the build.** The device
+   build is verified: `xcodebuild -scheme QuipiOS -destination
+   'generic/platform=iOS' build` → **BUILD SUCCEEDED**, `QuipWatch.app` embedded,
+   `TeamIdentifier=D2PM6R797Q`. `devicectl device install app` fails with
+   `CoreDeviceError 1011 … unable to locate a device matching the requested
+   device identifier`; `tunnelState: unavailable`, last connection 2026-09-13.
+   Cable or same-network-and-unlocked, then install and force-quit from the app
+   switcher (`devicectl install` replaces the bundle but does not kill the
+   running process).
+
+   Unblocked on the way: `xcodebuild -downloadPlatform watchOS` installed
+   watchOS 26.5 (23T570, 3.96 GB). The scheme had been refusing to build **at
+   all** — device destinations included, not just tests — for want of the
+   simulator runtime. `tools/check.sh` now runs the real scheme with the
+   `QuipWatch` target and is green (harness 62, QuipMac 865, QuipiOS 811); the
+   watch-free `project.nowatch.yml` fallback is no longer on the path.
+
+   The Mac half (bucket labels) still needs a QuipMac rebuild, and that costs the
+   Screen Recording + Accessibility TCC grants — worth deferring, since the
+   labels are only visible with the Labs flag on, which is off by default.
 2. **Confirm the row is gone on the phone.** Acceptance: launch the app with no
    Labs flag set and confirm no 26pt chip row above the grid and that every
    window the Mac broadcasts has a card, including a minimized one.
