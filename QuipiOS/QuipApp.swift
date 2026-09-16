@@ -1391,6 +1391,13 @@ struct MainiOSView: View {
     /// state, not a preference, so it costs no `PreferencesSnapshot` field and
     /// nothing to restore on a reinstall.
     @State private var spaceChipsExpanded = false
+    /// Labs gate for the whole filter row (visibility chips + per-monitor
+    /// chips). Off by default — see `LabsFlags.windowFilters`. Read here rather
+    /// than at each chip so the row, the grid and the canvas can never disagree
+    /// about whether filtering is in force: every filter goes through
+    /// `effectiveSpaceID` / `pinnedDisplayID`, and both return "no filter" when
+    /// this is off.
+    @AppStorage(LabsFlags.windowFilters) private var labsWindowFilters = false
     @State private var hasAutoShownPermsForConnection = false
 
     @AppStorage("lastURL") private var urlText: String = ""
@@ -3678,25 +3685,30 @@ struct MainiOSView: View {
         }
     }
 
-    /// Desktop and display filters on ONE 26pt row.
+    /// Visibility and display filters on ONE 26pt row. Labs-gated, off by
+    /// default (`LabsFlags.windowFilters`).
     ///
-    /// Two axes, ANDed: a desktop (macOS Space) is not a display (a physical
-    /// monitor), a window has one of each, and the grid shows the windows both
-    /// filters allow. Each side carries its own "All …" chip, and every count is
-    /// scoped to what the other side is allowing, so the row states the rule
-    /// rather than leaving it to be inferred from missing cards.
+    /// Two axes, ANDed: whether a window is drawn on the desk right now is not
+    /// which monitor it is on, a window has one of each, and the grid shows the
+    /// windows both filters allow. Each side carries its own "All …" chip, and
+    /// every count is scoped to what the other side is allowing, so the row
+    /// states the rule rather than leaving it to be inferred from missing cards.
     ///
-    /// They used to be two stacked rows, so a multi-display Mac with windows on
-    /// more than one desktop spent 52pt of the grid on chrome. They are also
-    /// both horizontal scrolls, so a single row loses nothing: what does not fit
-    /// scrolls, exactly as it already did.
+    /// They used to be two stacked rows, so a multi-display Mac with hidden
+    /// windows spent 52pt of the grid on chrome. They are also both horizontal
+    /// scrolls, so a single row loses nothing: what does not fit scrolls,
+    /// exactly as it already did.
     ///
-    /// The desktop side collapses to a single chip naming the active filter,
-    /// because the desktop chips are the ones that multiply — a Mac has two or
-    /// three displays but can have any number of desktops.
+    /// The visibility side collapses to a single chip naming the active filter,
+    /// to keep the row short on the phone.
+    ///
+    /// Off by default because the row's default pick REMOVED cards: the
+    /// visibility axis defaulted to "On Screen", so minimizing a tracked
+    /// terminal made it vanish from the phone with nothing on screen saying
+    /// why. Off, every window the Mac broadcasts is rendered.
     @ViewBuilder
     private var filterChips: some View {
-        if activeSpaces.count > 1 || displays.count > 1 {
+        if labsWindowFilters, activeSpaces.count > 1 || displays.count > 1 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
                     spaceChipGroup
@@ -3730,11 +3742,19 @@ struct MainiOSView: View {
     }
 
     private var windowsPassingDisplayFilter: [WindowState] {
-        guard let id = selectedDisplayID else { return displayWindows }
+        guard let id = pinnedDisplayID else { return displayWindows }
         return displayWindows.filter { effectiveDisplayID($0) == id }
     }
 
-    /// Compact per-display filter. One chip per display plus "All Displays",
+    /// The display filter actually in force: the chip pick while the Labs row
+    /// is on, and nothing at all while it is off. The per-backend selection
+    /// itself is left untouched in `UserDefaults`, so turning the row back on
+    /// restores the monitor the user had pinned rather than resetting it.
+    private var pinnedDisplayID: String? {
+        labsWindowFilters ? selectedDisplayID : nil
+    }
+
+    /// Compact per-monitor filter. One chip per display plus "All Displays",
     /// only when the Mac actually has more than one display — a single-display
     /// desk sees nothing at all, not a row with one useless chip.
     @ViewBuilder
@@ -3748,8 +3768,8 @@ struct MainiOSView: View {
                     selectDisplay(display.id)
                 }
             }
-            // Named, not bare "All": with a desktop "All Desktops" chip on the
-            // same row, one unqualified "All" read as a reset for both.
+            // Named, not bare "All": with an "All Windows" chip on the same
+            // row, one unqualified "All" read as a reset for both.
             filterChip(title: "All Displays", icon: Self.displayChipIcon,
                        count: windowsPassingSpaceFilter.count,
                        isOn: selectedDisplayID == nil) {
@@ -3758,9 +3778,9 @@ struct MainiOSView: View {
         }
     }
 
-    /// Desktops holding at least one window. A Space the user has nothing open
-    /// on would only offer a chip leading to a blank grid, and dropping the
-    /// empties can take the row back down to one — at which point it hides
+    /// Visibility buckets holding at least one window. A bucket the user has
+    /// nothing in would only offer a chip leading to a blank grid, and dropping
+    /// the empties can take the row back down to one — at which point it hides
     /// entirely, exactly like `displayChipGroup` on a single-display desk.
     ///
     /// Deliberately computed from ALL windows, not from the display filter's
@@ -3771,17 +3791,17 @@ struct MainiOSView: View {
     }
 
     /// SF Symbols for the two chip kinds. They used to share `display`, which
-    /// made a desktop chip and a display chip indistinguishable at a glance —
+    /// made a visibility chip and a monitor chip indistinguishable at a glance —
     /// the main reason the area read as noise rather than as two filters.
     private static let spaceChipIcon = "macwindow.on.rectangle"
     private static let displayChipIcon = "display"
 
-    /// The desktop filter: one chip when collapsed, the full set when expanded.
+    /// The visibility filter: one chip when collapsed, the full set when
+    /// expanded.
     ///
-    /// Collapsed is the default because the desktop chips are the ones that
-    /// multiply. The collapsed chip carries a chevron and names the active
-    /// filter, so the row always says what the grid is showing even at its
-    /// smallest.
+    /// Collapsed is the default to keep the row short. The collapsed chip
+    /// carries a chevron and names the active filter, so the row always says
+    /// what the grid is showing even at its smallest.
     @ViewBuilder
     private var spaceChipGroup: some View {
         if activeSpaces.count > 1 {
@@ -3794,7 +3814,7 @@ struct MainiOSView: View {
                         selectSpace(space.id)
                     }
                 }
-                filterChip(title: "All Desktops", icon: Self.spaceChipIcon,
+                filterChip(title: "All Windows", icon: Self.spaceChipIcon,
                            count: windowsPassingDisplayFilter.count,
                            isOn: effectiveSpaceID == nil) {
                     selectSpace(nil)
@@ -3820,7 +3840,7 @@ struct MainiOSView: View {
         }
     }
 
-    /// Pick a desktop and collapse in one gesture — an expanded row that stayed
+    /// Pick a bucket and collapse in one gesture — an expanded row that stayed
     /// open after a choice would cost the space the collapse exists to save.
     private func selectSpace(_ id: String?) {
         withAnimation(.easeOut(duration: 0.15)) {
@@ -3829,8 +3849,8 @@ struct MainiOSView: View {
         }
     }
 
-    /// One filter capsule, used by both axes. `icon` distinguishes a desktop
-    /// chip from a display chip; `count` is optional so a bare control (the
+    /// One filter capsule, used by both axes. `icon` distinguishes a visibility
+    /// chip from a monitor chip; `count` is optional so a bare control (the
     /// collapse affordance) can reuse the same shape instead of growing a
     /// second chip style; `trailingIcon` carries the disclosure chevron when
     /// collapsed.
@@ -3887,7 +3907,7 @@ struct MainiOSView: View {
 
     /// The display the chips are currently showing, or nil for "All Displays".
     private var activeDisplay: DisplayState? {
-        guard let id = selectedDisplayID else { return nil }
+        guard let id = pinnedDisplayID else { return nil }
         return displays.first { $0.id == id }
     }
 
@@ -3900,11 +3920,13 @@ struct MainiOSView: View {
         return screenAspect
     }
 
-    /// The desktop filter actually in force. A pinned Space whose last window
-    /// just closed falls back to "All Desktops" rather than stranding the user
-    /// on an empty grid with the chip that got them there now gone.
+    /// The visibility filter actually in force — nothing at all while the Labs
+    /// row is off. A pinned bucket whose last window just closed falls back to
+    /// "All Windows" rather than stranding the user on an empty grid with the
+    /// chip that got them there now gone.
     private var effectiveSpaceID: String? {
-        SpaceActivity.resolvedSelection(selectedSpaceID, activeSpaces: activeSpaces)
+        guard labsWindowFilters else { return nil }
+        return SpaceActivity.resolvedSelection(selectedSpaceID, activeSpaces: activeSpaces)
     }
 
     /// Every filter currently narrowing the grid, named the way its chip is.
@@ -3937,7 +3959,7 @@ struct MainiOSView: View {
     /// filter on that axis.
     private var filteredWindows: [WindowState] {
         let bySpace = effectiveSpaceID.map { id in displayWindows.filter { $0.spaceID == id } } ?? displayWindows
-        guard let id = selectedDisplayID else { return bySpace }
+        guard let id = pinnedDisplayID else { return bySpace }
         return bySpace.filter { effectiveDisplayID($0) == id }
     }
 
@@ -3948,7 +3970,7 @@ struct MainiOSView: View {
     /// composes each display's `spanFrame` with the window's frame inside it —
     /// the exact inverse of the split the Mac performs (`DisplayGeometry`).
     private func canvasFrame(for window: WindowState) -> WindowFrame {
-        guard selectedDisplayID == nil, displays.count > 1,
+        guard pinnedDisplayID == nil, displays.count > 1,
               let display = displays.first(where: { $0.id == effectiveDisplayID(window) })
         else { return window.frame }
         return DisplayGeometry.spanFrame(ofWindow: window.frame, onDisplay: display.spanFrame)
@@ -3956,7 +3978,7 @@ struct MainiOSView: View {
 
     private var windowCanvas: some View {
         GeometryReader { geo in
-            let mac = hostScreenRect(in: geo.size, aspect: CGFloat(canvasAspect))
+            let mac = Self.hostScreenRect(in: geo.size, aspect: CGFloat(canvasAspect))
             ZStack(alignment: .topLeading) {
                 Color.clear
 
@@ -4159,8 +4181,22 @@ struct MainiOSView: View {
         .accessibilityLabel(followFrontmost ? "Following Mac frontmost window. Tap to pin." : "Pinned to selected window. Tap to follow Mac.")
     }
 
-    /// Largest rect with the given aspect ratio (width/height) that fits inside `size`, centered.
-    private func hostScreenRect(in size: CGSize, aspect: CGFloat) -> CGRect {
+    /// Largest rect with the given aspect ratio (width/height) that fits inside
+    /// `size`, centered.
+    ///
+    /// The canvas is a scale model of the desk: every card is placed by
+    /// multiplying a normalized frame by this rect, so the rect's aspect IS the
+    /// mapping. It used to multiply the height by 1.45 in the letterboxed case
+    /// "so the thumbnail isn't a narrow strip", which made the model lie by 45%
+    /// in one axis — worst exactly where it is least affordable, on a wide desk.
+    /// On a 3440x1440 ultrawide (aspect 2.39) every card was drawn 45% taller
+    /// than the window it stands for, so the phone's picture of the desk did not
+    /// match the desk.
+    ///
+    /// True aspect in both branches now. A wide desk genuinely is a short band
+    /// on a portrait phone; the fix for that is the arrange modes (`gridFrame`),
+    /// which lay cards out on the phone's terms instead of distorting the Mac's.
+    static func hostScreenRect(in size: CGSize, aspect: CGFloat) -> CGRect {
         guard aspect > 0, size.width > 0, size.height > 0 else {
             return CGRect(origin: .zero, size: size)
         }
@@ -4169,8 +4205,7 @@ struct MainiOSView: View {
             let w = size.height * aspect
             return CGRect(x: (size.width - w) / 2, y: 0, width: w, height: size.height)
         } else {
-            // Portrait: stretch vertically a bit so the thumbnail isn't a narrow strip.
-            let h = min(size.height, (size.width / aspect) * 1.45)
+            let h = min(size.height, size.width / aspect)
             return CGRect(x: 0, y: (size.height - h) / 2, width: size.width, height: h)
         }
     }
