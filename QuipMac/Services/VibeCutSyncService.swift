@@ -96,7 +96,14 @@ final class VibeCutSyncService {
                           error: "No inheritable prompts found in VibeCut.")
         }
 
-        let written = library.replaceVibeCutSet(mapped.entries)
+        let written: Int
+        do {
+            written = try library.replaceVibeCutSet(mapped.entries)
+        } catch {
+            return record(synced: 0, skipped: mapped.skipped,
+                          skippedPacks: readResult.skippedPacks,
+                          error: "VibeCut prompts were left unchanged: \(error.localizedDescription)")
+        }
         refreshRepoProbe()
         return record(synced: written, skipped: mapped.skipped,
                       skippedPacks: readResult.skippedPacks, error: nil)
