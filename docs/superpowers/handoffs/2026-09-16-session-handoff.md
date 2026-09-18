@@ -48,6 +48,26 @@ Branch `eb-branch`, 4 commits, **not pushed**. Nothing installed anywhere.
 5. **Six unrelated files are dirty in the working tree** and were left strictly alone: `PromptLibrary.swift`, `VibeCutSyncService.swift`, `PromptLibraryVibeCutTests.swift`, `PushRegistrationService.swift`, `WatchSyncService.swift`, `WaitingActionResponseTests.swift`. The last three look like a Watch notification-readiness WIP.
 6. **Nothing pushed.** All four commits are local on `eb-branch`.
 
+## Flagged at sign-off, NOT investigated
+
+Owner, verbatim (dictated, garbled): *"Going before we make other pusher and
+stuff because there's still soon to be other issues with tolling between open
+windows."*
+
+Tentative reading, **unconfirmed** — stop pushing for now, because there are
+more issues coming with **toggling between open windows**. Nothing was
+investigated and no defect has been reproduced. Do not treat this as a spec.
+Confirm what "toggling between open windows" means before touching anything;
+plausible candidates on this surface, none verified:
+
+- switching the selected card in the grid (`SelectWindowMessage` + the Mac's
+  `focusWindow` → `activate(options: [.activateAllWindows])` + AX raise),
+- the follow-Mac-frontmost pill fighting a manual tap (`followFrontmost`),
+- window ORDER churn across layout updates (`phoneWindowOrder` /
+  `reconciledWindowOrder`),
+- or the visibility filter hiding the window being toggled to, which today's
+  Labs flag should already have taken out of the picture.
+
 ## Resume
 
 > Read `docs/superpowers/handoffs/2026-09-16-session-handoff.md`, then run the open-thread 1 and 2 acceptance tests on hardware once the iPhone is back on the cable — build with `xcodebuild -scheme QuipiOS -destination 'generic/platform=iOS' build`, install with `xcrun devicectl device install app --device FA951BBB-D706-5FCF-9886-3E57560E9030 <app>`, and force-quit from the app switcher before judging anything.
