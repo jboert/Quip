@@ -4,6 +4,144 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Tickets opened 2026-09-18 — window focus, and the wand
+
+Q-22 / Q-22a / Q-23 come out of one read-only inspection of the focus path plus
+a probe run against live windows. Q-24 is an owner request. Q-25 and Q-26 are
+carried over from the 2026-09-16 session as proper tickets rather than loose
+open threads.
+
+### Q-22a — a focus that finds nothing must say so
+
+**Land this first.** It is small, it is independent of Q-22, and without it
+nobody can tell a focus failure from a focus that worked.
+
+`WindowManager.focusWindow` walks the app's AX windows looking for one whose
+position is within 10pt of `window.bounds.origin`. If none matches, the `for`
+loop simply ends. Nothing is logged, nothing is returned, and nothing is sent
+back to the phone — the tap is swallowed whole. `axFocusGate` today reports only
+the case where the AX window *list* is unreadable (a revoked Accessibility
+grant), never the case where the list is fine and the match failed.
+
+Acceptance:
+- A focus request whose AX match fails writes one line naming the window id, the
+  CG origin it looked for, and the AX positions it actually saw.
+- Throttled per pid the way the existing `axFocusGate` is, so a persistently
+  unmatchable window cannot spam the log on every tap.
+- A focus request that matches more than one AX window logs the ambiguity (see
+  Q-22) rather than silently taking the first.
+- Successes stay out of the log, matching the `injection.log` rule in CLAUDE.md.
+
+Files: `QuipMac/Services/WindowManager.swift` (`focusWindow`, `axFocusGate`),
+`QuipMac/Services/LogPaths.swift` for the destination. Decide whether this
+belongs in `injection.log` (it is the same "I tapped and nothing happened"
+class) or stays in `websocket.log` where `focusWindow` already writes.
+
+### Q-22 — focus the window by id, not by fuzzy position
+
+`focusWindow` uses position as a key because there is no id linkage between the
+CG window and the AX element. Measured on a live desk (probe mirrors the
+matching logic exactly): **matched 5, missed 6, of 11** real iTerm / Chrome /
+Terminal / Finder windows. Three independent reasons:
+
+1. **Stale bounds.** `window.bounds` comes from the 2.0s CG poll, so a window
+   moved since the last tick misses its own AX element.
+2. **Duplicate origins.** Chrome `1710` and `1711` both reported
+   `cg=(692,56)`. Where a match does land with duplicates present, `break` takes
+   whichever AX element is enumerated first — so the wrong window is raised.
+   This is the "I toggled and got the wrong window" report.
+3. **Windows with no readable AX position at all** fall through silently.
+
+This repo has already learned this lesson once, in `98fbf1d` — *"map iTerm2
+session by exact window id, not fuzzy bounds."* Same mistake, different surface.
+
+**Decision the owner must make before implementation:** getting a CGWindowID off
+an AX element means `_AXUIElementGetWindow`, which is **private API**. Options:
+
+- Use it, accept the private-API risk, and keep a position fallback for when it
+  returns an error. Exact, and kills all three failure modes.
+- Stay public-only: match on title + size + position together, break ties
+  explicitly (prefer the frontmost / most recently raised), and refuse to act
+  when still ambiguous rather than guessing. Weaker, but nothing private ships.
+
+Acceptance, whichever route:
+- Every window the phone can see can be focused, including after it has been
+  moved between polls.
+- Two windows sharing an origin resolve to the one that was asked for, proven by
+  a test with two same-origin candidates.
+- An unresolvable request reports (Q-22a) instead of doing nothing.
+
+Files: `QuipMac/Services/WindowManager.swift` (`focusWindow`, and
+`ManagedWindow.windowNumber` already carries the CGWindowID).
+
+### Q-23 — raising a minimized window must unminimize it
+
+`kAXRaiseAction` does not restore a minimized window, so even a correct match
+does nothing when the target is in the Dock. Set `kAXMinimizedAttribute` to
+false before raising.
+
+This is the other half of the 2026-09-16 visibility work: a minimized window is
+now honestly labelled **Hidden** on the phone instead of being claimed to be on
+another desktop, which means the user can finally SEE it in the grid — and
+tapping it must then work.
+
+Acceptance: minimize a tracked terminal, tap its card on the phone, and the
+window restores and comes forward. Covered by Q-22a's logging if it does not.
+
+Files: `QuipMac/Services/WindowManager.swift` (`focusWindow`).
+
+### Q-24 — wand: an option that UNSELECTS simulators
+
+Owner request, 2026-09-18: on the Mac app, the magic wand's toggle options
+should include one that unselects simulators.
+
+Design note worth settling before writing code: `WandTargetKinds` today governs
+both *what the wand enables* and *what sorts first* — a coupling that has
+already needed untangling twice (`af86695` derived the sort tier from the
+configured kinds; `c149959` stopped `.mostActive` presenting an alphabetical
+list as a ranking). "Unselect simulators" is an **action**, not a kind filter,
+so bolting another bit onto `WandTargetKinds` would overload that field a third
+time. It likely belongs in the `WandOrder` rotation, or as a separate action
+next to the wand.
+
+Acceptance:
+- Reachable from the wand on the Mac sidebar without opening Settings.
+- Turns every simulator window OFF, leaves every other window's enabled state
+  untouched.
+- Idempotent — firing it twice leaves the same state.
+- A desk with no simulators does not offer a dead option (same rule the display
+  chips follow on a single-display Mac).
+
+Files: `QuipMac/Models/WandSort.swift` (`WandOrder`, `WandTargetKinds`,
+`WandWindowKind`), `QuipMac/Views/SettingsView.swift:891`,
+`QuipMac/Tests/WandSortTests.swift`.
+
+### Q-25 — hardware acceptance for the 2026-09-16 grid work
+
+**Blocked on the phone**, unreachable since 2026-09-13. Nothing from that
+session has run on hardware; every user-visible claim is test-verified only.
+
+1. Launch with no Labs flag set: no 26pt chip row above the grid, and every
+   window the Mac broadcasts has a card — including one minimized while
+   watching.
+2. With the ultrawide attached, a window on the left third of the desk occupies
+   the left third of the phone canvas, and cards are no longer stretched
+   vertically. **If the true-aspect band reads as too short to use, say so** —
+   one line in `hostScreenRect` brings the 1.45 back, and the arrange modes are
+   the intended answer instead.
+
+### Q-26 — `MainiOSView.body` is at the type-checker's budget
+
+One iOS run on 2026-09-16 failed with "the compiler is unable to type-check this
+expression in reasonable time", pointing at a trivial `DispatchQueue.main.async`
+line inside `body`; the same tree compiled on the next run. Bisected to no
+single edit — it is the body's size. It will refuse again, and next time it may
+not be in a session that can afford to bisect it. Break `body` into subviews.
+
+Files: `QuipiOS/QuipApp.swift` (`MainiOSView.body`).
+
+---
+
 ## Session log — 2026-09-16 (window filter row made opt-in; canvas aspect fixed)
 
 **Shipped on `eb-branch`. NOT installed — no paired device was reachable
