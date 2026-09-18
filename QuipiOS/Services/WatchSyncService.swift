@@ -12,6 +12,7 @@
 import Foundation
 import WatchConnectivity
 import OSLog
+import Observation
 
 /// Wire shape — must match the Watch-side `WatchWindowState` declared in
 /// `QuipiOS/QuipWatch/QuipWatchApp.swift`. Keeping the struct duplicated
@@ -24,7 +25,36 @@ struct WatchWindowSyncEntry: Codable {
     let claudeMode: String?
 }
 
+enum WatchNotificationReadiness: Equatable {
+    case unsupported
+    case noPairedWatch
+    case companionNotInstalled
+    case ready(reachable: Bool)
+
+    var title: String {
+        switch self {
+        case .unsupported: return "Apple Watch unavailable"
+        case .noPairedWatch: return "No paired Apple Watch"
+        case .companionNotInstalled: return "Install Quip on Apple Watch"
+        case .ready(let reachable): return reachable ? "Apple Watch connected" : "Apple Watch paired"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .unsupported: return "This iPhone does not support Watch connectivity."
+        case .noPairedWatch: return "Pair an Apple Watch to receive mirrored alerts and live Quip status."
+        case .companionNotInstalled: return "Install the Quip companion from the Watch app for live status and haptics."
+        case .ready(let reachable):
+            return reachable
+                ? "Mirrored alerts, inline actions, and live status are available."
+                : "Alerts can mirror; live status updates when the Watch reconnects."
+        }
+    }
+}
+
 @MainActor
+@Observable
 final class WatchSyncService: NSObject, WCSessionDelegate {
 
     private static let logger = Logger(subsystem: "com.quip.ios", category: "WatchSyncService")
@@ -32,6 +62,7 @@ final class WatchSyncService: NSObject, WCSessionDelegate {
     /// Last payload pushed — used to dedupe so we don't fire transferUserInfo
     /// for every layout poll when nothing actually changed.
     private var lastPayload: Data?
+    private(set) var readiness: WatchNotificationReadiness = .unsupported
 
     override init() {
         super.init()
@@ -39,6 +70,22 @@ final class WatchSyncService: NSObject, WCSessionDelegate {
         let session = WCSession.default
         session.delegate = self
         session.activate()
+        refreshReadiness()
+    }
+
+    func refreshReadiness() {
+        guard WCSession.isSupported() else {
+            readiness = .unsupported
+            return
+        }
+        let session = WCSession.default
+        if !session.isPaired {
+            readiness = .noPairedWatch
+        } else if !session.isWatchAppInstalled {
+            readiness = .companionNotInstalled
+        } else {
+            readiness = .ready(reachable: session.isReachable)
+        }
     }
 
     /// Push the current window list to the watch. Called from the host on
@@ -47,6 +94,7 @@ final class WatchSyncService: NSObject, WCSessionDelegate {
     func push(windows: [WatchWindowSyncEntry]) {
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
+        refreshReadiness()
         guard session.activationState == .activated else { return }
         guard session.isPaired, session.isWatchAppInstalled else { return }
 
@@ -90,7 +138,13 @@ final class WatchSyncService: NSObject, WCSessionDelegate {
 
     nonisolated func session(_ session: WCSession,
                              activationDidCompleteWith activationState: WCSessionActivationState,
-                             error: Error?) {}
+                             error: Error?) {
+        Task { @MainActor in self.refreshReadiness() }
+    }
+
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in self.refreshReadiness() }
+    }
 
     // The iPhone-side delegate must implement these no-ops (or real handlers)
     // even when the watch app does the talking, otherwise WCSession asserts
@@ -99,5 +153,6 @@ final class WatchSyncService: NSObject, WCSessionDelegate {
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
         // Re-activate so a new watch can pair without app relaunch.
         WCSession.default.activate()
+        Task { @MainActor in self.refreshReadiness() }
     }
 }

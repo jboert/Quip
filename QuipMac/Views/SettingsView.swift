@@ -739,11 +739,18 @@ private struct ProjectsTab: View {
 
 private struct PromptsTab: View {
     @Environment(PromptLibrary.self) private var library
+    @Environment(VibeCutSyncService.self) private var vibeCutSync
     @State private var editingPrompt: PromptEntry?
     @State private var creatingPrompt = false
 
+    private var inheritedCount: Int {
+        library.entries.filter(\.isInherited).count
+    }
+
     var body: some View {
         Form {
+            vibeCutSection
+
             Section {
                 if library.entries.isEmpty {
                     Text("No prompts yet. Click + to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/.")
@@ -770,7 +777,13 @@ private struct PromptsTab: View {
                     .font(.caption)
                 }
             } header: {
-                Text("Prompt Library (\(library.entries.count))")
+                if inheritedCount > 0 {
+                    Text("Prompt Library (\(library.entries.count))")
+                    + Text("  ·  \(library.entries.count - inheritedCount) yours · \(inheritedCount) from VibeCut")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Prompt Library (\(library.entries.count))")
+                }
             } footer: {
                 Text("Tapped on the phone, the body is sent verbatim to the active terminal. Edits broadcast to every connected phone.")
                     .font(.caption)
@@ -778,6 +791,7 @@ private struct PromptsTab: View {
             }
         }
         .formStyle(.grouped)
+        .task { vibeCutSync.refreshRepoProbe() }
         .sheet(isPresented: $creatingPrompt) {
             PromptEditorSheet(initial: nil) { id, label, body in
                 library.put(id: id, label: label, body: body) != nil
@@ -789,25 +803,202 @@ private struct PromptsTab: View {
             }
         }
     }
+
+    // MARK: VibeCut sync
+
+    /// Mac-side face of the VibeCut prompt inherit. Everything here reads or
+    /// drives plumbing that already existed for the phone's ⟳ button: the repo
+    /// probe surfaces `VibeCutPromptReader.defaultRoot()` (and Change… writes
+    /// the `vibecutRepoPath` default that was previously `defaults write`-only),
+    /// Sync Now runs the same VibeCutSyncService pipeline, and the status line
+    /// shows the counts that used to go only to stdout.
+    @ViewBuilder
+    private var vibeCutSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                switch vibeCutSync.repoFound {
+                case .some(true):  StatusDot(kind: .ok, text: "Repo found")
+                case .some(false): StatusDot(kind: .bad, text: "Repo not found")
+                case .none:        StatusDot(kind: .busy, text: "Checking…")
+                }
+                Text(vibeCutSync.repoPath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Spacer()
+                Button("Change…") { changeVibeCutRepo() }
+            }
+
+            HStack(spacing: 8) {
+                lastSyncLabel
+                Spacer()
+                if vibeCutSync.isSyncing {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Sync Now") {
+                    Task { _ = await vibeCutSync.sync(into: library, trigger: "settings-button") }
+                }
+                .disabled(vibeCutSync.isSyncing)
+            }
+        } header: {
+            Text("VibeCut")
+        } footer: {
+            Text("One-way inherit of VibeCut's prompt catalog + packs into the library below. Edits belong in VibeCut; sync here or from the phone (Settings → Prompts → ⟳).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var lastSyncLabel: some View {
+        if let outcome = vibeCutSync.lastOutcome {
+            if let error = outcome.error {
+                Text("Last attempt \(outcome.date.formatted(date: .abbreviated, time: .shortened)) — \(error)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            } else {
+                let packs = outcome.skippedPacks > 0
+                    ? " · \(outcome.skippedPacks) pack \(outcome.skippedPacks == 1 ? "file" : "files") unreadable" : ""
+                Text("Last sync \(outcome.date.formatted(date: .abbreviated, time: .shortened)) · \(outcome.synced) synced · \(outcome.skipped) skipped\(packs)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text("Never synced on this Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func changeVibeCutRepo() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the VibeCut repo root (the folder containing shared/prompts.json)"
+        if panel.runModal() == .OK, let url = panel.url {
+            UserDefaults.standard.set(url.path, forKey: "vibecutRepoPath")
+            vibeCutSync.refreshRepoProbe()
+        }
+    }
 }
 
 // MARK: - General Tab
 
+/// Settings for the sidebar's magic-wand button.
+///
+/// Its own struct so the four `@AppStorage` keys stay together and out of
+/// `GeneralTab`, which already carries a dozen.
+private struct WandSection: View {
+    @AppStorage("wandTargetKinds") private var targetKindsRaw: Int = WandTargetKinds.default.rawValue
+    @AppStorage("wandSortModes") private var sortModesRaw: String = WandSortMode.stored(WandSortMode.allCases)
+    @AppStorage("wandSortModeIndex") private var sortModeIndex: Int = 0
+
+    private var kinds: WandTargetKinds { WandTargetKinds.fromStored(targetKindsRaw) }
+    private var rotation: [WandSortMode] { WandSortMode.rotation(fromStored: sortModesRaw) }
+
+    var body: some View {
+        Section("Sort button") {
+            Text("The wand in the sidebar sorts your windows and switches them on. Each click moves to the next order below. Option-click switches them all off.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LabeledContent("Switches on") {
+                VStack(alignment: .leading, spacing: 2) {
+                    kindToggle("iTerm2", .iterm2)
+                    kindToggle("Terminal.app", .terminalApp)
+                    kindToggle("Simulators", .simulator)
+                }
+            }
+
+            LabeledContent("Orders") {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(WandSortMode.allCases) { mode in
+                        Toggle(isOn: modeBinding(mode)) {
+                            // The mode's own description, rather than a second
+                            // caption line per row — the sidebar's tooltip shows
+                            // the same text, so they stay in step.
+                            Text("\(mode.label) — \(mode.help)")
+                        }
+                        .disabled(isLastCheckedMode(mode))
+                        .help(isLastCheckedMode(mode)
+                              ? "The wand has to sort somehow — check another order first." : "")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The last checked box is DISABLED rather than merely un-storable.
+    ///
+    /// Unchecking it used to write a raw 0, which `WandTargetKinds.fromStored`
+    /// maps back to `.default` — so the write landed, the read undid it, and all
+    /// three boxes silently re-checked themselves with no explanation. Making
+    /// the empty state unreachable is the honest version of the same rule: the
+    /// wand always acts on something, and now you can see why the box will not
+    /// turn off.
+    private func kindToggle(_ title: String, _ kind: WandTargetKinds) -> some View {
+        let isLastChecked = kinds == WandTargetKinds(rawValue: kind.rawValue)
+        return Toggle(title, isOn: Binding(
+            get: { kinds.contains(kind) },
+            set: { on in
+                var next = kinds
+                if on { next.insert(kind) } else { next.remove(kind) }
+                guard !next.isEmpty else { return }
+                targetKindsRaw = next.rawValue
+            }
+        ))
+        .disabled(isLastChecked)
+        .help(isLastChecked ? "The wand has to switch something on — check another kind first." : "")
+    }
+
+    /// Same rule as `kindToggle`: the last checked order cannot be unchecked,
+    /// and the row says so, rather than storing an empty rotation that
+    /// `WandSortMode.rotation` quietly reads back as the full set.
+    private func modeBinding(_ mode: WandSortMode) -> Binding<Bool> {
+        Binding(
+            get: { rotation.contains(mode) },
+            set: { on in
+                var next = rotation
+                if on {
+                    guard !next.contains(mode) else { return }
+                    // Keep the canonical order so the rotation is predictable
+                    // no matter which order the boxes were ticked in.
+                    next = WandSortMode.allCases.filter { next.contains($0) || $0 == mode }
+                } else {
+                    next.removeAll { $0 == mode }
+                }
+                guard !next.isEmpty else { return }
+                sortModesRaw = WandSortMode.stored(next)
+                // The stored index can now point past the end of a shortened
+                // rotation. Reset rather than relying on the read-side clamp, so
+                // the sidebar caption matches what the next click will do.
+                sortModeIndex = 0
+            }
+        )
+    }
+
+    private func isLastCheckedMode(_ mode: WandSortMode) -> Bool {
+        rotation == [mode]
+    }
+}
+
 private struct GeneralTab: View {
     @Environment(WhisperStatusStore.self) private var whisperStatus
+    @Environment(MacPermissionsStore.self) private var permissionsStore
     @AppStorage("defaultTerminalApp") private var defaultTerminalApp: String = TerminalApp.iterm2.rawValue
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("showInMenuBar") private var showInMenuBar = true
     @AppStorage("showInDock") private var showInDock = true
     @AppStorage("mirrorDesktop") private var mirrorDesktop = false
+    /// Widens the phone's window list to every visible app, not just terminals.
+    /// Off by default: it is a real increase in what the phone can type into.
+    @AppStorage("mirrorAllApps") private var mirrorAllApps = false
     @AppStorage("crashRecoveryEnabled") private var crashRecoveryEnabled = false
     @State private var crashRecoveryError: String?
-
-    /// Re-probe TCC perms every 3s while this tab is visible so the row
-    /// status flips green within seconds of the user granting in System
-    /// Settings — without forcing the user to bounce back into Quip to
-    /// see it. TimelineView is the cheapest reactive timer in SwiftUI.
-    private let permissionProbe = PermissionProbeService()
 
     var body: some View {
         // Ordered by why you open General: permissions first (the actionable
@@ -817,12 +1008,16 @@ private struct GeneralTab: View {
         // Refresh" FYI section was dropped.
         Form {
             Section("Permissions") {
-                TimelineView(.periodic(from: .now, by: 3.0)) { _ in
-                    let perms = permissionProbe.probe()
-                    macPermRow(name: "Accessibility", granted: perms.accessibility, pane: .accessibility)
-                    macPermRow(name: "Automation (iTerm)", granted: perms.appleEvents, pane: .automation)
-                    macPermRow(name: "Screen Recording", granted: perms.screenRecording, pane: .screenRecording)
-                }
+                // Rows track `permissionsStore`, which the app refreshes every
+                // 5s off the main thread. Probing here instead ran a blocking
+                // Apple Events round-trip inside a SwiftUI body on main, every
+                // 3s while this tab was open — see Quip_2026-07-30-091540.hang.
+                // Unknown (pre-first-probe) reads as granted, same as the
+                // probe's own can't-tell default.
+                let perms = permissionsStore.snapshot
+                macPermRow(name: "Accessibility", granted: perms?.accessibility ?? true, pane: .accessibility)
+                macPermRow(name: "Automation (iTerm)", granted: perms?.appleEvents ?? true, pane: .automation)
+                macPermRow(name: "Screen Recording", granted: perms?.screenRecording ?? true, pane: .screenRecording)
                 Text("If System Settings already shows Quip enabled but the row stays red, turn Quip off and back on there. Screen Recording changes may require relaunching Quip.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -836,6 +1031,8 @@ private struct GeneralTab: View {
                 }
             }
 
+            WandSection()
+
             // Folded in from the former Colors tab — terminal background tints
             // keyed to Claude Code's state. Lives in its own struct so its
             // @AppStorage + @State color bindings stay self-contained.
@@ -846,6 +1043,11 @@ private struct GeneralTab: View {
             Section("Phone") {
                 Toggle("Mirror desktop terminals", isOn: $mirrorDesktop)
                 Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Mirror every app", isOn: $mirrorAllApps)
+                Text("Adds non-terminal windows too — Slack, Xcode, a browser — so you can select one on the phone and dictate straight into it. Text and keystrokes go to that app; terminal-only actions (clear, restart, scrollback) are refused for it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -1849,6 +2051,16 @@ private struct PromptRow: View {
 
     @State private var hovering = false
 
+    /// The id shown next to the label. Inherited prompts drop the reserved
+    /// `vibecut__` filename prefix — the badge already carries the provenance,
+    /// so the visible slug matches what VibeCut calls the prompt. The real id
+    /// (with prefix) stays untouched for edit/delete/Reveal.
+    private var displaySlug: String {
+        entry.isInherited && entry.id.hasPrefix(VibeCutPromptMapper.idPrefix)
+            ? String(entry.id.dropFirst(VibeCutPromptMapper.idPrefix.count))
+            : entry.id
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "doc.text")
@@ -1857,8 +2069,19 @@ private struct PromptRow: View {
                 HStack {
                     Text(entry.label)
                         .font(.system(size: 13, weight: .medium))
-                    if entry.label != entry.id {
-                        Text(entry.id)
+                    if entry.isInherited {
+                        // Same badge vocabulary as the phone's prompt list; the
+                        // pill replaces the raw `vibecut__` prefix in the slug.
+                        Text("VibeCut")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .foregroundStyle(Color.purple)
+                            .background(Capsule().fill(Color.purple.opacity(0.15)))
+                            .overlay(Capsule().stroke(Color.purple.opacity(0.4), lineWidth: 0.5))
+                    }
+                    if displaySlug != entry.label {
+                        Text(displaySlug)
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
                     }

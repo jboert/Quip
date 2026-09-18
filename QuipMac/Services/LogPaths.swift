@@ -11,6 +11,35 @@ import Foundation
 /// to touch a path creates the parent directory. Failures are swallowed — a
 /// logger that crashes the app on a disk-full event isn't doing its job.
 enum LogPaths {
+    /// Default ceiling for a single diagnostic log. Past this, the file is
+    /// rolled to `<path>.1` and a fresh one starts. One generation is kept:
+    /// these are debugging breadcrumbs, not an audit trail, and `push.log`
+    /// had reached 231 MB unbounded.
+    static let maxLogBytes = 16 * 1024 * 1024
+
+    /// Roll `path` to `path + ".1"` when it exceeds `maxBytes`. Any previous
+    /// `.1` is replaced. Returns true when a rotation happened.
+    ///
+    /// Failures are swallowed, consistent with the rest of this file: a logger
+    /// must never take the app down. If the move fails the file simply keeps
+    /// growing, which is the status quo.
+    @discardableResult
+    static func rotateIfNeeded(path: String, maxBytes: Int = maxLogBytes) -> Bool {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? Int,
+              size > maxBytes else { return false }
+
+        let rolled = path + ".1"
+        try? fm.removeItem(atPath: rolled)
+        do {
+            try fm.moveItem(atPath: path, toPath: rolled)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Parent directory for all Quip logs.
     static var directory: URL {
         let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
@@ -79,6 +108,30 @@ enum LogPaths {
     /// but returned shell (classifier bug), vs `comms=[zsh]` (process-tree walk
     /// missed the agent → stale PID), vs `chosen=grok` (paste/inject is at
     /// fault, not classification). One line per user action, not per poll.
+    /// Whisper/WhisperKit model lifecycle. Its own file because the failure
+    /// this exists to catch is a silent one: `setupWhisper` used to swallow the
+    /// init error into `whisperStatusStore` and the phone banner, so the Mac
+    /// had no record at all and a restart erased the evidence.
+    static var whisperPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("whisper.log").path
+    }
+
+    /// Keystroke/text injection outcomes — one line per FAILED injection, with
+    /// the operation, target window, terminal app, structured failure kind, and
+    /// the AppleScript message.
+    ///
+    /// This file exists because the injector's only record used to be `print`,
+    /// which reaches neither this directory nor the unified log: a Quip launched
+    /// from Finder dropped every "iTerm2 session not yet mapped" and every TCC
+    /// denial on the floor. The phone showed a red toast and the Mac kept no
+    /// evidence at all, so "did the keystrokes land?" could only be answered by
+    /// looking at the user's screen (2026-09-11).
+    static var injectionPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("injection.log").path
+    }
+
     static var classifyPath: String {
         ensureDirectoryExists()
         return directory.appendingPathComponent("classify.log").path

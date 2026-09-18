@@ -128,7 +128,19 @@ smoke_mac() {
     return 1
   fi
 
-  if /usr/bin/log show --last 10s --predicate 'process == "Quip" AND eventMessage CONTAINS "Address already in use"' --style compact | grep -q "Address already in use"; then
+  # Run the query and grep it SEPARATELY. Piped together, a failure of `log
+  # show` itself (unreadable log store, a TCC prompt, a bad predicate) is
+  # indistinguishable from "no match" — both leave grep with nothing and the
+  # smoke test falls straight through to "passed". A check that cannot run is
+  # not a check that passed.
+  local logout
+  if ! logout="$(/usr/bin/log show --last 10s \
+      --predicate 'process == "Quip" AND eventMessage CONTAINS "Address already in use"' \
+      --style compact 2>&1)"; then
+    log "Mac: port smoke INCONCLUSIVE, could not read the log store: $logout"
+    return 1
+  fi
+  if printf '%s' "$logout" | grep -q "Address already in use"; then
     log "Mac: port smoke failed, Quip logged Address already in use"
     return 1
   fi

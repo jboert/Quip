@@ -30,4 +30,16 @@ final class WaitingActionResponseTests: XCTestCase {
         XCTAssertEqual(WaitingActionResponse.choiceThree.rawIdentifier, "QUIP_ACTION_CHOICE_3")
         XCTAssertEqual(WaitingActionResponse.choiceFour.rawIdentifier, "QUIP_ACTION_CHOICE_4")
     }
+
+    func test_categoriesCoverEveryActionIdentifierUsedByAPNs() {
+        let categories = WaitingNotificationCategory.makeCategories()
+        XCTAssertEqual(Set(categories.map(\.identifier)),
+                       ["waiting_for_input", "waiting.yn", "waiting.12", "waiting.123", "waiting.1234"])
+
+        let actionIDs = Set(categories.flatMap { $0.actions.map(\.identifier) })
+        for response in [WaitingActionResponse.yes, .no, .choiceOne, .choiceTwo, .choiceThree, .choiceFour] {
+            XCTAssertTrue(actionIDs.contains(response.rawIdentifier),
+                          "\(response) must be actionable from a delivered notification")
+        }
+    }
 }

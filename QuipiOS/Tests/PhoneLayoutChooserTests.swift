@@ -246,4 +246,50 @@ final class PhoneLayoutChooserTests: XCTestCase {
             []
         )
     }
+
+    // MARK: hostScreenRect
+
+    /// The canvas is a scale model of the desk — every card is a normalized
+    /// frame multiplied by this rect — so its aspect must equal the desk's.
+    ///
+    /// The letterboxed branch used to multiply the height by 1.45 to avoid a
+    /// "narrow strip", which drew every card 45% taller than the window it
+    /// stands for. An ultrawide (3440x1440, aspect 2.39) on a portrait phone
+    /// hits that branch every time.
+    func testHostScreenRectKeepsTheDeskAspectWhenLetterboxed() {
+        let container = CGSize(width: 390, height: 300)
+        let aspect: CGFloat = 3440.0 / 1440.0
+        let rect = MainiOSView.hostScreenRect(in: container, aspect: aspect)
+        XCTAssertEqual(rect.width / rect.height, aspect, accuracy: 0.001,
+                       "canvas aspect must equal the desk's or every card is drawn distorted")
+        XCTAssertEqual(rect.width, 390, accuracy: 0.001, "should use the full width")
+        XCTAssertLessThanOrEqual(rect.maxY, 300.001, "must stay inside the container")
+    }
+
+    /// The other branch — a container narrower in aspect than it is tall — was
+    /// already true to the desk; pin it so the fix didn't trade one distortion
+    /// for another.
+    func testHostScreenRectKeepsTheDeskAspectWhenPillarboxed() {
+        let container = CGSize(width: 800, height: 200)
+        let aspect: CGFloat = 16.0 / 10.0
+        let rect = MainiOSView.hostScreenRect(in: container, aspect: aspect)
+        XCTAssertEqual(rect.width / rect.height, aspect, accuracy: 0.001)
+        XCTAssertEqual(rect.height, 200, accuracy: 0.001, "should use the full height")
+        XCTAssertLessThanOrEqual(rect.maxX, 800.001)
+    }
+
+    /// A 16:10 desk on a tall phone canvas: the old code stretched this one too
+    /// (1.45x), so this is the regression that covers the common case, not just
+    /// the ultrawide.
+    func testHostScreenRectDoesNotStretchAStandardDeskOnAPortraitCanvas() {
+        let rect = MainiOSView.hostScreenRect(in: CGSize(width: 390, height: 500),
+                                              aspect: 16.0 / 10.0)
+        XCTAssertEqual(rect.height, 390 / (16.0 / 10.0), accuracy: 0.001)
+    }
+
+    func testHostScreenRectFallsBackToTheContainerForANonsenseAspect() {
+        let container = CGSize(width: 120, height: 80)
+        XCTAssertEqual(MainiOSView.hostScreenRect(in: container, aspect: 0),
+                       CGRect(origin: .zero, size: container))
+    }
 }

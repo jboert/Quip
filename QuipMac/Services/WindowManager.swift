@@ -44,6 +44,15 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
     /// inactive Spaces or disconnected monitors, so we re-check here.
     var isOnVisibleScreen: Bool = true
 
+    /// Which display this window sits on (`DisplayInfo.id`), by center point.
+    /// Populated on every snapshot refresh alongside `isOnVisibleScreen`, and
+    /// shipped to the phone on `WindowState.displayID` so it can group windows
+    /// by screen. nil only when no display is known yet (first tick).
+    var displayID: String?
+    /// Mission Control Space containing this window, when the system metadata
+    /// can identify it. Nil is a safe fallback on unsupported macOS versions.
+    var spaceID: String?
+
     /// Whether this window is hosted by a terminal emulator Quip supports
     /// (Terminal.app or iTerm2). Used for auto-grouping in the sidebar.
     var isTerminal: Bool {
@@ -101,12 +110,34 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             isThinking: isThinking,
             claudeMode: claudeMode,
             cliKind: cliKind,
-            targetKind: targetKind
+            targetKind: targetKind,
+            displayID: displayID,
+            spaceID: spaceID
         )
     }
 }
 
 // MARK: - WindowManager
+
+/// Append one line to `injection.log` about the iTerm2 session map. Append-only,
+/// failures swallowed — same contract as the injector's own appender.
+///
+/// It shares the injector's file on purpose: someone reading that file is
+/// already chasing "iTerm2 session not yet mapped", and a fetch that keeps
+/// failing is the reason the mappings behind those sends went stale.
+fileprivate func appendSessionMapLog(_ message: String) {
+    let line = "\(Date().ISO8601Format()) \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = LogPaths.injectionPath
+    LogPaths.rotateIfNeeded(path: path)
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
 
 @MainActor
 @Observable
@@ -142,6 +173,10 @@ final class WindowManager {
 
     /// Available displays
     var displays: [DisplayInfo] = []
+
+    /// Mission Control Spaces discovered from the read-only system metadata.
+    /// Empty means macOS did not expose a usable catalog this tick.
+    private(set) var spaces: [SpaceState] = []
 
     // Next color index for assignment
     private var colorIndex: Int = 0
@@ -191,25 +226,56 @@ final class WindowManager {
     // MARK: - Display Info
 
     struct DisplayInfo: Identifiable, Sendable, Equatable, Hashable {
+        /// `CGDirectDisplayID` as a string. Stable across focus changes, app
+        /// restarts, and screen reordering — an enumeration index is not, and
+        /// a saved "show me the terminal screen" selection on the phone would
+        /// silently re-point at the other monitor the moment displays moved.
         let id: String
         let name: String
         let frame: CGRect
-        let isMain: Bool
+        /// True for `NSScreen.screens.first` — the display CG measures window
+        /// bounds from. Deliberately NOT `NSScreen.main`, which is the
+        /// *focused* screen: keying off that made every coordinate conversion
+        /// (and the monitor name the phone treats as Mac identity) flip the
+        /// moment the user clicked the second monitor.
+        let isPrimary: Bool
     }
 
     // MARK: - Refresh Displays
 
-    /// Enumerate available displays from NSScreen
+    /// Enumerate available displays from NSScreen. Index 0 is the primary.
     func refreshDisplays() {
         displays = NSScreen.screens.enumerated().map { index, screen in
-            let isMain = (screen == NSScreen.main)
-            let name = screen.localizedName
-            return DisplayInfo(
-                id: "display-\(index)",
-                name: name,
+            DisplayInfo(
+                id: Self.displayID(of: screen, fallbackIndex: index),
+                name: screen.localizedName,
                 frame: screen.frame,
-                isMain: isMain
+                isPrimary: index == 0
             )
+        }
+    }
+
+    /// `CGDirectDisplayID` for a screen, as a string. Falls back to the
+    /// enumeration index only when `NSScreenNumber` is missing (never observed
+    /// on real hardware, but the dictionary lookup is optional).
+    private static func displayID(of screen: NSScreen, fallbackIndex: Int) -> String {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        if let number = screen.deviceDescription[key] as? NSNumber {
+            return "display-\(number.uint32Value)"
+        }
+        return "display-idx\(fallbackIndex)"
+    }
+
+    /// Every display as the pure-geometry tuple `DisplayGeometry` speaks, in CG
+    /// space (top-left origin) so window bounds can be compared directly.
+    /// One place builds this so the broadcast path and the per-window display
+    /// assignment can never disagree about where a screen is.
+    func cgDisplayRects() -> [(id: String, isPrimary: Bool, rect: DisplayRect)] {
+        displays.map { display in
+            let cg = cgFrame(for: display)
+            return (id: display.id, isPrimary: display.isPrimary,
+                    rect: DisplayRect(x: cg.origin.x, y: cg.origin.y,
+                                      width: cg.width, height: cg.height))
         }
     }
 
@@ -224,16 +290,109 @@ final class WindowManager {
         let pid: pid_t
         let windowNumber: CGWindowID
         let bounds: CGRect
+        let spaceID: String?
     }
 
-    /// Fetch on-screen windows from CG. Safe to call from any thread.
+    /// Whether a window is currently drawn on the desk, to the precision macOS
+    /// exposes without private API.
+    ///
+    /// This used to be presented as a DESKTOP (Mission Control Space) split —
+    /// "This Desktop" vs "Other Desktops" — on the theory that
+    /// `optionOnScreenOnly` is scoped to the active Space, so whatever it omits
+    /// must live on another one. That theory is wrong, and the phone paid for
+    /// it: `optionOnScreenOnly` means "currently composited", so a window the
+    /// user MINIMIZED on the desk they are sitting at is omitted too, and got
+    /// labelled as being on some other desktop. Measured on a live single-Space
+    /// desk: 76 layer-0 windows, 10 on screen, 66 declared "Other Desktops" —
+    /// and minimizing a Finder window flipped it from on-screen to off-screen
+    /// with no Space change at all. With the phone defaulting to "This Desktop",
+    /// minimizing a tracked terminal made its card disappear.
+    ///
+    /// Naming the Space a window actually belongs to needs
+    /// `CGSCopySpacesForWindows`, which is private API. So the split now claims
+    /// only what it measures — on screen vs not — and the chips are named for
+    /// that. A minimized window reads as "Hidden", which is true, instead of
+    /// "Other Desktops", which was not.
+    struct SpaceCatalog: Sendable {
+        static let currentSpaceID = "space-current"
+        static let otherSpaceID = "space-other"
+
+        let spaces: [SpaceState]
+        private let byWindow: [CGWindowID: String]
+
+        nonisolated static func read() -> SpaceCatalog {
+            split(allWindows: layerZeroWindowIDs([.excludeDesktopElements]),
+                  onCurrentSpace: layerZeroWindowIDs([.excludeDesktopElements,
+                                                      .optionOnScreenOnly]))
+        }
+
+        /// Pure half of `read()`, so the split is testable without a
+        /// WindowServer. Both entries are always reported when something is on
+        /// screen; the phone drops an empty one and hides the row when only one
+        /// survives (`SpaceActivity`).
+        nonisolated static func split(allWindows: [CGWindowID],
+                                      onCurrentSpace: [CGWindowID]) -> SpaceCatalog {
+            let current = Set(onCurrentSpace)
+            var byWindow: [CGWindowID: String] = [:]
+            for id in allWindows {
+                byWindow[id] = current.contains(id) ? currentSpaceID : otherSpaceID
+            }
+            var states: [SpaceState] = []
+            if byWindow.values.contains(currentSpaceID) {
+                states.append(SpaceState(id: currentSpaceID, name: "On Screen",
+                                         isCurrent: true))
+            }
+            if byWindow.values.contains(otherSpaceID) {
+                states.append(SpaceState(id: otherSpaceID, name: "Hidden",
+                                         isCurrent: false))
+            }
+            return SpaceCatalog(spaces: states, byWindow: byWindow)
+        }
+
+        /// The buckets represented in an already-stamped snapshot, in the
+        /// order the chips should appear.
+        nonisolated static func desktops(inSnapshot raw: [RawWindowInfo]) -> [SpaceState] {
+            let present = Set(raw.compactMap(\.spaceID))
+            var states: [SpaceState] = []
+            if present.contains(currentSpaceID) {
+                states.append(SpaceState(id: currentSpaceID, name: "On Screen",
+                                         isCurrent: true))
+            }
+            if present.contains(otherSpaceID) {
+                states.append(SpaceState(id: otherSpaceID, name: "Hidden",
+                                         isCurrent: false))
+            }
+            return states
+        }
+
+        nonisolated static func layerZeroWindowIDs(_ options: CGWindowListOption) -> [CGWindowID] {
+            guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
+            else { return [] }
+            return list.compactMap { info in
+                guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0
+                else { return nil }
+                return info[kCGWindowNumber as String] as? CGWindowID
+            }
+        }
+
+        nonisolated func id(for windowNumber: CGWindowID) -> String? {
+            byWindow[windowNumber]
+        }
+    }
+
+    /// Fetch windows across all Mission Control Spaces from CG. Safe to call
+    /// from any thread; inactive-Space bounds remain in global CG coordinates.
     nonisolated static func fetchWindowList() -> [RawWindowInfo] {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        // `optionOnScreenOnly` is scoped to the active Space. Omitting it is
+        // the only CoreGraphics-supported way to discover windows on other
+        // Spaces; their bounds remain in the global desktop coordinate space.
+        let options: CGWindowListOption = [.excludeDesktopElements]
         guard let infoList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return []
         }
 
         var result: [RawWindowInfo] = []
+        let spaces = SpaceCatalog.read()
         let systemApps: Set<String> = ["Window Server", "Control Center", "Notification Center", "SystemUIServer"]
 
         for info in infoList {
@@ -257,7 +416,8 @@ final class WindowManager {
 
             result.append(RawWindowInfo(id: windowId, name: title, app: ownerName,
                                         bundleId: bundleId, pid: pid,
-                                        windowNumber: windowNumber, bounds: bounds))
+                                        windowNumber: windowNumber, bounds: bounds,
+                                        spaceID: spaces.id(for: windowNumber)))
         }
         return result
     }
@@ -273,19 +433,36 @@ final class WindowManager {
         // duplicate line if it fails again, which is the harmless direction.
         Self.axFocusGate.retainOnly(Set(raw.map(\.pid)))
 
-        // Precompute once per snapshot. Accessing NSScreen.screens is MainActor-safe
-        // and we're already on main here.
-        let screens = NSScreen.screens
-        let totalHeight = screens.map { $0.frame.maxY }.max() ?? 0
+        // Re-enumerate displays on every snapshot. Hot-plugging the second
+        // monitor mid-session used to leave `displays` stale until a Quip
+        // window happened to appear (only MainWindow/MenuBarView refreshed it),
+        // so a terminal moved to a just-connected screen was assigned to the
+        // wrong display — or to none. NSScreen.screens is a cheap MainActor
+        // read and we're already on main here.
+        refreshDisplays()
+        // Derive the desktop list from the snapshot rather than re-reading it.
+        // `fetchWindowList` already paid for the two CoreGraphics enumerations
+        // the split needs and stamped every window; reading again here would
+        // double that cost on every poll tick, on the main actor.
+        spaces = Self.SpaceCatalog.desktops(inSnapshot: raw)
+        let displayRects = cgDisplayRects()
 
         var refreshed: [ManagedWindow] = []
         for info in raw {
-            // CG bounds use top-left origin; NSScreen frames use bottom-left.
-            // Flip the Y to compare against screen frames. Same technique as
-            // `windows(for display:)` below.
-            let flippedY = totalHeight - info.bounds.midY
-            let center = CGPoint(x: info.bounds.midX, y: flippedY)
-            let onScreen = screens.contains { $0.frame.contains(center) }
+            // Both rects are CG space (top-left origin) — `cgDisplayRects`
+            // already flipped the NSScreen frames — so the window's own bounds
+            // compare directly with no second flip.
+            let windowRect = DisplayRect(x: info.bounds.origin.x, y: info.bounds.origin.y,
+                                         width: info.bounds.width, height: info.bounds.height)
+            let hitDisplay = displayRects.first {
+                $0.rect.contains(x: windowRect.midX, y: windowRect.midY)
+            }
+            let onScreen = hitDisplay != nil
+            // A window whose center lands in a gap between mismatched monitors
+            // still gets a display (the primary) so it can't vanish from every
+            // screen filter on the phone — but it is NOT counted as on-screen,
+            // which is what QA-mode's offscreen detection keys off.
+            let displayID = DisplayGeometry.displayID(forWindow: windowRect, displays: displayRects)
 
             let icon = NSRunningApplication(processIdentifier: info.pid)?.icon
             if let existing = windows.first(where: { $0.id == info.id }) {
@@ -297,7 +474,9 @@ final class WindowManager {
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: existing.iterm2SessionId,
                     iterm2Tty: existing.iterm2Tty,
-                    isOnVisibleScreen: onScreen
+                    isOnVisibleScreen: onScreen,
+                    displayID: displayID,
+                    spaceID: info.spaceID
                 ))
             } else {
                 refreshed.append(ManagedWindow(
@@ -308,7 +487,9 @@ final class WindowManager {
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
                     iterm2Tty: nil,
-                    isOnVisibleScreen: onScreen
+                    isOnVisibleScreen: onScreen,
+                    displayID: displayID,
+                    spaceID: info.spaceID
                 ))
             }
         }
@@ -337,6 +518,72 @@ final class WindowManager {
         applyWindowSnapshot(Self.fetchWindowList())
     }
 
+    // MARK: - Ordering
+
+    /// The one place window order is written. Sidebar drags, the magic-wand
+    /// sort, the per-row chevrons, and the layout-preview drag all funnel here.
+    ///
+    /// Before Iteration 1 there were two lists: `MainWindow.windowOrder` (what
+    /// the sidebar and preview rendered) and this `customOrder` (what survived
+    /// a refresh and what the phone saw). A preview drag wrote one, a sidebar
+    /// drag wrote the other, and the two views disagreed about which window was
+    /// arrange slot 1.
+    ///
+    /// `ids` may be partial or contain stale ids: unknown ids are dropped and
+    /// windows the caller didn't mention keep their existing relative position
+    /// at the end, so no window can fall out of the list by being forgotten.
+    func setOrder(_ ids: [String]) {
+        let known = Set(windows.map(\.id))
+        var next = ids.filter { known.contains($0) }
+        var seen = Set(next)
+        for window in windows where !seen.contains(window.id) {
+            next.append(window.id)
+            seen.insert(window.id)
+        }
+        customOrder = next
+
+        var byID: [String: ManagedWindow] = [:]
+        byID.reserveCapacity(windows.count)
+        for window in windows { byID[window.id] = window }
+        windows = next.compactMap { byID[$0] }
+    }
+
+    /// Move one window to sit where another currently sits, preserving the rest
+    /// of the order. Used by both drag paths, which speak in positions rather
+    /// than in ids.
+    func swapOrder(_ id: String, with otherID: String) {
+        guard let i = customOrder.firstIndex(of: id),
+              let j = customOrder.firstIndex(of: otherID) else { return }
+        var next = customOrder
+        next.swapAt(i, j)
+        setOrder(next)
+    }
+
+    // MARK: - Display Geometry
+
+    /// Convert a display's `NSScreen` frame (bottom-left origin, y up, measured
+    /// from the primary display) into the global CG / Accessibility space
+    /// (top-left origin, y down, measured from the primary display's top edge).
+    ///
+    /// Arrange targets are handed to the Accessibility API, which is top-left
+    /// origin — so a secondary display's rect has to be flipped or the windows
+    /// land in the primary display's coordinate space. Pure and static so the
+    /// arithmetic is testable without attaching monitors.
+    static func cgRect(forDisplayFrame frame: CGRect, primaryFrame: CGRect) -> CGRect {
+        CGRect(x: frame.minX,
+               y: primaryFrame.maxY - frame.maxY,
+               width: frame.width,
+               height: frame.height)
+    }
+
+    /// `cgRect(forDisplayFrame:primaryFrame:)` against the live primary screen.
+    /// Note `NSScreen.main` is the *focused* screen, not the primary — the
+    /// primary is `NSScreen.screens.first`, and it is the one CG measures from.
+    func cgFrame(for display: DisplayInfo) -> CGRect {
+        let primary = NSScreen.screens.first?.frame ?? display.frame
+        return Self.cgRect(forDisplayFrame: display.frame, primaryFrame: primary)
+    }
+
     // MARK: - Filter by Display
 
     /// Returns windows whose center point falls within the given display's frame.
@@ -359,7 +606,10 @@ final class WindowManager {
     func focusWindow(_ windowId: String) {
         guard let window = windows.first(where: { $0.id == windowId }) else { return }
         let app = NSRunningApplication(processIdentifier: window.pid)
-        app?.activate()
+        // `.activateAllWindows` asks Mission Control to switch to the Space
+        // owning the app when the user's macOS setting permits it. AX raise
+        // then selects the exact window once that Space is active.
+        app?.activate(options: [.activateAllWindows])
 
         // Also raise the specific window via AX
         let appElement = AXUIElementCreateApplication(window.pid)
@@ -553,8 +803,8 @@ final class WindowManager {
     /// Query iTerm2 for current session UUIDs and update `iterm2SessionId` on
     /// matching windows. `async` for the same reason as `refreshSubtitles`.
     func refreshIterm2SessionIds() async {
-        let sessions = await AppleScriptRunner.offMain { Self.fetchIterm2SessionIds() }
-        applyIterm2SessionIds(sessions)
+        let fetch = await AppleScriptRunner.offMain { Self.fetchIterm2SessionIds() }
+        applyIterm2SessionFetch(fetch)
     }
 
     /// Filter the window list for a single client's `LayoutUpdate` broadcast.
@@ -571,14 +821,26 @@ final class WindowManager {
     /// `mirrorDesktop=false` (no pair, default): enabled windows + visible
     /// targets (Simulator etc.). Targets ride along even when disabled so
     /// QA-mode pairing is discoverable without a manual enable step.
+    ///
+    /// `mirrorAllApps=true` outranks both: every visible window of every app,
+    /// so the phone can pick any app to dictate into.
     nonisolated static func windowsForBroadcast(
         _ all: [ManagedWindow],
         mirrorDesktop: Bool,
+        mirrorAllApps: Bool = false,
         qaPair: (String, String)? = nil
     ) -> [ManagedWindow] {
         if let pair = qaPair {
             let want: Set<String> = [pair.0, pair.1]
             return all.filter { want.contains($0.id) }
+        }
+        // `mirrorAllApps` is the "talk to any app from the phone" mode: without
+        // it a non-terminal window (Slack, Xcode, a browser) can only reach the
+        // phone by being enabled by hand on the Mac, so a user who wants to
+        // dictate into an app has no way to discover it from the phone at all.
+        // Strictly wider than `mirrorDesktop`, so it subsumes it.
+        if mirrorAllApps {
+            return all.filter { $0.isOnVisibleScreen || $0.isEnabled }
         }
         if mirrorDesktop {
             return all.filter {
@@ -614,6 +876,25 @@ final class WindowManager {
         /// the per-window shell PID so state detection isn't conflated
         /// across all iTerm windows sharing the app PID.
         let tty: String
+    }
+
+    /// The outcome of one `fetchIterm2SessionIds()` pass.
+    ///
+    /// The distinction matters because `applyIterm2SessionIds` clears every
+    /// mapping before re-matching: `.ok([])` legitimately means "iTerm2 has no
+    /// windows, drop the stale ids", while `.failed` means we learned nothing
+    /// and must keep what we had. Returning a bare `[]` for both is what let a
+    /// single timed-out AppleEvent unmap every window at once (2026-09-11).
+    enum Iterm2SessionFetch: Sendable {
+        /// What the pass learned. `unreadableWindows` are the CGWindowIDs whose
+        /// per-window `try` swallowed an error: the script succeeded overall, but
+        /// those windows produced no row, and treating that as "this window has
+        /// no session" is the same defect as `.failed` at per-window scale.
+        /// Their existing mappings must be preserved, not cleared.
+        case ok([Iterm2SessionInfo], unreadableWindows: Set<CGWindowID>)
+        /// The AppleScript errored — a busy iTerm2, an AppleEvent timeout, or a
+        /// consent prompt nobody has answered. Not evidence about sessions.
+        case failed
     }
 
     /// One terminal window's directory info: the basename for display plus the
@@ -788,7 +1069,7 @@ final class WindowManager {
         return result.stringValue == "ok"
     }
 
-    nonisolated static func fetchIterm2SessionIds() -> [Iterm2SessionInfo] {
+    nonisolated static func fetchIterm2SessionIds() -> Iterm2SessionFetch {
         var result: [Iterm2SessionInfo] = []
         // bounds of w returns {left, top, right, bottom} in screen coordinates
         // with top-left origin — same as CGWindowList. We join the four with
@@ -802,10 +1083,23 @@ final class WindowManager {
         // bad window makes executeAndReturnError fail → the function returns an
         // EMPTY session list → EVERY iTerm window stays unmapped and all sends
         // fail "iTerm2 session not yet mapped". Swallow + skip the bad window.
+        //
+        // But swallowing silently is how the SAME bug survived at per-window
+        // scale: a window that threw simply produced no row, and the apply side
+        // reads a missing row as "this window has no session" and clears it. So
+        // the catch now REPORTS — `ERROR\t<wid>` — and the caller preserves those
+        // windows instead of unmapping them. `wid` is seeded before the `try` so
+        // a window that fails at `id of w` reports -1, which is unattributable
+        // and forces the whole pass to `.failed`.
+        //
+        // The COUNT header separates "iTerm2 has no windows" (clear the stale
+        // ids — correct) from "we read nothing from N windows" (keep them).
         let script = """
         set output to ""
         tell application "iTerm2"
+            set output to "COUNT\\t" & (count of windows) & linefeed
             repeat with w in windows
+                set wid to -1
                 try
                     set wid to id of w
                     set {l, t, r, b} to bounds of w
@@ -818,6 +1112,8 @@ final class WindowManager {
                         end try
                     end tell
                     set output to output & wid & "\\t" & l & "," & t & "," & r & "," & b & "\\t" & uid & "\\t" & ttyPath & linefeed
+                on error
+                    set output to output & "ERROR\\t" & wid & linefeed
                 end try
             end repeat
         end tell
@@ -825,10 +1121,36 @@ final class WindowManager {
         """
 
         let asResult = AppleScriptRunner.run(script)
-        guard !asResult.failed, let output = asResult.stringValue else { return result }
+        // `.failed` is NOT "no sessions" — see `Iterm2SessionFetch`. Reporting
+        // it as an empty list made the caller wipe every good mapping.
+        guard !asResult.failed, let output = asResult.stringValue else { return .failed }
+
+        // Windows whose row the script could not produce. Distinct from absent:
+        // absent means "iTerm2 does not have this window", unreadable means "we
+        // could not look at it", and only the first justifies clearing an id.
+        var unreadable: Set<CGWindowID> = []
+        var reportedWindowCount: Int?
 
         for line in output.components(separatedBy: "\n") where !line.isEmpty {
             let parts = line.components(separatedBy: "\t")
+            if parts[0] == "COUNT" {
+                reportedWindowCount = parts.count >= 2
+                    ? Int(parts[1].trimmingCharacters(in: .whitespaces))
+                    : nil
+                continue
+            }
+            if parts[0] == "ERROR" {
+                // An unattributable failure (the error hit before `id of w`) can
+                // not be preserved selectively — nothing names the window to
+                // spare. Keeping every mapping is the safe read of "we learned
+                // nothing", which is exactly `.failed`.
+                guard parts.count >= 2,
+                      let wid = Int(parts[1].trimmingCharacters(in: .whitespaces)),
+                      wid > 0
+                else { return .failed }
+                unreadable.insert(CGWindowID(wid))
+                continue
+            }
             // wid, coords, uid required; tty optional (older iTerm).
             guard parts.count >= 3, let wid = Int(parts[0]) else { continue }
             let coords = parts[1].components(separatedBy: ",")
@@ -843,7 +1165,11 @@ final class WindowManager {
             let tty = rawTty.hasPrefix("/dev/") ? String(rawTty.dropFirst(5)) : rawTty
             result.append(Iterm2SessionInfo(windowNumber: CGWindowID(wid), bounds: bounds, uuid: uuid, tty: tty))
         }
-        return result
+        // Nothing usable, nothing named, and iTerm2 did not tell us it has zero
+        // windows: we learned nothing about anything. This is the `.ok([])` that
+        // used to wipe every mapping in one pass.
+        if result.isEmpty && unreadable.isEmpty && reportedWindowCount != 0 { return .failed }
+        return .ok(result, unreadableWindows: unreadable)
     }
 
     /// Apply pre-fetched subtitles to windows. Call on main.
@@ -920,7 +1246,51 @@ final class WindowManager {
         }
     }
 
-    func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo]) {
+    /// Consecutive `.failed` fetches. Drives the log throttle below — and it is
+    /// the only reason anyone can tell a healthy session map from a frozen one.
+    private var failedSessionFetchStreak = 0
+
+    /// Log the first failure, then every `sessionFetchLogEvery`-th. The poll
+    /// runs every 2s, so an unthrottled line per drop would bury the file it
+    /// writes to within minutes of a revoked Automation grant.
+    private static let sessionFetchLogEvery = 30
+
+    /// Apply a fetch outcome. A `.failed` pass is dropped on the floor: the
+    /// last good mapping is a better answer than no mapping, and the poll runs
+    /// again shortly. `.ok` (including `.ok([])`) is applied as truth.
+    ///
+    /// The drop is logged. Silently keeping the last good mapping means a
+    /// persistently failing fetch — a revoked Automation grant, a wedged
+    /// iTerm2 — looks exactly like a healthy system from the outside, while
+    /// every send runs against ids nothing is refreshing any more.
+    func applyIterm2SessionFetch(_ fetch: Iterm2SessionFetch) {
+        guard case .ok(let sessions, let unreadable) = fetch else {
+            failedSessionFetchStreak += 1
+            if failedSessionFetchStreak == 1
+                || failedSessionFetchStreak % Self.sessionFetchLogEvery == 0 {
+                appendSessionMapLog(
+                    "SESSION_FETCH failed streak=\(failedSessionFetchStreak) "
+                    + "action=kept-last-good-mapping")
+            }
+            return
+        }
+        if failedSessionFetchStreak > 0 {
+            appendSessionMapLog("SESSION_FETCH recovered after=\(failedSessionFetchStreak)")
+            failedSessionFetchStreak = 0
+        }
+        if !unreadable.isEmpty {
+            // Not a throttled streak: this is per-pass and self-limiting, and it
+            // names windows whose mapping is deliberately older than the rest.
+            let ids = unreadable.sorted().map(String.init).joined(separator: ",")
+            appendSessionMapLog("SESSION_FETCH partial unreadable=\(ids) action=kept-their-mappings")
+        }
+        applyIterm2SessionIds(sessions, preserving: unreadable)
+    }
+
+    /// `preserving` names windows this pass could not read at all. They are left
+    /// exactly as they were — an unread window is not an unmapped one.
+    func applyIterm2SessionIds(_ sessions: [Iterm2SessionInfo],
+                               preserving unreadableWindows: Set<CGWindowID> = []) {
         let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
         // Tolerance is per-dimension (midX/Y/width/height each). Summed as
         // squared distance, the effective threshold is 4 * tol^2 in 4D.
@@ -929,8 +1299,14 @@ final class WindowManager {
 
         var claimedUUIDs: Set<String> = []
 
-        // Clear stale assignments before re-matching this pass.
+        // Clear stale assignments before re-matching this pass — except windows
+        // the fetch could not read, which keep what they had. Their uuid is
+        // claimed up front so a later pass can't hand it to a different window.
         for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+            if unreadableWindows.contains(windows[i].windowNumber) {
+                if let held = windows[i].iterm2SessionId { claimedUUIDs.insert(held) }
+                continue
+            }
             windows[i].iterm2SessionId = nil
             windows[i].iterm2Tty = nil
         }
@@ -947,7 +1323,8 @@ final class WindowManager {
             sessions.filter { $0.windowNumber != 0 }.map { ($0.windowNumber, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        for i in windows.indices where windows[i].bundleId == iterm2BundleId {
+        for i in windows.indices
+        where windows[i].bundleId == iterm2BundleId && windows[i].iterm2SessionId == nil {
             guard let s = sessionByWindow[windows[i].windowNumber],
                   !claimedUUIDs.contains(s.uuid) else { continue }
             windows[i].iterm2SessionId = s.uuid

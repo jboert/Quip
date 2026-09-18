@@ -163,5 +163,141 @@ final class WindowManagerSessionIdTests: XCTestCase {
                        "Exact window-id join must win even when bounds are far apart")
         XCTAssertEqual(wm.windows[0].iterm2Tty, "ttys005")
     }
+    // MARK: - A failed AppleScript must not wipe good mappings
+
+    /// Regression (2026-09-11): one failed AppleEvent unmapped every iTerm2
+    /// window at once, and every phone `send_text` then came back
+    /// "iTerm2 session not yet mapped for window …" until a later fetch
+    /// happened to succeed.
+    ///
+    /// `fetchIterm2SessionIds()` collapsed "AppleScript failed" and "no iTerm2
+    /// windows exist" into the same empty array, and `applyIterm2SessionIds`
+    /// opens by clearing every mapping before re-matching. A busy iTerm2 (nine
+    /// windows, several agents churning) times the AppleEvent out routinely, so
+    /// this fired in normal use. The last good mapping is a better answer than
+    /// no mapping: keep it and let the next fetch correct it.
+    func testFailedFetchKeepsPreviousSessionMappings() {
+        let wm = WindowManager()
+        let bounds = CGRect(x: 824, y: 30, width: 466, height: 1329)
+
+        wm.windows = [
+            makeIterm2Window(id: "com.googlecode.iterm2.808",
+                             name: "claude", windowNumber: 808, bounds: bounds)
+        ]
+
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 808, bounds: bounds,
+                                            uuid: "UUID-808", tty: "ttys008")
+        ], unreadableWindows: []))
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808", "precondition")
+
+        wm.applyIterm2SessionFetch(.failed)
+
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808",
+                       "A failed AppleScript must leave the last good mapping alone")
+        XCTAssertEqual(wm.windows[0].iterm2Tty, "ttys008",
+                       "The tty rides with the session id and must survive too")
+    }
+
+    /// The other half of the contract: a fetch that genuinely saw no iTerm2
+    /// windows (iTerm quit, last window closed) still clears. Without this the
+    /// "keep the last good mapping" rule would pin a dead session id forever
+    /// and text would be injected into a window that no longer exists.
+    func testGenuinelyEmptyFetchStillClearsMappings() {
+        let wm = WindowManager()
+        let bounds = CGRect(x: 0, y: 0, width: 800, height: 600)
+
+        wm.windows = [
+            makeIterm2Window(id: "com.googlecode.iterm2.808",
+                             name: "claude", windowNumber: 808, bounds: bounds)
+        ]
+
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 808, bounds: bounds,
+                                            uuid: "UUID-808", tty: "ttys008")
+        ], unreadableWindows: []))
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808", "precondition")
+
+        wm.applyIterm2SessionFetch(.ok([], unreadableWindows: []))
+
+        XCTAssertNil(wm.windows[0].iterm2SessionId,
+                     "An empty-but-successful fetch means iTerm2 has no windows — clear")
+        XCTAssertNil(wm.windows[0].iterm2Tty)
+    }
+
+    /// The same bug at per-window scale, which the `.failed` guard does not
+    /// reach. The fetch script wraps each window in `try … end try`; a window
+    /// whose `current session` throws (hotkey window, AppleEvent timeout on a
+    /// busy iTerm2, window mid-close) produces no row, and a missing row used to
+    /// read as "this window has no session" and clear it. One window failing
+    /// must not unmap it, and must not disturb the windows that read fine.
+    func testUnreadableWindowKeepsItsMappingWhileOthersRefresh() {
+        let wm = WindowManager()
+        let boundsA = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let boundsB = CGRect(x: 900, y: 0, width: 800, height: 600)
+
+        wm.windows = [
+            makeIterm2Window(id: "com.googlecode.iterm2.808",
+                             name: "claude", windowNumber: 808, bounds: boundsA),
+            makeIterm2Window(id: "com.googlecode.iterm2.246",
+                             name: "codex", windowNumber: 246, bounds: boundsB)
+        ]
+
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 808, bounds: boundsA,
+                                            uuid: "UUID-808", tty: "ttys008"),
+            WindowManager.Iterm2SessionInfo(windowNumber: 246, bounds: boundsB,
+                                            uuid: "UUID-246", tty: "ttys006")
+        ], unreadableWindows: []))
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808", "precondition")
+        XCTAssertEqual(wm.windows[1].iterm2SessionId, "UUID-246", "precondition")
+
+        // 246 threw; 808 read fine and its session was recreated.
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 808, bounds: boundsA,
+                                            uuid: "UUID-808-NEW", tty: "ttys009")
+        ], unreadableWindows: [246]))
+
+        XCTAssertEqual(wm.windows[0].iterm2SessionId, "UUID-808-NEW",
+                       "A window that read fine still takes the fresh id")
+        XCTAssertEqual(wm.windows[0].iterm2Tty, "ttys009")
+        XCTAssertEqual(wm.windows[1].iterm2SessionId, "UUID-246",
+                       "A window the fetch could not read is not an unmapped window")
+        XCTAssertEqual(wm.windows[1].iterm2Tty, "ttys006")
+    }
+
+    /// A preserved window holds its uuid against the bounds fallback: two iTerm2
+    /// windows at the same size and position (stacked, or one just moved onto
+    /// the other) would otherwise let Pass 2 hand the surviving session to the
+    /// wrong window while its real owner sat unread.
+    func testPreservedWindowsUuidCannotBeClaimedByAnotherWindow() {
+        let wm = WindowManager()
+        let shared = CGRect(x: 100, y: 100, width: 800, height: 600)
+
+        wm.windows = [
+            makeIterm2Window(id: "com.googlecode.iterm2.808",
+                             name: "claude", windowNumber: 808, bounds: shared),
+            makeIterm2Window(id: "com.googlecode.iterm2.246",
+                             name: "codex", windowNumber: 246, bounds: shared)
+        ]
+
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 246, bounds: shared,
+                                            uuid: "UUID-246", tty: "ttys006")
+        ], unreadableWindows: []))
+        XCTAssertEqual(wm.windows[1].iterm2SessionId, "UUID-246", "precondition")
+
+        // 246 is now unreadable, and the fetch reports UUID-246 against a
+        // *different* window number that shares its bounds.
+        wm.applyIterm2SessionFetch(.ok([
+            WindowManager.Iterm2SessionInfo(windowNumber: 999, bounds: shared,
+                                            uuid: "UUID-246", tty: "ttys006")
+        ], unreadableWindows: [246]))
+
+        XCTAssertEqual(wm.windows[1].iterm2SessionId, "UUID-246",
+                       "The unread window keeps its own session")
+        XCTAssertNil(wm.windows[0].iterm2SessionId,
+                     "A uuid held by a preserved window must not be re-claimed")
+    }
 }
 #endif

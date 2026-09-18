@@ -61,6 +61,14 @@ final class ClaudeModeDetector {
     /// (including first-detection transitions from nil → a value).
     var onModeChange: ((String, ClaudeMode?, ClaudeMode?) -> Void)?
 
+    /// Fires with (windowId, content) for every SUCCESSFUL buffer read.
+    ///
+    /// This poll is already the most expensive read in the app — one
+    /// AppleScript per tracked window every 2s — so the output-activity signal
+    /// rides it rather than paying for a second pass. A failed read is not
+    /// reported at all: it is not evidence that the window stayed still.
+    var onContentRead: ((String, String) -> Void)?
+
     /// Cadence at which each tracked window's terminal buffer is scanned.
     /// 2s is a deliberate compromise between latency and AppleScript cost —
     /// faster polling would starve the MainActor when many windows are open.
@@ -109,6 +117,7 @@ final class ClaudeModeDetector {
         pollQueue.async { [weak self] in
             guard let self else { return }
             var results: [(String, ClaudeMode?)] = []
+            var reads: [(String, String)] = []
             for tw in snapshot {
                 // This loop is the single biggest consumer of the shared serial
                 // AppleScript queue: one script per tracked window, every 2s. The
@@ -120,16 +129,27 @@ final class ClaudeModeDetector {
                 // the pass: the windows we skip are picked up on the next tick,
                 // and the results we already have are still published below.
                 if AppleScriptRunner.isUserScriptPending { break }
-                let content = keystrokeInjector.readContent(
+                // `Detailed` so a failed read or a dead session id does not
+                // arrive as an empty buffer: mode detection treats "" as "no
+                // indicator", which is harmless, but reporting "" as CONTENT
+                // would make an unreadable window look like one that just
+                // cleared its screen — i.e. maximally active.
+                let read = keystrokeInjector.readContentDetailed(
                     terminalApp: tw.terminalApp,
                     cgWindowNumber: tw.windowNumber,
                     iterm2SessionId: tw.iterm2SessionId
-                ) ?? ""
+                )
+                let content = if case .ok(let value) = read { value } else { "" }
                 let mode = ClaudeModeScanner.detect(in: content)
+                if case .ok = read { reads.append((tw.windowId, content)) }
                 results.append((tw.windowId, mode))
             }
+            let observedReads = reads
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                for (windowId, content) in observedReads {
+                    self.onContentRead?(windowId, content)
+                }
                 for (windowId, newMode) in results {
                     let oldMode = self.windowModes[windowId]
                     if oldMode != newMode {
