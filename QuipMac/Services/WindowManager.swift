@@ -149,6 +149,10 @@ final class WindowManager {
     /// `nonisolated` so the gate isn't pinned to the main actor; the gate does
     /// its own locking (same pattern as `KeystrokeInjector.captureGate`).
     nonisolated private static let axFocusGate = LogTransitionGate<pid_t>()
+    /// Focus requests whose AX match failed, keyed by WINDOW id rather than by
+    /// pid: one window of an app can be unmatchable while its siblings resolve
+    /// fine, and keying on the pid would let the first failure silence the rest.
+    nonisolated private static let axMatchGate = LogTransitionGate<String>()
 
     // Rich, vibrant color palette for window identification
     static let colorPalette: [String] = [
@@ -432,6 +436,9 @@ final class WindowManager {
         // (every window minimized) is forgotten too; that costs at most one
         // duplicate line if it fails again, which is the harmless direction.
         Self.axFocusGate.retainOnly(Set(raw.map(\.pid)))
+        // Same reasoning, per window: a closed window must not keep its failure
+        // entry alive, or a future window id could inherit its silence.
+        Self.axMatchGate.retainOnly(Set(raw.map(\.id)))
 
         // Re-enumerate displays on every snapshot. Hot-plugging the second
         // monitor mid-session used to leave `displays` stale until a Quip
@@ -602,6 +609,73 @@ final class WindowManager {
 
     // MARK: - Focus Window
 
+    /// Which AX element a focus request resolves to, given only positions.
+    ///
+    /// `.none` and `.ambiguous` are first-class answers, not error paths: both
+    /// were previously indistinguishable from success, because the search was a
+    /// `for` loop that `break`ed on the first hit and simply ended otherwise.
+    enum AXWindowMatch: Equatable {
+        /// Exactly one candidate sits inside the tolerance.
+        case unique(Int)
+        /// Several do. Index order is the AX enumeration order.
+        case ambiguous([Int])
+        /// None does.
+        case none
+    }
+
+    /// Match a window's CG origin against the AX elements' origins.
+    ///
+    /// Position is a FUZZY key and this function cannot make it exact — that is
+    /// Q-22, and it needs a decision about private API. What it does is stop the
+    /// fuzziness from being silent: the caller can now tell "found it" from
+    /// "found nothing" from "found several and is about to guess".
+    ///
+    /// The tolerance absorbs the lag between the 2.0s CG poll and the tap. It is
+    /// exclusive at exactly `tolerance` points, matching the shipped `< 10`.
+    nonisolated static func matchAXWindow(targetOrigin: CGPoint,
+                                          candidates: [CGPoint],
+                                          tolerance: CGFloat = 10) -> AXWindowMatch {
+        let hits = candidates.enumerated().filter { _, origin in
+            abs(origin.x - targetOrigin.x) < tolerance && abs(origin.y - targetOrigin.y) < tolerance
+        }.map(\.offset)
+        switch hits.count {
+        case 0: return .none
+        case 1: return .unique(hits[0])
+        default: return .ambiguous(hits)
+        }
+    }
+
+    /// Report a focus request that could not be resolved to exactly one window.
+    ///
+    /// Goes to `websocket.log`, beside `focusWindow`'s existing AX-grant error,
+    /// NOT to `injection.log`. `injection.log` documents a closed `kind`
+    /// vocabulary for keystroke and text injection (`sessionNotFound |
+    /// tccDenied | windowClosed | unknown | unclassified`) and has tests that
+    /// hold it closed; a focus miss is a different operation, and filing it
+    /// there would mean either widening that contract or misfiling it as
+    /// `unclassified`.
+    ///
+    /// `cause` deliberately carries the OUTCOME only and never the candidate
+    /// list — the gate dedupes on the cause string, and a list that shifts by a
+    /// point per poll would compare unequal every time and defeat it.
+    nonisolated private static func reportFocusMatchFailure(windowId: String, app: String,
+                                                            target: CGPoint,
+                                                            candidates: [CGPoint],
+                                                            cause: String, detail: String) {
+        guard axMatchGate.evaluate(windowId, cause: cause) == .report else { return }
+        let seen = candidates.prefix(8)
+            .map { "(\(Int($0.x)),\(Int($0.y)))" }
+            .joined(separator: " ")
+        let more = candidates.count > 8 ? " +\(candidates.count - 8) more" : ""
+        QuipLog.write(
+            severity: .error, subsystem: "window",
+            message: "focusWindow: \(detail) window=\(windowId) app=\(app) "
+                   + "wanted=(\(Int(target.x)),\(Int(target.y))) "
+                   + "axPositions=[\(seen)\(more)]",
+            to: LogPaths.webSocketPath
+        )
+    }
+
     /// Bring a window to front and focus it
     func focusWindow(_ windowId: String) {
         guard let window = windows.first(where: { $0.id == windowId }) else { return }
@@ -645,19 +719,65 @@ final class WindowManager {
                           to: LogPaths.webSocketPath)
         }
 
-        // Find matching AX window by position
+        // Read every candidate's position ONCE, keeping the element beside it,
+        // so the decision below is made on the whole list rather than on
+        // whichever element happened to be enumerated first.
+        var candidates: [(element: AXUIElement, origin: CGPoint)] = []
         for axWindow in axWindows {
             var posRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success else { continue }
+            guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
+                  let value = posRef, CFGetTypeID(value) == AXValueGetTypeID() else { continue }
             var axPos = CGPoint.zero
-            AXValueGetValue(posRef as! AXValue, .cgPoint, &axPos)
-
-            if abs(axPos.x - window.bounds.origin.x) < 10 && abs(axPos.y - window.bounds.origin.y) < 10 {
-                AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
-                AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
-                break
-            }
+            AXValueGetValue(value as! AXValue, .cgPoint, &axPos)
+            candidates.append((axWindow, axPos))
         }
+
+        let target = window.bounds.origin
+        let origins = candidates.map(\.origin)
+        let chosen: AXUIElement
+        switch Self.matchAXWindow(targetOrigin: target, candidates: origins) {
+        case .unique(let index):
+            chosen = candidates[index].element
+            // This window resolved — if it had been failing, say it recovered,
+            // so a log that reported a miss cannot imply it is still missing.
+            if Self.axMatchGate.evaluate(window.id, cause: nil) == .reportRecovery {
+                QuipLog.write(severity: .info, subsystem: "window",
+                              message: "focusWindow: AX match recovered for window \(window.id)",
+                              to: LogPaths.webSocketPath)
+            }
+
+        case .ambiguous(let indexes):
+            // Still act, and still on the first: refusing here would break focus
+            // on every desk where the guess happens to be right, and choosing
+            // correctly needs the window id (Q-22). But this is exactly how the
+            // WRONG window gets raised, so it stops being silent.
+            Self.reportFocusMatchFailure(
+                windowId: window.id, app: window.app, target: target, candidates: origins,
+                cause: "ax-match-ambiguous(\(indexes.count))",
+                detail: "\(indexes.count) AX windows share this position — raising the first, "
+                      + "which may be the wrong window")
+            chosen = candidates[indexes[0]].element
+
+        case .none:
+            // The tap is over. Until now this returned with nothing written
+            // anywhere and nothing sent back to the phone.
+            Self.reportFocusMatchFailure(
+                windowId: window.id, app: window.app, target: target, candidates: origins,
+                cause: "ax-match-none",
+                detail: "no AX window matches the window's position, so it will NOT come "
+                      + "forward. The window most likely moved since the last 2.0s poll")
+            return
+        }
+
+        // A minimized window cannot be raised: `kAXRaiseAction` does nothing
+        // while it sits in the Dock, so a correct match still produced no
+        // visible result. Restore it first. This is the other half of reporting
+        // a minimized window honestly as "Hidden" rather than as living on
+        // another desktop — the card is now visible on the phone, so tapping it
+        // has to work.
+        AXUIElementSetAttributeValue(chosen, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        AXUIElementSetAttributeValue(chosen, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(chosen, kAXRaiseAction as CFString)
     }
 
     // MARK: - Arrange Windows
