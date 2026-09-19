@@ -116,6 +116,45 @@ Files: `QuipMac/Models/WandSort.swift` (`WandOrder`, `WandTargetKinds`,
 `WandWindowKind`), `QuipMac/Views/SettingsView.swift:891`,
 `QuipMac/Tests/WandSortTests.swift`.
 
+### Q-27 — duplicate prompts: reported, NOT reproduced, two latent paths found
+
+Owner report 2026-09-19 (dictated): *"make sure prompts aren't duplicate so
+prompts when you sync"*, confirmed as **sync creates duplicate prompts**.
+
+**Measured, and the reported path is clean.** Nothing here reproduces:
+
+- VibeCut catalog `~/Projects/vibecut/shared/prompts.json`: 54 prompts, 34
+  inheritable, **0 slug collisions**, **0 entries sharing name + body**. No
+  packs present in `~/Library/Application Support/VibeCut/packs`.
+- On-disk library `~/Library/Application Support/Quip/prompts`: 41 `.txt` =
+  **exactly 34 `vibecut__*`** (one per inheritable prompt) + 6 user prompts +
+  `README.txt`. Every title unique; no title shared between a `vibecut__` file
+  and a user file. So `replaceVibeCutSet` is not leaving orphans behind.
+- Phone: `WebSocketClient` does `promptLibrary = msg.prompts` — a wholesale
+  replace, so a re-broadcast cannot accumulate.
+
+So either the duplicates came from a state already cleaned up, or from a path
+below, or from something not yet looked at. **Get a screenshot of the actual
+duplicate pair before implementing anything.**
+
+**Latent path 1 — the mapper dedupes ids, never content.**
+`VibeCutPromptMapper.map` slugs the name, then `uniqueID` suffixes collisions
+`-2`, `-3`. Two VibeCut prompts with the SAME name and the SAME body therefore
+become two entries that are identical in every visible way and differ only by an
+id suffix. Not present in today's catalog, so this is a latent trap rather than
+the live defect — but it is the one that would look exactly like "sync
+duplicated my prompts".
+
+**Latent path 2 — pack import never overwrites, by design.**
+`applyImportedPack` calls `SharedPromptPack.uniquePromptID(desired:existing:)`
+for every prompt, so importing the same `.quippack` twice creates a suffixed
+copy of every prompt in it. Reproducible on demand. Correct as a
+never-clobber-the-user rule, but there is no "this pack is already installed"
+check and no way to replace rather than add.
+
+Decide per path: dedupe on (label, body) at map time, and/or offer
+replace-vs-add on a pack import whose ids already exist.
+
 ### Q-25 — hardware acceptance for the 2026-09-16 grid work
 
 **Blocked on the phone**, unreachable since 2026-09-13. Nothing from that
