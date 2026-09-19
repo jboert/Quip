@@ -20,9 +20,7 @@ _(none)_
 | Q-19b | Drag-to-resize smoke | Unblocked 2026-08-19 (Mac install done, pid 42368). Toggle on, drag a tile corner, Arrange, confirm the window matches the dragged rect; switch preset and confirm sizes reset. |
 | Q-16 | §58 Iteration 3 manual smoke | Unblocked 2026-08-19 (Mac install done). Close tracked iTerm windows during active polling, confirm no stale state or source churn. NOTE: the 2026-08-18 attempt proved nothing — the window opened for it never entered a tracked state, so the clean log meant nothing ran. Use a window actually running an agent CLI and confirm it is tracked first. |
 | Q-18a | §58 Iteration 1 manual smoke | Partly unblocked 2026-08-19. Runnable half: reorder in the layout preview, confirm sidebar + Arrange agree. Multi-display half stays BLOCKED — this machine has one display. |
-| Q-22a | A focus that finds nothing must say so | **Land first** — small, independent of Q-22, and nothing can be judged without it. `focusWindow`'s AX position match ends its loop silently on a miss: no log, no reply to the phone. Log the window id, the CG origin looked for, and the AX positions seen; throttle per pid like `axFocusGate`. |
 | Q-22 | Focus the window by id, not by fuzzy position | Measured: **5 matched, 6 missed of 11** live windows. Causes: 2.0s-stale `window.bounds`; two windows sharing an origin (Chrome 1710/1711 both `(692,56)`) where `break` raises whichever AX element came first; no readable AX position. **Owner decision first:** `_AXUIElementGetWindow` is private API — use it, or stay public-only with title+size+position and explicit tie-breaks. |
-| Q-23 | Raising a minimized window must unminimize it | `kAXRaiseAction` does not restore from the Dock, so a correct match still does nothing. Set `kAXMinimizedAttribute` false before raising. Other half of the 2026-09-16 visibility work — a minimized window is now visible on the phone, so tapping it has to work. |
 | Q-24 | Wand: an option that UNSELECTS simulators | Owner request 2026-09-18. Design call first: `WandTargetKinds` already governs both what the wand enables and what sorts first, untangled twice (`af86695`, `c149959`). This is an action, not a kind filter — likely `WandOrder` or a separate action, not a third bit on that field. |
 | Q-26 | `MainiOSView.body` is at the type-checker's budget | Failed once on 2026-09-16 with "unable to type-check this expression in reasonable time" on a trivial line, compiled on the retry. Not one edit — the body's size. Break it into subviews before it refuses in a session that cannot afford to bisect it. |
 
@@ -37,6 +35,8 @@ _(none)_
 
 | ID | Title | Landed |
 |----|-------|--------|
+| Q-22a | A focus that finds nothing now says so — `.none` and `.ambiguous` are logged with the wanted origin and the AX positions actually seen, throttled per window id | `a7e6125` |
+| Q-23 | A minimized window is unminimized before the raise — `kAXRaiseAction` alone never restores from the Dock | `a7e6125` |
 | Q-0a | Multi-select submits every pick instead of untoggling the last one | `2c57768` |
 | Q-0b | Trailing Return no longer answers the next prompt; window we read is the window we answer | `2dec128` |
 | Q-0c | Terminal.app reads target the requested window (its AppleScript window id IS the CGWindowID) | `b9664e4` |
