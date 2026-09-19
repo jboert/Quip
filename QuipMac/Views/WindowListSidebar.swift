@@ -220,13 +220,18 @@ struct WindowListSidebar: View {
     /// Magic-wand one-tap sort. Snapshots the current arrangement into the
     /// rotation's next order and writes it through `WindowManager.setOrder`
     /// (which the sidebar renders verbatim, so it sticks and stays
-    /// drag-tweakable afterward), then switches the configured target kinds on.
+    /// drag-tweakable afterward), then makes the configured kinds THE
+    /// selection — switching the checked kinds on and the unchecked ones off.
     ///
-    /// Targets are enabled on EVERY tap and never flipped off. The old
-    /// behaviour toggled — tap once to enable everything, tap again to disable
-    /// everything — so clicking the wand twice reliably ended with nothing
-    /// selected, which read as the button not working. Switching everything off
-    /// is still available on Option-click.
+    /// It used to only ever switch targets on. Combined with `wandTargets()`
+    /// filtering to the configured kinds, that meant an unchecked kind was not
+    /// "switch this off", it was "the wand cannot see this" — so unchecking
+    /// Simulators left every running simulator on with nothing able to clear
+    /// it, Option-click included. See `WandSort.selection(for:kinds:)`.
+    ///
+    /// This is an assignment, not the old toggle: tapping twice lands on the
+    /// same desk as tapping once, so it cannot repeat the old second-tap
+    /// behaviour of switching everything off and reading as a broken button.
     ///
     /// One-shot by design: it does NOT keep re-sorting as states change. Tap
     /// again for the next order in the rotation.
@@ -242,13 +247,16 @@ struct WindowListSidebar: View {
                          lastOutputChangeAt: outputActivity.lastOutputChangeAt[window.id])
         }
         let sorted = WandSort.order(items, mode: mode)
-        let targets = wandTargets()
+        let change = WandSort.selection(
+            for: windows.map {
+                WandSelectionItem(id: $0.id, kind: wandKind($0), isEnabled: $0.isEnabled)
+            },
+            kinds: WandTargetKinds.fromStored(wandTargetKindsRaw))
 
         withAnimation(.easeOut(duration: 0.22)) {
             windowManager.setOrder(sorted)
-            for target in targets where !target.isEnabled {
-                windowManager.toggleWindow(target.id, enabled: true)
-            }
+            for id in change.disable { windowManager.toggleWindow(id, enabled: false) }
+            for id in change.enable { windowManager.toggleWindow(id, enabled: true) }
         }
         wandSortModeIndex = WandSort.advance(index: wandSortModeIndex, rotation: wandRotation)
     }

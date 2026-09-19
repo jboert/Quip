@@ -102,6 +102,21 @@ enum WandWindowKind: Sendable, Equatable, CaseIterable {
     var isTerminal: Bool { self == .iterm2 || self == .terminalApp }
 }
 
+/// One window, reduced to what the SELECTION needs — which is less than the
+/// sort needs, because switching a window on or off does not care where it
+/// ranks.
+struct WandSelectionItem: Sendable, Equatable {
+    let id: String
+    let kind: WandWindowKind
+    let isEnabled: Bool
+
+    init(id: String, kind: WandWindowKind, isEnabled: Bool) {
+        self.id = id
+        self.kind = kind
+        self.isEnabled = isEnabled
+    }
+}
+
 /// One window, reduced to what the sort actually needs.
 ///
 /// Deliberately not `ManagedWindow`: the ordering rules are the part worth
@@ -239,4 +254,43 @@ enum WandSort {
         guard !rotation.isEmpty else { return .devFocused }
         return rotation[min(max(index, 0), rotation.count - 1) % rotation.count]
     }
+    /// Which windows the wand must switch on, and which off, so that the desk
+    /// ends up matching the configured kinds exactly.
+    ///
+    /// The wand used to only ever switch its targets ON, and `wandTargets()`
+    /// filters to the configured kinds — so an UNCHECKED kind did not mean
+    /// "switch this off", it meant "the wand cannot see this". Unchecking
+    /// Simulators therefore left every running simulator switched on with no
+    /// way to clear it: Option-click filters by the same configured kinds, so
+    /// it could not reach them either.
+    ///
+    /// Read as an assignment instead: a tap makes the checked kinds the
+    /// selection. That is idempotent, so it does NOT reintroduce the old
+    /// toggle, whose second tap switched everything off and read as a broken
+    /// button — tapping twice here lands on the same desk as tapping once.
+    ///
+    /// `other` is never touched in either direction. The setting cannot name
+    /// it, so the wand has no mandate over it: a browser the user enabled by
+    /// hand stays enabled.
+    ///
+    /// Only actual CHANGES come back, so the caller never writes a toggle for a
+    /// window already in the right state.
+    static func selection(for items: [WandSelectionItem],
+                          kinds: WandTargetKinds) -> (enable: [String], disable: [String]) {
+        var enable: [String] = []
+        var disable: [String] = []
+        for item in items {
+            let wanted: Bool
+            switch item.kind {
+            case .iterm2:      wanted = kinds.contains(.iterm2)
+            case .terminalApp: wanted = kinds.contains(.terminalApp)
+            case .simulator:   wanted = kinds.contains(.simulator)
+            case .other:       continue
+            }
+            if wanted && !item.isEnabled { enable.append(item.id) }
+            if !wanted && item.isEnabled { disable.append(item.id) }
+        }
+        return (enable, disable)
+    }
+
 }

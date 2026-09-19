@@ -398,4 +398,82 @@ final class OutputActivityTrackerTests: XCTestCase {
         XCTAssertFalse(tracker.record(windowId: "gone", content: "c",
                                       now: now.addingTimeInterval(2)))
     }
+    // MARK: - selection(for:kinds:) — the wand as an assignment, not an append
+
+    private func item(_ id: String, _ kind: WandWindowKind, enabled: Bool) -> WandSelectionItem {
+        WandSelectionItem(id: id, kind: kind, isEnabled: enabled)
+    }
+
+    /// The reported case: Simulators unchecked, yet simulator windows stay
+    /// switched on forever.
+    ///
+    /// `magicSort` only ever ENABLED its targets, and `wandTargets()` filters to
+    /// the configured kinds — so an unchecked kind was not "switch this off", it
+    /// was "the wand cannot see this at all". Option-click could not clear them
+    /// either, because it filters by the same configured kinds. Nothing in the
+    /// wand could turn a simulator off once something else had turned it on.
+    func testUncheckingSimulatorsSwitchesRunningSimulatorsOff() {
+        let result = WandSort.selection(
+            for: [item("term", .iterm2, enabled: false),
+                  item("sim", .simulator, enabled: true)],
+            kinds: [.iterm2, .terminalApp])
+        XCTAssertEqual(result.enable, ["term"])
+        XCTAssertEqual(result.disable, ["sim"])
+    }
+
+    /// A tap lands on exactly the checked kinds — so tapping again changes
+    /// nothing. This is what keeps the assignment from being the old toggle,
+    /// whose second tap ended with nothing selected and read as a dead button.
+    func testASecondTapIsANoOp() {
+        let settled = [item("term", .iterm2, enabled: true),
+                       item("sim", .simulator, enabled: false)]
+        let result = WandSort.selection(for: settled, kinds: [.iterm2])
+        XCTAssertEqual(result.enable, [])
+        XCTAssertEqual(result.disable, [])
+    }
+
+    /// `other` has no `WandTargetKinds` counterpart, so the setting can never
+    /// name it — which means the wand must never switch it off either. A
+    /// browser the user enabled by hand is not the wand's business.
+    func testWindowsTheWandCannotNameAreLeftAlone() {
+        let result = WandSort.selection(
+            for: [item("chrome", .other, enabled: true),
+                  item("finder", .other, enabled: false)],
+            kinds: [.iterm2])
+        XCTAssertEqual(result.enable, [])
+        XCTAssertEqual(result.disable, [])
+    }
+
+    /// Only actual changes are reported, so the caller does not write a
+    /// toggle — and an animation block — for a window already in the right
+    /// state.
+    func testAlreadyCorrectWindowsAreNotReported() {
+        let result = WandSort.selection(
+            for: [item("a", .iterm2, enabled: true), item("b", .simulator, enabled: false)],
+            kinds: [.iterm2])
+        XCTAssertEqual(result.enable, [])
+        XCTAssertEqual(result.disable, [])
+    }
+
+    func testEveryConfiguredKindIsSwitchedOn() {
+        let result = WandSort.selection(
+            for: [item("a", .iterm2, enabled: false),
+                  item("b", .terminalApp, enabled: false),
+                  item("c", .simulator, enabled: false)],
+            kinds: [.iterm2, .terminalApp, .simulator])
+        XCTAssertEqual(result.enable, ["a", "b", "c"])
+        XCTAssertEqual(result.disable, [])
+    }
+
+    /// An empty stored set falls back to the default rather than switching the
+    /// whole desk off — the same defence `fromStored` already applies, checked
+    /// here because under an assignment model the blast radius of getting it
+    /// wrong is now "everything turns off" rather than "nothing turns on".
+    func testACorruptEmptyKindSetDoesNotSwitchEverythingOff() {
+        let result = WandSort.selection(
+            for: [item("a", .iterm2, enabled: true), item("c", .simulator, enabled: true)],
+            kinds: WandTargetKinds.fromStored(0))
+        XCTAssertEqual(result.disable, [])
+    }
+
 }
