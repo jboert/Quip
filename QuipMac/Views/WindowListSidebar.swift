@@ -14,6 +14,11 @@ struct WindowListSidebar: View {
     /// hardcoding meant a wand tap could never select the iTerm2 windows alone.
     @AppStorage("wandTargetKinds") private var wandTargetKindsRaw: Int = WandTargetKinds.default.rawValue
     @AppStorage("wandSortModes") private var wandSortModesRaw: String = WandSortMode.stored(WandSortMode.allCases)
+    /// Skip windows that are not drawn on the desk right now — minimized to the
+    /// Dock, or sitting on another Mission Control Space. Off by default: it
+    /// changes which windows a tap switches on, and a setting that silently
+    /// narrows the wand is worse than one the user turned on themselves.
+    @AppStorage("wandOnScreenOnly") private var wandOnScreenOnly: Bool = false
     /// Where the rotation stands. Persisted so the wand does not silently
     /// restart at "Dev" on every launch while the header still reads the mode
     /// from the last session.
@@ -75,12 +80,7 @@ struct WindowListSidebar: View {
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Sort windows: \(currentWandMode.label)")
-            .help("Sort + switch on your windows — \(currentWandMode.help). "
-                  + (wandModeHasData ? ""
-                     : "No activity seen yet — only windows that are switched on are watched, "
-                       + "so this order has nothing to rank by. ")
-                  + "Click again for the next order. Option-click to switch them all off. "
-                  + "Configure in Settings → General.")
+            .help(wandHelp)
 
             Button {
                 showingAddPopover.toggle()
@@ -179,8 +179,36 @@ struct WindowListSidebar: View {
                       configured: WandTargetKinds.fromStored(wandTargetKindsRaw))
     }
 
+    /// Whether the window is composited on the desk right now. `spaceID` is
+    /// stamped on every snapshot from CoreGraphics' on-screen list, so a
+    /// minimized window reads as off screen within one poll tick. Nil means the
+    /// snapshot has not classified it yet — fail open, never hide a window on a
+    /// missing signal.
+    private func isOnScreen(_ window: ManagedWindow) -> Bool {
+        guard let spaceID = window.spaceID else { return true }
+        return spaceID == WindowManager.SpaceCatalog.currentSpaceID
+    }
+
     private func isWaitingForInput(_ window: ManagedWindow) -> Bool {
         stateDetector.windowStates[window.id] == .waitingForInput
+    }
+
+    /// The wand's tooltip, assembled as a `String` rather than inline in
+    /// `.help(...)`: a concatenation chain of this length inside the header's
+    /// view builder pushes the whole expression past what the type-checker will
+    /// solve ("unable to type-check this expression in reasonable time").
+    private var wandHelp: String {
+        var parts: [String] = ["Sort + switch on your windows — \(currentWandMode.help)."]
+        if !wandModeHasData {
+            parts.append("No activity seen yet — only windows that are switched on are "
+                         + "watched, so this order has nothing to rank by.")
+        }
+        if wandOnScreenOnly {
+            parts.append("Minimized and off-screen windows are switched off.")
+        }
+        parts.append("Click again for the next order. Option-click to switch them all off.")
+        parts.append("Configure in Settings → General.")
+        return parts.joined(separator: " ")
     }
 
     /// The rotation the wand walks, and where it currently stands.
@@ -249,9 +277,11 @@ struct WindowListSidebar: View {
         let sorted = WandSort.order(items, mode: mode)
         let change = WandSort.selection(
             for: windows.map {
-                WandSelectionItem(id: $0.id, kind: wandKind($0), isEnabled: $0.isEnabled)
+                WandSelectionItem(id: $0.id, kind: wandKind($0), isEnabled: $0.isEnabled,
+                                  isOnScreen: isOnScreen($0))
             },
-            kinds: WandTargetKinds.fromStored(wandTargetKindsRaw))
+            kinds: WandTargetKinds.fromStored(wandTargetKindsRaw),
+            onScreenOnly: wandOnScreenOnly)
 
         withAnimation(.easeOut(duration: 0.22)) {
             windowManager.setOrder(sorted)

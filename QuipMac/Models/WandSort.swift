@@ -109,11 +109,22 @@ struct WandSelectionItem: Sendable, Equatable {
     let id: String
     let kind: WandWindowKind
     let isEnabled: Bool
+    /// Whether the window is composited on the desk right now. A window the
+    /// user minimized to the Dock is NOT, and neither is one parked on another
+    /// Mission Control Space — macOS exposes no public way to tell those two
+    /// apart (see `WindowManager.SpaceCatalog`), so the wand's setting is named
+    /// for what is measured: on screen, or not.
+    ///
+    /// Defaults to `true` so a caller that does not care about the filter reads
+    /// as "everything is on screen" and behaves exactly as it did before the
+    /// filter existed.
+    let isOnScreen: Bool
 
-    init(id: String, kind: WandWindowKind, isEnabled: Bool) {
+    init(id: String, kind: WandWindowKind, isEnabled: Bool, isOnScreen: Bool = true) {
         self.id = id
         self.kind = kind
         self.isEnabled = isEnabled
+        self.isOnScreen = isOnScreen
     }
 }
 
@@ -275,18 +286,39 @@ enum WandSort {
     ///
     /// Only actual CHANGES come back, so the caller never writes a toggle for a
     /// window already in the right state.
+    /// What the wand's tap assigns: the checked kinds on, everything else it
+    /// can name off.
+    ///
+    /// `onScreenOnly` narrows "the checked kinds" to the windows drawn on the
+    /// desk right now. A minimized terminal is then not merely skipped — it is
+    /// switched OFF, the same way an unchecked kind is, because "skipped" was
+    /// the bug Q-24 fixed: a window nothing can clear stays on forever.
+    ///
+    /// One guard: if the filter leaves NO window of a checked kind on screen,
+    /// the whole selection is a no-op rather than an instruction to switch the
+    /// desk off. Minimizing your last terminal should not make the wand read as
+    /// a button that clears everything.
     static func selection(for items: [WandSelectionItem],
-                          kinds: WandTargetKinds) -> (enable: [String], disable: [String]) {
+                          kinds: WandTargetKinds,
+                          onScreenOnly: Bool = false) -> (enable: [String], disable: [String]) {
+        func isChecked(_ kind: WandWindowKind) -> Bool {
+            switch kind {
+            case .iterm2:      return kinds.contains(.iterm2)
+            case .terminalApp: return kinds.contains(.terminalApp)
+            case .simulator:   return kinds.contains(.simulator)
+            case .other:       return false
+            }
+        }
+
+        if onScreenOnly,
+           !items.contains(where: { isChecked($0.kind) && $0.isOnScreen }) {
+            return ([], [])
+        }
+
         var enable: [String] = []
         var disable: [String] = []
-        for item in items {
-            let wanted: Bool
-            switch item.kind {
-            case .iterm2:      wanted = kinds.contains(.iterm2)
-            case .terminalApp: wanted = kinds.contains(.terminalApp)
-            case .simulator:   wanted = kinds.contains(.simulator)
-            case .other:       continue
-            }
+        for item in items where item.kind != .other {
+            let wanted = isChecked(item.kind) && (!onScreenOnly || item.isOnScreen)
             if wanted && !item.isEnabled { enable.append(item.id) }
             if !wanted && item.isEnabled { disable.append(item.id) }
         }

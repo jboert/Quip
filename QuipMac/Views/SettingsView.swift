@@ -896,6 +896,7 @@ private struct WandSection: View {
     @AppStorage("wandTargetKinds") private var targetKindsRaw: Int = WandTargetKinds.default.rawValue
     @AppStorage("wandSortModes") private var sortModesRaw: String = WandSortMode.stored(WandSortMode.allCases)
     @AppStorage("wandSortModeIndex") private var sortModeIndex: Int = 0
+    @AppStorage("wandOnScreenOnly") private var onScreenOnly: Bool = false
 
     private var kinds: WandTargetKinds { WandTargetKinds.fromStored(targetKindsRaw) }
     private var rotation: [WandSortMode] { WandSortMode.rotation(fromStored: sortModesRaw) }
@@ -911,6 +912,13 @@ private struct WandSection: View {
                     kindToggle("iTerm2", .iterm2)
                     kindToggle("Terminal.app", .terminalApp)
                     kindToggle("Simulators", .simulator)
+                    Toggle("Only windows on screen", isOn: $onScreenOnly)
+                        .help("A window minimized to the Dock — or parked on another "
+                              + "Mission Control Space — is switched off instead of on. "
+                              + "macOS has no public way to tell those two apart, so both "
+                              + "count as off screen. If nothing of a checked kind is on "
+                              + "screen, the wand leaves your selection alone rather than "
+                              + "switching everything off.")
                 }
             }
 

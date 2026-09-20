@@ -455,6 +455,78 @@ final class OutputActivityTrackerTests: XCTestCase {
         XCTAssertEqual(result.disable, [])
     }
 
+    // MARK: - selection(onScreenOnly:) — skip what is minimized or off screen
+
+    private func item(_ id: String, _ kind: WandWindowKind,
+                      enabled: Bool, onScreen: Bool) -> WandSelectionItem {
+        WandSelectionItem(id: id, kind: kind, isEnabled: enabled, isOnScreen: onScreen)
+    }
+
+    /// The ask: a terminal minimized to the Dock should not come back on when
+    /// the wand fires. It is switched OFF, not merely skipped — skipping is
+    /// what left unchecked kinds stuck on forever (see the Simulators case
+    /// above).
+    func testMinimizedWindowsAreSwitchedOffWhenTheFilterIsOn() {
+        let result = WandSort.selection(
+            for: [item("visible", .iterm2, enabled: false, onScreen: true),
+                  item("minimized", .iterm2, enabled: true, onScreen: false)],
+            kinds: [.iterm2],
+            onScreenOnly: true)
+        XCTAssertEqual(result.enable, ["visible"])
+        XCTAssertEqual(result.disable, ["minimized"])
+    }
+
+    /// The filter is opt-in. With it off, where a window is drawn changes
+    /// nothing — the checked kinds all come on, minimized or not.
+    func testOffScreenWindowsStillComeOnWhenTheFilterIsOff() {
+        let result = WandSort.selection(
+            for: [item("visible", .iterm2, enabled: false, onScreen: true),
+                  item("minimized", .iterm2, enabled: false, onScreen: false)],
+            kinds: [.iterm2],
+            onScreenOnly: false)
+        XCTAssertEqual(result.enable, ["visible", "minimized"])
+        XCTAssertEqual(result.disable, [])
+    }
+
+    /// Minimize your last terminal and the wand must not read as a button that
+    /// clears the desk: with nothing of a checked kind on screen the whole
+    /// selection is a no-op.
+    func testNothingOnScreenLeavesTheSelectionAlone() {
+        let result = WandSort.selection(
+            for: [item("a", .iterm2, enabled: true, onScreen: false),
+                  item("b", .simulator, enabled: true, onScreen: false)],
+            kinds: [.iterm2],
+            onScreenOnly: true)
+        XCTAssertEqual(result.enable, [])
+        XCTAssertEqual(result.disable, [])
+    }
+
+    /// The no-op guard asks about CHECKED kinds only. An on-screen simulator
+    /// with Simulators unchecked is not a reason to keep a minimized iTerm2
+    /// window on.
+    func testAnOnScreenUncheckedKindDoesNotSatisfyTheGuard() {
+        let result = WandSort.selection(
+            for: [item("term", .iterm2, enabled: true, onScreen: false),
+                  item("sim", .simulator, enabled: true, onScreen: true)],
+            kinds: [.iterm2],
+            onScreenOnly: true)
+        XCTAssertEqual(result.enable, [])
+        XCTAssertEqual(result.disable, [])
+    }
+
+    /// `other` stays none of the wand's business under the filter too — a
+    /// browser the user enabled by hand is not switched off for being
+    /// minimized.
+    func testOtherWindowsAreLeftAloneUnderTheFilter() {
+        let result = WandSort.selection(
+            for: [item("term", .iterm2, enabled: false, onScreen: true),
+                  item("chrome", .other, enabled: true, onScreen: false)],
+            kinds: [.iterm2],
+            onScreenOnly: true)
+        XCTAssertEqual(result.enable, ["term"])
+        XCTAssertEqual(result.disable, [])
+    }
+
     func testEveryConfiguredKindIsSwitchedOn() {
         let result = WandSort.selection(
             for: [item("a", .iterm2, enabled: false),
