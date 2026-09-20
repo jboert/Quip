@@ -1562,7 +1562,17 @@ struct MainiOSView: View {
     @State private var showQAPicker: Bool = false
     @State private var qaPickerSourceWindow: String? = nil
 
+    // `body` used to be one ~535-line chained expression and once failed
+    // with "unable to type-check this expression in reasonable time" on an
+    // unrelated one-line edit (Q-26). It is now split into stages, each of
+    // which type-checks on its own. Modifier order is unchanged: the stages
+    // apply them in exactly the sequence the single chain did.
     var body: some View {
+        contentWithSheets
+    }
+
+    /// The view tree itself — QA pair layout, or status bar + content + controls.
+    private var rootLayers: some View {
         ZStack {
             colors.background
                 .ignoresSafeArea()
@@ -1643,78 +1653,13 @@ struct MainiOSView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .overlay {
-            if isRecording {
-                // Full-screen tap-to-stop layer (landscape) or dimmed backdrop (portrait)
-                Color.black.opacity(isPortrait ? 0.4 : 0.25)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(!isPortrait)
-                    .onTapGesture { if !isPortrait { onStopRecording() } }
+    }
 
-                VStack(spacing: 12) {
-                    Spacer()
-
-                    // Live transcription display
-                    if !speech.transcribedText.isEmpty {
-                        Text(speech.transcribedText)
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 16)
-                            .frame(maxWidth: .infinity)
-                            .background(.black.opacity(0.55))
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
-                            )
-                            .padding(.horizontal, 24)
-                            .transition(.opacity)
-                    }
-
-                    if !isPortrait {
-                        // Recording indicator pill (landscape only)
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(.red)
-                                .frame(width: 10, height: 10)
-                                .opacity(0.9)
-                            Text(speech.transcribedText.isEmpty ? "Listening — tap to stop" : "Tap to send")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.9))
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(.red.opacity(0.35))
-                        .clipShape(Capsule())
-                        .padding(.bottom, 20)
-                    } else {
-                        // Leave space for portrait controls below
-                        Spacer().frame(height: 120)
-                    }
-                }
-                .allowsHitTesting(!isPortrait)
-            }
-        }
-        .overlay {
-            if speech.isSpeaking {
-                TTSNotificationOverlay(
-                    currentSpeakingWindowId: speech.currentSpeakingWindowId,
-                    windows: windows,
-                    ttsTexts: ttsOverlayTexts,
-                    onTap: { windowId in
-                        onRequestContent(windowId)
-                    },
-                    onSwipeDismiss: { speech.stopSpeaking() }
-                )
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 500)
-                .padding(.horizontal, 24)
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.25), value: speech.isSpeaking)
-            }
-        }
+    /// Recording backdrop, TTS banner, volume-button sink and the error toast.
+    private var contentWithOverlays: some View {
+        rootLayers
+        .overlay { recordingOverlay }
+        .overlay { speakingOverlay }
         .allowsHitTesting(true)
         .overlay { HiddenVolumeView().frame(width: 1, height: 1) }
         .overlay(alignment: .top) {
@@ -1732,6 +1677,87 @@ struct MainiOSView: View {
             }
         }
         .environment(\.quipColors, colors)
+    }
+
+    @ViewBuilder
+    private var recordingOverlay: some View {
+        if isRecording {
+            // Full-screen tap-to-stop layer (landscape) or dimmed backdrop (portrait)
+            Color.black.opacity(isPortrait ? 0.4 : 0.25)
+                .ignoresSafeArea()
+                .allowsHitTesting(!isPortrait)
+                .onTapGesture { if !isPortrait { onStopRecording() } }
+
+            VStack(spacing: 12) {
+                Spacer()
+
+                // Live transcription display
+                if !speech.transcribedText.isEmpty {
+                    Text(speech.transcribedText)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 16)
+                        .frame(maxWidth: .infinity)
+                        .background(.black.opacity(0.55))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+                        )
+                        .padding(.horizontal, 24)
+                        .transition(.opacity)
+                }
+
+                if !isPortrait {
+                    // Recording indicator pill (landscape only)
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 10, height: 10)
+                            .opacity(0.9)
+                        Text(speech.transcribedText.isEmpty ? "Listening — tap to stop" : "Tap to send")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.red.opacity(0.35))
+                    .clipShape(Capsule())
+                    .padding(.bottom, 20)
+                } else {
+                    // Leave space for portrait controls below
+                    Spacer().frame(height: 120)
+                }
+            }
+            .allowsHitTesting(!isPortrait)
+        }
+    }
+
+    @ViewBuilder
+    private var speakingOverlay: some View {
+        if speech.isSpeaking {
+            TTSNotificationOverlay(
+                currentSpeakingWindowId: speech.currentSpeakingWindowId,
+                windows: windows,
+                ttsTexts: ttsOverlayTexts,
+                onTap: { windowId in
+                    onRequestContent(windowId)
+                },
+                onSwipeDismiss: { speech.stopSpeaking() }
+            )
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 500)
+            .padding(.horizontal, 24)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.25), value: speech.isSpeaking)
+        }
+    }
+
+    /// Lifecycle wiring — onAppear / onChange / onReceive.
+    private var contentWithLifecycle: some View {
+        contentWithOverlays
         .onAppear {
             updateOrientation()
             // One-shot first-launch seed for the slot row + custom-button
@@ -1887,6 +1913,11 @@ struct MainiOSView: View {
             // Auto-fetch terminal output for the inline view in portrait.
             if isPortrait, newId != nil { requestActiveContent() }
         }
+    }
+
+    /// Sheets, covers, confirmation dialogs and alerts.
+    private var contentWithSheets: some View {
+        contentWithLifecycle
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { code in
                 showQRScanner = false
