@@ -34,7 +34,7 @@ _(none)_
 
 | ID | Title | Landed |
 |----|-------|--------|
-| Q-26 | `MainiOSView.body` split into stages — `rootLayers` / `contentWithOverlays` / `contentWithLifecycle` / `contentWithSheets` plus the two big overlay closures, each type-checking on its own. Modifier order unchanged | `PENDING` |
+| Q-26 | `MainiOSView.body` split into stages — `rootLayers` / `contentWithOverlays` / `contentWithLifecycle` / `contentWithSheets` plus the two big overlay closures, each type-checking on its own. Modifier order unchanged | `e05b066` |
 | Q-24 | Wand: unchecking a kind switches it OFF instead of hiding it from the wand — the checked set is now the selection, idempotent | `7c8921f` |
 | Q-22a | A focus that finds nothing now says so — `.none` and `.ambiguous` are logged with the wanted origin and the AX positions actually seen, throttled per window id | `a7e6125` |
 | Q-23 | A minimized window is unminimized before the raise — `kAXRaiseAction` alone never restores from the Dock | `a7e6125` |
