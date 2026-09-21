@@ -39,6 +39,33 @@ final class MirrorDesktopFilterTests: XCTestCase {
     private let terminal = "com.apple.Terminal"
     private let browser = "com.apple.Safari"
 
+    // MARK: - Which owners are tracked at all
+
+    /// An XPC service's window (the text-cursor service, the AutoFill sheet,
+    /// the open/save panel service) blinks in and out of the CG snapshot. It
+    /// cannot be activated and cannot be pointed at, and tracking it is what
+    /// made the window list read as fickle: measured on a live desk, every
+    /// list transition over 45s belonged to one of these.
+    func testProhibitedOwnersAreNotTracked() {
+        XCTAssertFalse(WindowManager.isTrackableOwner(activationPolicy: .prohibited))
+    }
+
+    /// A menu-bar-only app is still something the user can dictate into, so
+    /// `.accessory` is NOT the same as "background service".
+    func testAccessoryOwnersStayTracked() {
+        XCTAssertTrue(WindowManager.isTrackableOwner(activationPolicy: .accessory))
+    }
+
+    func testRegularOwnersStayTracked() {
+        XCTAssertTrue(WindowManager.isTrackableOwner(activationPolicy: .regular))
+    }
+
+    /// Unclassifiable fails OPEN — a window whose owner `NSRunningApplication`
+    /// cannot see is still a window, and dropping it would be a silent loss.
+    func testUnknownOwnersStayTracked() {
+        XCTAssertTrue(WindowManager.isTrackableOwner(activationPolicy: nil))
+    }
+
     func testMirrorOffShowsOnlyEnabledWindows() {
         let all = [
             mw(id: "a", bundleId: iterm2, enabled: true),

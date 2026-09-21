@@ -415,6 +415,15 @@ final class WindowManager {
             if bounds.width < 50 || bounds.height < 50 { continue }
 
             let runningApp = NSRunningApplication(processIdentifier: pid)
+            // XPC services and background helpers own layer-0 windows that
+            // blink in and out of the snapshot — the text-cursor service, the
+            // AutoFill sheet, the open/save panel service. Measured on a live
+            // desk: 79 windows, 23 of them owned by `.prohibited` processes,
+            // and EVERY list transition over 45s was one of those (seven
+            // distinct CursorUIViewService windows, ten transitions). They are
+            // what makes the list read as fickle. `.accessory` apps stay —
+            // Stream Deck and HazeOver are things the user can point at.
+            guard Self.isTrackableOwner(activationPolicy: runningApp?.activationPolicy) else { continue }
             let bundleId = runningApp?.bundleIdentifier ?? "unknown.\(pid)"
             let windowId = "\(bundleId).\(windowNumber)"
 
@@ -424,6 +433,21 @@ final class WindowManager {
                                         spaceID: spaces.id(for: windowNumber)))
         }
         return result
+    }
+
+    /// Whether a window's owning process is one the user can meaningfully
+    /// point at.
+    ///
+    /// `.prohibited` means the process has no Dock presence and cannot be
+    /// activated — an XPC service or a background agent. Its windows are
+    /// transient by design, so tracking them makes the list churn without ever
+    /// offering anything to select. `.regular` and `.accessory` both stay: a
+    /// menu-bar-only app (Stream Deck, HazeOver) is still a real target.
+    ///
+    /// A nil policy (the pid is gone, or `NSRunningApplication` cannot see it)
+    /// fails OPEN — a window we cannot classify is still a window.
+    nonisolated static func isTrackableOwner(activationPolicy: NSApplication.ActivationPolicy?) -> Bool {
+        activationPolicy != .prohibited
     }
 
     /// Apply pre-fetched window data on main. Merges with existing state, resolves icons.
