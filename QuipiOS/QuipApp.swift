@@ -336,7 +336,8 @@ struct QuipApp: App {
                 displays = s.displays
                 spanAspect = s.spanAspect
                 spaces = s.spaces
-                selectedSpaceID = s.spaces.first(where: { $0.isCurrent })?.id
+                selectedSpaceID = SpaceActivity.selectionSurvivingUpdate(selectedSpaceID,
+                                                                         incoming: s.spaces)
                 selectedDisplayID = s.selectedDisplayID
                 ContentMapMutations.pruneToWindowIDs(
                     Set(s.windows.map(\.id)),
@@ -591,9 +592,8 @@ struct QuipApp: App {
                 if let span = update.spanAspect, span > 0 { spanAspect = span }
                 if let incomingSpaces = update.spaces {
                     spaces = incomingSpaces
-                    if selectedSpaceID == nil {
-                        selectedSpaceID = incomingSpaces.first(where: { $0.isCurrent })?.id
-                    }
+                    selectedSpaceID = SpaceActivity.selectionSurvivingUpdate(selectedSpaceID,
+                                                                             incoming: incomingSpaces)
                 }
                 // The manager already dropped a filter pointing at an
                 // unplugged monitor; mirror its verdict so the chips and the

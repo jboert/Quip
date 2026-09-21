@@ -216,6 +216,24 @@ enum SpaceActivity {
         return selected
     }
 
+    /// The selection to carry into a NEW snapshot: the pick itself when the
+    /// incoming buckets still offer it, otherwise nil ("All Windows").
+    ///
+    /// Never invents a selection. The phone used to default to the bucket
+    /// marked `isCurrent`, which was right while the buckets were Mission
+    /// Control Spaces — "show me the desk I am sitting at". The buckets now
+    /// mean on-screen vs hidden (`WindowManager.SpaceCatalog`), so that same
+    /// default hides every minimized window by default, and re-applying it on
+    /// each update made "All Windows" impossible to hold: the pick reverted
+    /// within one broadcast. A filter the user did not ask for is a filter
+    /// they cannot turn off.
+    static func selectionSurvivingUpdate(_ selected: String?,
+                                         incoming: [SpaceState]) -> String? {
+        guard let selected, incoming.contains(where: { $0.id == selected })
+        else { return nil }
+        return selected
+    }
+
     /// The label the COLLAPSED visibility chip carries: the pinned bucket's
     /// name, or `allTitle` when the filter is off.
     ///

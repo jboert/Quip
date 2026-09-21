@@ -1262,6 +1262,37 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertNil(SpaceActivity.resolvedSelection(nil, activeSpaces: active))
     }
 
+    // MARK: - SpaceActivity: a selection surviving a new snapshot
+
+    /// "All Windows" has to STICK. The phone used to re-arm the filter to the
+    /// current bucket on every layout update that carried spaces, so choosing
+    /// All Windows reverted to On Screen within one broadcast and the filter
+    /// could not be turned off at all.
+    func testAllWindowsSurvivesAnUpdate() {
+        let incoming = [space("space-current", current: true), space("space-other")]
+        XCTAssertNil(SpaceActivity.selectionSurvivingUpdate(nil, incoming: incoming))
+    }
+
+    /// A new snapshot must never invent a filter the user did not ask for,
+    /// even when it names a current bucket.
+    func testAnUpdateNeverInventsASelection() {
+        let incoming = [space("space-current", current: true)]
+        XCTAssertNil(SpaceActivity.selectionSurvivingUpdate(nil, incoming: incoming))
+    }
+
+    func testAPickSurvivesAnUpdateThatStillOffersIt() {
+        let incoming = [space("space-current", current: true), space("space-other")]
+        XCTAssertEqual(SpaceActivity.selectionSurvivingUpdate("space-other", incoming: incoming),
+                       "space-other")
+    }
+
+    /// The bucket emptied out, so the pick has nowhere to point — fall back to
+    /// All Windows rather than stranding the grid on a filter with no chip.
+    func testAPickVanishesWhenItsBucketIsGone() {
+        let incoming = [space("space-current", current: true)]
+        XCTAssertNil(SpaceActivity.selectionSurvivingUpdate("space-other", incoming: incoming))
+    }
+
     // MARK: - SpaceActivity: the collapsed chip
 
     /// Collapsed, the chip is the row's ONLY evidence of what the grid is
