@@ -180,6 +180,39 @@ final class WindowManager {
     }
     static let manualOrderKey = "windowOrderIsManual"
 
+    /// Windows the user pinned to the top of the list. Survives every re-sort
+    /// — screen order, a drag, a wand tap — because a pin answers "keep this
+    /// where I can see it", not "put the list in this order".
+    ///
+    /// Persisted. The ids carry a CoreGraphics window number, so a pin follows
+    /// the window it was made on and does NOT transfer to a window reopened in
+    /// its place; that is the honest behaviour, since nothing in the id says
+    /// the new window is the same work.
+    private(set) var pinnedWindowIDs: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: WindowManager.pinnedKey) ?? []
+    )
+    static let pinnedKey = "pinnedWindowIDs"
+
+    func togglePin(_ id: String) {
+        if pinnedWindowIDs.contains(id) { pinnedWindowIDs.remove(id) } else { pinnedWindowIDs.insert(id) }
+        UserDefaults.standard.set(Array(pinnedWindowIDs), forKey: Self.pinnedKey)
+        applyPinsToCurrentOrder()
+    }
+
+    func isPinned(_ id: String) -> Bool { pinnedWindowIDs.contains(id) }
+
+    /// Re-float the pins over whatever order the list is in now. Called on a
+    /// pin change so the row moves under the click, and after every snapshot so
+    /// a re-sort cannot bury a pinned window.
+    private func applyPinsToCurrentOrder() {
+        let order = WindowPinOrder.apply(windows.map(\.id), pinned: pinnedWindowIDs)
+        var byID: [String: ManagedWindow] = [:]
+        byID.reserveCapacity(windows.count)
+        for window in windows { byID[window.id] = window }
+        windows = order.compactMap { byID[$0] }
+        customOrder = order
+    }
+
     /// Reading-order rank: terminals first, then anything else the phone can
     /// target (simulators), then the rest. Mirrors the sidebar's row grouping.
     nonisolated static func screenOrderTier(_ window: ManagedWindow) -> Int {
@@ -603,6 +636,7 @@ final class WindowManager {
             windows = order.compactMap { byID[$0] }
             customOrder = order
         }
+        applyPinsToCurrentOrder()
     }
 
     /// Convenience: fetch + apply in one call (runs CG query on main — use the
@@ -643,6 +677,7 @@ final class WindowManager {
         byID.reserveCapacity(windows.count)
         for window in windows { byID[window.id] = window }
         windows = next.compactMap { byID[$0] }
+        applyPinsToCurrentOrder()
     }
 
     /// Hand the order back to the desk: forget the user's placement and
@@ -656,6 +691,7 @@ final class WindowManager {
         for window in windows { byID[window.id] = window }
         windows = order.compactMap { byID[$0] }
         customOrder = order
+        applyPinsToCurrentOrder()
     }
 
     /// Move one window to sit where another currently sits, preserving the rest

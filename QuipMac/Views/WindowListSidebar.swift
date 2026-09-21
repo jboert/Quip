@@ -329,7 +329,9 @@ struct WindowListSidebar: View {
                         windowManager.toggleWindow(row.window.id, enabled: enabled)
                     },
                     onMoveUp: moveAction(for: row.window.id, neighborID: row.previousSameRankID),
-                    onMoveDown: moveAction(for: row.window.id, neighborID: row.nextSameRankID)
+                    onMoveDown: moveAction(for: row.window.id, neighborID: row.nextSameRankID),
+                    isPinned: windowManager.isPinned(row.window.id),
+                    onTogglePin: { windowManager.togglePin(row.window.id) }
                 )
                 .tag(row.window.id)
             }
@@ -535,6 +537,10 @@ private struct WindowRow: View {
     let onToggle: (Bool) -> Void
     var onMoveUp: (() -> Void)?
     var onMoveDown: (() -> Void)?
+    /// Pinned windows sit at the top of the list and stay there through every
+    /// re-sort. Defaults keep previews and any other caller compiling.
+    var isPinned: Bool = false
+    var onTogglePin: (() -> Void)? = nil
 
     @State private var isHovering = false
 
@@ -557,6 +563,21 @@ private struct WindowRow: View {
                 EmptyView()
             }
             .toggleStyle(.checkbox)
+            // The pin itself is the affordance: filled when pinned, and shown
+            // on hover otherwise so an unpinned row costs no permanent ink in
+            // a list this dense.
+            if isPinned || isHovering, let onTogglePin {
+                Button(action: onTogglePin) {
+                    Image(systemName: isPinned ? "pin.fill" : "pin")
+                        .font(.caption)
+                        .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(isPinned ? "Unpin window" : "Pin window to top")
+                .help(isPinned
+                      ? "Pinned to the top. Unpin to let it sort with the rest."
+                      : "Pin to the top — it stays there through a re-sort, a drag or a wand tap.")
+            }
 
             Text(slot.map { "\($0)." } ?? "–")
                 .font(.caption.monospacedDigit())
