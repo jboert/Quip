@@ -104,11 +104,17 @@ Response to `request_content`. Contains the last ~200 lines of terminal output, 
   "windowId": "Terminal.12345",
   "content": "$ ls -la\ntotal 48\n...",
   "screenshot": "iVBORw0KGgoAAAANSUhEUgAA...",
-  "urls": ["https://example.com/foo"]
+  "urls": ["https://example.com/foo"],
+  "hasAutosuggest": true,
+  "autosuggest": { "typed": "git ch", "suggestion": "eckout main" }
 }
 ```
 
 `screenshot` is `null` when capture is unavailable (e.g., Screen Recording permission not granted). `urls` is optional for backward compat with pre-tray Mac builds; modern Mac builds send an explicit empty list when the current scrape has no URLs so clients can clear stale tray pills.
+
+`autosuggest` carries the terminal's inline suggestion — the greyed ghost text zsh-autosuggestions, fish and the agent CLIs render after the cursor — split into what is already on the input line (`typed`) and the ghost run itself (`suggestion`). Absent when no suggestion is showing. Both halves come out of the redacted scrape and are capped at 512 characters each (`AutosuggestLimits.maxCharacters`).
+
+`hasAutosuggest` is the older boolean form of the same fact and stays on the wire beside it. A client must read the two as a union: a Mac that predates `autosuggest` sends the flag alone (the accept button works, there is nothing to render), and a client that predates the flag would otherwise ignore a suggestion it was sent. Accepting is unchanged — `quick_action` with `press_right` — but a client that has the text can also echo `typed + suggestion` back into its own input field, so it knows what it just typed on the Mac.
 
 ### output_delta
 

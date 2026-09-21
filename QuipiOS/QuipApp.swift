@@ -75,7 +75,7 @@ enum ContentMapMutations {
         _ screenshotMap: inout [String: String],
         _ urlsMap: inout [String: [String]],
         _ updatedAtMap: inout [String: Date],
-        _ autosuggestMap: inout [String: Bool]
+        _ autosuggestMap: inout [String: TerminalAutosuggest]
     ) {
         textMap.keys.filter { !activeIDs.contains($0) }.forEach { textMap.removeValue(forKey: $0) }
         screenshotMap.keys.filter { !activeIDs.contains($0) }.forEach { screenshotMap.removeValue(forKey: $0) }
@@ -148,10 +148,13 @@ struct QuipApp: App {
     @State private var terminalContentScreenshotById: [String: String] = [:]
     @State private var terminalContentURLsById: [String: [String]] = [:]
     @State private var terminalContentUpdatedAtById: [String: Date] = [:]
-    /// Per-window inline-autosuggestion flag from the Mac's terminal_content
-    /// broadcast (AutosuggestDetector). Gates the accept-autocomplete button.
-    /// Missing key = false (older Mac builds never send the field).
-    @State private var terminalContentHasAutosuggestById: [String: Bool] = [:]
+    /// Per-window inline autosuggestion from the Mac's terminal_content
+    /// broadcast (AutosuggestDetector) — the typed prefix and the ghost run.
+    /// Gates the accept-autocomplete button AND is what the input row renders.
+    /// Missing key = no suggestion (older Mac builds never send the field, and
+    /// their flag-only broadcasts leave the button working with nothing to
+    /// draw).
+    @State private var terminalAutosuggestById: [String: TerminalAutosuggest] = [:]
     @State private var showPINEntry = false
     @State private var pinText = ""
     @State private var projectDirectories: [String] = []
@@ -235,7 +238,7 @@ struct QuipApp: App {
                 terminalContentScreenshotById: $terminalContentScreenshotById,
                 terminalContentURLsById: $terminalContentURLsById,
                 terminalContentUpdatedAtById: $terminalContentUpdatedAtById,
-                terminalContentHasAutosuggestById: $terminalContentHasAutosuggestById,
+                terminalAutosuggestById: $terminalAutosuggestById,
                 showPINEntry: $showPINEntry,
                 pinText: $pinText,
                 projectDirectories: projectDirectories,
@@ -341,7 +344,7 @@ struct QuipApp: App {
                     &terminalContentScreenshotById,
                     &terminalContentURLsById,
                     &terminalContentUpdatedAtById,
-                    &terminalContentHasAutosuggestById
+                    &terminalAutosuggestById
                 )
                 terminalContentText = s.terminalContentText
                 terminalContentScreenshot = s.terminalContentScreenshot
@@ -580,7 +583,7 @@ struct QuipApp: App {
                     &terminalContentScreenshotById,
                     &terminalContentURLsById,
                     &terminalContentUpdatedAtById,
-                    &terminalContentHasAutosuggestById
+                    &terminalAutosuggestById
                 )
                 monitorName = update.monitor
                 if let a = update.screenAspect, a > 0 { screenAspect = a }
@@ -774,7 +777,7 @@ struct QuipApp: App {
             }
         }
 
-        manager.onTerminalContent = { session, windowId, content, screenshot, urls, hasAutosuggest in
+        manager.onTerminalContent = { session, windowId, content, screenshot, urls, autosuggest in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 let receivedAt = Date()
@@ -782,7 +785,7 @@ struct QuipApp: App {
                 terminalContentText = content
                 terminalContentUpdatedAt = receivedAt
                 terminalContentUpdatedAtById[windowId] = receivedAt
-                terminalContentHasAutosuggestById[windowId] = hasAutosuggest
+                terminalAutosuggestById[windowId] = autosuggest
                 if let screenshot, !screenshot.isEmpty {
                     terminalContentScreenshot = screenshot
                 }
@@ -1352,7 +1355,7 @@ struct MainiOSView: View {
     @Binding var terminalContentScreenshotById: [String: String]
     @Binding var terminalContentURLsById: [String: [String]]
     @Binding var terminalContentUpdatedAtById: [String: Date]
-    @Binding var terminalContentHasAutosuggestById: [String: Bool]
+    @Binding var terminalAutosuggestById: [String: TerminalAutosuggest]
     @Binding var showPINEntry: Bool
     @Binding var pinText: String
     var projectDirectories: [String]
@@ -1561,6 +1564,14 @@ struct MainiOSView: View {
     // long-pressed window's id (one half); the sheet picks the OTHER half.
     @State private var showQAPicker: Bool = false
     @State private var qaPickerSourceWindow: String? = nil
+
+    /// What the phone typed on the Mac by accepting an autosuggestion, and the
+    /// window it typed it on. While the compose field still matches `text`, the
+    /// Mac's input line holds exactly this, so Send means "press Return" — see
+    /// `InputLineSend`. Cleared on send, on edit (which also wipes the Mac's
+    /// line), and on switching windows, because an echo is only true of the
+    /// window it came from.
+    @State private var lineEcho: (windowId: String, text: String)? = nil
 
     // `body` used to be one ~535-line chained expression and once failed
     // with "unable to type-check this expression in reasonable time" on an
@@ -1910,6 +1921,13 @@ struct MainiOSView: View {
             terminalContentScreenshot = nil
             terminalContentURLs = nil
             terminalContentWindowId = newId
+            // An echo is only true of the window it was typed on. Drop it AND
+            // the field it is mirroring, so the next window's Send never
+            // submits a line that belongs to the last one.
+            if lineEcho != nil {
+                if textInputValue == lineEcho?.text { textInputValue = "" }
+                lineEcho = nil
+            }
             // Auto-fetch terminal output for the inline view in portrait.
             if isPortrait, newId != nil { requestActiveContent() }
         }
@@ -3253,42 +3271,142 @@ struct MainiOSView: View {
 
     // MARK: - Text Input Bar
 
-    private var textInputBar: some View {
-        HStack(spacing: 6) {
-            TextField("Type a prompt\u{2026}", text: $textInputValue)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(colors.textPrimary)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(colors.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .onSubmit { sendTextInput() }
+    /// The suggestion the Mac reports for the selected window, if any.
+    private var activeAutosuggest: TerminalAutosuggest? {
+        guard let wid = selectedWindowId else { return nil }
+        return terminalAutosuggestById[wid]
+    }
 
-            Button { sendTextInput() } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(canSubmitInput ? colors.buttonPrimary : colors.buttonDisabled)
+    /// The echo, but only while it is still about the selected window.
+    private var activeLineEcho: String? {
+        guard let echo = lineEcho, echo.windowId == selectedWindowId else { return nil }
+        return echo.text
+    }
+
+    /// Accept the shown suggestion: Right-arrow on the Mac commits the ghost
+    /// text, and the phone mirrors the resulting line into its own field so the
+    /// user can see what they just typed on a machine they are not looking at.
+    private func acceptAutosuggest() {
+        guard let wid = selectedWindowId, let suggestion = activeAutosuggest else { return }
+        client.send(QuickActionMessage(windowId: wid, action: "press_right"))
+        let line = suggestion.accepted
+        textInputValue = line
+        lineEcho = (windowId: wid, text: line)
+        // Re-scrape so the ghost row clears once the Mac has taken the
+        // keystroke — same 300ms the quick-action path already uses.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [client] in
+            client.send(RequestContentMessage(windowId: wid))
+        }
+    }
+
+    /// The user typed over text that is already on the Mac's input line. Wipe
+    /// the line now, at edit time, so what they eventually send is the whole
+    /// line and not a second copy appended to the first.
+    private func reconcileEcho(_ newValue: String) {
+        guard InputLineSend.shouldClearMacLine(fieldText: newValue, lineEcho: activeLineEcho),
+              let wid = lineEcho?.windowId
+        else { return }
+        client.send(QuickActionMessage(windowId: wid, action: "clear_input"))
+        lineEcho = nil
+    }
+
+    /// The suggestion row above the field: the line the agent is completing,
+    /// then its ghost text. Tapping anywhere on it accepts. Hidden once the
+    /// user starts composing — their own text is the thing being sent then,
+    /// and the suggestion completes the Mac's line, not the phone's.
+    @ViewBuilder
+    private var autosuggestRow: some View {
+        if let suggestion = activeAutosuggest, textInputValue.isEmpty, lineEcho == nil {
+            Button { acceptAutosuggest() } label: {
+                HStack(spacing: 0) {
+                    Text(suggestion.typed)
+                        .foregroundStyle(colors.textSecondary)
+                    Text(suggestion.suggestion)
+                        .foregroundStyle(colors.textSecondary.opacity(0.55))
+                    Spacer(minLength: 6)
+                    Image(systemName: "text.append")
+                        .font(.system(size: 12))
+                        .foregroundStyle(colors.textSecondary)
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(colors.surface.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            .disabled(!canSubmitInput)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Accept suggestion: \(suggestion.suggestion)")
+            .accessibilityHint("Types the greyed suggestion on the Mac")
+        }
+    }
+
+    private var textInputBar: some View {
+        VStack(spacing: 3) {
+            autosuggestRow
+            HStack(spacing: 6) {
+                TextField("Type a prompt\u{2026}", text: $textInputValue)
+                    .font(.system(size: 12, design: .monospaced))
+                    // While the field mirrors the Mac's input line it is not a
+                    // draft, it is a readout — dimmed so the two never look
+                    // like the same thing.
+                    .foregroundStyle(isEchoingMacLine ? colors.textSecondary : colors.textPrimary)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .onChange(of: textInputValue) { _, newValue in reconcileEcho(newValue) }
+                    .onSubmit { sendTextInput() }
+
+                Button { sendTextInput() } label: {
+                    // Return, not up-arrow, while the text is already on the
+                    // Mac's line: the button submits what is there rather than
+                    // typing anything.
+                    Image(systemName: isEchoingMacLine
+                          ? "return.circle.fill" : "arrow.up.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(canSubmitInput ? colors.buttonPrimary : colors.buttonDisabled)
+                }
+                .disabled(!canSubmitInput)
+                .accessibilityLabel(isEchoingMacLine ? "Submit the line on the Mac" : "Send")
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .background(colors.background)
     }
 
+    /// True while the compose field is a readout of the Mac's input line rather
+    /// than a draft — i.e. an accepted suggestion that has not been edited.
+    private var isEchoingMacLine: Bool {
+        InputLineSend.plan(fieldText: textInputValue, lineEcho: activeLineEcho) == .returnOnly
+    }
+
     private func sendTextInput() {
-        let text = textInputValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let windowId = selectedWindowId else { return }
-        // An image-only submit is valid — only bail if both text AND image are empty.
-        guard !text.isEmpty || pendingImage.hasPendingImage else { return }
+        // `nil` plan = nothing typed. An image-only submit is still valid, so
+        // only bail when there is no image either.
+        let plan = InputLineSend.plan(fieldText: textInputValue, lineEcho: activeLineEcho)
+        guard plan != nil || pendingImage.hasPendingImage else { return }
         textInputValue = ""
+        lineEcho = nil
         // Ship the image first; only fire the text send AFTER the image has
         // actually been dispatched so the Mac processes them in order.
         sendPendingImageIfNeeded(windowId: windowId) { [client] in
-            if !text.isEmpty {
+            switch plan {
+            case .none:
+                break
+            case .typeAndReturn(let text):
                 client.send(SendTextMessage(windowId: windowId, text: text, pressReturn: true))
+            case .returnOnly:
+                // The Mac already has this text on its input line (the phone put
+                // it there by accepting a suggestion). Typing it again would
+                // double it, so submit what is there.
+                client.send(QuickActionMessage(windowId: windowId, action: "press_return"))
             }
         }
     }
@@ -3298,7 +3416,7 @@ struct MainiOSView: View {
     /// both the up-arrow's `.disabled` check and `submitOrPressReturn()`'s
     /// branch read the same condition.
     private var canSubmitInput: Bool {
-        !textInputValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        InputLineSend.plan(fieldText: textInputValue, lineEcho: activeLineEcho) != nil
             || pendingImage.hasPendingImage
     }
 
@@ -3647,12 +3765,11 @@ struct MainiOSView: View {
         let text = terminalContentTextById[wid] ?? terminalContentText ?? ""
         let screenshot = terminalContentScreenshotById[wid] ?? terminalContentScreenshot
         let urls = terminalContentURLsById[wid] ?? terminalContentURLs ?? []
-        let hasAutosuggest = terminalContentHasAutosuggestById[wid] ?? false
         return InlineTerminalContent(
             content: text,
             screenshot: screenshot,
             urls: urls,
-            hasAutosuggest: hasAutosuggest,
+            autosuggest: activeAutosuggest,
             windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
             windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
             isExpanded: $isTerminalExpanded,
@@ -3660,6 +3777,13 @@ struct MainiOSView: View {
                 if let wid = selectedWindowId { onRequestContent(wid) }
             },
             onSendAction: { action, fingerprint in
+                // The header's accept-autocomplete button and the suggestion
+                // row are the same act — route both through `acceptAutosuggest`
+                // so either one leaves the phone knowing what it just typed.
+                if action == "press_right", activeAutosuggest != nil {
+                    acceptAutosuggest()
+                    return
+                }
                 if let wid = selectedWindowId {
                     client.send(QuickActionMessage(windowId: wid, action: action, promptFingerprint: fingerprint))
                     // 300ms is enough for the keystroke to reach iTerm and
@@ -5820,11 +5944,12 @@ struct InlineTerminalContent: View {
     /// Screenshot mode (the typical case) renders URLs as pixels with no tap
     /// routing, so this tray is how they become interactive.
     let urls: [String]
-    /// True when the Mac detected an inline autosuggestion (ghost text) on
-    /// this window's input line. Gates the accept-autocomplete button
-    /// (US-003); defaults false so callers without live state (QA pair
+    /// The inline autosuggestion (ghost text) the Mac read off this window's
+    /// input line, or nil when none is showing. Gates the accept-autocomplete
+    /// button (US-003); defaults nil so callers without live state (QA pair
     /// layout, previews) keep compiling and the button stays inert.
-    var hasAutosuggest: Bool = false
+    var autosuggest: TerminalAutosuggest? = nil
+    private var hasAutosuggest: Bool { autosuggest != nil }
     let windowName: String
     let windowColor: Color
     @Binding var isExpanded: Bool

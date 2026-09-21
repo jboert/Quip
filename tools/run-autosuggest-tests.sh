@@ -77,6 +77,21 @@ expect(AutosuggestDetector.suggestionText(in: "you typed \u{1B}[2mghost\u{1B}[0m
 expect(AutosuggestDetector.suggestionText(in: "you typed \u{1B}[2mghost\u{1B}[0m\n"),
        "ghost", "trailing newline ignored")
 
+// The phone needs BOTH halves: the line it is completing, and the ghost run.
+// `suggestionText` is the second half of `inputLine`, so the two can never
+// disagree about where the split is.
+let line = AutosuggestDetector.inputLine(in: ghost)
+expect(line?.typed, "you typed ", "inputLine typed half")
+expect(line?.suggestion, "ghost text", "inputLine suggestion half")
+expect(AutosuggestDetector.inputLine(in: plain)?.suggestion, nil,
+       "inputLine nil when no suggestion")
+expect(AutosuggestDetector.inputLine(in: fullyDim)?.suggestion, nil,
+       "inputLine nil for a fully-dim hint line")
+// Padding spaces are stripped from the END of the line, not from the typed
+// half — accepting has to reproduce the line exactly.
+expect(AutosuggestDetector.inputLine(in: "git ch\u{1B}[90meckout main\u{1B}[0m").map { $0.typed + $0.suggestion },
+       "git checkout main", "typed + suggestion reconstructs the line")
+
 // US-004 — inject-time guard consults the same detection.
 expect(AutosuggestDetector.shouldAccept(liveContent: ghost), true,
        "shouldAccept true for ghost-text sample")

@@ -542,6 +542,32 @@ struct RequestContentMessage: Codable, Sendable {
     }
 }
 
+/// The terminal's input line while an inline suggestion is showing: what is
+/// already committed to the line, and the greyed ghost run trailing it.
+///
+/// Shipped whole rather than as a bare flag so the phone can RENDER the
+/// suggestion instead of only knowing one exists, and so an accept can echo
+/// the resulting line back into the compose field — the phone otherwise has
+/// no way to know what its own tap just typed on the Mac.
+///
+/// Both halves come out of the REDACTED scrape, so `SecretRedactor` has
+/// already run on them, and both are capped at
+/// `AutosuggestLimits.maxCharacters` — a suggestion is one input line, and an
+/// unbounded field on a 500ms broadcast is a size hazard the 16 MiB cap should
+/// never have to catch.
+struct TerminalAutosuggest: Codable, Sendable, Equatable {
+    let typed: String
+    let suggestion: String
+
+    init(typed: String, suggestion: String) {
+        self.typed = String(typed.prefix(AutosuggestLimits.maxCharacters))
+        self.suggestion = String(suggestion.prefix(AutosuggestLimits.maxCharacters))
+    }
+
+    /// The line as it reads once the suggestion is accepted.
+    var accepted: String { typed + suggestion }
+}
+
 struct TerminalContentMessage: Codable, Sendable {
     let type: String
     let windowId: String
@@ -559,15 +585,22 @@ struct TerminalContentMessage: Codable, Sendable {
     /// Decodes as false when absent so pre-autosuggest Mac builds keep
     /// working (additive-field pattern).
     let hasAutosuggest: Bool
+    /// The suggestion itself, when there is one. `hasAutosuggest` stays on the
+    /// wire beside it: a phone build that predates this field still gets its
+    /// button gate, and a Mac build that predates it sends the flag alone, so
+    /// the phone falls back to the flag-only behaviour (button works, nothing
+    /// to render).
+    let autosuggest: TerminalAutosuggest?
 
     init(windowId: String, content: String, screenshot: String? = nil, urls: [String]? = nil,
-         hasAutosuggest: Bool = false) {
+         autosuggest: TerminalAutosuggest? = nil) {
         self.type = "terminal_content"
         self.windowId = windowId
         self.content = content
         self.screenshot = screenshot
         self.urls = urls
-        self.hasAutosuggest = hasAutosuggest
+        self.autosuggest = autosuggest
+        self.hasAutosuggest = autosuggest != nil
     }
 
     init(from decoder: Decoder) throws {
@@ -577,11 +610,16 @@ struct TerminalContentMessage: Codable, Sendable {
         content = try c.decode(String.self, forKey: .content)
         screenshot = try? c.decode(String.self, forKey: .screenshot)
         urls = try? c.decode([String].self, forKey: .urls)
-        hasAutosuggest = (try? c.decode(Bool.self, forKey: .hasAutosuggest)) ?? false
+        autosuggest = try? c.decode(TerminalAutosuggest.self, forKey: .autosuggest)
+        // A Mac that sends the suggestion but an older flag, or the flag alone,
+        // both have to read as "there is a suggestion" — the button gate is the
+        // union, never the newer field alone.
+        hasAutosuggest = ((try? c.decode(Bool.self, forKey: .hasAutosuggest)) ?? false)
+            || autosuggest != nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, windowId, content, screenshot, urls, hasAutosuggest
+        case type, windowId, content, screenshot, urls, hasAutosuggest, autosuggest
     }
 }
 

@@ -232,7 +232,7 @@ final class WebSocketClient {
     /// (project, taskId, title, ts). The host renders a card/toast. (US-004.)
     var onSwrmStoryStarted: ((SwrmStoryStartedMessage) -> Void)?
     var onStateChange: ((String, String) -> Void)?
-    var onTerminalContent: ((String, String, String?, [String]?, Bool) -> Void)?  // (windowId, content, screenshot, urls, hasAutosuggest)
+    var onTerminalContent: ((String, String, String?, [String]?, TerminalAutosuggest?) -> Void)?  // (windowId, content, screenshot, urls, autosuggest)
     var onOutputDelta: ((String, String, String, Bool) -> Void)?  // (windowId, windowName, text, isFinal)
     // (windowId, windowName, sessionId, sequence, isFinal, wavData)
     var onTTSAudio: ((String, String, String, Int, Bool, Data) -> Void)?
@@ -1227,7 +1227,7 @@ final class WebSocketClient {
         case "terminal_content":
             guard isAuthenticated else { return }
             if let msg = Self.decodeMessage(TerminalContentMessage.self, from: data, msgType: peek.type) {
-                onTerminalContent?(msg.windowId, msg.content, msg.screenshot, msg.urls, msg.hasAutosuggest)
+                onTerminalContent?(msg.windowId, msg.content, msg.screenshot, msg.urls, msg.autosuggest)
             }
         case "output_delta":
             guard isAuthenticated else { return }

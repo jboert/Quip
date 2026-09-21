@@ -746,11 +746,45 @@ final class MessageProtocolTests: XCTestCase {
         let original = TerminalContentMessage(
             windowId: "w1",
             content: "$ git ch\u{1B}[2meckout main\u{1B}[0m",
-            hasAutosuggest: true
+            autosuggest: TerminalAutosuggest(typed: "$ git ch", suggestion: "eckout main")
         )
         let data = try XCTUnwrap(MessageCoder.encode(original))
         let restored = try XCTUnwrap(MessageCoder.decode(TerminalContentMessage.self, from: data))
         XCTAssertTrue(restored.hasAutosuggest)
+        XCTAssertEqual(restored.autosuggest?.typed, "$ git ch")
+        XCTAssertEqual(restored.autosuggest?.suggestion, "eckout main")
+        XCTAssertEqual(restored.autosuggest?.accepted, "$ git checkout main")
+    }
+
+    /// A Mac old enough to send the flag but not the text: the button must
+    /// still gate on, with nothing to render.
+    func testTerminalContentMessageFlagWithoutTextStillReadsAsSuggestion() throws {
+        let json = """
+        {"type":"terminal_content","windowId":"w1","content":"$ ls","hasAutosuggest":true}
+        """.data(using: .utf8)!
+        let msg = try XCTUnwrap(MessageCoder.decode(TerminalContentMessage.self, from: json))
+        XCTAssertTrue(msg.hasAutosuggest)
+        XCTAssertNil(msg.autosuggest)
+    }
+
+    /// And the reverse: a peer that reads the text but whose flag went missing
+    /// must not conclude there is no suggestion.
+    func testTerminalContentMessageTextWithoutFlagStillReadsAsSuggestion() throws {
+        let json = """
+        {"type":"terminal_content","windowId":"w1","content":"$ ls","autosuggest":{"typed":"$ l","suggestion":"s -la"}}
+        """.data(using: .utf8)!
+        let msg = try XCTUnwrap(MessageCoder.decode(TerminalContentMessage.self, from: json))
+        XCTAssertTrue(msg.hasAutosuggest)
+        XCTAssertEqual(msg.autosuggest?.accepted, "$ ls -la")
+    }
+
+    /// The cap is enforced in the initializer, so no caller can put an
+    /// unbounded scrape on a broadcast that fires every 500ms per window.
+    func testTerminalAutosuggestTruncatesEachHalf() {
+        let long = String(repeating: "x", count: AutosuggestLimits.maxCharacters + 50)
+        let suggestion = TerminalAutosuggest(typed: long, suggestion: long)
+        XCTAssertEqual(suggestion.typed.count, AutosuggestLimits.maxCharacters)
+        XCTAssertEqual(suggestion.suggestion.count, AutosuggestLimits.maxCharacters)
     }
 
     // MARK: - Cross-platform JSON key compatibility

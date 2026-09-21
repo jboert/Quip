@@ -20,6 +20,19 @@ enum AutosuggestDetector {
     /// The ANSI-stripped text of the inline suggestion on the last non-empty
     /// line of `content`, or nil when nothing is showing.
     static func suggestionText(in content: String) -> String? {
+        inputLine(in: content)?.suggestion
+    }
+
+    /// Both halves of the input line when a suggestion is showing: what the
+    /// user (or the agent) has already committed to the line, and the ghost
+    /// run trailing it.
+    ///
+    /// `suggestionText(in:)` answers half of this and is kept because the
+    /// Mac's inject-time guard only cares about that half. The phone needs
+    /// both: it renders `typed` as the line it is completing and `suggestion`
+    /// as the ghost, and after an accept it echoes `typed + suggestion` back
+    /// as "this is what is on the line now".
+    static func inputLine(in content: String) -> (typed: String, suggestion: String)? {
         guard !content.isEmpty else { return nil }
 
         // Only the LAST non-empty line can carry the input-line suggestion;
@@ -49,7 +62,9 @@ enum AutosuggestDetector {
               chars[..<start].contains(where: { !$0.suggestionStyled && !$0.char.isWhitespace })
         else { return nil }
 
-        return String(chars[start...].map(\.char))
+        let typed = String(chars[..<start].map(\.char))
+        let suggestion = String(chars[start...].map(\.char))
+        return (typed: typed, suggestion: suggestion)
     }
 
     /// True when `suggestionText(in:)` finds a suggestion.

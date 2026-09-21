@@ -2048,12 +2048,19 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         // respected — we never ship a URL we also redacted
                         // from the visible content.
                         let urls = TerminalURLExtractor.extract(from: redacted)
-                        // Ghost-text flag for the phone's accept-autocomplete
-                        // button — computed on the same scrape the phone
-                        // renders, so button state matches what's on screen.
-                        let hasAutosuggest = isTerminal && AutosuggestDetector.hasSuggestion(in: redacted)
+                        // Ghost text for the phone — computed on the same
+                        // scrape the phone renders, so what it draws and what
+                        // its accept button does both match what is on screen.
+                        // Shipped whole (typed prefix + suggestion) rather than
+                        // as a flag: the phone renders it inline and echoes the
+                        // accepted line back into its compose field.
+                        let autosuggest = isTerminal
+                            ? AutosuggestDetector.inputLine(in: redacted).map {
+                                TerminalAutosuggest(typed: $0.typed, suggestion: $0.suggestion)
+                              }
+                            : nil
                         DispatchQueue.main.async {
-                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot, urls: urls, hasAutosuggest: hasAutosuggest))
+                            webSocketServer.broadcast(TerminalContentMessage(windowId: wid, content: redacted, screenshot: screenshot, urls: urls, autosuggest: autosuggest))
                         }
                     }
                 }
