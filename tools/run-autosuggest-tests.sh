@@ -92,6 +92,33 @@ expect(AutosuggestDetector.inputLine(in: fullyDim)?.suggestion, nil,
 expect(AutosuggestDetector.inputLine(in: "git ch\u{1B}[90meckout main\u{1B}[0m").map { $0.typed + $0.suggestion },
        "git checkout main", "typed + suggestion reconstructs the line")
 
+// Claude Code's recall ghost: prompt marker AND text all dim, cursor at the
+// start. The prefix rule alone called this a hint line and no accept button
+// ever lit — the case in IMG_6997.
+let recall = "some output\n\u{1B}[2m\u{203A} relaunched it, test the pin on the phone\u{1B}[0m"
+expect(AutosuggestDetector.suggestionText(in: recall), "relaunched it, test the pin on the phone",
+       "fully-dim line behind a prompt marker => suggestion")
+expect(AutosuggestDetector.inputLine(in: recall)?.typed, "\u{203A} ",
+       "marker is the typed half")
+expect(AutosuggestDetector.shouldAccept(liveContent: recall), true,
+       "recall ghost is acceptable")
+
+// The same shape with the other markers shells and composers draw.
+for marker in [">", "\u{276F}", "$", "%"] {
+    let line = "out\n\u{1B}[2m\(marker) do the thing\u{1B}[0m"
+    expect(AutosuggestDetector.suggestionText(in: line), "do the thing",
+           "marker \(marker) => suggestion")
+}
+
+// A dim line with NO marker is still a hint, not a suggestion — this is the
+// rule that keeps "? for shortcuts" from lighting the button.
+expect(AutosuggestDetector.suggestionText(in: "out\n\u{1B}[2m? for shortcuts\u{1B}[0m"),
+       nil, "marker-less dim line stays a hint")
+
+// A marker with nothing after it is an empty composer, not a suggestion.
+expect(AutosuggestDetector.suggestionText(in: "out\n\u{1B}[2m\u{203A}   \u{1B}[0m"),
+       nil, "bare marker => nil")
+
 // US-004 — inject-time guard consults the same detection.
 expect(AutosuggestDetector.shouldAccept(liveContent: ghost), true,
        "shouldAccept true for ghost-text sample")
