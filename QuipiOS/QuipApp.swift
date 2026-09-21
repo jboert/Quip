@@ -3288,7 +3288,16 @@ struct MainiOSView: View {
     /// user can see what they just typed on a machine they are not looking at.
     private func acceptAutosuggest() {
         guard let wid = selectedWindowId, let suggestion = activeAutosuggest else { return }
-        client.send(QuickActionMessage(windowId: wid, action: "press_right"))
+        // `send` returns false when there is no socket. Ignoring it is how an
+        // accept became a tap that did nothing, with no trace on either peer:
+        // the suggestion maps outlive a disconnect, so the row was still there
+        // to tap long after the Mac could hear about it.
+        guard client.send(QuickActionMessage(windowId: wid, action: "press_right")) else {
+            print("[Quip] accept autosuggest DROPPED — no socket (window=\(wid))")
+            errorToast = "Not connected — the Mac never got that"
+            return
+        }
+        print("[Quip] accept autosuggest sent press_right (window=\(wid))")
         let line = suggestion.accepted
         textInputValue = line
         lineEcho = (windowId: wid, text: line)
@@ -3316,7 +3325,11 @@ struct MainiOSView: View {
     /// and the suggestion completes the Mac's line, not the phone's.
     @ViewBuilder
     private var autosuggestRow: some View {
-        if let suggestion = activeAutosuggest, textInputValue.isEmpty, lineEcho == nil {
+        // Gated on the live connection, not just on having a suggestion: the
+        // per-window maps survive a disconnect, and a row that offers an action
+        // the phone cannot perform is worse than no row.
+        if let suggestion = activeAutosuggest, client.isAuthenticated,
+           textInputValue.isEmpty, lineEcho == nil {
             Button { acceptAutosuggest() } label: {
                 HStack(spacing: 0) {
                     Text(suggestion.typed)

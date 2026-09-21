@@ -3412,10 +3412,18 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     }
                     return
                 }
+                // Only the DROP was recorded, so a press_right that reached
+                // the Mac and injected left no trace anywhere — which made
+                // "the button does nothing" impossible to split into "never
+                // arrived", "arrived and was dropped" and "arrived, injected,
+                // and the app ignored the key".
+                KokoroTTSDebug.log("press_right accepted for \(wid): injecting right-arrow")
                 DispatchQueue.main.async {
                     let fire: () -> Void = {
                         Task { @MainActor in
-                            await keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                            let result = await keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                            KokoroTTSDebug.log("press_right injected for \(wid): success=\(result.success ? 1 : 0)"
+                                               + (result.error.map { " error=\($0)" } ?? ""))
                         }
                     }
                     if injectionDelay == 0 { fire() }
