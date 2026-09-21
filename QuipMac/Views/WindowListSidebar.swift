@@ -642,5 +642,13 @@ private struct WindowRow: View {
         .onHover { hovering in
             isHovering = hovering
         }
+        // The hover glyph is the fast path, not the only one: a control that
+        // only exists while the pointer is over the row reads as absent to
+        // anyone who has not already found it.
+        .contextMenu {
+            if let onTogglePin {
+                Button(isPinned ? "Unpin from top" : "Pin to top", action: onTogglePin)
+            }
+        }
     }
 }
