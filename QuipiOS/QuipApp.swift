@@ -4909,6 +4909,14 @@ struct MainiOSView: View {
             client.send(CloseWindowMessage(windowId: windowId))
             return
         }
+        if action == .togglePin {
+            // Ask for the opposite of what the last broadcast said. The Mac
+            // answers with a fresh layout, so the card moves when the Mac has
+            // actually written the pin, never before.
+            let pinned = windows.first(where: { $0.id == windowId })?.isPinned ?? false
+            client.send(SetPinMessage(windowId: windowId, pinned: !pinned))
+            return
+        }
         let str: String
         switch action {
         case .pressReturn: str = "press_return"
@@ -4919,6 +4927,7 @@ struct MainiOSView: View {
         case .viewOutput: return // handled above
         case .duplicate: return  // handled above
         case .closeWindow: return // handled above
+        case .togglePin: return   // handled above
         case .pairForQA:
             qaPickerSourceWindow = windowId
             showQAPicker = true

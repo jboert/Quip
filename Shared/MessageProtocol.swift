@@ -112,6 +112,11 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     let displayID: String?
     /// Desktop Space containing the window, when macOS exposes that metadata.
     let spaceID: String?
+    /// Pinned to the top of the list. The Mac owns the pin set and has already
+    /// floated pinned windows to the front of `windows`, so a client that
+    /// ignores this field still gets the right ORDER — the flag is what lets it
+    /// draw the pin and offer to toggle it. Optional: older Mac builds omit it.
+    let isPinned: Bool
 
     // Synthesized Equatable compares ALL fields including frame
 
@@ -119,7 +124,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
          claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil,
-         displayID: String? = nil, spaceID: String? = nil) {
+         displayID: String? = nil, spaceID: String? = nil, isPinned: Bool = false) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
@@ -129,6 +134,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         self.targetKind = targetKind
         self.displayID = displayID
         self.spaceID = spaceID
+        self.isPinned = isPinned
     }
 
     init(from decoder: Decoder) throws {
@@ -147,11 +153,29 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         targetKind = try? c.decode(String.self, forKey: .targetKind)
         displayID = try? c.decode(String.self, forKey: .displayID)
         spaceID = try? c.decode(String.self, forKey: .spaceID)
+        isPinned = (try? c.decode(Bool.self, forKey: .isPinned)) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind, targetKind
-        case displayID, spaceID
+        case displayID, spaceID, isPinned
+    }
+}
+
+/// Phone → Mac: pin or unpin a window.
+///
+/// The Mac owns the pin set — it is what orders the list both peers see, so a
+/// phone-local pin would mean the two disagree about where a window sits. The
+/// phone asks; the Mac writes and re-broadcasts the order it produced.
+struct SetPinMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+    let pinned: Bool
+
+    init(windowId: String, pinned: Bool) {
+        self.type = "set_pin"
+        self.windowId = windowId
+        self.pinned = pinned
     }
 }
 

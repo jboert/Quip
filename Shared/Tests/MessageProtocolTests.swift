@@ -787,6 +787,48 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(suggestion.suggestion.count, AutosuggestLimits.maxCharacters)
     }
 
+    // MARK: - Pinning
+
+    /// The Mac owns the pin set and has already floated pinned windows to the
+    /// front, so the flag is what lets a client DRAW the pin — order does not
+    /// depend on it.
+    func testWindowStatePinnedRoundTrips() throws {
+        let original = WindowState(id: "w1", name: "zsh", app: "iTerm2", enabled: true,
+                                   frame: WindowFrame(x: 0, y: 0, width: 1, height: 1),
+                                   state: "neutral", color: "#4A90E2", isPinned: true)
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        let restored = try XCTUnwrap(MessageCoder.decode(WindowState.self, from: data))
+        XCTAssertTrue(restored.isPinned)
+    }
+
+    /// A Mac that predates pinning omits the field; every window reads unpinned
+    /// rather than failing to decode.
+    func testWindowStatePinnedDefaultsFalseWhenAbsent() throws {
+        let json = """
+        {"id":"w1","name":"zsh","app":"iTerm2","enabled":true,"state":"neutral","color":"#4A90E2",
+         "frame":{"x":0,"y":0,"width":1,"height":1}}
+        """.data(using: .utf8)!
+        let restored = try XCTUnwrap(MessageCoder.decode(WindowState.self, from: json))
+        XCTAssertFalse(restored.isPinned)
+    }
+
+    func testSetPinMessageRoundTrips() throws {
+        let data = try XCTUnwrap(MessageCoder.encode(SetPinMessage(windowId: "w1", pinned: true)))
+        let restored = try XCTUnwrap(MessageCoder.decode(SetPinMessage.self, from: data))
+        XCTAssertEqual(restored.type, "set_pin")
+        XCTAssertEqual(restored.windowId, "w1")
+        XCTAssertTrue(restored.pinned)
+    }
+
+    /// Unpin is a distinct instruction, not the absence of one — the phone
+    /// sends the state it wants, so a stale broadcast cannot turn an unpin into
+    /// a no-op.
+    func testSetPinMessageCarriesUnpin() throws {
+        let data = try XCTUnwrap(MessageCoder.encode(SetPinMessage(windowId: "w1", pinned: false)))
+        let restored = try XCTUnwrap(MessageCoder.decode(SetPinMessage.self, from: data))
+        XCTAssertFalse(restored.pinned)
+    }
+
     // MARK: - Cross-platform JSON key compatibility
 
     func testSortedKeysEncoding() throws {

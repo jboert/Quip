@@ -497,6 +497,18 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // rate limit) and undo that deliberate suppression.
             guard let type = MessageCoder.messageType(from: data) else { return }
             switch type {
+            // Phone asked to pin or unpin. The Mac owns the pin set — it is
+            // what orders the list both peers see — so the phone asks and the
+            // next broadcast carries the order this produced.
+            case "set_pin":
+                if let msg = MessageCoder.decode(SetPinMessage.self, from: data) {
+                    DispatchQueue.main.async {
+                        if self.windowManager.isPinned(msg.windowId) != msg.pinned {
+                            self.windowManager.togglePin(msg.windowId)
+                        }
+                        self.broadcastLayout()
+                    }
+                }
             case "set_qa_pair":
                 if let msg = MessageCoder.decode(SetQAPairMessage.self, from: data) {
                     DispatchQueue.main.async {
@@ -1423,7 +1435,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 screenBounds: bounds,
                 isThinking: thinkingWindows.contains(window.id),
                 claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue,
-                cliKind: terminalStateDetector.windowCLIKind[window.id]
+                cliKind: terminalStateDetector.windowCLIKind[window.id],
+                isPinned: windowManager.isPinned(window.id)
             )
         }
     }

@@ -116,6 +116,26 @@ Response to `request_content`. Contains the last ~200 lines of terminal output, 
 
 `hasAutosuggest` is the older boolean form of the same fact and stays on the wire beside it. A client must read the two as a union: a Mac that predates `autosuggest` sends the flag alone (the accept button works, there is nothing to render), and a client that predates the flag would otherwise ignore a suggestion it was sent. Accepting is unchanged — `quick_action` with `press_right` — but a client that has the text can also echo `typed + suggestion` back into its own input field, so it knows what it just typed on the Mac.
 
+### set_pin
+
+Phone → Mac. Pins or unpins a window.
+
+```json
+{
+  "type": "set_pin",
+  "windowId": "com.googlecode.iterm2.1234",
+  "pinned": true
+}
+```
+
+The Mac owns the pin set: it is what orders the window list both peers see, so
+a phone-local pin would mean the two disagree about where a window sits. The
+phone sends the state it wants — `pinned: false` is an explicit unpin, not the
+absence of an instruction — and the Mac answers with a fresh `layout_update`
+carrying the order it produced. Pinned windows are already floated to the front
+of `windows`, so a client that ignores `WindowState.isPinned` still renders the
+right order; the flag is what lets it draw the pin and offer to toggle it.
+
 ### output_delta
 
 Streaming chunk of new terminal output for a window — used to drive the in-app terminal mirror without polling. Each delta carries a contiguous slice of new text. `isFinal: true` marks the end of a coalescing batch.

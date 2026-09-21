@@ -122,6 +122,18 @@ struct WindowRectangle: View {
 
                 Spacer(minLength: 0)
 
+                // Pinned is a state the card has to show, or the only way to
+                // know is to open the menu. Rides the existing top row rather
+                // than adding height.
+                if window.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(windowColor.opacity(0.9))
+                        .rotationEffect(.degrees(45))
+                        .fixedSize()
+                        .accessibilityLabel("Pinned")
+                }
+
                 if window.isThinking && window.enabled {
                     Text("✽")
                         .font(.system(size: 20, weight: .bold))
@@ -185,6 +197,13 @@ struct WindowRectangle: View {
                 triggerAction(.restartClaude)
             } label: {
                 Label("Restart Claude", systemImage: "arrow.clockwise")
+            }
+
+            Button {
+                triggerAction(.togglePin)
+            } label: {
+                Label(window.isPinned ? "Unpin from top" : "Pin to top",
+                      systemImage: window.isPinned ? "pin.slash" : "pin")
             }
 
             if window.isTarget || window.isTerminal {
@@ -277,6 +296,9 @@ enum WindowAction {
     case duplicate
     case closeWindow
     case pairForQA
+    /// Pin or unpin. The Mac owns the pin set and re-broadcasts the order it
+    /// produced, so the phone sends intent rather than reordering locally.
+    case togglePin
 }
 
 #Preview {
