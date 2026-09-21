@@ -166,6 +166,56 @@ final class WindowManager {
     /// Custom ordering of window IDs — preserved across refreshes
     var customOrder: [String] = []
 
+    /// Whether the user has placed the windows themselves — a sidebar or
+    /// preview drag, a chevron, or a wand tap. Until they do, the list is kept
+    /// in screen order (`WindowScreenOrder`) and re-sorts as windows move, so
+    /// the sidebar reads like the desk looks. The moment they choose an order,
+    /// that order is theirs and nothing re-sorts under them.
+    ///
+    /// Persisted: a pinned order that silently unpinned itself on relaunch
+    /// would be the same surprise in the other direction.
+    var usesManualOrder: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.manualOrderKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.manualOrderKey) }
+    }
+    static let manualOrderKey = "windowOrderIsManual"
+
+    /// Reading-order rank: terminals first, then anything else the phone can
+    /// target (simulators), then the rest. Mirrors the sidebar's row grouping.
+    nonisolated static func screenOrderTier(_ window: ManagedWindow) -> Int {
+        if window.isTerminal { return 0 }
+        if window.isTarget { return 1 }
+        return 2
+    }
+
+    /// The snapshot in reading order. Pure input for `WindowScreenOrder`: every
+    /// window is placed by its own bounds and by the origin of the display it
+    /// sits on, so windows group by monitor before they order within one.
+    nonisolated static func screenOrder(_ windows: [ManagedWindow],
+                                        displays: [(id: String, isPrimary: Bool, rect: DisplayRect)]) -> [String] {
+        var originByDisplay: [String: (x: Double, y: Double)] = [:]
+        for display in displays {
+            originByDisplay[display.id] = (x: Double(display.rect.x), y: Double(display.rect.y))
+        }
+        let items = windows.map { window -> WindowScreenOrder.Item in
+            // A window whose display is unknown (first tick, or a centre in the
+            // gap between mismatched monitors) is placed by its own origin
+            // rather than dropped.
+            let origin = window.displayID.flatMap { originByDisplay[$0] }
+                ?? (x: Double(window.bounds.origin.x), y: Double(window.bounds.origin.y))
+            return WindowScreenOrder.Item(
+                id: window.id,
+                tier: screenOrderTier(window),
+                displayX: origin.x,
+                displayY: origin.y,
+                x: Double(window.bounds.origin.x),
+                y: Double(window.bounds.origin.y),
+                height: Double(window.bounds.height)
+            )
+        }
+        return WindowScreenOrder.order(items)
+    }
+
     /// iTerm2 session UUIDs the user explicitly attached from the phone's
     /// "scan existing sessions" flow. Persisted to UserDefaults so the
     /// attachment survives Quip restarts. On every snapshot apply, any
@@ -525,7 +575,7 @@ final class WindowManager {
             }
         }
 
-        if !customOrder.isEmpty {
+        if usesManualOrder, !customOrder.isEmpty {
             var ordered: [ManagedWindow] = []
             for id in customOrder {
                 if let w = refreshed.first(where: { $0.id == id }) { ordered.append(w) }
@@ -538,8 +588,20 @@ final class WindowManager {
             customOrder.removeAll { !activeIds.contains($0) }
             windows = ordered
         } else {
-            windows = refreshed
-            customOrder = refreshed.map(\.id)
+            // A pinned order that did not survive the relaunch is not a pin:
+            // `customOrder` lives in memory only, so a stale flag would show
+            // the "reset" button with nothing to reset.
+            if usesManualOrder { usesManualOrder = false }
+            // Nobody has placed these windows, so the desk decides: terminals
+            // first, then by display, then top row before bottom, left to
+            // right. Re-derived on every snapshot, so moving a window on screen
+            // moves its row in the list.
+            let order = Self.screenOrder(refreshed, displays: cgDisplayRects())
+            var byID: [String: ManagedWindow] = [:]
+            byID.reserveCapacity(refreshed.count)
+            for window in refreshed { byID[window.id] = window }
+            windows = order.compactMap { byID[$0] }
+            customOrder = order
         }
     }
 
@@ -564,6 +626,10 @@ final class WindowManager {
     /// windows the caller didn't mention keep their existing relative position
     /// at the end, so no window can fall out of the list by being forgotten.
     func setOrder(_ ids: [String]) {
+        // Every placement path funnels here (drag, chevron, wand), so this is
+        // the one place that has to record "the user chose this" and stop the
+        // screen-order re-sort from overwriting it on the next snapshot.
+        usesManualOrder = true
         let known = Set(windows.map(\.id))
         var next = ids.filter { known.contains($0) }
         var seen = Set(next)
@@ -577,6 +643,19 @@ final class WindowManager {
         byID.reserveCapacity(windows.count)
         for window in windows { byID[window.id] = window }
         windows = next.compactMap { byID[$0] }
+    }
+
+    /// Hand the order back to the desk: forget the user's placement and
+    /// re-sort now, rather than waiting for the next snapshot tick so the list
+    /// visibly answers the click.
+    func resetToScreenOrder() {
+        usesManualOrder = false
+        let order = Self.screenOrder(windows, displays: cgDisplayRects())
+        var byID: [String: ManagedWindow] = [:]
+        byID.reserveCapacity(windows.count)
+        for window in windows { byID[window.id] = window }
+        windows = order.compactMap { byID[$0] }
+        customOrder = order
     }
 
     /// Move one window to sit where another currently sits, preserving the rest

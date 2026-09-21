@@ -82,6 +82,22 @@ struct WindowListSidebar: View {
             .accessibilityLabel("Sort windows: \(currentWandMode.label)")
             .help(wandHelp)
 
+            // Only while an order is pinned: with the list already in screen
+            // order there is nothing to reset, and a permanently-inert button
+            // is noise in a header this small.
+            if windowManager.usesManualOrder {
+                Button { windowManager.resetToScreenOrder() } label: {
+                    Image(systemName: "arrow.up.arrow.down.circle")
+                        .font(.title3)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Reset to screen order")
+                .help("Your order is pinned — a drag, a chevron or the wand set it. "
+                      + "Reset to list the windows the way they sit on screen: "
+                      + "terminals first, then by display, top row before bottom, "
+                      + "left to right.")
+            }
+
             Button {
                 showingAddPopover.toggle()
             } label: {
