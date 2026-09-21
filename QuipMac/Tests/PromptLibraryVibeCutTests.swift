@@ -115,7 +115,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
             PromptEntry(id: "vibecut__alpha", label: "Alpha", body: "a body", tags: ["vibecut", "x"]),
             PromptEntry(id: "vibecut__beta", label: "Beta", body: "b body", tags: ["vibecut"]),
         ]
-        let written = lib.replaceVibeCutSet(entries)
+        let written = try! lib.replaceVibeCutSet(entries)
 
         XCTAssertEqual(written, 2)
         // User + README untouched.
@@ -135,7 +135,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
 
     func testMetaTagRoundTripsThroughRenderAndParse() {
         let lib = PromptLibrary()
-        lib.replaceVibeCutSet([
+        try! lib.replaceVibeCutSet([
             PromptEntry(id: "vibecut__commit", label: "Commit", body: "Write a commit.",
                         tags: ["vibecut", "git"]),
         ])
@@ -147,12 +147,12 @@ final class PromptLibraryVibeCutTests: XCTestCase {
 
     func testResyncReplacesPriorSetCleanly() {
         let lib = PromptLibrary()
-        lib.replaceVibeCutSet([
+        try! lib.replaceVibeCutSet([
             PromptEntry(id: "vibecut__a", label: "A", body: "1", tags: ["vibecut"]),
             PromptEntry(id: "vibecut__b", label: "B", body: "2", tags: ["vibecut"]),
         ])
         // Second sync drops "b", adds "c".
-        let written = lib.replaceVibeCutSet([
+        let written = try! lib.replaceVibeCutSet([
             PromptEntry(id: "vibecut__a", label: "A", body: "1new", tags: ["vibecut"]),
             PromptEntry(id: "vibecut__c", label: "C", body: "3", tags: ["vibecut"]),
         ])

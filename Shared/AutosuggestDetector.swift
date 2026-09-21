@@ -20,6 +20,19 @@ enum AutosuggestDetector {
     /// The ANSI-stripped text of the inline suggestion on the last non-empty
     /// line of `content`, or nil when nothing is showing.
     static func suggestionText(in content: String) -> String? {
+        inputLine(in: content)?.suggestion
+    }
+
+    /// Both halves of the input line when a suggestion is showing: what the
+    /// user (or the agent) has already committed to the line, and the ghost
+    /// run trailing it.
+    ///
+    /// `suggestionText(in:)` answers half of this and is kept because the
+    /// Mac's inject-time guard only cares about that half. The phone needs
+    /// both: it renders `typed` as the line it is completing and `suggestion`
+    /// as the ghost, and after an accept it echoes `typed + suggestion` back
+    /// as "this is what is on the line now".
+    static func inputLine(in content: String) -> (typed: String, suggestion: String)? {
         guard !content.isEmpty else { return nil }
 
         // Only the LAST non-empty line can carry the input-line suggestion;
@@ -43,13 +56,29 @@ enum AutosuggestDetector {
         var start = chars.count
         while start > 0, chars[start - 1].suggestionStyled { start -= 1 }
 
-        // The run must be preceded by the user's typed (non-dim) input on the
-        // same line — a run spanning the whole line is a hint, not a suggestion.
-        guard start > 0,
-              chars[..<start].contains(where: { !$0.suggestionStyled && !$0.char.isWhitespace })
-        else { return nil }
+        // Normally the run must be preceded by the user's typed (non-dim) input
+        // on the same line — a run spanning the whole line is usually a hint
+        // ("? for shortcuts"), not a suggestion.
+        //
+        // The exception is a composer that draws its PROMPT MARKER dim too.
+        // Claude Code's recall ghost is exactly that shape: `› do the thing`
+        // with every character dim and the cursor parked at the start. Under
+        // the prefix rule alone that reads as a hint line and no accept button
+        // ever lights, which is the case that prompted this. So a fully-dim
+        // last line still counts when it opens with a prompt marker — the
+        // marker is the "typed" half, and everything after it is the ghost.
+        let hasTypedPrefix = start > 0
+            && chars[..<start].contains(where: { !$0.suggestionStyled && !$0.char.isWhitespace })
+        if !hasTypedPrefix {
+            guard let markerEnd = promptMarkerEnd(in: chars) else { return nil }
+            start = markerEnd
+            // Marker and nothing else is an empty composer, not a suggestion.
+            guard chars[start...].contains(where: { !$0.char.isWhitespace }) else { return nil }
+        }
 
-        return String(chars[start...].map(\.char))
+        let typed = String(chars[..<start].map(\.char))
+        let suggestion = String(chars[start...].map(\.char))
+        return (typed: typed, suggestion: suggestion)
     }
 
     /// True when `suggestionText(in:)` finds a suggestion.
@@ -63,6 +92,22 @@ enum AutosuggestDetector {
     /// into the user's typed text.
     static func shouldAccept(liveContent: String) -> Bool {
         hasSuggestion(in: liveContent)
+    }
+
+    /// Prompt markers the agent composers and shells draw at the head of the
+    /// input line. Deliberately short: each one is a character no ordinary
+    /// output line starts with when it is the last line on screen.
+    private static let promptMarkers: Set<Character> = [">", "\u{276F}", "\u{203A}", "$", "%", "#"]
+
+    /// Index just past the leading prompt marker and the spaces after it, or
+    /// nil when the line does not start with one.
+    private static func promptMarkerEnd(in chars: [StyledCharacter]) -> Int? {
+        var i = 0
+        while i < chars.count, chars[i].char.isWhitespace { i += 1 }
+        guard i < chars.count, promptMarkers.contains(chars[i].char) else { return nil }
+        i += 1
+        while i < chars.count, chars[i].char == " " { i += 1 }
+        return i
     }
 
     // MARK: - ANSI parsing

@@ -59,6 +59,14 @@ targets:
         DEVELOPMENT_TEAM: D2PM6R797Q
         ENABLE_HARDENED_RUNTIME: true
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    # Without a scheme, `xcodebuild -target` falls back to the legacy build
+    # location (SYMROOT=$PROJECT_DIR/build). SPM package targets then resolve
+    # that against their own read-only checkout and the build dies in yyjson /
+    # swift-jinja with "module file not found" or "Permission denied". A scheme
+    # routes the build through DerivedData the way Xcode.app already does.
+    scheme:
+      testTargets:
+        - QuipMacTests
     info:
       path: Info.plist
       properties:

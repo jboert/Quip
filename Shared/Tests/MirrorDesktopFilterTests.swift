@@ -39,6 +39,33 @@ final class MirrorDesktopFilterTests: XCTestCase {
     private let terminal = "com.apple.Terminal"
     private let browser = "com.apple.Safari"
 
+    // MARK: - Which owners are tracked at all
+
+    /// An XPC service's window (the text-cursor service, the AutoFill sheet,
+    /// the open/save panel service) blinks in and out of the CG snapshot. It
+    /// cannot be activated and cannot be pointed at, and tracking it is what
+    /// made the window list read as fickle: measured on a live desk, every
+    /// list transition over 45s belonged to one of these.
+    func testProhibitedOwnersAreNotTracked() {
+        XCTAssertFalse(WindowManager.isTrackableOwner(activationPolicy: .prohibited))
+    }
+
+    /// A menu-bar-only app is still something the user can dictate into, so
+    /// `.accessory` is NOT the same as "background service".
+    func testAccessoryOwnersStayTracked() {
+        XCTAssertTrue(WindowManager.isTrackableOwner(activationPolicy: .accessory))
+    }
+
+    func testRegularOwnersStayTracked() {
+        XCTAssertTrue(WindowManager.isTrackableOwner(activationPolicy: .regular))
+    }
+
+    /// Unclassifiable fails OPEN — a window whose owner `NSRunningApplication`
+    /// cannot see is still a window, and dropping it would be a silent loss.
+    func testUnknownOwnersStayTracked() {
+        XCTAssertTrue(WindowManager.isTrackableOwner(activationPolicy: nil))
+    }
+
     func testMirrorOffShowsOnlyEnabledWindows() {
         let all = [
             mw(id: "a", bundleId: iterm2, enabled: true),
@@ -183,6 +210,66 @@ final class MirrorDesktopFilterTests: XCTestCase {
             all, mirrorDesktop: false, qaPair: ("sim", "termGone")
         ).map(\.id)
         XCTAssertEqual(Set(ids), Set(["sim"]))
+    }
+
+    // MARK: - Mirror every app
+
+    /// The "talk to any app" mode. Without it a non-terminal window can only
+    /// reach the phone by being enabled by hand on the Mac, so there was no way
+    /// to pick Slack (or any app) as a dictation target from the phone.
+    func testMirrorAllAppsIncludesNonTerminalWindows() {
+        let all = [
+            mw(id: "term", bundleId: iterm2, enabled: false),
+            mw(id: "web", bundleId: browser, enabled: false),
+            mw(id: "chat", bundleId: "com.tinyspeck.slackmacgap", enabled: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: false, mirrorAllApps: true
+        ).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["term", "web", "chat"]))
+    }
+
+    func testMirrorAllAppsStillHidesOffscreenWindowsUnlessEnabled() {
+        // Windows on a disconnected monitor or another Space are not reachable
+        // and would just be dead cards — unless the user explicitly enabled one.
+        let all = [
+            mw(id: "gone", bundleId: browser, enabled: false, onVisibleScreen: false),
+            mw(id: "goneButEnabled", bundleId: browser, enabled: true, onVisibleScreen: false),
+            mw(id: "here", bundleId: browser, enabled: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: false, mirrorAllApps: true
+        ).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["goneButEnabled", "here"]))
+    }
+
+    func testMirrorAllAppsIsStrictlyWiderThanMirrorDesktop() {
+        let all = [
+            mw(id: "term", bundleId: iterm2, enabled: false),
+            mw(id: "web", bundleId: browser, enabled: false),
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false),
+            mw(id: "offscreenEnabled", bundleId: iterm2, enabled: true, onVisibleScreen: false),
+        ]
+        let narrow = Set(WindowManager.windowsForBroadcast(all, mirrorDesktop: true).map(\.id))
+        let wide = Set(WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: true, mirrorAllApps: true).map(\.id))
+        XCTAssertTrue(narrow.isSubset(of: wide),
+                      "the wider mode must never drop a window the narrow one showed")
+        XCTAssertTrue(wide.contains("web"))
+    }
+
+    func testMirrorAllAppsStillYieldsToAQAPair() {
+        // QA mode is an explicit two-window contract; no mirror setting may
+        // widen it, or the paired phone's side-by-side layout breaks.
+        let all = [
+            mw(id: "sim", bundleId: "com.apple.iphonesimulator", enabled: false),
+            mw(id: "term", bundleId: iterm2, enabled: false),
+            mw(id: "web", bundleId: browser, enabled: false),
+        ]
+        let ids = WindowManager.windowsForBroadcast(
+            all, mirrorDesktop: true, mirrorAllApps: true, qaPair: ("sim", "term")
+        ).map(\.id)
+        XCTAssertEqual(Set(ids), Set(["sim", "term"]))
     }
 }
 #endif

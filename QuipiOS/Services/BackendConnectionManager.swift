@@ -53,9 +53,25 @@ final class BackendConnectionManager {
     /// (probes gather data; this evaluates whether to act on the data).
     private var swapEvaluatorTask: Task<Void, Never>?
     /// UserDefaults-backed toggle. Read at task start so a user flip
-    /// takes effect on the next eval tick. Defaults OFF until the
-    /// first hardware-verified release; opt-in keeps the rollout safe.
+    /// takes effect on the next eval tick.
     static let autoSwapDefaultsKey = "latencyAutoSwapEnabled"
+
+    /// Whether the latency swap engine may act. **Unset means on.**
+    ///
+    /// This shipped default-OFF pending hardware verification, and the effect
+    /// was that it never ran for anybody: `UserDefaults.bool(forKey:)` reports
+    /// false for a key nobody has written, so a user who never opened
+    /// Settings → Diagnostics → Latency got no swap engine at all. Measured on
+    /// 2026-08-17: 20 authenticated connects in a day, every one over the
+    /// Tailscale relay, with a Bonjour-advertised LAN path probed every 60s and
+    /// never once used.
+    ///
+    /// An explicit choice in either direction still wins — this only fills the
+    /// gap where there is no choice recorded.
+    nonisolated static func autoSwapEnabled(_ defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: autoSwapDefaultsKey) != nil else { return true }
+        return defaults.bool(forKey: autoSwapDefaultsKey)
+    }
 
     /// Hooks the host (`QuipApp`) sets so that side-effecty things which the
     /// manager itself shouldn't know about — Live Activity, push registration,
@@ -67,7 +83,7 @@ final class BackendConnectionManager {
     /// for the active session. (US-004.)
     var onSwrmStoryStarted: ((BackendSession, SwrmStoryStartedMessage) -> Void)?
     var onStateChange: ((BackendSession, String, String) -> Void)?
-    var onTerminalContent: ((BackendSession, String, String, String?, [String]?, Bool) -> Void)?
+    var onTerminalContent: ((BackendSession, String, String, String?, [String]?, TerminalAutosuggest?) -> Void)?
     var onOutputDelta: ((BackendSession, String, String, String, Bool) -> Void)?
     var onTTSAudio: ((BackendSession, String, String, String, Int, Bool, Data) -> Void)?
     var onSelectWindow: ((BackendSession, String) -> Void)?
@@ -320,7 +336,7 @@ final class BackendConnectionManager {
     /// One eval pass. Returns the URL we swapped to (if any) for testability.
     @discardableResult
     func evaluateSwap() async -> URL? {
-        guard UserDefaults.standard.bool(forKey: Self.autoSwapDefaultsKey) else { return nil }
+        guard Self.autoSwapEnabled() else { return nil }
         guard !activeBackendID.isEmpty,
               let session = sessions[activeBackendID],
               let entry = paired.first(where: { $0.id == activeBackendID }),
@@ -1192,6 +1208,20 @@ final class BackendConnectionManager {
             session.windows = update.windows
             session.monitorName = update.monitor
             if let a = update.screenAspect, a > 0 { session.screenAspect = a }
+            // Older Mac builds omit `displays` entirely; treat that as "one
+            // screen" rather than clobbering a list we already have.
+            if let displays = update.displays { session.displays = displays }
+            if let span = update.spanAspect, span > 0 { session.spanAspect = span }
+            if let spaces = update.spaces { session.spaces = spaces }
+            // A screen the user had pinned can be unplugged mid-session. Drop
+            // the filter instead of showing an empty grid with no way out.
+            if let picked = session.selectedDisplayID,
+               !session.displays.isEmpty,
+               !session.displays.contains(where: { $0.id == picked }) {
+                session.selectedDisplayID = nil
+                UserDefaults.standard.removeObject(
+                    forKey: BackendSession.screenFilterKey(forBackendId: session.backendID))
+            }
             let wasConnected = session.reachability == .connected
             if !wasConnected { session.reachability = .connected }
             // §J — stamp the paired-backend's lastConnectedAt on the
@@ -1238,7 +1268,7 @@ final class BackendConnectionManager {
             self.onStateChange?(session, windowId, newState)
         }
 
-        c.onTerminalContent = { [weak self, weak session] windowId, content, screenshot, urls, hasAutosuggest in
+        c.onTerminalContent = { [weak self, weak session] windowId, content, screenshot, urls, autosuggest in
             guard let self, let session else { return }
             session.terminalContentWindowId = windowId
             session.terminalContentText = content
@@ -1248,7 +1278,7 @@ final class BackendConnectionManager {
             if let urls {
                 session.terminalContentURLs = urls
             }
-            self.onTerminalContent?(session, windowId, content, screenshot, urls, hasAutosuggest)
+            self.onTerminalContent?(session, windowId, content, screenshot, urls, autosuggest)
         }
 
         c.onOutputDelta = { [weak self, weak session] windowId, windowName, text, isFinal in
@@ -1431,6 +1461,10 @@ final class BackendConnectionManager {
             rebuilt.selectedWindowId = session.selectedWindowId
             rebuilt.monitorName = session.monitorName
             rebuilt.screenAspect = session.screenAspect
+            rebuilt.displays = session.displays
+            rebuilt.spanAspect = session.spanAspect
+            rebuilt.spaces = session.spaces
+            rebuilt.updateSelectedDisplay(session.selectedDisplayID)
             rebuilt.terminalContentText = session.terminalContentText
             rebuilt.terminalContentScreenshot = session.terminalContentScreenshot
             rebuilt.terminalContentURLs = session.terminalContentURLs

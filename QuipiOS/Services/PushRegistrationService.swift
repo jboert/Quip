@@ -28,8 +28,25 @@ final class PushRegistrationService {
 
     private static let tokenKey = "apnsDeviceToken"
 
+    /// A cached APNs token is not proof that alerts can still be shown: the
+    /// user can disable notifications in Settings after registration.
+    private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
+
+    var canPresentAlerts: Bool {
+        switch authorizationStatus {
+        case .authorized, .provisional, .ephemeral: true
+        case .notDetermined, .denied: false
+        @unknown default: false
+        }
+    }
+
     init() {
         deviceToken = UserDefaults.standard.string(forKey: Self.tokenKey)
+    }
+
+    func refreshAuthorizationStatus() async {
+        authorizationStatus = await UNUserNotificationCenter.current()
+            .notificationSettings().authorizationStatus
     }
 
     /// Called from the app delegate when APNs hands us a fresh token.
@@ -62,13 +79,21 @@ final class PushRegistrationService {
     func requestPermissionAndRegister() async {
         let center = UNUserNotificationCenter.current()
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
-            if granted {
+            authorizationStatus = await center.notificationSettings().authorizationStatus
+            if canPresentAlerts {
                 await MainActor.run {
                     UIApplication.shared.registerForRemoteNotifications()
                 }
+            } else if authorizationStatus == .notDetermined {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+                await refreshAuthorizationStatus()
+                if granted && canPresentAlerts {
+                    await MainActor.run {
+                        UIApplication.shared.registerForRemoteNotifications()
+                    }
+                }
             } else {
-                print("[PushRegistration] user declined notification permission")
+                print("[PushRegistration] notification permission is disabled")
             }
         } catch {
             print("[PushRegistration] requestAuthorization error: \(error.localizedDescription)")

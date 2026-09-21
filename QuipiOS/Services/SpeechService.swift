@@ -56,6 +56,11 @@ final class SpeechService {
     @ObservationIgnored private var audioPlayer: AVAudioPlayer?
     @ObservationIgnored private var playerDelegate: PlayerDelegate?
     @ObservationIgnored private var audioQueue: [(windowId: String, sessionId: String, data: Data)] = []
+    @ObservationIgnored private var audioQueueBytes = 0
+    /// Bound queued TTS data so a backgrounded/slow phone cannot accumulate
+    /// an unbounded stream of WAV chunks. The currently playing chunk is not
+    /// counted here; only data waiting in `audioQueue` is evictable.
+    private static let maxQueuedAudioBytes = 4_000_000
     @ObservationIgnored private var currentlyPlayingWindowId: String?
     /// Latest sessionId per window — used to drop stale chunks
     @ObservationIgnored private var activeSessionIds: [String: String] = [:]
@@ -352,7 +357,9 @@ final class SpeechService {
 
         // New session for this window? Drop stale chunks for that window.
         if activeSessionIds[windowId] != sessionId {
+            let removed = audioQueue.filter { $0.windowId == windowId }
             audioQueue.removeAll { $0.windowId == windowId }
+            audioQueueBytes = max(0, audioQueueBytes - removed.reduce(0) { $0 + $1.data.count })
             // If the currently playing chunk is from this window's old session, stop it
             if currentlyPlayingWindowId == windowId {
                 audioPlayer?.stop()
@@ -365,6 +372,14 @@ final class SpeechService {
         // Final-marker messages arrive with empty audio — nothing to queue
         if !data.isEmpty {
             audioQueue.append((windowId: windowId, sessionId: sessionId, data: data))
+            audioQueueBytes += data.count
+            // Drop oldest queued chunks first. This preserves the newest
+            // response tail, which is more useful than retaining stale audio
+            // while a slow client catches up.
+            while audioQueueBytes > Self.maxQueuedAudioBytes, !audioQueue.isEmpty {
+                let dropped = audioQueue.removeFirst()
+                audioQueueBytes -= dropped.data.count
+            }
             if audioPlayer == nil {
                 playNextChunk()
             }
@@ -377,6 +392,7 @@ final class SpeechService {
         audioPlayer = nil
         playerDelegate = nil
         audioQueue.removeAll()
+        audioQueueBytes = 0
         activeSessionIds.removeAll()
         currentlyPlayingWindowId = nil
         currentSpeakingWindowId = nil
@@ -387,7 +403,9 @@ final class SpeechService {
     /// Stop a specific window's audio — removes its queued chunks and stops
     /// playback if that window is currently playing, then advances the queue.
     func stopSpeaking(windowId: String) {
+        let removed = audioQueue.filter { $0.windowId == windowId }
         audioQueue.removeAll { $0.windowId == windowId }
+        audioQueueBytes = max(0, audioQueueBytes - removed.reduce(0) { $0 + $1.data.count })
         activeSessionIds.removeValue(forKey: windowId)
         if currentlyPlayingWindowId == windowId {
             audioPlayer?.stop()
@@ -408,6 +426,7 @@ final class SpeechService {
             return
         }
         audioQueue.removeFirst()
+        audioQueueBytes = max(0, audioQueueBytes - next.data.count)
 
         // Audio session is already configured by HardwareButtonHandler (.playAndRecord).
         // Do NOT call setCategory/setActive here — it triggers phantom outputVolume KVO

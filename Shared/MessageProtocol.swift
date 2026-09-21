@@ -10,16 +10,36 @@ struct WSMessage: Codable {
 
 struct LayoutUpdate: Codable, Sendable {
     let type: String
+    /// Name of the PRIMARY display (`NSScreen.screens.first`), not the focused
+    /// one. The phone also uses this string as a same-Mac identity signal
+    /// (`BackendConnectionManager.isSameMac`), so it must not change when the
+    /// user clicks a second monitor.
     let monitor: String
-    /// width / height of the host display — lets clients render a correctly-proportioned thumbnail
+    /// width / height of the primary display — lets clients render a
+    /// correctly-proportioned thumbnail. Per-display aspects live on
+    /// `displays`; this stays for older clients that know only one screen.
     let screenAspect: Double?
     let windows: [WindowState]
+    /// Every connected display. Optional so an older Mac build (which omits it)
+    /// still decodes; clients treat nil/empty as "one screen, the primary".
+    let displays: [DisplayState]?
+    /// width / height of the union of all displays — the aspect a client needs
+    /// to render every screen on one merged canvas. Equals `screenAspect` on a
+    /// single-display Mac.
+    let spanAspect: Double?
+    /// Spaces visible to the Mac. Optional so older peers continue to decode.
+    let spaces: [SpaceState]?
 
-    init(monitor: String, screenAspect: Double? = nil, windows: [WindowState]) {
+    init(monitor: String, screenAspect: Double? = nil, windows: [WindowState],
+         displays: [DisplayState]? = nil, spanAspect: Double? = nil,
+         spaces: [SpaceState]? = nil) {
         self.type = "layout_update"
         self.monitor = monitor
         self.screenAspect = screenAspect
         self.windows = windows
+        self.displays = displays
+        self.spanAspect = spanAspect
+        self.spaces = spaces
     }
 }
 
@@ -84,13 +104,27 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     /// generic apps). Optional + string-typed for forward compat — older
     /// Mac builds omit it; older clients ignore unknown values.
     let targetKind: String?
+    /// Which display this window sits on — matches a `DisplayState.id` in the
+    /// same `LayoutUpdate`. `frame` is normalized against THIS display, not
+    /// against the whole desktop, so a client that ignores `displayID` still
+    /// renders every window inside a single 0-1 canvas. Optional for backward
+    /// compat with older Mac builds (nil = "the primary display").
+    let displayID: String?
+    /// Desktop Space containing the window, when macOS exposes that metadata.
+    let spaceID: String?
+    /// Pinned to the top of the list. The Mac owns the pin set and has already
+    /// floated pinned windows to the front of `windows`, so a client that
+    /// ignores this field still gets the right ORDER — the flag is what lets it
+    /// draw the pin and offer to toggle it. Optional: older Mac builds omit it.
+    let isPinned: Bool
 
     // Synthesized Equatable compares ALL fields including frame
 
     /// Backward-compat: default isThinking to false and claudeMode to nil if missing from JSON
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
-         claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil) {
+         claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil,
+         displayID: String? = nil, spaceID: String? = nil, isPinned: Bool = false) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
@@ -98,6 +132,9 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         self.claudeMode = claudeMode
         self.cliKind = cliKind
         self.targetKind = targetKind
+        self.displayID = displayID
+        self.spaceID = spaceID
+        self.isPinned = isPinned
     }
 
     init(from decoder: Decoder) throws {
@@ -114,10 +151,94 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         claudeMode = try? c.decode(String.self, forKey: .claudeMode)
         cliKind = try? c.decode(CLIKind.self, forKey: .cliKind)
         targetKind = try? c.decode(String.self, forKey: .targetKind)
+        displayID = try? c.decode(String.self, forKey: .displayID)
+        spaceID = try? c.decode(String.self, forKey: .spaceID)
+        isPinned = (try? c.decode(Bool.self, forKey: .isPinned)) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind, targetKind
+        case displayID, spaceID, isPinned
+    }
+}
+
+/// Phone → Mac: pin or unpin a window.
+///
+/// The Mac owns the pin set — it is what orders the list both peers see, so a
+/// phone-local pin would mean the two disagree about where a window sits. The
+/// phone asks; the Mac writes and re-broadcasts the order it produced.
+struct SetPinMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+    let pinned: Bool
+
+    init(windowId: String, pinned: Bool) {
+        self.type = "set_pin"
+        self.windowId = windowId
+        self.pinned = pinned
+    }
+}
+
+/// A macOS Mission Control desktop. The identifier is intentionally opaque;
+/// only the Mac can activate a Space and older clients may ignore this field.
+struct SpaceState: Codable, Sendable, Equatable, Hashable, Identifiable {
+    let id: String
+    let name: String
+    let isCurrent: Bool
+}
+
+/// Which visibility buckets are worth offering as a filter, and which pick to
+/// honour.
+///
+/// The buckets are "On Screen" and "Hidden" — see `WindowManager.SpaceCatalog`
+/// for why this is NOT a Mission Control Space split. An empty bucket is noise
+/// rather than a destination — it gives the phone a chip that leads to a blank
+/// grid — so the chip row is built from the buckets that actually hold windows.
+enum SpaceActivity {
+
+    /// `spaces` narrowed to those holding at least one of `windows`, in the
+    /// Mac's original order. Windows the Mac could not place (`spaceID == nil`)
+    /// count toward no bucket.
+    static func active(spaces: [SpaceState], windows: [WindowState]) -> [SpaceState] {
+        let occupied = Set(windows.compactMap(\.spaceID))
+        return spaces.filter { occupied.contains($0.id) }
+    }
+
+    /// The selection to honour once empty buckets drop out: the pick itself
+    /// while it still has activity, otherwise nil ("All Windows"). Closing
+    /// the last window in the pinned bucket must not strand the user on a
+    /// filter with no way back — the same rule the display chips follow when
+    /// a monitor is unplugged.
+    static func resolvedSelection(_ selected: String?,
+                                  activeSpaces: [SpaceState]) -> String? {
+        guard let selected, activeSpaces.contains(where: { $0.id == selected })
+        else { return nil }
+        return selected
+    }
+
+    /// The label the COLLAPSED visibility chip carries: the pinned bucket's
+    /// name, or `allTitle` when the filter is off.
+    ///
+    /// Collapsed, the chip is the row's only evidence of what the grid is
+    /// showing, so it must never read "All Windows" while a filter is active —
+    /// that would quietly lie about why windows are missing. It takes the
+    /// already-resolved selection rather than the raw one so a pick that went
+    /// quiet reads as "All Windows" here exactly as it does in the grid.
+    static func collapsedTitle(activeSpaces: [SpaceState],
+                               effectiveSpaceID: String?,
+                               allTitle: String = "All Windows") -> String {
+        guard let effectiveSpaceID,
+              let space = activeSpaces.first(where: { $0.id == effectiveSpaceID })
+        else { return allTitle }
+        return space.name
+    }
+
+    /// Windows the collapsed chip should count: those in the pinned bucket, or
+    /// every window when the filter is off. Mirrors what the grid renders, so
+    /// the badge can never disagree with the number of cards below it.
+    static func collapsedCount(windows: [WindowState], effectiveSpaceID: String?) -> Int {
+        guard let effectiveSpaceID else { return windows.count }
+        return windows.filter { $0.spaceID == effectiveSpaceID }.count
     }
 }
 
@@ -445,6 +566,32 @@ struct RequestContentMessage: Codable, Sendable {
     }
 }
 
+/// The terminal's input line while an inline suggestion is showing: what is
+/// already committed to the line, and the greyed ghost run trailing it.
+///
+/// Shipped whole rather than as a bare flag so the phone can RENDER the
+/// suggestion instead of only knowing one exists, and so an accept can echo
+/// the resulting line back into the compose field — the phone otherwise has
+/// no way to know what its own tap just typed on the Mac.
+///
+/// Both halves come out of the REDACTED scrape, so `SecretRedactor` has
+/// already run on them, and both are capped at
+/// `AutosuggestLimits.maxCharacters` — a suggestion is one input line, and an
+/// unbounded field on a 500ms broadcast is a size hazard the 16 MiB cap should
+/// never have to catch.
+struct TerminalAutosuggest: Codable, Sendable, Equatable {
+    let typed: String
+    let suggestion: String
+
+    init(typed: String, suggestion: String) {
+        self.typed = String(typed.prefix(AutosuggestLimits.maxCharacters))
+        self.suggestion = String(suggestion.prefix(AutosuggestLimits.maxCharacters))
+    }
+
+    /// The line as it reads once the suggestion is accepted.
+    var accepted: String { typed + suggestion }
+}
+
 struct TerminalContentMessage: Codable, Sendable {
     let type: String
     let windowId: String
@@ -462,15 +609,22 @@ struct TerminalContentMessage: Codable, Sendable {
     /// Decodes as false when absent so pre-autosuggest Mac builds keep
     /// working (additive-field pattern).
     let hasAutosuggest: Bool
+    /// The suggestion itself, when there is one. `hasAutosuggest` stays on the
+    /// wire beside it: a phone build that predates this field still gets its
+    /// button gate, and a Mac build that predates it sends the flag alone, so
+    /// the phone falls back to the flag-only behaviour (button works, nothing
+    /// to render).
+    let autosuggest: TerminalAutosuggest?
 
     init(windowId: String, content: String, screenshot: String? = nil, urls: [String]? = nil,
-         hasAutosuggest: Bool = false) {
+         autosuggest: TerminalAutosuggest? = nil) {
         self.type = "terminal_content"
         self.windowId = windowId
         self.content = content
         self.screenshot = screenshot
         self.urls = urls
-        self.hasAutosuggest = hasAutosuggest
+        self.autosuggest = autosuggest
+        self.hasAutosuggest = autosuggest != nil
     }
 
     init(from decoder: Decoder) throws {
@@ -480,11 +634,16 @@ struct TerminalContentMessage: Codable, Sendable {
         content = try c.decode(String.self, forKey: .content)
         screenshot = try? c.decode(String.self, forKey: .screenshot)
         urls = try? c.decode([String].self, forKey: .urls)
-        hasAutosuggest = (try? c.decode(Bool.self, forKey: .hasAutosuggest)) ?? false
+        autosuggest = try? c.decode(TerminalAutosuggest.self, forKey: .autosuggest)
+        // A Mac that sends the suggestion but an older flag, or the flag alone,
+        // both have to read as "there is a suggestion" — the button gate is the
+        // union, never the newer field alone.
+        hasAutosuggest = ((try? c.decode(Bool.self, forKey: .hasAutosuggest)) ?? false)
+            || autosuggest != nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, windowId, content, screenshot, urls, hasAutosuggest
+        case type, windowId, content, screenshot, urls, hasAutosuggest, autosuggest
     }
 }
 
@@ -1032,6 +1191,11 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     var pushNotifyAllWindows: Bool?
     var liveActivitiesEnabled: Bool?
     var ttsEnabled: Bool?
+    /// Press Return automatically once a dictation finishes, instead of
+    /// leaving the transcript sitting in the prompt for the user to send.
+    /// Optional so a Mac that predates the setting decodes as nil and the
+    /// phone keeps its own value rather than being reset on every restore.
+    var dictationAutoSend: Bool?
     /// JSON-encoded ordered slot list from the Apple-toolbar-style editor.
     /// Supersedes `enabledQuickButtons` (kept for downgrade safety) — the
     /// CSV is regenerated from the slot list's built-in entries on each
@@ -1071,6 +1235,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         pushNotifyAllWindows: Bool? = nil,
         liveActivitiesEnabled: Bool? = nil,
         ttsEnabled: Bool? = nil,
+        dictationAutoSend: Bool? = nil,
         quickSlotsJSON: String? = nil,
         customButtonsJSON: String? = nil,
         followFrontmost: Bool? = nil,
@@ -1093,6 +1258,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.pushNotifyAllWindows = pushNotifyAllWindows
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.ttsEnabled = ttsEnabled
+        self.dictationAutoSend = dictationAutoSend
         self.quickSlotsJSON = quickSlotsJSON
         self.customButtonsJSON = customButtonsJSON
         self.followFrontmost = followFrontmost

@@ -19,6 +19,12 @@ enum LabsFlags {
     static let oneTapAnswer = "labs.oneTapAnswer"
     /// Enable export/import of prompt + hot-button "packs" via the Share Sheet. (§6.1)
     static let promptPackSharing = "labs.promptPackSharing"
+    /// The grid's filter row — visibility ("On Screen" / "Hidden") and, on a
+    /// multi-display Mac, one chip per monitor. Off by default: the row costs
+    /// 26pt of grid on every desk, and its default pick used to HIDE cards
+    /// (a minimized terminal reads as "Hidden"), which is the opposite of what
+    /// someone reaching for their phone wants.
+    static let windowFilters = "labs.windowFilters"
 
     /// One row per visible flag for the Settings → Quip Labs section.
     /// Order here is display order. Cursor stays out of Settings for now.
@@ -27,6 +33,8 @@ enum LabsFlags {
          "Big contextual answer buttons when an agent is waiting; the Mac re-checks the prompt before sending."),
         (promptPackSharing, "Prompt & button packs",
          "Share and import prompts and custom buttons as files."),
+        (windowFilters, "Window filters",
+         "Adds a filter row above the grid: show only on-screen windows, or only one monitor's."),
     ]
 }
 

@@ -81,14 +81,26 @@ enum URLSwapPolicy {
 
     // MARK: - Helpers
 
-    /// Most recent (≤10) samples whose `serverURLHost` matches `host`. Window
-    /// kept small so a freshly-promoted URL can earn its keep without 100
-    /// stale samples blocking the next decision.
+    /// The measurement kind this policy scores on. Probes are the only signal
+    /// every URL has: the connected URL is the only one that can produce live
+    /// round-trips, so admitting live samples would compare a full WebSocket
+    /// round trip on one side against a bare TCP connect on the other. A TCP
+    /// handshake is cheaper than an app round trip by construction, so that
+    /// comparison promoted any candidate over the URL in use — including a
+    /// slower one. Live samples stay in the buffer for Diagnostics; they just
+    /// do not vote here.
+    static let comparableSamplePath = "probe"
+
+    /// Most recent (≤10) PROBE samples whose `serverURLHost` matches `host`.
+    /// Window kept small so a freshly-promoted URL can earn its keep without
+    /// 100 stale samples blocking the next decision.
     static func samplesForHost(
         _ host: String,
         samples: [WebSocketClient.LatencySample]
     ) -> [WebSocketClient.LatencySample] {
-        Array(samples.filter { $0.serverURLHost == host }.suffix(10))
+        Array(samples
+            .filter { $0.serverURLHost == host && $0.path == comparableSamplePath }
+            .suffix(10))
     }
 
     private static func avgNetRtt(_ samples: [WebSocketClient.LatencySample]) -> Double {

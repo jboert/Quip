@@ -124,8 +124,9 @@ final class PromptLibrary {
     /// Replace the entire inherited VibeCut set on disk in ONE batch that fires
     /// exactly one broadcast. Deletes every `vibecut__*.txt` (the reserved
     /// namespace only — never touches the user's own prompts or README.txt), then
-    /// writes the fresh set via the same non-throwing `createFile` path as `put()`,
-    /// then rescans ONCE. Returns the number of files written.
+    /// stages and verifies the fresh set, then replaces the live files and rescans ONCE.
+    /// If the live replacement fails, it restores the prior reserved set before returning
+    /// an error; a sync is never acknowledged as successful after a partial write.
     ///
     /// The single-broadcast guarantee relies on this running synchronously on the
     /// MainActor: the FS watcher's rescan hops through a 0.15s-debounced
@@ -134,53 +135,80 @@ final class PromptLibrary {
     /// guard (`newEntries == entries`). N prompts → one `prompt_library` message,
     /// not N. Do not introduce an `await` between the delete and the final rescan.
     @discardableResult
-    func replaceVibeCutSet(_ inherited: [PromptEntry]) -> Int {
+    func replaceVibeCutSet(_ inherited: [PromptEntry]) throws -> Int {
         ensureDirExists()
         let fm = FileManager.default
+        let transactionID = UUID().uuidString
+        let staging = Self.directory.appendingPathComponent(".vibecut-staging-\(transactionID)", isDirectory: true)
+        let backup = Self.directory.appendingPathComponent(".vibecut-backup-\(transactionID)", isDirectory: true)
+        var stagedCount = 0
+        var preserveBackup = false
+        let old = try fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "txt" && $0.lastPathComponent.hasPrefix(VibeCutPromptMapper.idPrefix) }
 
-        // 1. Delete the prior inherited set — reserved `vibecut__` filename
-        //    namespace ONLY, so a user-authored prompt (or README.txt) is never
-        //    at risk even if it happens to carry a `vibecut` tag.
-        if let urls = try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil) {
-            for url in urls where url.pathExtension == "txt"
-                && url.lastPathComponent.hasPrefix(VibeCutPromptMapper.idPrefix) {
-                try? fm.removeItem(at: url)
-            }
-        }
+        try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+        do {
+            try fm.createDirectory(at: backup, withIntermediateDirectories: false)
+            for url in old { try fm.copyItem(at: url, to: backup.appendingPathComponent(url.lastPathComponent)) }
 
-        // 2. Write the fresh set (non-throwing createFile — see put()'s SIGTRAP note).
-        var written = 0
-        for entry in inherited {
-            let safeID = Self.sanitizeID(entry.id)
-            guard !safeID.isEmpty else { continue }
-            let url = Self.directory.appendingPathComponent("\(safeID).txt")
-            let fileBody = Self.renderFile(id: safeID, label: entry.label, body: entry.body,
+            // Stage every new file before touching the live namespace.
+            for entry in inherited {
+                let safeID = Self.sanitizeID(entry.id)
+                guard !safeID.isEmpty else { continue }
+                let url = staging.appendingPathComponent("\(safeID).txt")
+                let body = Self.renderFile(id: safeID, label: entry.label, body: entry.body,
                                            tags: entry.tags, targetAgent: entry.targetAgent,
                                            description: entry.description)
-            if fm.createFile(atPath: url.path, contents: Data(fileBody.utf8)) { written += 1 }
+                guard fm.createFile(atPath: url.path, contents: Data(body.utf8)),
+                      try String(contentsOf: url, encoding: .utf8) == body else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+            }
+            let staged = try fm.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "txt" }
+            guard staged.count == inherited.count else { throw CocoaError(.fileWriteUnknown) }
+            stagedCount = staged.count
+
+            do {
+                for url in old { try fm.removeItem(at: url) }
+                for url in staged { try fm.moveItem(at: url, to: Self.directory.appendingPathComponent(url.lastPathComponent)) }
+            } catch {
+                // Roll back the reserved namespace. Preserve the backup if recovery itself
+                // fails so a human can recover it instead of silently losing prompts.
+                do {
+                    let partial = try fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)
+                        .filter { $0.pathExtension == "txt" && $0.lastPathComponent.hasPrefix(VibeCutPromptMapper.idPrefix) }
+                    for url in partial { try fm.removeItem(at: url) }
+                    let saved = try fm.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil)
+                    for url in saved { try fm.copyItem(at: url, to: Self.directory.appendingPathComponent(url.lastPathComponent)) }
+                    try? fm.removeItem(at: backup)
+                } catch {
+                    preserveBackup = true
+                    throw NSError(domain: "Quip.VibeCutSync", code: 2, userInfo: [NSLocalizedDescriptionKey: "VibeCut sync failed and recovery backup remains at \(backup.path): \(error.localizedDescription)"])
+                }
+                throw error
+            }
+            try fm.removeItem(at: backup)
+            try fm.removeItem(at: staging)
+        } catch {
+            try? fm.removeItem(at: staging)
+            if !preserveBackup, fm.fileExists(atPath: backup.path) { try? fm.removeItem(at: backup) }
+            throw error
         }
 
-        // 3. One rescan → one onChange → one broadcast.
+        // One rescan → one onChange → one broadcast.
         rescan()
-        return written
+        return stagedCount
     }
 
     /// Strip path separators / leading dots / shell metacharacters so a
     /// hostile id (e.g. `../../../etc/passwd`) can't escape the prompts
-    /// directory or write outside it. Allowed: alphanumeric, dash,
-    /// underscore, dot in the middle. Empty result = reject.
+    /// directory or write outside it. Empty result = reject.
+    ///
+    /// The rule itself lives in `Shared/PromptID.swift` because the iOS editor
+    /// previews the resulting filename before saving; both peers must agree.
     static func sanitizeID(_ raw: String) -> String {
-        var out = ""
-        for ch in raw {
-            if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "." {
-                out.append(ch)
-            } else if ch == " " {
-                out.append("-")
-            }
-        }
-        // Strip leading dots (no hidden files, no `.` / `..` traversal).
-        while out.first == "." { out.removeFirst() }
-        return out
+        PromptID.sanitize(raw)
     }
 
     private func ensureDirExists() {
@@ -341,7 +369,20 @@ final class PromptLibrary {
     private func startWatching() {
         let path = Self.directory.path
         let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            // Silent until now, and the symptom is a feature that looks dead
+            // rather than broken: without this descriptor the FS watcher never
+            // starts, so edits to the prompts directory stop broadcasting to
+            // paired phones and nothing anywhere says why.
+            QuipLog.write(
+                severity: .error, subsystem: "prompts",
+                message: "prompt watcher NOT started: open(O_EVTONLY) failed for \(path) "
+                       + "(errno \(errno): \(String(cString: strerror(errno)))). "
+                       + "Prompt edits will not broadcast to phones until Quip restarts.",
+                to: LogPaths.webSocketPath
+            )
+            return
+        }
         watcherFD = fd
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,

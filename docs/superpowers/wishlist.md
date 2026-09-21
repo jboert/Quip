@@ -2,7 +2,665 @@
 
 Future features, improvements, and known bugs tracked for eventual implementation. Each item here is a candidate for a GitHub issue or sprint work. When you're ready to implement one, it should graduate to a spec in `docs/superpowers/specs/` and a plan in `docs/superpowers/plans/`, then land as a commit on a working branch.
 
+---
+
+## Tickets opened 2026-09-18 — window focus, and the wand
+
+Q-22 / Q-22a / Q-23 come out of one read-only inspection of the focus path plus
+a probe run against live windows. Q-24 is an owner request. Q-25 and Q-26 are
+carried over from the 2026-09-16 session as proper tickets rather than loose
+open threads.
+
+### Q-22a — a focus that finds nothing must say so
+
+**Land this first.** It is small, it is independent of Q-22, and without it
+nobody can tell a focus failure from a focus that worked.
+
+`WindowManager.focusWindow` walks the app's AX windows looking for one whose
+position is within 10pt of `window.bounds.origin`. If none matches, the `for`
+loop simply ends. Nothing is logged, nothing is returned, and nothing is sent
+back to the phone — the tap is swallowed whole. `axFocusGate` today reports only
+the case where the AX window *list* is unreadable (a revoked Accessibility
+grant), never the case where the list is fine and the match failed.
+
+Acceptance:
+- A focus request whose AX match fails writes one line naming the window id, the
+  CG origin it looked for, and the AX positions it actually saw.
+- Throttled per pid the way the existing `axFocusGate` is, so a persistently
+  unmatchable window cannot spam the log on every tap.
+- A focus request that matches more than one AX window logs the ambiguity (see
+  Q-22) rather than silently taking the first.
+- Successes stay out of the log, matching the `injection.log` rule in CLAUDE.md.
+
+Files: `QuipMac/Services/WindowManager.swift` (`focusWindow`, `axFocusGate`),
+`QuipMac/Services/LogPaths.swift` for the destination. Decide whether this
+belongs in `injection.log` (it is the same "I tapped and nothing happened"
+class) or stays in `websocket.log` where `focusWindow` already writes.
+
+### Q-22 — focus the window by id, not by fuzzy position
+
+`focusWindow` uses position as a key because there is no id linkage between the
+CG window and the AX element. Measured on a live desk (probe mirrors the
+matching logic exactly): **matched 5, missed 6, of 11** real iTerm / Chrome /
+Terminal / Finder windows. Three independent reasons:
+
+1. **Stale bounds.** `window.bounds` comes from the 2.0s CG poll, so a window
+   moved since the last tick misses its own AX element.
+2. **Duplicate origins.** Chrome `1710` and `1711` both reported
+   `cg=(692,56)`. Where a match does land with duplicates present, `break` takes
+   whichever AX element is enumerated first — so the wrong window is raised.
+   This is the "I toggled and got the wrong window" report.
+3. **Windows with no readable AX position at all** fall through silently.
+
+This repo has already learned this lesson once, in `98fbf1d` — *"map iTerm2
+session by exact window id, not fuzzy bounds."* Same mistake, different surface.
+
+**Decision the owner must make before implementation:** getting a CGWindowID off
+an AX element means `_AXUIElementGetWindow`, which is **private API**. Options:
+
+- Use it, accept the private-API risk, and keep a position fallback for when it
+  returns an error. Exact, and kills all three failure modes.
+- Stay public-only: match on title + size + position together, break ties
+  explicitly (prefer the frontmost / most recently raised), and refuse to act
+  when still ambiguous rather than guessing. Weaker, but nothing private ships.
+
+Acceptance, whichever route:
+- Every window the phone can see can be focused, including after it has been
+  moved between polls.
+- Two windows sharing an origin resolve to the one that was asked for, proven by
+  a test with two same-origin candidates.
+- An unresolvable request reports (Q-22a) instead of doing nothing.
+
+Files: `QuipMac/Services/WindowManager.swift` (`focusWindow`, and
+`ManagedWindow.windowNumber` already carries the CGWindowID).
+
+### Q-23 — raising a minimized window must unminimize it
+
+`kAXRaiseAction` does not restore a minimized window, so even a correct match
+does nothing when the target is in the Dock. Set `kAXMinimizedAttribute` to
+false before raising.
+
+This is the other half of the 2026-09-16 visibility work: a minimized window is
+now honestly labelled **Hidden** on the phone instead of being claimed to be on
+another desktop, which means the user can finally SEE it in the grid — and
+tapping it must then work.
+
+Acceptance: minimize a tracked terminal, tap its card on the phone, and the
+window restores and comes forward. Covered by Q-22a's logging if it does not.
+
+Files: `QuipMac/Services/WindowManager.swift` (`focusWindow`).
+
+### Q-24 — wand: an option that UNSELECTS simulators
+
+Owner request, 2026-09-18: on the Mac app, the magic wand's toggle options
+should include one that unselects simulators.
+
+Design note worth settling before writing code: `WandTargetKinds` today governs
+both *what the wand enables* and *what sorts first* — a coupling that has
+already needed untangling twice (`af86695` derived the sort tier from the
+configured kinds; `c149959` stopped `.mostActive` presenting an alphabetical
+list as a ranking). "Unselect simulators" is an **action**, not a kind filter,
+so bolting another bit onto `WandTargetKinds` would overload that field a third
+time. It likely belongs in the `WandOrder` rotation, or as a separate action
+next to the wand.
+
+Acceptance:
+- Reachable from the wand on the Mac sidebar without opening Settings.
+- Turns every simulator window OFF, leaves every other window's enabled state
+  untouched.
+- Idempotent — firing it twice leaves the same state.
+- A desk with no simulators does not offer a dead option (same rule the display
+  chips follow on a single-display Mac).
+
+Files: `QuipMac/Models/WandSort.swift` (`WandOrder`, `WandTargetKinds`,
+`WandWindowKind`), `QuipMac/Views/SettingsView.swift:891`,
+`QuipMac/Tests/WandSortTests.swift`.
+
+### Q-27 — duplicate prompts: reported, NOT reproduced, two latent paths found
+
+Owner report 2026-09-19 (dictated): *"make sure prompts aren't duplicate so
+prompts when you sync"*, confirmed as **sync creates duplicate prompts**.
+
+**Measured, and the reported path is clean.** Nothing here reproduces:
+
+- VibeCut catalog `~/Projects/vibecut/shared/prompts.json`: 54 prompts, 34
+  inheritable, **0 slug collisions**, **0 entries sharing name + body**. No
+  packs present in `~/Library/Application Support/VibeCut/packs`.
+- On-disk library `~/Library/Application Support/Quip/prompts`: 41 `.txt` =
+  **exactly 34 `vibecut__*`** (one per inheritable prompt) + 6 user prompts +
+  `README.txt`. Every title unique; no title shared between a `vibecut__` file
+  and a user file. So `replaceVibeCutSet` is not leaving orphans behind.
+- Phone: `WebSocketClient` does `promptLibrary = msg.prompts` — a wholesale
+  replace, so a re-broadcast cannot accumulate.
+
+So either the duplicates came from a state already cleaned up, or from a path
+below, or from something not yet looked at. **Get a screenshot of the actual
+duplicate pair before implementing anything.**
+
+**Latent path 1 — the mapper dedupes ids, never content.**
+`VibeCutPromptMapper.map` slugs the name, then `uniqueID` suffixes collisions
+`-2`, `-3`. Two VibeCut prompts with the SAME name and the SAME body therefore
+become two entries that are identical in every visible way and differ only by an
+id suffix. Not present in today's catalog, so this is a latent trap rather than
+the live defect — but it is the one that would look exactly like "sync
+duplicated my prompts".
+
+**Latent path 2 — pack import never overwrites, by design.**
+`applyImportedPack` calls `SharedPromptPack.uniquePromptID(desired:existing:)`
+for every prompt, so importing the same `.quippack` twice creates a suffixed
+copy of every prompt in it. Reproducible on demand. Correct as a
+never-clobber-the-user rule, but there is no "this pack is already installed"
+check and no way to replace rather than add.
+
+Decide per path: dedupe on (label, body) at map time, and/or offer
+replace-vs-add on a pack import whose ids already exist.
+
+### Q-25 — hardware acceptance for the 2026-09-16 grid work
+
+**Blocked on the phone**, unreachable since 2026-09-13. Nothing from that
+session has run on hardware; every user-visible claim is test-verified only.
+
+1. Launch with no Labs flag set: no 26pt chip row above the grid, and every
+   window the Mac broadcasts has a card — including one minimized while
+   watching.
+2. With the ultrawide attached, a window on the left third of the desk occupies
+   the left third of the phone canvas, and cards are no longer stretched
+   vertically. **If the true-aspect band reads as too short to use, say so** —
+   one line in `hostScreenRect` brings the 1.45 back, and the arrange modes are
+   the intended answer instead.
+
+### Q-26 — `MainiOSView.body` is at the type-checker's budget
+
+One iOS run on 2026-09-16 failed with "the compiler is unable to type-check this
+expression in reasonable time", pointing at a trivial `DispatchQueue.main.async`
+line inside `body`; the same tree compiled on the next run. Bisected to no
+single edit — it is the body's size. It will refuse again, and next time it may
+not be in a session that can afford to bisect it. Break `body` into subviews.
+
+Files: `QuipiOS/QuipApp.swift` (`MainiOSView.body`).
+
+---
+
+## Session log — 2026-09-16 (window filter row made opt-in; canvas aspect fixed)
+
+**Shipped on `eb-branch`. NOT installed — no paired device was reachable
+(`devicectl list devices` reported every device `unavailable`). NOT pushed.**
+
+- `f50a7a4` — `fix(grid)`: stop calling a minimized window "Other Desktops".
+- `1c2edf2` — `fix(grid)`: make the filter row opt-in and stop the canvas
+  distorting the desk.
+
+### Reported
+
+"The screens and displays don't work and are not reliable — toggle this and
+make it a setting to turn on." Owner picked, from a menu: the whole row is
+noise, and the all-displays canvas is wrong.
+
+### What was actually broken
+
+Three things, two of them measured on this machine rather than argued.
+
+**1. The desktop split was not a desktop split.** The Mac derived
+"This Desktop" / "Other Desktops" from the set difference between the full
+CoreGraphics window list and the one taken with `optionOnScreenOnly`, on the
+theory that that option is Space-scoped. It is not — it means "currently
+composited". Probe on a live single-Space desk: **76 layer-0 windows, 10 on
+screen, 66 declared to be on other desktops.** A second probe minimized a
+Finder window and watched it flip on-screen → off-screen → on-screen with no
+Space change at all. Since the phone defaults to the first bucket, minimizing
+a tracked terminal deleted its card from the grid and the row blamed another
+desktop. Naming the real Space needs `CGSCopySpacesForWindows` (private API),
+so the buckets now claim only what they measure: **On Screen** / **Hidden**,
+reset chip **All Windows**. Wire ids are unchanged.
+
+**2. The canvas lied about the desk by 45%.** `hostScreenRect` multiplied the
+height by 1.45 in the letterboxed branch "so the thumbnail isn't a narrow
+strip". Every card is a normalized frame multiplied by that rect, so the fudge
+drew every window 45% taller than the window it stands for. A portrait phone
+takes that branch on any desk wider than the canvas — and this desk is a single
+**3440×1440 ultrawide, aspect 2.39**, the worst case. True aspect in both
+branches now, covered by tests rather than by eye.
+
+**3. The display chips cannot appear on this desk at all.** `NSScreen.screens`
+reports one display, and `displayChipGroup` renders nothing below two. Half of
+what "screens and displays" names has never been visible here. No code change —
+recorded so the next session does not go hunting for a bug in it.
+
+### The setting
+
+`LabsFlags.windowFilters` → Settings → Quip Labs → **Window filters**, off by
+default. It gates the whole row and both axes. The gate is read once and routed
+through `effectiveSpaceID` / `pinnedDisplayID`, so the row, the grid and the
+canvas cannot disagree about whether filtering is on. The per-backend monitor
+pick is left in `UserDefaults` untouched, so turning the row back on restores
+the pinned monitor rather than resetting it.
+
+### Verified
+
+| Claim | Evidence |
+|---|---|
+| `optionOnScreenOnly` is not a Space test | **Measured twice.** 66 of 76 layer-0 windows misfiled; a Finder minimize/restore flips the flag with no Space change. |
+| Bucket labels no longer claim a desktop | **Test-verified**, both the `split` path and the `desktops(inSnapshot:)` path that actually feeds the broadcast. |
+| Canvas keeps the desk's aspect | **Test-verified**, 4 cases: ultrawide letterbox, pillarbox, a 16:10 desk on a portrait canvas, and the nonsense-aspect fallback. |
+| Full gate | **Green.** harness 62 checks, QuipMac 865 tests, QuipiOS 811 tests (806 before this session). |
+| Anything on hardware | **NOT verified.** No device was reachable; nothing has run on the phone or been installed to the Mac. |
+
+### Open threads
+
+1. **Nothing is installed — blocked on the phone, not on the build.** The device
+   build is verified: `xcodebuild -scheme QuipiOS -destination
+   'generic/platform=iOS' build` → **BUILD SUCCEEDED**, `QuipWatch.app` embedded,
+   `TeamIdentifier=D2PM6R797Q`. `devicectl device install app` fails with
+   `CoreDeviceError 1011 … unable to locate a device matching the requested
+   device identifier`; `tunnelState: unavailable`, last connection 2026-09-13.
+   Cable or same-network-and-unlocked, then install and force-quit from the app
+   switcher (`devicectl install` replaces the bundle but does not kill the
+   running process).
+
+   Unblocked on the way: `xcodebuild -downloadPlatform watchOS` installed
+   watchOS 26.5 (23T570, 3.96 GB). The scheme had been refusing to build **at
+   all** — device destinations included, not just tests — for want of the
+   simulator runtime. `tools/check.sh` now runs the real scheme with the
+   `QuipWatch` target and is green (harness 62, QuipMac 865, QuipiOS 811); the
+   watch-free `project.nowatch.yml` fallback is no longer on the path.
+
+   The Mac half (bucket labels) still needs a QuipMac rebuild, and that costs the
+   Screen Recording + Accessibility TCC grants — worth deferring, since the
+   labels are only visible with the Labs flag on, which is off by default.
+2. **Confirm the row is gone on the phone.** Acceptance: launch the app with no
+   Labs flag set and confirm no 26pt chip row above the grid and that every
+   window the Mac broadcasts has a card, including a minimized one.
+3. **Confirm the canvas matches the desk.** Acceptance: with the ultrawide
+   attached, check that a window occupying the left third of the desk occupies
+   the left third of the phone canvas, and that cards are no longer stretched
+   vertically. If the resulting band reads as too short to use, the arrange
+   modes are the intended answer — but say so, because reverting one line in
+   `hostScreenRect` brings the 1.45 back.
+4. **`body` is near the type-checker's budget.** One run of the iOS suite
+   mid-session failed with "the compiler is unable to type-check this expression
+   in reasonable time" pointing at a trivial line inside `MainiOSView.body`, and
+   the same tree compiled on the next run. Not chased. `MainiOSView.body` is the
+   thing to break up when it next refuses.
+5. **Display chips are still untested anywhere.** They need a second monitor.
+   The span composition (`DisplayGeometry.spanFrame`) has unit tests but has
+   never been seen on hardware.
+
+---
+
+## Session log — 2026-09-11 (iTerm2 unmapping fixed; injection logging added)
+
+**Shipped on `eb-branch`, installed, hardware-confirmed. Not pushed.**
+
+- `00d2f1e` — `fix(iterm2)`: a failed AppleScript no longer unmaps every window.
+- `9a4ac75` — `feat(diagnostics)`: failed injections now write `injection.log`.
+- `b9dbeec` — `fix(tts)`: a stale session map no longer reports itself as a
+  permissions problem. Found by following this session's own lead — open
+  thread 5 below was written as a suspicion and closed in the same session.
+
+### The bug: one timed-out AppleEvent unmapped nine windows
+
+Reported as a red toast on the phone: `Text send failed: iTerm2 session not yet
+mapped for window com.googlecode.iterm2.808`.
+
+It was neither a Spaces regression nor a lost TCC grant, and both were ruled out
+by measurement rather than argument: iTerm2's `id of w` equals the CGWindowID for
+all nine windows (808 included) with bounds identical to the pixel, so the
+matcher and the Automation grant were both healthy.
+
+The defect was one collapsed return value. `fetchIterm2SessionIds()` handed back
+a bare `[Iterm2SessionInfo]`, so **"the AppleScript failed" and "iTerm2 has no
+windows" were the same value** — `AppleScriptRunner.Output.failed` was computed
+and then discarded. `applyIterm2SessionIds` opens by clearing every mapping
+before re-matching, so a single failed fetch unmapped all nine at once, and every
+send failed until some later fetch happened to succeed.
+
+`ensureITermSessionResolved` — written specifically to heal this — made it worse,
+because it calls the same fetch. A failed heal did the wiping, then ran
+`perform(refreshed)` on a still-nil window. That is the call that fired the toast.
+
+Corroborating evidence in `kokoro.log`: windows 246, 247 and 808 all read empty
+**within the same second** (15:03:25Z). One failure burst, not three faults.
+
+Fix: `Iterm2SessionFetch { ok([Iterm2SessionInfo]), failed }` plus
+`applyIterm2SessionFetch`, which drops a `.failed` pass and keeps the last good
+mapping. `.ok([])` still clears, so a quit iTerm2 cannot pin a dead session id.
+**All ten call sites had the bug**; all ten migrated.
+
+The generalisable lesson, worth carrying past this bug: *a function that returns
+a collection cannot report failure.* Every `guard … else { return [] }` over an
+I/O boundary is this bug waiting for a caller that treats empty as authoritative.
+`applyIterm2SessionIds` was exactly that caller.
+
+### Injection had no log at all
+
+Chasing the above surfaced a second gap. `KeystrokeInjector`'s only record of a
+failure was `print`, which reaches neither `~/Library/Logs/Quip/` nor the unified
+log — verified: `log show --predicate 'process == "Quip"'` returns **zero lines**
+for a Quip launched from Finder. So every "not yet mapped" and every TCC denial
+went on the floor, and "did the keystrokes land?" was answerable only by looking
+at the user's screen.
+
+`injection.log` now takes one line per FAILED injection:
+
+```
+DROPPED op=sendText window=com.googlecode.iterm2.808 app=iTerm2 kind=sessionNotFound msg="…"
+```
+
+`kind` renders the existing `InjectionError` as a closed vocabulary
+(`sessionNotFound | tccDenied | windowClosed | unknown | unclassified`) so a
+stale session id (self-heals) greps apart from a TCC denial (needs a human).
+Successes stay out — `latency.log` already has them with timing. Six sites wired:
+the five iTerm2 session guards plus `executeAppleScript`, where TCC denials and
+AppleEvent timeouts surface. Three guards that returned an unclassified result
+now carry `kind: .sessionNotFound`, which they always were — so the self-heal
+path can finally see them.
+
+### Verified
+
+| Claim | Evidence |
+|---|---|
+| Desktop chips render with real counts | **Owner-confirmed on hardware** — This Desktop 10 / Other Desktops 2 / All Desktops 12. Closes half of 2026-09-10 open thread 1. |
+| The unmapping fix works end to end | **Confirmed on hardware.** `send_text` to window 808 at 17:17:25Z landed with no toast and no `injection.log` entry. |
+| `Iterm2SessionFetch` semantics | **Test-verified, proven non-vacuous.** Reverting the guard fails with `nil is not equal to Optional("UUID-808")` — the reported symptom exactly. |
+| `injection.log` line format | **Test-verified.** 6 cases via a pure static builder, including that a quote or newline in an AppleScript error is escaped rather than forging a second log line. |
+| Full gate | **Green.** harness 62 checks, QuipMac 808 tests, QuipiOS 800 tests. |
+| Phone authenticates over LAN | **Observed at last.** `client live: 192.168.4.42:54980 (auth=pin)` at 16:33:08Z. The 2026-09-10 handoff had this as never-seen. |
+| `injection.log` actually writes | **NOT verified.** The format is unit-tested; the append path has never run, because nothing has failed since install. It is created on first failure. |
+
+### Open threads
+
+1. **Walk the chip interactions past the row.** Still the oldest open item. The
+   row renders with correct counts; untested are tapping "Other Desktops" to
+   filter, tapping a card on another desktop to switch Space and raise it
+   (`activate(options: [.activateAllWindows])` + AX raise), and returning via
+   "All Desktops".
+2. **`injection.log`'s write path is unexercised.** First real failure proves it.
+   If it matters sooner, force one by sending to a window id that no longer
+   exists.
+3. **Dual-path flap still shows up.** A `CLOSE_WAIT` sat beside the live LAN
+   socket at 16:33 and collapsed on its own. Related to
+   `project_dual_path_reap_deadlock`; not chased.
+4. **Nothing pushed.** Both commits are local on `eb-branch`.
+5. ~~**`TTS DROPPED — window content read empty`**~~ — **closed, `b9dbeec`.** The
+   suspicion was right. `readContent` separates a failed AppleScript (nil) from
+   an empty buffer (""), and `waitForStableContent` collapsed both with `?? ""`,
+   so an unmapped window, a genuinely failed read, and a quiet terminal all
+   produced the same "suspect a revoked Automation/Accessibility grant" line.
+   `ContentSettleOutcome { stable, noSessionId, unreadable, empty }` splits them,
+   and `.noSessionId` now says outright that it is not a permissions problem.
+   The 2026-08-11 history of this message is therefore **not** evidence of a
+   long-standing TCC fault — much of it was probably the unmapping bug all along.
+
+6. **The write path of `injection.log` is still unexercised** after three
+   installs — nothing has failed since. Same caveat as thread 2.
+
+
 **Scrub history:** 2026-05-05 — collapsed verbose ✅ Done bodies to status line + commit hash. Original context lives in git log + code; the entries here track *what shipped* not *how*. Wishlist / In Progress / Blocked items kept full. Tabled §55 (Universal Clipboard already covers it) and §52 (no iPad).
+
+---
+
+## Session log — 2026-08-18 (§58 Iterations 1, 2, 4 shipped; Mac installed; a flap found by testing, then fixed)
+
+### Shipped
+
+| Commit | What |
+| --- | --- |
+| `316f483` | §58 Iteration 2 closed. The acks/pending-UI/metadata work had already landed piecemeal; the last gap was client-side id validation. The Mac's filename sanitizer moved to `Shared/PromptID.swift` (two-peer contract, like `NumberedPromptDetector`) and the editor now previews the real filename, refuses ids that sanitize to nothing, warns on a sanitized collision, and sends the sanitized id. |
+| `cf0f1b3` | §58 Iteration 1. One order source (`WindowManager.customOrder` via `setOrder`/`swapOrder`) instead of three; Arrange builds rects from the selected display converted into AX top-left space; failures raise an alert instead of doing nothing; sidebar numbers are arrange slots, not row positions. |
+| `f42ae84` | §58 Iteration 4 minus the resize decision: spawn-path quoting (the sidebar interpolated an NSOpenPanel path straight into `do script "cd \(dir)"` — unquoted and unescaped), 11 icon-only Mac controls labelled, iOS prompt rows given the button trait plus a named "Paste and send" action, prompt-ack timeouts + sanitization documented in `docs/protocol.md`. |
+| `198b43c` | Drag-to-resize made real. The toggle had shipped for months with nothing behind it — `customFrames` was passed in, never written, never read by Arrange. Eight handles per tile, `LayoutResize` for the arithmetic, Arrange and the preview reading one computed property, presets clearing hand-dragged rects, "Reset sizes" escape hatch. |
+
+### The generalisable one: two views, two lists, one lie
+
+Iteration 1's order bug and Iteration 4's resize toggle are the same failure. In
+both, the UI rendered from one data structure and the action read from another,
+so the picture and the behaviour could disagree indefinitely without anything
+erroring. The preview drag wrote `customOrder`; the sidebar drag wrote
+`windowOrder`; Arrange computed frames in its own switch statement while the
+preview computed them in a different one. Nothing crashes when two sources
+diverge — it just quietly stops meaning anything.
+
+Worth looking for elsewhere: any place a SwiftUI view takes a `@Binding` it
+writes but nothing reads, or where two call sites compute "the same" derived
+value independently.
+
+### Mac install (2026-08-18 11:30 PDT)
+
+`/Applications/Quip.app` rebuilt from `198b43c` — Developer ID
+(`D2PM6R797Q`), hardened runtime, `codesign --verify --deep --strict` valid on
+the installed bundle, fresh pid 88438 (verified `STARTED`, not the trapped-SIGTERM
+no-op), `nm` confirms `LayoutResize` + `PromptID` symbols are present.
+
+Trap re-confirmed: the Release build failed first with ~30 `cannot find X in
+scope` errors because the committed `pbxproj` is stale — the pre-commit gate
+restores it under the zero-pbxproj protocol, so `xcodegen generate` is mandatory
+before any build, not just after adding files.
+
+APNs orphaned by the reinstall exactly as predicted — `push.log` now logs
+`waiting_for_input skipped — APNs not configured in Settings → Notifications`.
+The `.p8` needs re-entering.
+
+### Found by testing, not by reading: state flaps ~26×/min
+
+Running the Q-16 smoke surfaced something unrelated and more interesting.
+`push.log` carries 73 `neutral↔waiting_for_input` transitions in 2m50s for a
+single busy iTerm window (other windows: 2–7 in the same period).
+
+Cause is a single `cpuIdleThreshold = 5.0` with no hysteresis: an agent doing
+work oscillates across it, and the existing 2-poll debounce (0.5s at a 0.25s
+interval) is nowhere near long enough to absorb that. Pushes are protected by a
+separate 30s per-(window, device) debounce in `PushNotificationService`, so this
+is not notification spam — it is phone-grid badge flicker plus one layout
+broadcast per transition. Filed as Q-20 with the fix shape (separate enter/exit
+thresholds + a minimum dwell).
+
+**Fixed the same day** in `TerminalStateDebounce`. The key observation is that
+the two directions were never symmetric and should never have shared a number:
+
+- Raising `waitingForInput` is the expensive mistake — it badges the phone grid
+  and can fire a push claiming an agent is asking the user something when it is
+  not. That direction now needs **6 agreeing polls (1.5s)** of sustained quiet.
+- Clearing it is cheap to get wrong and expensive to get slow (a stale "answer
+  me" badge), so it stays at the original **2 polls (0.5s)**.
+
+That asymmetry is why this did not need the latency trade it looked like it
+needed. A genuine prompt idles indefinitely, so it still lands — about a second
+later than before, against a human reaction time measured in seconds. A working
+agent essentially never idles 1.5s straight inside a turn, so the flap stops.
+The regression oracle is `test_alternatingPollsNeverTransition`: it replays the
+measured shape (two quiet polls, two busy, 200 times) and asserts **zero**
+transitions, where the old flat threshold produced one roughly every other poll.
+
+Also tightened: the pending run is now dropped on `untrackWindow`,
+`stopMonitoring`, `trackWindow`, and both STT state writes, so a half-accumulated
+candidate can never survive a lifecycle event and complete a transition it did
+not earn.
+
+Confirmed on hardware 2026-08-19 (Q-20a) — and it did **not** clear the bar:
+44 transitions in 180s for one window, ~14.7/min against a ~26/min baseline and
+a single-digit target. The debounce is a real ~1.8x improvement and stays, but
+it was answering the wrong question. See below.
+
+## Session log — 2026-08-19 (Q-20a failed, Q-21 shipped and confirmed)
+
+### The flap was never a timing problem
+
+`TerminalStateDetector.swift:515` decides the state with `totalCPU <
+cpuThreshold` over the AI child processes alone. An agent blocked on an LLM
+stream or an MCP call burns ~0% CPU, so by that measure it is *identical* to a
+prompt waiting on a human. Q-20 made the required quiet run longer, which can
+only delay the same wrong answer. The log said so plainly once it was read the
+right way: every raise cleared again after 1-5s, and a real prompt idles
+indefinitely — so none of those 22 cycles were prompts at all.
+
+### The obvious fix is a trap
+
+"Read the pane and look for the prompt" does not work. **Claude Code draws its
+`❯` input box while it is working too** — verified against live panes, the box
+is present in both states. Status-line glyphs do not separate them either: a
+working pane shows `✶ Crystallizing… (40s · ↓ 1.4k tokens)`, a finished one
+`✻ Cooked for 23m 34s`, both a glyph plus an elapsed time. The design was
+approved on the input-cue rule and had to be changed mid-build once the live
+captures falsified it.
+
+What separates them is **movement**. A working agent redraws a live counter
+every frame; an idle one is frozen — the same idle pane read three times a
+second apart came back byte-identical. So the raise, and only the raise, now
+captures the pane twice 400ms apart and proceeds only if nothing moved. This
+needs no per-CLI dialect knowledge, which matters: the status verbs are
+randomized per turn and every CLI draws its own chrome, so a matcher would have
+started rotting immediately.
+
+Shipped in `7611d32` as three pieces, split so the logic is testable without
+spawning `osascript` against a live terminal — which is exactly the shape of
+test that missed the original flap:
+
+- `Shared/PaneStability.swift` — pure text compare; strips ANSI so a colour
+  repaint is not movement, and refuses to answer on an empty capture rather
+  than calling two failed reads "identical"
+- `QuipMac/Services/PromptRaiseGate.swift` — pure decision: stable raises,
+  moving drops, unreadable **fails open**, and staleness outranks all three
+- detector wiring — resolves the reader on main (window metadata is MainActor),
+  runs the reads on `pollQueue` (they fork `osascript`), applies back on main
+  behind the Q-16b generation guard
+
+Unreadable panes fail open deliberately. A missing Automation grant that
+silently stopped the badge would look exactly like a fixed flap, so it raises on
+CPU alone as before and logs `prompt-gate skipped` into `push.log` next to the
+transitions it failed to gate.
+
+### Q-21a — confirmed, same protocol
+
+| window | Q-20 only | with gate |
+| --- | --- | --- |
+| `iterm2.114` | 44 | 1 |
+| `iterm2.118` | 39 | 3 |
+| `iterm2.116` | 24 | 0 |
+| `iterm2.115` | 24 | 0 |
+| `iterm2.113` | 2 | 6 |
+| **raises, all windows** | **67** | **10** |
+
+Zero `prompt-gate skipped` lines in the window, so every raise was actually
+gated — none of the improvement came from the fail-open path, which is the
+reading that would have made these numbers meaningless. The two
+`com.apple.Terminal` windows that raised once and stayed raised are correct: no
+agent process, so they take the early return at `:511` and genuinely are waiting
+on a human.
+
+Still owed: confirming on hardware that a real prompt badges the phone within
+~2s. The unit oracle covers it; the grid does not yet.
+
+### Owed regardless — APNs is still dark
+
+`push.log` logged `waiting_for_input skipped — APNs not configured` throughout
+this session, including after the key was re-entered. Quip was reinstalled twice
+more afterwards for the Q-21 build, and every stable-resign reinstall re-triggers
+the keychain-orphan pattern, so the key needs re-importing through Settings →
+Notifications rather than just re-typing.
+
+### Smokes still not run
+
+- **Q-16 (poll guards): NOT verified.** The window opened for the test never
+  entered a tracked state, and three AppleScript `close` variants against it
+  returned success while leaving it open (iTerm window id 2962 is still on the
+  desktop — worth closing by hand). Nothing about the guard was exercised;
+  do not read the clean log as a pass.
+- **Q-18a multi-display: unrunnable here.** This machine reports one display, so
+  the half of Iteration 1 that matters most cannot be tested without a second
+  monitor attached.
+- **Q-19b (resize) and Q-17a (prompt CRUD)** need hands on the UI.
+
+---
+
+## Session log — 2026-08-17 (multi-select "still broken" = stale binary; probe socket leak; LAN routing)
+
+### Shipped
+- **Latency swap actually works** (`58dd75e`) — the engine was gated behind a
+  default-off key nobody ever wrote, and its comparison mixed measurement kinds. Both
+  fixed; the phone moved to LAN on hardware at `21:57:02Z`. Full write-up below.
+- **Pre-handshake reaper** (`1dbd64b`) — `PreHandshakeReapPolicy` closes any accepted
+  connection that has not completed the WebSocket upgrade within 10s. The listener
+  previously waited forever, so every phone latency probe (TCP-only, one per alternate
+  URL per minute, closed as soon as TCP is up) pinned a Mac socket in `CLOSE_WAIT` —
+  measured still open four minutes after the peer's FIN. Worse, ~60s later the peer's
+  own FIN_WAIT_2 timer RST'd the abandoned socket, the Mac's connection object was
+  still alive to receive it, and websocket.log printed `[WARN] broke during handshake
+  — the client never got connected: POSIX 54`. 43 of those in one day, all describing
+  a LAN path that was healthy. Deadline is pinned by test between the ~60s RST window
+  and a real handshake (milliseconds). Mac suite 685 green; verified live against the
+  phone's own probe (`reaping … within 10s` at INFO, zero WARNs since).
+- **Mac app brought current** — `/Applications/Quip.app` was the **Jun 20** build.
+
+### The one that mattered — no code was broken
+
+The reported symptom was multiple-choice answers failing three ways at once: tap does
+nothing, "Prompt changed — not sent", multi-select never submits. Every fix for all
+three had already shipped to `eb-branch`; none of it was running. The installed binary
+predated the entire interactive-checkbox path (`7654f6c`, Jul 1 — so the Mac typed
+`"1, 3"` as text into an Ink widget that ignores typed text), the Terminal.app space
+key (`bf050c7`), the untoggle + submit-review fix (`2c57768`), and two `fingerprint()`
+rule changes (`22e4f01`, `18b2ec0`) that break the phone↔Mac two-peer contract against
+a current phone — a mismatch that yields "Prompt changed — not sent" on *every* prompt.
+
+Diagnostic worth keeping: three symptoms spanning unrelated code paths point at one
+stale binary, not three live bugs. `stat -f "%Sm" /Applications/Quip.app` against the
+feature's commit date costs five seconds and would have opened this session instead of
+closing it. Verify the installed binary actually carries the feature with
+`nm -a …/Contents/MacOS/Quip | grep -ci multiselect` (68 after, 0 before) — `strings`
+does not work on Swift symbols, and `ditto` leaves the `.app` directory mtime stale so
+check `Contents/MacOS/Quip` instead.
+
+**Live-verified end to end:** phone tapped two options on a real Claude Code checkbox
+widget → `audit.log` recorded `select_multi:1,2` at `20:40:45Z` → the picks came back
+correct. First successful phone-driven multi-select on this machine; the three attempts
+earlier the same morning (`15:41`–`15:42`) hit the old binary and died silently.
+
+### Already shipped, contrary to the backlog
+- **Persist connections across reinstall** — done (`f75dcef`). `PreferencesSnapshot`
+  carries `pairedBackendsJSON`, `recentConnectionsJSON`, `activeBackendID`; restore goes
+  through merge hooks (never clobbers live rows) and is mirrored to
+  `NSUbiquitousKeyValueStore`, so it survives a reinstall even with no Mac reachable.
+- **Bonjour in Tailscale mode** — done (`8dbfa93`, TXT-fold). The Mac advertises LAN
+  Bonjour in all modes now.
+- **Dual-path row flap** — not reproducing. All 20 authenticated connects on 2026-08-17
+  came over Tailscale, never two at once; `urlsByRefreshingLocal` + `ingestLocalURLs`
+  are in place. What looked like a flap in websocket.log was the probe artifact above.
+
+### Answered, then fixed — the phone was never going to use LAN
+The open question above ("why has the phone authenticated over Tailscale on all 20
+connects, never LAN?") had two independent answers, and both had to be fixed
+(`58dd75e`).
+
+1. **The swap engine was dark for everybody.** `evaluateSwap` gates on
+   `latencyAutoSwapEnabled`, and `UserDefaults.bool(forKey:)` returns false for a key
+   nobody ever wrote. It shipped "off until hardware-verified", which in practice meant
+   off forever — the verification required the engine to run. Unset now means on
+   (`BackendConnectionManager.autoSwapEnabled`); an explicit choice either way still
+   wins, and the Settings row reads through the same helper so the toggle cannot
+   disagree with the engine.
+2. **Turning it on would have decided wrongly.** `LatencyProbeService` skipped the URL
+   it was connected to, so that URL's bucket held only live samples — a full WebSocket
+   round trip — while every candidate's bucket held only TCP-connect times. A handshake
+   is cheaper than an application round trip by construction, so *any* candidate scored
+   far better than the URL in use, including a slower one. The `candidateRatio` guards
+   sampling noise; nothing guarded the unit mismatch. Now every URL is probed (the
+   connected one included, force-added since a hot-swap can briefly hide it from the
+   provider's view) and `URLSwapPolicy` scores probe samples only. Live samples stay in
+   the buffer for Diagnostics; they no longer vote.
+
+**Verified live on hardware.** Phone connected Tailscale-first as designed at
+`21:54:49Z`; both URLs probed in the same second each cycle (the signature of the fix —
+previously only the LAN line appeared); third probe round completed ~`21:56:5x`; swap
+landed at **`21:57:02Z`**, inside the window the thresholds predict. `netstat` confirmed
+the live socket as `192.168.4.26.8765 ← 192.168.4.42` — LAN to LAN, relay out of the
+path. QuipiOS suite: 756 tests, 0 failures.
+
+### Verified end to end this session
+| Change | Evidence |
+| --- | --- |
+| Phone-driven multi-select | `audit.log` `select_multi:1,2` at `20:40:45Z` → correct picks returned |
+| Pre-handshake reaper | `reaping … within 10s` at INFO; zero `broke during handshake` since; no leaked sockets |
+| LAN routing | `client live: 192.168.4.42` at `21:57:02Z`, first LAN auth on record |
 
 ---
 
@@ -43,12 +701,28 @@ Tailscale IP does not work). Needs a cable or same-Wi-Fi + unlock. iOS build is 
 ### OPEN — deferred, with reasons
 - **~16 remaining swallowed errors** — listed with risk notes in
   `docs/superpowers/plans/2026-07-13-swallowed-errors-audit.md`.
-- **`pasteImage` has no Terminal.app fallback** — hard-fails there (the same
-  Terminal.app-vs-iTerm2 blind spot that caused `bf050c7`).
-- **Image paste puts only `public.tiff` on the clipboard** — some targets want PNG/JPEG.
-- **`APNsJWTTests` hangs the whole Mac suite** (~57 min observed) on a Keychain
-  authorization prompt in `APNsKeyStore.get()` (APNsKeyStore.swift:62). Workaround in use:
-  `-skip-testing:QuipMacTests/APNsJWTTests`. Real fix: inject the key store in tests.
+- ~~**`pasteImage` has no Terminal.app fallback**~~ **FIXED 2026-08-03.** Codex
+  under Terminal.app took the clipboard-bytes route, which only `pasteImage`
+  serves and `pasteImage` only drives iTerm2 — so the upload failed after the
+  photo had already been saved, and the phone showed an error. Measured on
+  codex-cli 0.146.0: given a bare absolute path, Codex opens the file itself
+  ("Viewed Image └ …" then described the picture), so Terminal.app now takes the
+  same typed-path route every other CLI uses. iTerm2 + Codex still pastes bytes.
+- ~~**Image paste puts only `public.tiff` on the clipboard**~~ **FIXED 2026-08-03.**
+  `writeImagePayload` now offers TIFF + PNG + the file URL as ONE pasteboard
+  item. TIFF stays the primary representation (it is what the proven iTerm2 +
+  Codex paste consumes), so this only widens what a target can accept. NOTE: the
+  live paste itself is still unverified from a dev shell — System Events
+  keystrokes need an Accessibility grant the shell does not have, so only Quip
+  can exercise it. Covered by unit tests against a private pasteboard.
+- ~~**`APNsJWTTests` hangs the whole Mac suite**~~ **RESOLVED — re-measured
+  2026-08-03.** The tests already inject the PEM (`keyPEM:`) and no longer reach
+  `APNsKeyStore.get()`, so the Keychain prompt never fires: the class runs
+  unskipped in 0.018s (7 tests), and the full suite is 669 tests in 24s with no
+  `-skip-testing`. Drop that flag if any script still passes it. The one live
+  hazard left is the *default argument* `keyPEM: Data? = APNsKeyStore.get()` —
+  it is evaluated per call site, so a future test that omits the parameter puts
+  the Keychain read back inside the test host. Called out at the initializer.
 - **Final whole-branch review** across this session's 28 commits was never run.
 
 ---
@@ -67,7 +741,18 @@ into Quip's Prompts page, via a manual Sync button. US-001..US-006 all green.
   (`hiddenPromptIDsJSON`, `PromptHideState`) filtered at `sortedPromptsByMRU()`.
 - Contract: `docs/vibecut-prompt-inherit.md`. **NOT hardware-verified** — needs a
   Mac rebuild (touches QuipMac) + live phone sync.
-- Possible v2: Settings UI for `vibecutRepoPath`; two-way sync (out of scope now).
+- ~~Possible v2: Settings UI for `vibecutRepoPath`~~ SHIPPED 2026-08-14 (`7f28b61`,
+  `8470340`): Mac Settings → Prompts VibeCut section (repo probe + Change… +
+  Sync Now via shared `VibeCutSyncService` + persisted last-sync counts), header
+  yours/inherited split, purple badge + prefix-free slugs on inherited rows,
+  sync trigger + outcome logged to websocket.log. Installed + Mac-verified
+  2026-08-14; live PHONE sync against the new build still unverified. Comps:
+  claude.ai/code/artifact/ae6ff381-5fef-4235-bc1a-ee6987075e57.
+  Open question: two syncs on 2026-08-14 (12:38:53, 12:43:44 local) fired with
+  zero WS clients and no button press, during synthetic AppleScript keystrokes
+  racing window restoration; unreproducible ×4 afterward. If websocket.log ever
+  shows `sync started (trigger=…)` nobody asked for, that line names the caller.
+- Two-way sync still out of scope.
 
 ## Wishlist — Alternate app icons (user-selectable in Settings)  [2026-06-20, requested]
 
@@ -100,14 +785,21 @@ Shipped on eb-branch (unpushed):
   rebuilt + installed (Mac Release Developer-ID, TCC survived; iOS to device).
   See [[project_smart_answer_multiselect_gap]].
 
-### OPEN — acceptance test (needs a live Claude checkbox prompt + user hands)
-- **Multi-select keystroke assumption is UNVERIFIED.** The Mac injects each
-  picked option *number* (no Return) to toggle its checkbox, then one Return to
-  submit — assuming Claude's TUI toggles on the number key. If it actually needs
-  ↑/↓ + Space, the chips appear but toggle the wrong rows. Fix point if so: the
-  `select_multi` branch of the `steps` builder in `revalidateAnswer`
-  (`QuipMac/QuipMacApp.swift`). Acceptance: on the cleanup-groups menu, tick
-  G1+G3 → Submit → exactly G1 and G3 checked, then submitted.
+### RESOLVED 2026-08-03 — the keystroke assumption was wrong, and now it is measured
+- The old note here guessed that Claude's TUI toggles a checkbox on the option's
+  number key. It does not. Probed live against Claude Code v2.1.220: **space**
+  toggles, **Return on an option row toggles that row too** (the footer says
+  "Enter to select"), and committing means walking onto an unnumbered `Submit`
+  row and then confirming a review step. The checked box is `[✔]` (U+2714). See
+  the 2026-08-03 section at the end of this file and
+  [[project_agent_cli_prompt_dialects]]. Fixed in `2c57768`; the live captures
+  are regression fixtures in `tools/main.swift`.
+- Still owed: the **phone→Mac leg**. Tap 2+ options in a Claude multi-select from
+  the phone and Submit; the terminal must list every pick under "Review your
+  answers" and land on `⏺ User answered Claude's questions`. The Mac-side
+  choreography is verified by direct injection; only the WebSocket hop between
+  them is untested, and it needs a paired phone (the Mac requires a PIN, so it
+  cannot be driven from a script here).
 
 ## Session log — 2026-06-15 (prompt-save crash + connection triage)
 
@@ -1345,3 +2037,455 @@ assumed.
   a lot (mode poll is 91ms × N every 2s) this gets worse — at that point move
   the pollers to `osascript` subprocesses (process isolation, no shared lexer,
   main never waits) and keep in-process AppleScript for injection only.
+
+---
+
+## Main-thread hangs — fixed 2026-08-01, tail open
+
+**What it was:** the app never crashed. Zero `.ips` reports for Quip, ever. Five
+`Quip_*.hang` reports in `/Library/Logs/DiagnosticReports/` (913s, 85s, 39s,
+6.3s, 3.2s) plus three `cpu_resource.diag` ("95% cpu average"). The app froze,
+got force-quit, and that read as a crash. **When the user says "Quip crashed",
+look for `*.hang`, not `*.ips`.**
+
+Every stack was one defect: a blocking system call on the MainActor. The trap is
+that `nonisolated` does NOT hop off the actor — a synchronous `nonisolated` func
+called from `@MainActor` code runs inline on the main thread.
+
+Plan: `docs/superpowers/plans/2026-08-01-main-thread-hang-fixes.md`.
+Commits `c6631ef`..`e451f57`. Suite 636 → 663 tests.
+
+**Regression oracle:** `TerminalStateDetector.mainThreadProcessSpawns` — counts
+`Process()` launches where `Thread.isMainThread`. Tests assert it stays 0. Reuse
+it for any new spawn site rather than inventing a second mechanism.
+
+### Same defect class — swept 2026-08-08
+
+Found by a full `QuipMac/` sweep, ranked by exposure. None were speculative; each
+was a named blocking call on a confirmed MainActor path. Four are fixed, three
+are deliberately left alone with reasons.
+
+**Fixed**
+
+- `WhisperDictationService.ingest(_:)` — base64 PCM decode plus `queue.sync` on
+  main, **once per audio chunk of every PTT stream**. Highest frequency of the
+  set. Both halves now run on the existing serial whisper queue; because it is
+  serial, a later `hasBuffer`/`purgeStaleSessions` still sees the append.
+  `ingestAsync` (test-only) routes through the same path via a continuation,
+  so tests and production agree about where the decode happens.
+  Oracle: `WhisperDictationService.mainThreadChunkDecodes`, same shape as
+  `TerminalStateDetector.mainThreadProcessSpawns`, asserted 0.
+- `WebSocketServer.broadcast<T>` — `JSONEncoder().encode` on main for payloads up
+  to 4 MiB. Encode moved to a **serial** `encodeQueue`, each item hopping back
+  via `DispatchQueue.main.async`. Serial + FIFO is the whole point: TTS audio
+  chunks must arrive in sequence, and a concurrent queue or a `Task { @MainActor }`
+  hop (unordered by design) would scramble them.
+- `VibeCutPromptReader.read()` — packs-directory walk plus a JSON decode per
+  pack. Now `Task.detached`; `handleSyncVibeCut` split so only the read moved and
+  the MainActor tail (`finishSyncVibeCut`) is unchanged.
+- `QuipMacApp.windowIndexForWindow(_:terminalApp:)` — AX title walk with zero
+  callers anywhere in the repo. Deleted rather than fixed.
+
+**Left alone, on purpose**
+
+- `ImageUploadHandler.save(message:)` — moving it off main makes the whole
+  `image_upload` branch async, and `handleIncomingMessage` is what currently
+  guarantees frames are processed in arrival order. That ordering is exactly what
+  the press_return race in CLAUDE.md ("break in the prompt with no image pasted")
+  depends on. Needs a way to keep per-connection message ordering across an async
+  hop first; a bare `Task` reintroduces a bug that was already fixed once.
+- `PromptLibrary.rescan()` — `replaceVibeCutSet`'s own comment states the
+  single-broadcast guarantee "relies on this running synchronously on the
+  MainActor … Do not introduce an `await` between the delete and the final
+  rescan." Making `rescan` async breaks that invariant; N prompts would emit N
+  `prompt_library` messages instead of one.
+- `PINStore.read()` — a synchronous `SecItemCopyMatching` during `App.init`, with
+  a sampled hang already recorded in the file's own comment. Left because it is
+  the authentication path: making the first read async means deciding what the
+  server does with connections that arrive before the PIN is known, and getting
+  that wrong fails open. Wants a deliberate design pass, not a thread hop.
+
+**Not swept:** `sendToClient` and `broadcastTunnelsOnly` still encode on main.
+Same fix shape as `broadcast`; they carry the QA-mode per-client layout path.
+
+### Deliberate deviations from the plan (do not "fix" without reading why)
+
+- **No cap on the cloudflared poll window.** With incremental reads the log is
+  read once in total, so a cap only adds a way to kill a legitimately slow
+  tunnel. The 30s stall watchdog already covers never-resolves.
+- **The cloudflared `Process.run()` itself still spawns on main.** One
+  `posix_spawn` on an explicit user action, not a timer. Moving it would spread
+  the process handle and `terminationHandler` wiring across threads.
+
+### Signing flags noticed during the install (not acted on)
+
+- `com.apple.security.get-task-allow = true` is present in the **Release**
+  build. Harmless for local install; would block notarization if Quip is ever
+  distributed. Untouched because changing signing config mid-install was out of
+  scope.
+- `CFBundleVersion` is still `1` while `CFBundleShortVersionString` is `1.5.5`.
+  Bump it if you ever need to tell two installs apart.
+
+### Acceptance test — the only real proof
+
+Tests pin the mechanism; they cannot prove the freeze is gone. Run a Claude Code
+session that spawns many short-lived children in a tracked terminal window, with
+the Settings → General tab open, for a few days of normal use. Then:
+
+```bash
+ls -lt /Library/Logs/DiagnosticReports/ | grep -i quip
+```
+
+Baseline to beat: 5 hangs + 3 cpu_resource reports between 2026-07-27 and
+2026-08-01. **Any new `Quip_*.hang` — read its main-thread stack before
+assuming it is one of the six open items above.**
+
+## §18.2 multi-select — fixed 2026-08-03, plus what it exposed
+
+Three defects, all found by driving a REAL Claude Code v2.1.220 AskUserQuestion
+multi-select widget (not a hand-written fixture) and injecting keystrokes into
+it. Fixed; the live captures are now regression fixtures in `tools/main.swift`.
+
+1. **Return on an option row TOGGLES it, it does not submit.** The widget's
+   footer says "Enter to select". The old choreography ended in a bare
+   `"return"`, which flipped the last pick back OFF and left the prompt open —
+   the "it only selects one at a time" report. Real submit = walk one row past
+   the last option onto the unnumbered **Submit** row, Return there, then a
+   review step ("Ready to submit your answers? ❯ 1. Submit answers / 2. Cancel").
+2. **The checked box renders `[✔]` (U+2714)**, which no detector matched. A
+   checked line stopped counting as a checkbox line (corrupting the option run)
+   and `checkedOptions` came back empty (so the toggle diff flipped correct
+   boxes).
+3. **Terminals return the full window height**, so a prompt drawn near the top
+   sits below dozens of blank lines — past `scanLineLimit`. Only the phone-facing
+   broadcast trimmed them, so the Mac re-hashed padded content, got nil, and
+   dropped every fingerprinted answer as "Prompt changed — not sent". Trim now
+   lives in `KeystrokeInjector.readContent`, the single read choke point.
+
+### Found in the same pass — also fixed
+
+4. **A single-option tap typed the digit AND a Return.** Both interactive
+   dialects act on the digit the instant it lands (verified live: "2" answered
+   Claude's single-select outright; "3" picked a model in Codex's `/model` AND
+   advanced to its next step), so the trailing Return answered whatever screen
+   came next — it was silently confirming Codex's default reasoning level. The
+   digit now goes in alone and a Return follows only when the screen still shows
+   the same prompt, or shows Claude's review step.
+5. **Terminal.app read the wrong window.** `readContent` asked for "contents of
+   front window", so with two Terminal.app windows the answer re-validation, the
+   mode poll, and the prompt scrape behind push notifications could all be
+   looking at a different window than the one they were asked about. It turns out
+   **Terminal.app's AppleScript `id of window` IS the CGWindowID** — verified
+   against `CGWindowListCopyWindowInfo` on two live windows (72 and 968 matched)
+   — so reads now target `window id <cgWindowNumber>` exactly, and read a
+   non-frontmost window fine. iTerm2 has targeted by session id all along.
+   (Injection still goes through the frontmost window via System Events, which is
+   why `focusWindow` still runs before typing.)
+6. **Fingerprint asymmetry.** The phone could only ever hash redacted content
+   while the Mac re-hashed the raw buffer, so any prompt containing something
+   `SecretRedactor` rewrites could never re-validate. Redaction moved into
+   `readContent`, making it the one canonical form both peers hash.
+
+### Noticed while in there
+
+- **Meta rows are no longer offered as answers — done 2026-08-04.** Two rows,
+  two different rules:
+  - "Chat about this" sits BELOW the rule Claude draws under the options, so a
+    divider ends the menu. Structural; no label text in any language involved.
+  - "Type something" sits ABOVE the rule, inside the real option list, so the
+    divider rule cannot reach it. Rather than guess from the label — the class
+    of guess that broke this area twice — the rule came out of the shipped CLI
+    binary (`strings` on `claude` 2.1.221), which builds the row list as
+    `[...realOptions, {type:"input", value:"__other__", placeholder: multiSelect
+    ? "Type something" : "Type something."}, ...chatRow]`. Three facts follow:
+    the label is a fixed literal, there is exactly one such row, and it is
+    always LAST in the option run. `freeTextOption` requires the literal AND the
+    final position, so a real option that happens to carry that text stays
+    answerable.
+  - The row is dropped only from what gets OFFERED (`answerableOptions` — the
+    phone's chips, the Mac's notification actions). Navigation still counts it:
+    `lastOption` / `hasSubmitRow` / `MultiSelectSync.keystrokes` read the full
+    run, because a walk that skipped the row would land the cursor ON it and
+    Return would open the editor instead of submitting. Re-validation
+    (`answerStillValid`) also stays on the wide `detect`, so a phone running an
+    older build that still shows the chip keeps its current behaviour rather
+    than getting "Prompt changed — not sent".
+- **Codex has no checkbox multi-select at all** (checked on codex-cli 0.146.0:
+  `/model` and approvals are single-select numbered pickers, correctly detected
+  with cursor + fingerprint). A Codex prompt that "wouldn't submit" was defect 3
+  or 4 above, not a missing multi-select path.
+
+### Acceptance test
+
+From the phone: open a Claude Code multi-select, tap 2+ options, Submit. The
+terminal must show every pick in "Review your answers" and land on
+`⏺ User answered Claude's questions`. Verified by direct injection on
+2026-08-03; the phone→Mac leg still wants one hands-on run.
+
+---
+
+## Session log — 2026-08-06 (the gate lied; CI had never run; merge to main blocked)
+
+One defect class, five instances: **a failure reported as a pass.** Found by
+chasing why a commit landed after what looked like a failing check.
+
+### Fixed
+
+1. **`tools/check.sh` called a failing swiftc harness green** (`b994d97`). It ran
+   `bash tools/run-multiselect-tests.sh | tail -2` and then tested `$?`, which is
+   *tail's* status — always 0. The two Xcode gates already used
+   `${PIPESTATUS[0]}`; the harness line did not. Proved by breaking a harness
+   check deliberately: pre-fix "all green", post-fix "1 suite(s) ran, 1 FAILED",
+   exit 1.
+2. **CI's `changes` job failed CLOSED** (`ba07665`). If the scope mapper errored,
+   `apple` came out unset, both 10×-billed macOS jobs skipped, and the run went
+   green having built nothing. Now falls **open** — an unusable scope output runs
+   everything. Note the tempting wrong fix: `exit 1` there produces the same
+   outcome, because a failed `needs` *skips* its dependents rather than failing
+   them.
+3. **`tools/install-git-hooks.sh` printed "installed" after a failed `ln`** —
+   no `set -e`, unconditional success line. (`ba07665`)
+4. **`tools/quip-smoke.sh` called an unreadable log store a pass** — `log show |
+   grep -q` cannot distinguish "no match" from "the query itself failed". Split
+   into a status-checked query plus a grep, with an INCONCLUSIVE branch.
+   (`ba07665`)
+5. **`check.sh`'s `.github/` rule was a fallback, not unconditional** (`38482d9`).
+   A CI edit shipped alongside a `tools/` edit matched the harness rule first, so
+   the fallback never fired and a workflow change was "verified" by a 2-second
+   swiftc run.
+
+### The one that mattered — CI has been red since `f19760d`
+
+`.gitignore` carried an unanchored `scripts/`. **An unanchored directory pattern
+matches at ANY depth**, so it silently swallowed `.github/scripts/`. Both files
+the workflow calls — `changed-scopes.sh` and `changed-scopes-test.sh` — were
+never committed. Every run has failed at step one ever since, and it was
+invisible locally because the files exist untracked on this machine and `git
+status` never lists an ignored file.
+
+Anchored to `/scripts/` and `/tasks/`, and both scripts committed (`889db83`).
+Verified in a clean checkout, where untracked files do not exist: the files are
+present and `changed-scopes-test.sh` passes 13 checks run exactly as a runner
+would run it.
+
+Local gate on the merged tree: 62 harness checks, 680 QuipMac, 746 QuipiOS, all
+`TEST SUCCEEDED`.
+
+### Blocked — the merge to `main`
+
+`eb-branch` → `main` is a clean fast-forward and has been run locally; `main` is
+at `889db83`. Pushing it is blocked: **`main` is protected** and rejects direct
+pushes ("Changes must be made through a pull request"). `origin/main` is
+untouched at `3269351`, `origin/eb-branch` at `731a20d`. Landing this needs
+`eb-branch` pushed and a PR opened — an outward-facing action distinct from the
+direct push that was approved, so it waits on the owner.
+
+## Multi-display + any-app dictation — shipped 2026-09-08 (`c5aa63e`), hardware verification still open
+
+Asked for: the phone must work across the apps on the desktop, and across the
+screens on a Mac Studio — the terminal often lives on the second monitor, and
+toggling back and forth has to be one tap.
+
+Neither worked. Both were found by reading the broadcast path, then reproduced
+with the reporting desk's real geometry (3440x1440 ultrawide primary, a
+2560x1440 monitor to its right):
+
+```
+focus on primary:     second-screen window -> x = 1.047   OFF-CANVAS
+focus on 2nd screen:  primary window       -> x = -1.266  OFF-CANVAS
+per-own-display:      both                 -> 0.058 / 0.062  on-canvas
+```
+
+Four defects behind that:
+
+1. `broadcastLayout` normalized EVERY window against one display, so anything on
+   a second screen arrived outside the phone's 0-1 canvas. Second-screen windows
+   still appeared in the list (tap worked) — they just drew off the thumbnail,
+   which reads as "the phone can't see my other monitor".
+2. "Which display" was `NSScreen.main` — the *focused* screen, not the primary.
+   Clicking the other monitor re-based every window AND changed
+   `LayoutUpdate.monitor`, which `BackendConnectionManager.isSameMac` treats as a
+   same-Mac identity signal. A screen-focus change could read as a different Mac.
+3. Nothing about displays existed on the wire at all, so there was no way to
+   build a screen toggle: `LayoutUpdate` carried one `monitor` string, and the
+   phone had no display filter.
+4. `terminalAppForWindow` answers `.terminal` for every unrecognized bundle id,
+   and that path runs `tell application "Terminal" to activate` + keystroke into
+   `process "Terminal"`. Dictating into a Slack or Xcode card typed the
+   transcript into Terminal.app's shell. Silently, in the wrong app.
+
+Shipped:
+
+- `Shared/DisplayGeometry.swift` — Foundation-only pure math both peers use:
+  normalize a window against its own display, compute the desktop span, compose
+  the two back for a merged canvas. The Mac splits, the phone composes; the
+  round trip is pinned by test.
+- Wire: `LayoutUpdate.displays` + `spanAspect`, `WindowState.displayID`, all
+  optional so an older Mac or phone decodes and renders exactly as before.
+- `DisplayInfo.isMain` → `isPrimary` (`NSScreen.screens.first`, the display CG
+  measures from), and its id is now the `CGDirectDisplayID` rather than an
+  enumeration index — an index re-points at a different monitor the moment
+  displays are reordered, which would strand a saved phone selection.
+- `applyWindowSnapshot` re-enumerates displays every poll tick and assigns each
+  window a display by center point. Hot-plugging a monitor mid-session used to
+  leave `displays` stale until a Quip window happened to appear, because only
+  `MainWindow` / `MenuBarView` ever refreshed it.
+- Phone: a compact chip row (one per screen + "All") filters the grid and
+  switches the canvas aspect. Persists per backend; drops itself back to "All"
+  when the pinned monitor is unplugged; hidden entirely on a one-screen Mac.
+- Generic injection: `sendTextToApp` / `sendKeystrokeToApp` / `pasteImageToApp`
+  address the target by **unix id** (a process's System Events name is not its
+  app name) and raise it before typing. `send_text`, `image_upload`, and quick
+  actions branch on `isFirstClassHost`; shell-only verbs (clear / restart /
+  scrollback) are refused out loud instead of typed in as literal text.
+- New Mac setting **"Mirror every app"** (off by default). Without it a
+  non-terminal window can only reach the phone by being enabled by hand on the
+  Mac, so there was no way to pick an app as a dictation target from the phone.
+
+QuipMac 758 tests, QuipiOS 772 tests, `TEST SUCCEEDED` both. Mac Release built,
+signed Developer ID `D2PM6R797Q` at build time, `ditto`'d to `/Applications`
+(fresh pid, 14:17:02). iOS installed to the iPhone 17 Pro Max.
+
+### Open — needs the second monitor plugged in
+
+Only `C34J79x` was attached during this session, so every multi-display claim
+rests on the pure-geometry tests, not on hardware. The acceptance flow:
+
+1. Plug in monitor #2, move an iTerm window to it.
+2. Force-quit the phone app from the app switcher and relaunch — `devicectl
+   install` replaces the bundle but does not kill the running process.
+3. Chip row appears above the grid. Tap monitor 2: only its windows, correctly
+   placed. Tap back: the toggle is one tap each way.
+4. Tap "All": both screens on one wide canvas, second-screen windows in the
+   right-hand slot.
+5. Click a window on monitor 2 **on the Mac** and confirm the phone grid does
+   NOT jump — that is defect 2, and it is invisible on a single-screen desk.
+6. Settings → Phone → Mirror every app on. Select a Slack/Xcode card, dictate,
+   confirm the text lands in that app and not in a terminal.
+7. With a non-terminal selected, tap Clear: expect the refusal toast and nothing
+   typed anywhere.
+
+Also needs a TCC re-grant this session: the Mac was rebuilt, so Accessibility
+and Screen Recording may have to be re-checked before any keystroke lands.
+
+### Open — the QuipiOS suite cannot run on this machine
+
+`xcodebuild -scheme QuipiOS` fails before compiling anything:
+
+```
+This scheme builds an embedded Apple Watch app. watchOS 26.5 must be installed
+in order to run the scheme
+```
+
+The watchOS **SDK** is installed; the watchOS **simulator runtime** is not
+(`xcrun simctl list runtimes` lists no watch entry), and the scheme's
+embedded-watch check wants a paired watch simulator for any iOS destination.
+That means `tools/check.sh`'s QuipiOS gate is dead on this box — it reports a
+build failure, not a skip.
+
+Worked around by generating a watch-free project from `project.yml` (strip the
+`QuipWatch` target and the `- target: QuipWatch` dependency, rename the project),
+which builds and tests fine. The real fixes, either is fine:
+
+- `xcodebuild -downloadPlatform watchOS` to install the simulator runtime (a
+  large download, so it wants a deliberate go-ahead); or
+- teach `check.sh` to fall back to a watch-free spec, so the iOS gate keeps
+  working on a machine without watch runtimes instead of failing.
+
+## Desktop (Spaces) chips — shipped 2026-09-10 (`6863c30`), row confirmed on hardware
+
+Asked for during the multi-display acceptance walk above: the desk turned out to
+be **Apple Spaces on a single display**, not two monitors, so the display chips
+were hidden by construction and the feature actually under test was `b0280d7`'s
+Space-aware window enumeration.
+
+### The mechanism was wrong, not the parsing
+
+`SpaceCatalog` read `com.apple.spaces` from UserDefaults, since macOS exposes no
+public Space API. Two parsing defects were found and fixed first (`7e05ae4`):
+`monitors.first` picked the live display only by luck on a machine that keeps
+collapsed records for every display ever attached, and desktop ids synthesized
+from `Space Properties` indices matched no window at all.
+
+Both fixes were real. Neither made a chip appear, because the source itself is
+wrong. Measured against the live window list on the reporting desk:
+
+```
+Space Properties[].windows   ->  30 distinct window ids
+live layer-0 window list     -> 112 windows
+overlap                      ->   9
+```
+
+The plist tracks desktop pictures and a handful of system surfaces. It does not
+carry app windows. Nearly every `WindowState.spaceID` was nil, so the phone had
+nothing to attribute to a desktop.
+
+The measurement only got taken because the owner said "I could see it working at
+one point" — which was true, and diagnostic. `03ef379` (a desktop needs a window
+before it earns a chip) is a correct product rule that converted a *visibly*
+broken feature into an *invisibly* broken one: before it, chips rendered off
+`spaces.count > 1` regardless of whether the mapping worked.
+
+### What shipped instead
+
+Two `CGWindowListCopyWindowInfo` calls, differing by one option:
+
+| Options | Yields |
+|---|---|
+| `.excludeDesktopElements` | every layer-0 window on every desktop |
+| `.excludeDesktopElements` + `.optionOnScreenOnly` | only the active desktop |
+
+The set difference is an honest two-way split: **This Desktop** / **Other
+Desktops**, plus **All Desktops**. Same desk that measured 9-of-112 reports 16
+windows here and 96 elsewhere, re-attributing as you switch Spaces. The row
+hides entirely when everything is on one desktop.
+
+`applyWindowSnapshot` derives `spaces` from the snapshot it already holds rather
+than enumerating a second time, so a poll tick pays for one CG call instead of
+two — relevant given this project's history of MainActor-blocking hangs.
+
+### Tabled deliberately: per-desktop names
+
+The public API cannot say *which* other desktop a window sits on. The private
+`CGSCopySpacesForWindows` can. It was declined: two accurate chips beat five
+chips that point at nothing, and a private API is a dependency this doesn't need.
+Reopen only if the two-way split proves too coarse in daily use. The doc comment
+on `SpaceCatalog` carries the 9-of-112 measurement so the plist route is not
+re-attempted by someone reading only the code.
+
+### Also fixed: the iOS gate on a machine with no watch runtime
+
+`tools/check.sh` grew `ios_generate()`. When `xcrun simctl list runtimes` shows
+no watchOS runtime, it generates from a QuipWatch-stripped spec and prints
+`note: no watchOS simulator runtime — ran without the QuipWatch target` rather
+than reporting a build failure as a test failure. The generated spec is deleted
+*after* the suite runs — xcodegen records the spec path inside the project, so
+deleting it first makes `xcodebuild` fail with "couldn't be opened".
+
+### Open — the interactions past the row
+
+The chip row renders; the owner confirmed it on hardware. Not yet walked:
+
+1. Tap **Other Desktops** and confirm the grid filters to only those windows.
+2. Tap a card that lives on another desktop, confirm macOS switches Space and
+   raises that window. `activate(options: [.activateAllWindows])` + the AX raise
+   is untested on hardware.
+3. Tap **All Desktops** and confirm the full grid returns.
+
+### Shipped and confirmed — auto-send dictation
+
+`aac4a1e` added **Settings → Input → "Auto-send dictation"**, off by default. On,
+`stopRecording` sends with `pressReturn: true` so a hands-free flow needs no tap;
+off is today's behaviour. It rides the prefs backup as
+`PreferencesSnapshot.dictationAutoSend`, optional so a Mac predating the field
+decodes as nil and the phone keeps its own value instead of being reset on every
+restore. Suites are green, and the owner confirmed on hardware that speaking
+with the toggle on submits without a tap. The *off* path was not re-checked, but
+off is the pre-existing behaviour.
+
+### Open — the phone still never authenticates over LAN
+
+Reconnect after the Mac rebuild showed one `ESTABLISHED` socket over Tailscale
+(`100.x`, `auth=pin`, `client live`) while the LAN dial (`192.168.4.x`) was
+reaped before handshake. Same symptom recorded against the persist-connections
+work. Not chased this session.

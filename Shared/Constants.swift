@@ -19,3 +19,12 @@ enum WSLimits {
     /// phone photos (~7-10 MB encoded) with headroom for TTS audio bursts.
     static let maxMessageBytes: Int = 16 * 1024 * 1024
 }
+
+/// Bounds on the inline-suggestion payload the Mac ships with every
+/// `terminal_content` broadcast (`TerminalAutosuggest`).
+enum AutosuggestLimits {
+    /// Per half — typed prefix and ghost run each truncate here. A suggestion
+    /// is one input line; the cap exists so a pathological scrape cannot
+    /// inflate a broadcast that already fires every 500ms per window.
+    static let maxCharacters: Int = 512
+}
