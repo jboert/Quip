@@ -4,7 +4,7 @@ options:
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
-  createIntermediateGroups: true
+  createIntermediateGroups: false
 settings:
   base:
     # Stay on Swift 5 language mode for the iOS target. Local builds use
@@ -52,7 +52,7 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Quip
-        CFBundleShortVersionString: 1.5.5
+        CFBundleShortVersionString: 1.5.6
         UILaunchScreen:
           UIColorName: ""
         NSSpeechRecognitionUsageDescription: Quip uses speech recognition to transcribe your voice commands for Claude Code.

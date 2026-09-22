@@ -3283,9 +3283,9 @@ struct MainiOSView: View {
         return echo.text
     }
 
-    /// Accept the shown suggestion: Right-arrow on the Mac commits the ghost
-    /// text, and the phone mirrors the resulting line into its own field so the
-    /// user can see what they just typed on a machine they are not looking at.
+    /// Accept the shown suggestion: the Mac chooses Tab for an agent-composer
+    /// placeholder and Right-arrow for a shell ghost completion, then the phone
+    /// mirrors the resulting line into its field so the user can see it.
     private func acceptAutosuggest() {
         guard let wid = selectedWindowId, let suggestion = activeAutosuggest else { return }
         // `send` returns false when there is no socket. Ignoring it is how an
@@ -5979,6 +5979,13 @@ struct InlineTerminalContent: View {
     /// (action, promptFingerprint?) — fingerprint is non-nil only for one-tap
     /// answers when the Labs flag is on, so the Mac re-validates. (§3.2)
     var onSendAction: (String, String?) -> Void
+
+    /// Single testable seam for the native row above the terminal pixels. The
+    /// row and the header button must keep using the legacy `press_right` wire
+    /// action; the Mac re-scrapes and chooses Tab or Right-arrow at inject time.
+    static func acceptAutosuggest(using send: (String, String?) -> Void) {
+        send("press_right", nil)
+    }
     @AppStorage(LabsFlags.oneTapAnswer) private var labsOneTapAnswer = false
     /// Swipe handler — `direction` is +1 (swipe left = next window) or -1
     /// (swipe right = previous window), matching `MainiOSView.cycleWindow`.
@@ -6218,7 +6225,7 @@ struct InlineTerminalContent: View {
                 }
                 .disabled(!hasAutosuggest)
                 .accessibilityLabel("Accept autocomplete")
-                .accessibilityHint("Presses Right-arrow to accept the shown suggestion")
+                .accessibilityHint("Accepts the shown suggestion on the Mac")
                 .accessibilityAddTraits(.isButton)
                 Button { onRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
@@ -6229,6 +6236,39 @@ struct InlineTerminalContent: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Color.white.opacity(0.06))
+
+            // The terminal screenshot is pixels, so tapping the visible ghost
+            // text cannot carry an action. Surface the same text as a real
+            // Button immediately above the image: this is the mobile equivalent
+            // of pressing Tab/Right-arrow on the Mac, and it remains reachable
+            // even when the separate phone compose field is hidden.
+            if let autosuggest {
+                Button {
+                    Self.acceptAutosuggest(using: onSendAction)
+                } label: {
+                    HStack(spacing: 0) {
+                        Text(autosuggest.typed)
+                            .foregroundStyle(colors.textSecondary)
+                        Text(autosuggest.suggestion)
+                            .foregroundStyle(colors.textSecondary.opacity(0.55))
+                        Spacer(minLength: 6)
+                        Image(systemName: "text.append")
+                            .font(.system(size: 12))
+                            .foregroundStyle(colors.textSecondary)
+                    }
+                    .font(.system(size: 12, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(colors.surface.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("terminal-autosuggest-accept")
+                .accessibilityLabel("Accept suggestion: \(autosuggest.suggestion)")
+                .accessibilityHint("Accepts the greyed suggestion on the Mac")
+            }
 
             // §18 — context-aware numbered-prompt chips. When the shared
             // detector finds an agent CLI's numeric choice menu, render one
@@ -6469,8 +6509,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
     case shiftTab
-    // Right-arrow — commits the shell/Claude inline autocomplete (greyed
-    // ghost text). Maps to the Mac `press_right` quick-action.
+    // Accepts shell/agent inline autocomplete. The legacy wire action remains
+    // `press_right`; the Mac re-scrapes and chooses Tab or Right-arrow.
     case acceptAutocomplete
 
     var id: String { rawValue }
@@ -6605,7 +6645,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .clearInput: return .quickAction("clear_input")
         // Raw Shift+Tab — cycles Claude mode (normal → autoAccept → plan).
         case .shiftTab: return .quickAction("press_shift_tab")
-        // Right-arrow — accepts the shown inline autocomplete suggestion.
+        // Accepts the live inline suggestion; Mac chooses Tab or Right-arrow.
         case .acceptAutocomplete: return .quickAction("press_right")
         }
     }

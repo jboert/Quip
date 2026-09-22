@@ -3,14 +3,17 @@ import Foundation
 /// Detects the terminal's inline autosuggestion — the greyed "ghost text" that
 /// zsh-autosuggestions, fish, and Claude Code inline suggest render after the
 /// cursor. Both peers share this one source: the Mac uses it to broadcast a
-/// per-window hasAutosuggest flag and to guard Right-arrow injection, the phone
+/// per-window hasAutosuggest flag and to guard accept-key injection, the phone
 /// uses the flag to gate its accept-autocomplete button.
 ///
-/// A suggestion is a TRAILING run on the LAST non-empty line styled dim/faint
+/// A suggestion is normally a TRAILING run on the LAST non-empty line styled dim/faint
 /// (SGR 2) or grey foreground (SGR 90, or 8-bit greys 38;5;8 / 38;5;236-245),
 /// immediately preceded on that line by non-dim text (the user's typed input).
 /// A fully-dim line is not a suggestion (that's a hint/comment line), and dim
-/// text in scrollback (any earlier line) never triggers.
+/// text in scrollback (any earlier line) never triggers. iTerm2's AppleScript
+/// `contents` strips color/style, so the exact Codex empty-composer placeholder
+/// also has a narrow plain-text fallback in the final three non-empty lines (the
+/// status bar can occupy one or two rendered rows in current Codex builds).
 ///
 /// Foundation-only (no AppKit/UIKit/SwiftUI) so it compiles in the swiftc
 /// assertion harness (tools/run-autosuggest-tests.sh) with no Xcode,
@@ -34,6 +37,17 @@ enum AutosuggestDetector {
     /// as "this is what is on the line now".
     static func inputLine(in content: String) -> (typed: String, suggestion: String)? {
         guard !content.isEmpty else { return nil }
+
+        // iTerm2's AppleScript `contents` is plain text: the screenshot keeps
+        // the placeholder grey, but the scrape loses the SGR/style information
+        // this detector normally relies on. Recognize only Codex's exact stock
+        // placeholder, and only at the live bottom of the composer (or directly
+        // above its status bar). This keeps ordinary scrollback text from
+        // manufacturing an accept button while making the pixels the phone
+        // visibly shows actionable.
+        if let placeholder = plainCodexPlaceholder(in: content) {
+            return placeholder
+        }
 
         // Only the LAST non-empty line can carry the input-line suggestion;
         // dim runs in scrollback must not trigger.
@@ -86,18 +100,69 @@ enum AutosuggestDetector {
         suggestionText(in: content) != nil
     }
 
-    /// Pure inject-time decision the Mac's press_right handler consults: a tap
-    /// that raced the screen (suggestion gone by inject time) must be dropped,
-    /// never injected into empty air where Right-arrow would move the cursor
-    /// into the user's typed text.
+    /// The key that accepts the LIVE suggestion, or nil when the suggestion
+    /// disappeared before the phone's tap reached the Mac.
+    ///
+    /// Shell autosuggestions trail text the user already typed and accept with
+    /// Right-arrow. Agent composers render a marker-only prefix (for example
+    /// `› Ask Codex to do anything`) and accept that placeholder with Tab.
+    /// Deciding from the freshly scraped line keeps a stale phone tap from
+    /// injecting either key into empty air.
+    static func acceptanceKey(liveContent: String) -> String? {
+        guard let line = inputLine(in: liveContent) else { return nil }
+        return isPromptMarkerOnly(line.typed) ? "tab" : "right"
+    }
+
+    /// True when `typed` is only an agent/shell prompt marker plus whitespace,
+    /// rather than text the user entered. Shared with `TerminalAutosuggest` so
+    /// the phone's echoed accepted line omits UI chrome such as `› `.
+    static func isPromptMarkerOnly(_ typed: String) -> Bool {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count == 1 && trimmed.first.map(promptMarkers.contains) == true
+    }
+
+    /// Compatibility predicate for callers that only need yes/no.
     static func shouldAccept(liveContent: String) -> Bool {
-        hasSuggestion(in: liveContent)
+        acceptanceKey(liveContent: liveContent) != nil
     }
 
     /// Prompt markers the agent composers and shells draw at the head of the
     /// input line. Deliberately short: each one is a character no ordinary
     /// output line starts with when it is the last line on screen.
     private static let promptMarkers: Set<Character> = [">", "\u{276F}", "\u{203A}", "$", "%", "#"]
+
+    private static let codexPlaceholder = "Ask Codex to do anything"
+
+    /// Exact, style-free fallback for iTerm2's AppleScript scrape. Only inspect
+    /// the last three non-empty lines because Codex renders its status line below
+    /// the composer and that status can wrap; anything older is scrollback and
+    /// must not be actionable. The terminal API may omit the prompt marker or
+    /// include a cursor glyph around it, so the stock phrase is the stable part.
+    private static func plainCodexPlaceholder(in content: String) -> (typed: String, suggestion: String)? {
+        let recentLines = content
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .suffix(3)
+
+        for rawLine in recentLines.reversed() {
+            let visible = String(styledCharacters(of: String(rawLine)).map(\.char))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let phraseRange = visible.range(of: codexPlaceholder) else { continue }
+            let suffix = visible[phraseRange.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard suffix.isEmpty else { continue }
+
+            let prefix = visible[..<phraseRange.lowerBound]
+            let marker = prefix.reversed().first(where: promptMarkers.contains) ?? "\u{203A}"
+            // With no prompt marker, tolerate only a tiny cursor-shaped prefix;
+            // never turn an ordinary sentence ending in the stock phrase into
+            // a remote keystroke target.
+            guard prefix.contains(where: promptMarkers.contains)
+                    || prefix.trimmingCharacters(in: .whitespacesAndNewlines).count <= 2
+            else { continue }
+            return (typed: "\(marker) ", suggestion: codexPlaceholder)
+        }
+        return nil
+    }
 
     /// Index just past the leading prompt marker and the spaces after it, or
     /// nil when the line does not start with one.

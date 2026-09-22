@@ -107,6 +107,8 @@ if [ "$run_harness" = "true" ]; then
     # was reported green. Same PIPESTATUS[0] rule the two Xcode gates below use.
     bash tools/run-multiselect-tests.sh | tail -2
     [ "${PIPESTATUS[0]}" -eq 0 ] || failures=$((failures + 1))
+    bash tools/run-check-script-tests.sh
+    [ "$?" -eq 0 ] || failures=$((failures + 1))
     echo ""
 else
     note_skip "swiftc harness" "no Shared/ or tools/ change"
@@ -139,9 +141,15 @@ fi
 # QuipWatch target stripped and say so, so the iOS code still gets tested and
 # the report stays honest about what ran.
 ios_generate() {
-    if xcrun simctl list runtimes 2>/dev/null | grep -q "watchOS"; then
-        (cd "$ROOT/QuipiOS" && xcodegen generate >/dev/null 2>&1)
-        return 0
+    # Do not use `xcrun ... | grep -q` under pipefail here: grep exits as soon
+    # as it sees watchOS, xcrun then receives SIGPIPE, and the successful match
+    # is reported as a failed pipeline. That silently selected the no-Watch
+    # fallback even on machines with both watchOS runtimes installed.
+    local simulator_runtimes
+    simulator_runtimes="$(xcrun simctl list runtimes 2>/dev/null || true)"
+    if [[ "$simulator_runtimes" == *watchOS* ]]; then
+        (cd "$ROOT/QuipiOS" && xcodegen generate --quiet)
+        return $?
     fi
     python3 - "$ROOT/QuipiOS/project.yml" "$ROOT/QuipiOS/project.nowatch.yml" <<'PY'
 import sys
@@ -165,17 +173,28 @@ open(sys.argv[2], 'w').write('\n'.join(out))
 PY
     # xcodegen records the spec path inside the generated project, so the file
     # has to outlive the build; the gate below removes it once the suite ran.
-    (cd "$ROOT/QuipiOS" && xcodegen generate --spec project.nowatch.yml >/dev/null 2>&1)
+    (cd "$ROOT/QuipiOS" && xcodegen generate --spec project.nowatch.yml --quiet)
     echo "   note: no watchOS simulator runtime — ran without the QuipWatch target"
 }
 
 if [ "$run_ios" = "true" ]; then
     echo "── QuipiOS suite"
     ran=$((ran + 1))
-    ios_generate
-    xcodebuild -project QuipiOS/QuipiOS.xcodeproj -scheme QuipiOS -destination "id=$IOS_SIM_UDID" test 2>&1 \
-        | grep -E "error:|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" | tail -3
-    [ "${PIPESTATUS[0]}" -eq 0 ] || failures=$((failures + 1))
+    if ios_generate; then
+        # The generated project records Signing.xcconfig relative to QuipiOS/.
+        # Keep Xcode's working directory anchored there as well. Capture first
+        # and filter second: this makes the invoked command identical to the
+        # direct suite and preserves xcodebuild's status without PIPESTATUS.
+        ios_log="$(mktemp "${TMPDIR:-/tmp}/quip-ios-check.XXXXXX")"
+        (cd "$ROOT/QuipiOS" && xcodebuild -project QuipiOS.xcodeproj -scheme QuipiOS -destination "id=$IOS_SIM_UDID" test) >"$ios_log" 2>&1
+        ios_status=$?
+        grep -E "error:|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" "$ios_log" | tail -3
+        rm -f "$ios_log"
+        [ "$ios_status" -eq 0 ] || failures=$((failures + 1))
+    else
+        echo "error: failed to generate QuipiOS.xcodeproj"
+        failures=$((failures + 1))
+    fi
     rm -f "$ROOT/QuipiOS/project.nowatch.yml"
     git -C "$ROOT" checkout QuipiOS/QuipiOS.xcodeproj/project.pbxproj >/dev/null 2>&1 || true
     echo ""

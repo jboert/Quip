@@ -3388,11 +3388,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 await keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_right":
-            // Accept-autocomplete: Right-arrow commits the shown inline suggestion
-            // (zsh-autosuggestions / fish / Claude Code ghost text). Re-scrape the
-            // live buffer and inject only while a suggestion is actually showing —
-            // a tap that raced the screen must not nudge the cursor into typed
-            // text (mirrors answerStillValid's revalidate-before-inject).
+            // Legacy wire name, current semantics: re-scrape the live buffer,
+            // then use Tab for a marker-only agent placeholder (for example
+            // `› Ask Codex to do anything`) or Right-arrow for a shell ghost
+            // completion. A tap that raced the screen must inject neither.
             let sessionId = window.iterm2SessionId
             let isTerminal = window.isTerminal
             DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
@@ -3400,7 +3399,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     ? keystrokeInjector.readContentDetailed(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
                     : .ok("")
                 let content: String = { if case .ok(let c) = read { return c } else { return "" } }()
-                guard AutosuggestDetector.shouldAccept(liveContent: content) else {
+                guard let acceptanceKey = AutosuggestDetector.acceptanceKey(liveContent: content) else {
                     // "no autosuggestion" and "we could not read the screen" are
                     // different facts, and `print` reaches neither ~/Library/Logs/
                     // Quip nor the unified log — so this used to be recorded
@@ -3417,12 +3416,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // "the button does nothing" impossible to split into "never
                 // arrived", "arrived and was dropped" and "arrived, injected,
                 // and the app ignored the key".
-                KokoroTTSDebug.log("press_right accepted for \(wid): injecting right-arrow")
+                KokoroTTSDebug.log("press_right accepted for \(wid): injecting \(acceptanceKey)")
                 DispatchQueue.main.async {
                     let fire: () -> Void = {
                         Task { @MainActor in
-                            let result = await keystrokeInjector.sendKeystroke("right", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
-                            KokoroTTSDebug.log("press_right injected for \(wid): success=\(result.success ? 1 : 0)"
+                            let result = await keystrokeInjector.sendKeystroke(acceptanceKey, to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                            KokoroTTSDebug.log("press_right injected \(acceptanceKey) for \(wid): success=\(result.success ? 1 : 0)"
                                                + (result.error.map { " error=\($0)" } ?? ""))
                         }
                     }

@@ -113,4 +113,17 @@ final class InlineTerminalContentBranchTests: XCTestCase {
             InlineTerminalContent.branch(content: "", screenshot: nil)
         )
     }
+
+    func test_autosuggest_row_dispatches_legacy_accept_action() {
+        var receivedAction: String?
+        var receivedFingerprint: String? = "unexpected"
+
+        InlineTerminalContent.acceptAutosuggest { action, fingerprint in
+            receivedAction = action
+            receivedFingerprint = fingerprint
+        }
+
+        XCTAssertEqual(receivedAction, "press_right")
+        XCTAssertNil(receivedFingerprint)
+    }
 }

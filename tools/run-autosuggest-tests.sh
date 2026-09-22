@@ -102,6 +102,34 @@ expect(AutosuggestDetector.inputLine(in: recall)?.typed, "\u{203A} ",
        "marker is the typed half")
 expect(AutosuggestDetector.shouldAccept(liveContent: recall), true,
        "recall ghost is acceptable")
+expect(AutosuggestDetector.acceptanceKey(liveContent: recall), "tab",
+       "marker-only composer ghost accepts with Tab")
+
+let codexPlaceholder = "out\n\u{1B}[2m\u{203A} Ask Codex to do anything\u{1B}[0m"
+expect(AutosuggestDetector.suggestionText(in: codexPlaceholder), "Ask Codex to do anything",
+       "Codex placeholder is surfaced")
+expect(AutosuggestDetector.acceptanceKey(liveContent: codexPlaceholder), "tab",
+       "Codex placeholder accepts with Tab")
+
+// iTerm2 AppleScript strips the grey style, and Codex draws a status bar below
+// the composer. The exact stock placeholder must still be actionable there.
+let plainCodexPlaceholder = "old output\n\u{203A} Ask Codex to do anything\ngpt-5.6-sol medium"
+expect(AutosuggestDetector.suggestionText(in: plainCodexPlaceholder), "Ask Codex to do anything",
+       "plain iTerm Codex placeholder above status bar is surfaced")
+expect(AutosuggestDetector.acceptanceKey(liveContent: plainCodexPlaceholder), "tab",
+       "plain iTerm Codex placeholder accepts with Tab")
+
+let wrappedFooterPlaceholder = "\u{203A} Ask Codex to do anything\nnew output\ngpt-5.6-sol medium"
+expect(AutosuggestDetector.suggestionText(in: wrappedFooterPlaceholder), "Ask Codex to do anything",
+       "plain Codex placeholder survives a two-row status footer")
+
+let markerlessCodexPlaceholder = "old output\nAsk Codex to do anything\nstatus row one\nstatus row two"
+expect(AutosuggestDetector.acceptanceKey(liveContent: markerlessCodexPlaceholder), "tab",
+       "iTerm scrape may omit the prompt marker but still accepts exact placeholder with Tab")
+
+let stalePlainPlaceholder = "\u{203A} Ask Codex to do anything\nnew output\nstatus one\nstatus two"
+expect(AutosuggestDetector.suggestionText(in: stalePlainPlaceholder), nil,
+       "plain Codex placeholder older than the live bottom three is ignored")
 
 // The same shape with the other markers shells and composers draw.
 for marker in [">", "\u{276F}", "$", "%"] {
@@ -122,6 +150,8 @@ expect(AutosuggestDetector.suggestionText(in: "out\n\u{1B}[2m\u{203A}   \u{1B}[0
 // US-004 — inject-time guard consults the same detection.
 expect(AutosuggestDetector.shouldAccept(liveContent: ghost), true,
        "shouldAccept true for ghost-text sample")
+expect(AutosuggestDetector.acceptanceKey(liveContent: ghost), "right",
+       "typed shell ghost accepts with Right-arrow")
 expect(AutosuggestDetector.shouldAccept(liveContent: plain), false,
        "shouldAccept false for plain no-suggestion line")
 

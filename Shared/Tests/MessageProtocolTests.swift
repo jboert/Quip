@@ -787,6 +787,11 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertEqual(suggestion.suggestion.count, AutosuggestLimits.maxCharacters)
     }
 
+    func testTerminalAutosuggestAcceptedLineOmitsComposerMarker() {
+        let suggestion = TerminalAutosuggest(typed: "› ", suggestion: "Ask Codex to do anything")
+        XCTAssertEqual(suggestion.accepted, "Ask Codex to do anything")
+    }
+
     // MARK: - Pinning
 
     /// The Mac owns the pin set and has already floated pinned windows to the

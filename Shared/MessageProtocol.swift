@@ -606,8 +606,11 @@ struct TerminalAutosuggest: Codable, Sendable, Equatable {
         self.suggestion = String(suggestion.prefix(AutosuggestLimits.maxCharacters))
     }
 
-    /// The line as it reads once the suggestion is accepted.
-    var accepted: String { typed + suggestion }
+    /// The line as it reads once the suggestion is accepted. Agent composer
+    /// markers (`› `, `> `, etc.) are UI chrome, not text Tab inserts.
+    var accepted: String {
+        AutosuggestDetector.isPromptMarkerOnly(typed) ? suggestion : typed + suggestion
+    }
 }
 
 struct TerminalContentMessage: Codable, Sendable {
