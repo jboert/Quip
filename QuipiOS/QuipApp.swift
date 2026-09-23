@@ -1427,6 +1427,7 @@ struct MainiOSView: View {
     /// the settings editor via the same @AppStorage key; drives the picker filter.
     @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
     @State private var showPromptsPickerSheet = false
+    @State private var showBroadcastPromptSheet = false
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -1971,6 +1972,16 @@ struct MainiOSView: View {
                     }
                 )
             }
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showBroadcastPromptSheet) {
+            BroadcastPromptSheet(
+                windows: windows,
+                prompts: sortedPromptsByMRU(),
+                isConnected: client.isConnected,
+                initialDraft: textInputValue,
+                onSend: queueBroadcastPrompt
+            )
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showBackendPicker) {
@@ -2853,6 +2864,8 @@ struct MainiOSView: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
+            broadcastPromptButton
+
             // Cluster gating — small gap (10pt) appears between adjacent
             // clusters when both have visible buttons. PTT mic is always
             // visible and stays geometrically centered via flexible
@@ -3151,6 +3164,26 @@ struct MainiOSView: View {
         .padding(.vertical, isPortrait ? 8 : 4)
     }
 
+    private var broadcastPromptButton: some View {
+        let canOpen = BroadcastPromptPlan.canOpen(
+            windows: windows,
+            isConnected: client.isConnected
+        )
+        return Button {
+            showBroadcastPromptSheet = true
+        } label: {
+            Label("Broadcast Prompt", systemImage: "dot.radiowaves.left.and.right")
+                .font(.system(size: isPortrait ? 16 : 13, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: isPortrait ? 50 : 36)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(colors.buttonPrimary)
+        .disabled(!canOpen)
+        .accessibilityHint("Choose terminal windows and send the same prompt to each one")
+        .padding(.horizontal, isPortrait ? 6 : 12)
+    }
+
     /// Compact one-line description of any notable PTT/voice path state
     /// for the banner just above the main row. nil when nothing notable —
     /// the banner stays collapsed. (GH H.)
@@ -3422,6 +3455,22 @@ struct MainiOSView: View {
                 client.send(QuickActionMessage(windowId: windowId, action: "press_return"))
             }
         }
+    }
+
+    /// Queue one reviewed prompt for every selected terminal on the active Mac.
+    /// Returning the queued IDs lets the sheet keep only failed targets selected
+    /// for retry, avoiding duplicate prompts after a partial queue. Each message
+    /// keeps its own dedupe token.
+    private func queueBroadcastPrompt(_ text: String, targetIDs: [String]) -> Set<String> {
+        guard !text.isEmpty, !targetIDs.isEmpty else { return [] }
+        let queuedIDs = Set(targetIDs.filter { windowID in
+            client.send(SendTextMessage(windowId: windowID, text: text, pressReturn: true))
+        })
+        if queuedIDs.count == targetIDs.count {
+            textInputValue = ""
+            lineEcho = nil
+        }
+        return queuedIDs
     }
 
     /// True when there's something for the up-arrow / Return button to

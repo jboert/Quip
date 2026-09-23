@@ -34,6 +34,8 @@ _(none)_
 
 | ID | Title | Landed |
 |----|-------|--------|
+| Q-29 | Mobile Broadcast Prompt promoted to a full-width primary action above the main controls, with a compact landscape treatment and terminal-aware disabled state | verified 2026-09-23 — mutation check + 856 iOS tests + full gate green |
+| Q-28 | Mobile Broadcast Prompt sheet — draft/library input, terminal-only multi-select, safe ordered fan-out, and failed-target-only retry | verified 2026-09-23 — 5 focused tests + 855 iOS tests + full gate green |
 | Q-26 | `MainiOSView.body` split into stages — `rootLayers` / `contentWithOverlays` / `contentWithLifecycle` / `contentWithSheets` plus the two big overlay closures, each type-checking on its own. Modifier order unchanged | `e05b066` |
 | Q-24 | Wand: unchecking a kind switches it OFF instead of hiding it from the wand — the checked set is now the selection, idempotent | `7c8921f` |
 | Q-22a | A focus that finds nothing now says so — `.none` and `.ambiguous` are logged with the wanted origin and the AX positions actually seen, throttled per window id | `a7e6125` |
