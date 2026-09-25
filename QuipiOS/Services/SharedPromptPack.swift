@@ -66,6 +66,75 @@ struct SharedPromptPack: Codable {
         return "\(desired)-\(n)"
     }
 
+    /// What a confirmed import will actually add. Built before anything is
+    /// sent, so the sheet and the apply step agree on the same numbers.
+    struct ImportPlan {
+        /// Prompts to put, already carrying their final non-colliding ids.
+        let prompts: [PromptEntry]
+        /// Buttons to append, already re-minted.
+        let buttons: [CustomButton]
+        let alreadyInstalledPrompts: Int
+        let alreadyInstalledButtons: Int
+
+        var isEmpty: Bool { prompts.isEmpty && buttons.isEmpty }
+    }
+
+    /// Plan an import against what is already installed (Q-27b).
+    ///
+    /// Importing the same pack twice used to add a suffixed copy of every
+    /// prompt and a fresh copy of every button. Now an item whose visible
+    /// content is already installed is skipped: a prompt matches on label AND
+    /// body (ignoring id, because an earlier import may have suffixed it), a
+    /// button on label, icon and payload. Anything else is added exactly as
+    /// before — a prompt whose id is taken by DIFFERENT content still gets a
+    /// suffixed id rather than overwriting the user's copy.
+    static func importPlan(for pack: SharedPromptPack,
+                           existingPrompts: [PromptEntry],
+                           existingButtons: [CustomButton]) -> ImportPlan {
+        var takenIDs = Set(existingPrompts.map(\.id))
+        var installedPrompts = Set(existingPrompts.map { PromptContent($0) })
+        var prompts: [PromptEntry] = []
+        var skippedPrompts = 0
+        for p in pack.prompts {
+            guard installedPrompts.insert(PromptContent(p)).inserted else {
+                skippedPrompts += 1
+                continue
+            }
+            let id = uniquePromptID(desired: p.id, existing: takenIDs)
+            takenIDs.insert(id)
+            prompts.append(PromptEntry(id: id, label: p.label, body: p.body, tags: p.tags,
+                                       targetAgent: p.targetAgent, description: p.description))
+        }
+
+        var installedButtons = Set(existingButtons.map { ButtonContent($0) })
+        var buttons: [CustomButton] = []
+        var skippedButtons = 0
+        for b in pack.buttons {
+            guard installedButtons.insert(ButtonContent(b)).inserted else {
+                skippedButtons += 1
+                continue
+            }
+            buttons.append(reminted(b))
+        }
+
+        return ImportPlan(prompts: prompts, buttons: buttons,
+                          alreadyInstalledPrompts: skippedPrompts,
+                          alreadyInstalledButtons: skippedButtons)
+    }
+
+    private struct PromptContent: Hashable {
+        let label: String
+        let body: String
+        init(_ p: PromptEntry) { label = p.label; body = p.body }
+    }
+
+    private struct ButtonContent: Hashable {
+        let label: String
+        let systemImage: String?
+        let payload: CustomPayload
+        init(_ b: CustomButton) { label = b.label; systemImage = b.systemImage; payload = b.payload }
+    }
+
     /// Re-mint a button's id so an imported button never collides with an
     /// existing local one. (§6.1)
     static func reminted(_ button: CustomButton) -> CustomButton {

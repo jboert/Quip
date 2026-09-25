@@ -25,7 +25,15 @@ struct PendingContentShare: Identifiable {
 /// confirmation (never silent). (§6.1)
 struct ImportPackSheet: View {
     let pack: SharedPromptPack
+    /// What confirming would actually add. Items already installed are listed
+    /// as skipped instead of silently re-added (Q-27b).
+    var plan: SharedPromptPack.ImportPlan? = nil
     var onConfirm: () -> Void
+
+    private var alreadyInstalled: Int {
+        (plan?.alreadyInstalledPrompts ?? 0) + (plan?.alreadyInstalledButtons ?? 0)
+    }
+    private var nothingNew: Bool { plan?.isEmpty == true }
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -51,6 +59,15 @@ struct ImportPackSheet: View {
                         }
                     }
                 }
+                if alreadyInstalled > 0 {
+                    Section {
+                        Text(nothingNew
+                             ? "Everything in this pack is already installed."
+                             : "\(alreadyInstalled) already installed — will be skipped, not duplicated.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationTitle(pack.name ?? "Import Pack")
             .navigationBarTitleDisplayMode(.inline)
@@ -59,7 +76,9 @@ struct ImportPackSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Import") { onConfirm(); dismiss() }.bold()
+                    Button("Import") { onConfirm(); dismiss() }
+                        .bold()
+                        .disabled(nothingNew)
                 }
             }
         }

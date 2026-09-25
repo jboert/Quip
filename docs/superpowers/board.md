@@ -21,7 +21,8 @@ _(none)_
 | Q-16 | §58 Iteration 3 manual smoke | Unblocked 2026-08-19 (Mac install done). Close tracked iTerm windows during active polling, confirm no stale state or source churn. NOTE: the 2026-08-18 attempt proved nothing — the window opened for it never entered a tracked state, so the clean log meant nothing ran. Use a window actually running an agent CLI and confirm it is tracked first. |
 | Q-18a | §58 Iteration 1 manual smoke | Partly unblocked 2026-08-19. Runnable half: reorder in the layout preview, confirm sidebar + Arrange agree. Multi-display half stays BLOCKED — this machine has one display. |
 | Q-22 | Focus the window by id, not by fuzzy position | Measured: **5 matched, 6 missed of 11** live windows. Causes: 2.0s-stale `window.bounds`; two windows sharing an origin (Chrome 1710/1711 both `(692,56)`) where `break` raises whichever AX element came first; no readable AX position. **Owner decision first:** `_AXUIElementGetWindow` is private API — use it, or stay public-only with title+size+position and explicit tie-breaks. |
-| Q-27 | Duplicate prompts — reported, NOT reproduced | Latent path 1 FIXED as Q-27a (mapper now collapses same name + same body). Still open: latent path 2 (importing the same `.quippack` twice suffixes a copy of every prompt — needs an owner call: replace vs add), and the reported case itself still has no screenshot. |
+| Q-27 | Duplicate prompts — reported, NOT reproduced | Both latent paths FIXED (Q-27a sync, Q-27b pack re-import). What remains is the reported case itself: it has never been reproduced, so a screenshot of a real duplicate pair is still wanted before closing. |
+| Q-31 | `tools/check.sh` has no timeout — a hung simulator stalls the gate indefinitely | Observed 2026-09-25: the QuipiOS suite finished building, then sat at test launch for **2h18m** with no output (the gate prints only at the end). Rebooting the QA sim fixed it, and the next run took 9s. Add a per-suite timeout that reports TIMED OUT as a failure, naming the simulator UDID. |
 
 ## Blocked
 
@@ -34,6 +35,7 @@ _(none)_
 
 | ID | Title | Landed |
 |----|-------|--------|
+| Q-27b | Importing the same `.quippack` twice no longer duplicates it. A prompt already installed (same label + body, any id) and a button already installed (same label, icon and payload) are skipped. Changed content under a taken id is still added with a suffix, never overwritten. The import sheet says how many will be skipped, and Import is disabled when nothing is new | verified 2026-09-25 — 5 new tests; a mutation disabling the skip failed 4 of them; 865 iOS tests green |
 | Q-30 | `tools/check.sh` on a red suite printed only "Executed N tests, with 5 failures" — `grep | tail -3` cut every line naming the failing test. Failing `error:` lines now print first (deduped, capped at 15) and runtime os_log noise like `[sandbox] … (error: -9)` no longer matches | verified 2026-09-25 — fixture check + full gate green |
 | Q-27a | VibeCut sync: two prompts with the same name AND same body mapped to two identical-looking rows differing only by an id suffix. They now collapse to one entry (tags unioned) and count toward `skipped`, so the ack's synced count equals the rows shown | verified 2026-09-25 — 4 new mapper tests (3 red first) + 930 Mac / 860 iOS / 62 harness green |
 | Q-29 | Mobile Broadcast Prompt promoted to a full-width primary action above the main controls, with a compact landscape treatment and terminal-aware disabled state | verified 2026-09-23 — mutation check + 856 iOS tests + full gate green |

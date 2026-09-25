@@ -412,7 +412,7 @@ struct QuipApp: App {
                 }
             }
             .sheet(item: $importablePack) { item in
-                ImportPackSheet(pack: item.pack) { applyImportedPack(item.pack) }
+                ImportPackSheet(pack: item.pack, plan: importPlan(for: item.pack)) { applyImportedPack(item.pack) }
             }
             .sheet(item: $pendingContentShare) { share in
                 // US-004/US-005 — review a parked quip://share draft, then ship
@@ -512,22 +512,28 @@ struct QuipApp: App {
         }
     }
 
+    /// What importing `pack` would add right now, given the phone's current
+    /// prompt library and custom buttons (Q-27b).
+    private func importPlan(for pack: SharedPromptPack) -> SharedPromptPack.ImportPlan {
+        SharedPromptPack.importPlan(for: pack,
+                                    existingPrompts: client.promptLibrary,
+                                    existingButtons: CustomButtonStore.decode(customButtonsJSON))
+    }
+
     /// Apply a confirmed pack: prompts → Mac via PutPromptMessage (non-colliding
     /// ids), buttons → appended locally with fresh UUIDs (auto-syncs to Mac via
-    /// the preferences snapshot).
+    /// the preferences snapshot). Anything already installed is skipped, so
+    /// importing the same pack twice no longer duplicates it (Q-27b).
     private func applyImportedPack(_ pack: SharedPromptPack) {
-        var existing = Set(client.promptLibrary.map(\.id))
-        for p in pack.prompts {
-            let id = SharedPromptPack.uniquePromptID(desired: p.id, existing: existing)
-            existing.insert(id)
-            client.send(PutPromptMessage(id: id, label: p.label, body: p.body,
+        let plan = importPlan(for: pack)
+        for p in plan.prompts {
+            client.send(PutPromptMessage(id: p.id, label: p.label, body: p.body,
                                          tags: p.tags, targetAgent: p.targetAgent, description: p.description))
         }
-        if !pack.buttons.isEmpty {
+        if !plan.buttons.isEmpty {
             var defs = CustomButtonStore.decode(customButtonsJSON)
             var slotList = QuickSlotStore.decode(quickSlotsJSON)
-            for b in pack.buttons {
-                let r = SharedPromptPack.reminted(b)
+            for r in plan.buttons {
                 defs.append(r)
                 slotList.append(.custom(r.id))
             }
