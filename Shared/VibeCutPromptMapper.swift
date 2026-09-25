@@ -86,10 +86,13 @@ enum VibeCutPromptMapper {
     static let idPrefix = "vibecut__"
 
     /// Map a decoded catalog into inheritable Quip prompts plus a count of the
-    /// entries that were skipped by the include filter.
+    /// entries that were not synced: those the include filter rejected, and
+    /// content duplicates (same name AND same body) collapsed into an earlier
+    /// entry. `skipped` feeds the sync ack, so the phone's "synced N" always
+    /// equals the number of rows it will show.
     static func map(catalog: VibeCutCatalog) -> (entries: [PromptEntry], skipped: Int) {
         let included = catalog.prompts.filter(isInheritable)
-        let skipped = catalog.prompts.count - included.count
+        var skipped = catalog.prompts.count - included.count
 
         // Deterministic ordering so collision suffixes (-2/-3) and output order are
         // stable across runs: sort by display name, then by source id.
@@ -103,9 +106,26 @@ enum VibeCutPromptMapper {
         var fallbackCounter = 0
         var entries: [PromptEntry] = []
         entries.reserveCapacity(sorted.count)
+        // (raw name, body) → index of the entry that owns that content. Keyed on
+        // the raw name, not the label, so two unnamed copies still match before
+        // each is handed its own `untitled-N` fallback (Q-27).
+        var entryIndexByContent: [ContentKey: Int] = [:]
 
         for p in sorted {
             let name = p.name ?? ""
+            let key = ContentKey(name: name, body: p.prompt ?? "")
+            if let owner = entryIndexByContent[key] {
+                // Same name and same body would otherwise become a second row,
+                // identical on screen and differing only by an id suffix —
+                // exactly what "sync duplicated my prompts" looks like. Fold it
+                // in, keeping any tags the first copy did not carry.
+                let kept = entries[owner]
+                entries[owner] = PromptEntry(id: kept.id, label: kept.label, body: kept.body,
+                                             tags: dedupePreservingOrder((kept.tags ?? []) + tags(for: p)),
+                                             targetAgent: nil, description: nil)
+                skipped += 1
+                continue
+            }
             var core = slug(name)
             if core.isEmpty {
                 fallbackCounter += 1
@@ -114,13 +134,9 @@ enum VibeCutPromptMapper {
             let id = uniqueID(idPrefix + core, used: &used)
             let label = name.isEmpty ? core : name
 
-            var tags = [providerTag]
-            if let cat = p.category, !cat.isEmpty { tags.append(cat) }
-            if let extra = p.tags { for t in extra where !t.isEmpty { tags.append(t) } }
-            tags = dedupePreservingOrder(tags)
-
+            entryIndexByContent[key] = entries.count
             entries.append(PromptEntry(id: id, label: label, body: p.prompt ?? "",
-                                       tags: tags, targetAgent: nil, description: nil))
+                                       tags: tags(for: p), targetAgent: nil, description: nil))
         }
         return (entries, skipped)
     }
@@ -151,6 +167,19 @@ enum VibeCutPromptMapper {
     }
 
     // MARK: - Private helpers
+
+    private struct ContentKey: Hashable {
+        let name: String
+        let body: String
+    }
+
+    /// `vibecut` first, then the category, then the prompt's own tags, deduped.
+    private static func tags(for p: VibeCutPrompt) -> [String] {
+        var tags = [providerTag]
+        if let cat = p.category, !cat.isEmpty { tags.append(cat) }
+        if let extra = p.tags { for t in extra where !t.isEmpty { tags.append(t) } }
+        return dedupePreservingOrder(tags)
+    }
 
     private static func uniqueID(_ base: String, used: inout Set<String>) -> String {
         if !used.contains(base) { used.insert(base); return base }

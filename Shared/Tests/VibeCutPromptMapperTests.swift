@@ -130,6 +130,59 @@ final class VibeCutPromptMapperTests: XCTestCase {
         XCTAssertEqual(ids, ["vibecut__code-review", "vibecut__code-review-2", "vibecut__code-review-3"])
     }
 
+    // MARK: - Q-27: content duplicates collapse
+
+    /// Same name AND same body used to become two entries identical in every
+    /// visible way, differing only by an id suffix — exactly what "sync
+    /// duplicated my prompts" looks like. They now collapse to one entry.
+    func testSameNameAndBodyCollapseToOneEntry() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "b", name: "Code Review", prompt: "Review it.", mode: "paste", type: "text"),
+            VibeCutPrompt(id: "a", name: "Code Review", prompt: "Review it.", mode: "paste", type: "text"),
+        ])
+        let result = VibeCutPromptMapper.map(catalog: catalog)
+        XCTAssertEqual(result.entries.map(\.id), ["vibecut__code-review"])  // no -2 left behind
+        XCTAssertEqual(result.skipped, 1)
+    }
+
+    /// The collapsed entry keeps every tag either copy carried, so no category
+    /// the user filters on disappears with the duplicate.
+    func testCollapsedDuplicateKeepsTheUnionOfTags() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "a", name: "Ship", category: "git", tags: ["deploy"],
+                          prompt: "Ship it.", mode: "paste", type: "text"),
+            VibeCutPrompt(id: "b", name: "Ship", category: "release", tags: ["deploy", "ci"],
+                          prompt: "Ship it.", mode: "paste", type: "text"),
+        ])
+        let entries = VibeCutPromptMapper.map(catalog: catalog).entries
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].tags, ["vibecut", "git", "deploy", "release", "ci"])
+    }
+
+    /// Two unnamed prompts with the same body are the same prompt too, even
+    /// though each would otherwise get its own `untitled-N` fallback.
+    func testUnnamedDuplicatesCollapseWithoutBurningAFallbackNumber() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "a", name: "", prompt: "same", mode: "paste", type: "text"),
+            VibeCutPrompt(id: "b", name: "", prompt: "same", mode: "paste", type: "text"),
+            VibeCutPrompt(id: "c", name: "", prompt: "different", mode: "paste", type: "text"),
+        ])
+        let ids = VibeCutPromptMapper.map(catalog: catalog).entries.map(\.id)
+        XCTAssertEqual(ids, ["vibecut__untitled-1", "vibecut__untitled-2"])
+    }
+
+    /// Same name, different body is NOT a duplicate — both survive (the
+    /// existing suffix rule still applies).
+    func testSameNameDifferentBodyStillKeepsBoth() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "a", name: "Review", prompt: "short", mode: "paste", type: "text"),
+            VibeCutPrompt(id: "b", name: "Review", prompt: "long", mode: "paste", type: "text"),
+        ])
+        let result = VibeCutPromptMapper.map(catalog: catalog)
+        XCTAssertEqual(result.entries.count, 2)
+        XCTAssertEqual(result.skipped, 0)
+    }
+
     // MARK: - Determinism
 
     func testMapIsDeterministicRegardlessOfInputOrder() {
