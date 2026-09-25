@@ -119,14 +119,29 @@ fi
 # repo root — running `git checkout` from inside QuipMac/ is what produced
 # "pathspec ... did not match any file(s)" by hand (US-005).
 
+# Print a suite's verdict from its captured log. The failing `error:` lines come
+# first, deduped and capped, THEN the count and the verdict. This used to be one
+# `grep … | tail -3`, which on a failure kept only the "Executed N tests, with 5
+# failures" lines and cut every line that said WHICH test failed — a red gate
+# that could not say what was red.
+#
+# Only compiler/XCTest/xcodebuild errors count: runtime os_log noise such as
+# "[sandbox] … (error: -9)" appears on green runs and must not read as a failure.
+summarize_suite_log() {
+    grep -E '\.swift:[0-9]+(:[0-9]+)?: error:|^(xcodebuild: )?error:' "$1" | awk '!seen[$0]++' | head -15
+    grep -E "Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" "$1" | tail -2
+}
+
 if [ "$run_mac" = "true" ]; then
     echo "── QuipMac suite"
     ran=$((ran + 1))
     (cd QuipMac && xcodegen generate >/dev/null 2>&1)
-    xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -configuration Debug test 2>&1 \
-        | grep -E "error:|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" | tail -3
-    # PIPESTATUS[0] is xcodebuild's own status, not grep's.
-    [ "${PIPESTATUS[0]}" -eq 0 ] || failures=$((failures + 1))
+    mac_log="$(mktemp "${TMPDIR:-/tmp}/quip-mac-check.XXXXXX")"
+    xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -configuration Debug test >"$mac_log" 2>&1
+    mac_status=$?
+    summarize_suite_log "$mac_log"
+    rm -f "$mac_log"
+    [ "$mac_status" -eq 0 ] || failures=$((failures + 1))
     git -C "$ROOT" checkout QuipMac/QuipMac.xcodeproj/project.pbxproj >/dev/null 2>&1 || true
     echo ""
 else
@@ -188,7 +203,7 @@ if [ "$run_ios" = "true" ]; then
         ios_log="$(mktemp "${TMPDIR:-/tmp}/quip-ios-check.XXXXXX")"
         (cd "$ROOT/QuipiOS" && xcodebuild -project QuipiOS.xcodeproj -scheme QuipiOS -destination "id=$IOS_SIM_UDID" test) >"$ios_log" 2>&1
         ios_status=$?
-        grep -E "error:|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" "$ios_log" | tail -3
+        summarize_suite_log "$ios_log"
         rm -f "$ios_log"
         [ "$ios_status" -eq 0 ] || failures=$((failures + 1))
     else
