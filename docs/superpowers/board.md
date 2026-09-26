@@ -22,7 +22,6 @@ _(none)_
 | Q-18a | §58 Iteration 1 manual smoke | Partly unblocked 2026-08-19. Runnable half: reorder in the layout preview, confirm sidebar + Arrange agree. Multi-display half stays BLOCKED — this machine has one display. |
 | Q-22 | Focus the window by id, not by fuzzy position | Measured: **5 matched, 6 missed of 11** live windows. Causes: 2.0s-stale `window.bounds`; two windows sharing an origin (Chrome 1710/1711 both `(692,56)`) where `break` raises whichever AX element came first; no readable AX position. **Owner decision first:** `_AXUIElementGetWindow` is private API — use it, or stay public-only with title+size+position and explicit tie-breaks. |
 | Q-27 | Duplicate prompts — reported, NOT reproduced | Both latent paths FIXED (Q-27a sync, Q-27b pack re-import). What remains is the reported case itself: it has never been reproduced, so a screenshot of a real duplicate pair is still wanted before closing. |
-| Q-31 | `tools/check.sh` has no timeout — a hung simulator stalls the gate indefinitely | Observed 2026-09-25: the QuipiOS suite finished building, then sat at test launch for **2h18m** with no output (the gate prints only at the end). Rebooting the QA sim fixed it, and the next run took 9s. Add a per-suite timeout that reports TIMED OUT as a failure, naming the simulator UDID. |
 
 ## Blocked
 
@@ -35,6 +34,7 @@ _(none)_
 
 | ID | Title | Landed |
 |----|-------|--------|
+| Q-31 | `tools/check.sh` can no longer hang: every Xcode suite runs under `run_bounded` (pure bash, default 1200s, `QUIP_CHECK_SUITE_TIMEOUT` overrides). A timed-out suite is killed along with its children, reported as TIMED OUT with the simulator reboot command, and counted as a failure. Found a watchdog race on the way (a retired watchdog could mark a finished command as timed out), fixed and covered | verified 2026-09-26 — 4 new behavioral check-script tests, 5 clean runs; `--all` green; a real 4s timeout killed xcodebuild, exited 1, and left no processes |
 | Q-27b | Importing the same `.quippack` twice no longer duplicates it. A prompt already installed (same label + body, any id) and a button already installed (same label, icon and payload) are skipped. Changed content under a taken id is still added with a suffix, never overwritten. The import sheet says how many will be skipped, and Import is disabled when nothing is new | verified 2026-09-25 — 5 new tests; a mutation disabling the skip failed 4 of them; 865 iOS tests green |
 | Q-30 | `tools/check.sh` on a red suite printed only "Executed N tests, with 5 failures" — `grep | tail -3` cut every line naming the failing test. Failing `error:` lines now print first (deduped, capped at 15) and runtime os_log noise like `[sandbox] … (error: -9)` no longer matches | verified 2026-09-25 — fixture check + full gate green |
 | Q-27a | VibeCut sync: two prompts with the same name AND same body mapped to two identical-looking rows differing only by an id suffix. They now collapse to one entry (tags unioned) and count toward `skipped`, so the ack's synced count equals the rows shown | verified 2026-09-25 — 4 new mapper tests (3 red first) + 930 Mac / 860 iOS / 62 harness green |

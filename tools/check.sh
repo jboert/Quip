@@ -132,13 +132,65 @@ summarize_suite_log() {
     grep -E "Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" "$1" | tail -2
 }
 
+# Q-31 — every Xcode suite runs under a time limit. There was none, and on
+# 2026-09-25 the QuipiOS suite finished building and then sat at test launch on a
+# wedged simulator for 2h18m, printing nothing (output is only shown at the end).
+# A gate that can hang forever is a gate nobody runs.
+#
+# Pure bash on purpose: coreutils `timeout` is a Homebrew install, not something
+# every Mac running this has. Returns the command's own status, or 124 (the
+# coreutils convention) when the limit was hit and the command was killed.
+SUITE_TIMEOUT="${QUIP_CHECK_SUITE_TIMEOUT:-1200}"
+
+run_bounded() {
+    local limit="$1" log="$2"; shift 2
+    local fired="$log.timed-out"
+    rm -f "$fired"
+    "$@" >"$log" 2>&1 &
+    local pid=$!
+    (
+        sleep "$limit"
+        # Only a command that is STILL running has timed out. Without this, a
+        # watchdog being retired (its sleep killed) ran on and marked a command
+        # that had already finished as timed out.
+        kill -0 "$pid" 2>/dev/null || exit 0
+        : >"$fired"
+        # xcodebuild owns the simulator test runner; stop the children first so
+        # nothing outlives the gate, then the command itself.
+        pkill -TERM -P "$pid" 2>/dev/null; kill -TERM "$pid" 2>/dev/null
+        sleep 5
+        pkill -KILL -P "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null
+    ) 2>/dev/null &
+    local watchdog=$!
+    wait "$pid" 2>/dev/null
+    local rc=$?
+    # Retire the watchdog either way (quietly — a killed job otherwise prints
+    # "Terminated" into the gate's output).
+    # Stop the watchdog BEFORE its sleep, so it cannot run on to its next line.
+    local watchdog_kids
+    watchdog_kids="$(pgrep -P "$watchdog" 2>/dev/null)"
+    { kill "$watchdog"; [ -n "$watchdog_kids" ] && kill $watchdog_kids; wait "$watchdog"; } 2>/dev/null
+    if [ -e "$fired" ]; then
+        rm -f "$fired"
+        return 124
+    fi
+    return "$rc"
+}
+
+report_timeout() {
+    echo "error: $1 TIMED OUT after ${SUITE_TIMEOUT}s and was killed (set QUIP_CHECK_SUITE_TIMEOUT to change the limit)"
+    [ -n "${2:-}" ] && echo "   a wedged simulator is the usual cause — xcrun simctl shutdown $2 && xcrun simctl boot $2"
+    return 0
+}
+
 if [ "$run_mac" = "true" ]; then
     echo "── QuipMac suite"
     ran=$((ran + 1))
     (cd QuipMac && xcodegen generate >/dev/null 2>&1)
     mac_log="$(mktemp "${TMPDIR:-/tmp}/quip-mac-check.XXXXXX")"
-    xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -configuration Debug test >"$mac_log" 2>&1
+    run_bounded "$SUITE_TIMEOUT" "$mac_log" xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -configuration Debug test
     mac_status=$?
+    [ "$mac_status" -eq 124 ] && report_timeout "QuipMac suite"
     summarize_suite_log "$mac_log"
     rm -f "$mac_log"
     [ "$mac_status" -eq 0 ] || failures=$((failures + 1))
@@ -201,8 +253,10 @@ if [ "$run_ios" = "true" ]; then
         # and filter second: this makes the invoked command identical to the
         # direct suite and preserves xcodebuild's status without PIPESTATUS.
         ios_log="$(mktemp "${TMPDIR:-/tmp}/quip-ios-check.XXXXXX")"
-        (cd "$ROOT/QuipiOS" && xcodebuild -project QuipiOS.xcodeproj -scheme QuipiOS -destination "id=$IOS_SIM_UDID" test) >"$ios_log" 2>&1
+        ios_suite() { cd "$ROOT/QuipiOS" && xcodebuild -project QuipiOS.xcodeproj -scheme QuipiOS -destination "id=$IOS_SIM_UDID" test; }
+        run_bounded "$SUITE_TIMEOUT" "$ios_log" ios_suite
         ios_status=$?
+        [ "$ios_status" -eq 124 ] && report_timeout "QuipiOS suite" "$IOS_SIM_UDID"
         summarize_suite_log "$ios_log"
         rm -f "$ios_log"
         [ "$ios_status" -eq 0 ] || failures=$((failures + 1))
