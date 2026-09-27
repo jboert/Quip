@@ -13,6 +13,12 @@ settings:
     # there are too many call sites to retrofit safely right now.
     SWIFT_VERSION: "5"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    # One version for the app, its watch app and its Live Activity: App Store
+    # validation rejects an embedded bundle whose versions differ from the
+    # app's (the watch said 1.4.0 while the app said 1.5.6). The build number
+    # is overridden per upload by tools/testflight.sh.
+    MARKETING_VERSION: "1.5.6"
+    CURRENT_PROJECT_VERSION: "1"
     SWIFT_STRICT_CONCURRENCY: minimal
 targets:
   QuipiOS:
@@ -42,6 +48,12 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Quip
+        # One source for the app's bundle ID (Signing.xcconfig, overridable in
+        # the gitignored Signing.local.xcconfig). The watch and Live Activity
+        # IDs derive from it: an App Store upload rejects an embedded watch app
+        # whose ID is not prefixed by its parent's, and a watch whose
+        # WKCompanionAppBundleIdentifier names a different app never pairs.
+        PRODUCT_BUNDLE_IDENTIFIER: $(QUIP_APP_BUNDLE_ID)
         INFOPLIST_FILE: Info.plist
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
@@ -52,7 +64,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Quip
-        CFBundleShortVersionString: 1.5.6
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen:
           UIColorName: ""
         NSSpeechRecognitionUsageDescription: Quip uses speech recognition to transcribe your voice commands for Claude Code.
@@ -106,9 +119,12 @@ targets:
     platform: iOS
     sources:
       - QuipLiveActivity
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipiOS.liveactivity
+        PRODUCT_BUNDLE_IDENTIFIER: $(QUIP_APP_BUNDLE_ID).liveactivity
         PRODUCT_NAME: QuipLiveActivity
         INFOPLIST_FILE: QuipLiveActivity/Info.plist
         CODE_SIGN_IDENTITY: "Apple Development"
@@ -116,16 +132,22 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         DEVELOPMENT_TEAM: D2PM6R797Q
         GENERATE_INFOPLIST_FILE: "NO"
-        SKIP_INSTALL: "NO"
+        # Embedded in Quip.app, so never installed on its own. "NO" put a second
+        # top-level .app in the archive, which made it a Generic Xcode Archive
+        # that cannot be exported for TestFlight ("expected one {}").
+        SKIP_INSTALL: "YES"
   QuipWatch:
     type: application
     platform: watchOS
     deploymentTarget: "10.0"
     sources:
       - path: QuipWatch
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.quip.QuipiOS.watchkitapp
+        PRODUCT_BUNDLE_IDENTIFIER: $(QUIP_APP_BUNDLE_ID).watchkitapp
         PRODUCT_NAME: QuipWatch
         INFOPLIST_FILE: QuipWatch/Info.plist
         CODE_SIGN_IDENTITY: "Apple Development"
@@ -134,7 +156,10 @@ targets:
         DEVELOPMENT_TEAM: D2PM6R797Q
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
         GENERATE_INFOPLIST_FILE: "NO"
-        SKIP_INSTALL: "NO"
+        # Embedded in Quip.app, so never installed on its own. "NO" put a second
+        # top-level .app in the archive, which made it a Generic Xcode Archive
+        # that cannot be exported for TestFlight ("expected one {}").
+        SKIP_INSTALL: "YES"
         SWIFT_VERSION: "6.0"
   QuipiOSTests:
     type: bundle.unit-test

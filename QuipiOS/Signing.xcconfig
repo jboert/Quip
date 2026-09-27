@@ -1,14 +1,23 @@
 // Signing.xcconfig — committed stub.
 //
-// This file is intentionally empty. Real signing identity (team ID, bundle ID)
-// lives in Signing.local.xcconfig, which is gitignored so personal / org
-// signing details never land in a commit.
+// Real signing identity (team ID, bundle ID) lives in Signing.local.xcconfig,
+// which is gitignored so personal / org signing details never land in a commit.
 //
 // To build the iOS target locally, create QuipiOS/Signing.local.xcconfig with:
 //     DEVELOPMENT_TEAM = <your 10-char Apple Developer team ID>
-//     PRODUCT_BUNDLE_IDENTIFIER = <your bundle ID, e.g. com.example.quip>
+//     QUIP_APP_BUNDLE_ID = <your bundle ID, e.g. com.example.quip>
+//
+// QUIP_APP_BUNDLE_ID, not PRODUCT_BUNDLE_IDENTIFIER: the watch app and the
+// Live Activity derive their IDs from it (`<id>.watchkitapp`,
+// `<id>.liveactivity`), and the watch's WKCompanionAppBundleIdentifier names
+// it. Setting PRODUCT_BUNDLE_IDENTIFIER alone renamed only the phone app, so
+// the watch still pointed at com.quip.QuipiOS — it could never pair, and an App
+// Store upload rejects a watch app whose ID is not prefixed by its parent's.
+// A local file that still sets only PRODUCT_BUNDLE_IDENTIFIER now builds as
+// the default below; add QUIP_APP_BUNDLE_ID to it.
 //
 // The `?` on #include means "include if present" — missing local file is not
 // an error here; it will surface at codesign time with a clearer message.
 
+QUIP_APP_BUNDLE_ID = com.quip.QuipiOS
 #include? "Signing.local.xcconfig"
