@@ -142,4 +142,15 @@ final class AXWindowMatchTests: XCTestCase {
         XCTAssertEqual(resolve(origin: CGPoint(x: 0, y: 0), size: size, title: "zsh", [twin, twin]),
                        .ambiguous([0, 1]))
     }
+
+    /// A title that matches NO same-origin candidate (stale, or the app-name
+    /// fallback CG uses without Screen Recording) must not turn a real tie into
+    /// "none": the tie is reported as ambiguous, so it is logged as a tie.
+    func testATitleMatchingNoSameOriginCandidateStaysAmbiguous() {
+        let size = CGSize(width: 800, height: 600)
+        let result = resolve(origin: CGPoint(x: 5, y: 5), size: size, title: "iTerm2",
+                             [C(origin: CGPoint(x: 5, y: 5), size: size, title: "one"),
+                              C(origin: CGPoint(x: 5, y: 5), size: size, title: "two")])
+        XCTAssertEqual(result, .ambiguous([0, 1]))
+    }
 }
