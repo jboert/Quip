@@ -765,10 +765,9 @@ final class WindowManager {
 
     /// Match a window's CG origin against the AX elements' origins.
     ///
-    /// Position is a FUZZY key and this function cannot make it exact — that is
-    /// Q-22, and it needs a decision about private API. What it does is stop the
-    /// fuzziness from being silent: the caller can now tell "found it" from
-    /// "found nothing" from "found several and is about to guess".
+    /// Position alone is a FUZZY key. `focusWindow` no longer uses this —
+    /// it calls `resolveAXWindow`, which adds size and title (Q-22). Kept as
+    /// the position-only primitive and for its tests.
     ///
     /// The tolerance absorbs the lag between the 2.0s CG poll and the tap. It is
     /// exclusive at exactly `tolerance` points, matching the shipped `< 10`.
@@ -783,6 +782,90 @@ final class WindowManager {
         case 1: return .unique(hits[0])
         default: return .ambiguous(hits)
         }
+    }
+
+    /// What a focus request knows about the window it wants.
+    struct AXFocusTarget: Equatable {
+        var origin: CGPoint
+        var size: CGSize
+        var title: String
+    }
+
+    /// What one AX element reports. Any field can be unreadable — a window
+    /// with no readable position used to fall through silently (Q-22 cause 3).
+    struct AXCandidate: Equatable {
+        var origin: CGPoint?
+        var size: CGSize?
+        var title: String?
+    }
+
+    /// Resolve a focus request to one AX element using public attributes only
+    /// (Q-22, public-API route: `_AXUIElementGetWindow` is private and not used).
+    ///
+    /// 1. Position within `tolerance`. One hit wins.
+    /// 2. Several hits share a position (Chrome 1710/1711 both at (692,56)):
+    ///    narrow by size, then by exact non-empty title. What survives decides.
+    /// 3. No position hit — the window moved since the poll, or its position is
+    ///    unreadable: fall back to title AND size together, and only when that
+    ///    identifies exactly one element.
+    ///
+    /// It never guesses. Still-ambiguous stays `.ambiguous`, and the caller
+    /// refuses to raise rather than raise the wrong window.
+    nonisolated static func resolveAXWindow(target: AXFocusTarget,
+                                            candidates: [AXCandidate],
+                                            tolerance: CGFloat = 10) -> AXWindowMatch {
+        func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < tolerance }
+        func sizeMatches(_ c: AXCandidate) -> Bool {
+            guard let size = c.size else { return false }
+            return near(size.width, target.size.width) && near(size.height, target.size.height)
+        }
+        func titleMatches(_ c: AXCandidate) -> Bool {
+            !target.title.isEmpty && c.title == target.title
+        }
+        func verdict(_ hits: [Int]) -> AXWindowMatch {
+            switch hits.count {
+            case 0: return .none
+            case 1: return .unique(hits[0])
+            default: return .ambiguous(hits)
+            }
+        }
+
+        let positional = candidates.enumerated().filter { _, c in
+            guard let o = c.origin else { return false }
+            return near(o.x, target.origin.x) && near(o.y, target.origin.y)
+        }.map(\.offset)
+
+        if positional.count == 1 { return .unique(positional[0]) }
+
+        if positional.count > 1 {
+            var narrowed = positional
+            let bySize = narrowed.filter { sizeMatches(candidates[$0]) }
+            if !bySize.isEmpty { narrowed = bySize }
+            if narrowed.count > 1 {
+                let byTitle = narrowed.filter { titleMatches(candidates[$0]) }
+                if !byTitle.isEmpty { narrowed = byTitle }
+            }
+            return verdict(narrowed)
+        }
+
+        // No position hit. Identity by title + size, both required: a title
+        // alone repeats (two "zsh" windows), and a size alone repeats more.
+        let identity = candidates.indices.filter {
+            titleMatches(candidates[$0]) && sizeMatches(candidates[$0])
+        }
+        return verdict(identity)
+    }
+
+    /// The window's bounds as CG reports them right now, not as of the last
+    /// 2.0s poll — a window moved between the poll and the tap used to miss
+    /// its own AX element (Q-22 cause 1). nil when CG no longer knows it.
+    nonisolated static func liveBounds(for windowNumber: CGWindowID) -> CGRect? {
+        guard let info = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowNumber)
+                as? [[String: Any]],
+              let first = info.first,
+              let dict = first[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: dict as CFDictionary) else { return nil }
+        return rect
     }
 
     /// Report a focus request that could not be resolved to exactly one window.
@@ -859,25 +942,44 @@ final class WindowManager {
                           to: LogPaths.webSocketPath)
         }
 
-        // Read every candidate's position ONCE, keeping the element beside it,
-        // so the decision below is made on the whole list rather than on
-        // whichever element happened to be enumerated first.
-        var candidates: [(element: AXUIElement, origin: CGPoint)] = []
+        // Read every candidate's position, size and title ONCE, keeping the
+        // element beside it, so the decision is made on the whole list rather
+        // than on whichever element happened to be enumerated first. An element
+        // whose position is unreadable is KEPT (origin nil): it can still be
+        // identified by title + size.
+        var elements: [AXUIElement] = []
+        var candidates: [AXCandidate] = []
         for axWindow in axWindows {
+            var candidate = AXCandidate()
             var posRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
-                  let value = posRef, CFGetTypeID(value) == AXValueGetTypeID() else { continue }
-            var axPos = CGPoint.zero
-            AXValueGetValue(value as! AXValue, .cgPoint, &axPos)
-            candidates.append((axWindow, axPos))
+            if AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
+               let value = posRef, CFGetTypeID(value) == AXValueGetTypeID() {
+                var point = CGPoint.zero
+                AXValueGetValue(value as! AXValue, .cgPoint, &point)
+                candidate.origin = point
+            }
+            var sizeRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef) == .success,
+               let value = sizeRef, CFGetTypeID(value) == AXValueGetTypeID() {
+                var size = CGSize.zero
+                AXValueGetValue(value as! AXValue, .cgSize, &size)
+                candidate.size = size
+            }
+            var titleRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef) == .success {
+                candidate.title = titleRef as? String
+            }
+            elements.append(axWindow)
+            candidates.append(candidate)
         }
 
-        let target = window.bounds.origin
-        let origins = candidates.map(\.origin)
+        let bounds = Self.liveBounds(for: window.windowNumber) ?? window.bounds
+        let target = AXFocusTarget(origin: bounds.origin, size: bounds.size, title: window.name)
+        let origins = candidates.compactMap(\.origin)
         let chosen: AXUIElement
-        switch Self.matchAXWindow(targetOrigin: target, candidates: origins) {
+        switch Self.resolveAXWindow(target: target, candidates: candidates) {
         case .unique(let index):
-            chosen = candidates[index].element
+            chosen = elements[index]
             // This window resolved — if it had been failing, say it recovered,
             // so a log that reported a miss cannot imply it is still missing.
             if Self.axMatchGate.evaluate(window.id, cause: nil) == .reportRecovery {
@@ -887,25 +989,22 @@ final class WindowManager {
             }
 
         case .ambiguous(let indexes):
-            // Still act, and still on the first: refusing here would break focus
-            // on every desk where the guess happens to be right, and choosing
-            // correctly needs the window id (Q-22). But this is exactly how the
-            // WRONG window gets raised, so it stops being silent.
+            // Position, size AND title all agree across several elements — two
+            // genuinely identical windows. Raising the first is exactly how the
+            // wrong window came forward, so refuse and say so (Q-22).
             Self.reportFocusMatchFailure(
-                windowId: window.id, app: window.app, target: target, candidates: origins,
+                windowId: window.id, app: window.app, target: target.origin, candidates: origins,
                 cause: "ax-match-ambiguous(\(indexes.count))",
-                detail: "\(indexes.count) AX windows share this position — raising the first, "
-                      + "which may be the wrong window")
-            chosen = candidates[indexes[0]].element
+                detail: "\(indexes.count) AX windows match on position, size and title — "
+                      + "refusing to guess, so the window will NOT come forward")
+            return
 
         case .none:
-            // The tap is over. Until now this returned with nothing written
-            // anywhere and nothing sent back to the phone.
             Self.reportFocusMatchFailure(
-                windowId: window.id, app: window.app, target: target, candidates: origins,
+                windowId: window.id, app: window.app, target: target.origin, candidates: origins,
                 cause: "ax-match-none",
-                detail: "no AX window matches the window's position, so it will NOT come "
-                      + "forward. The window most likely moved since the last 2.0s poll")
+                detail: "no AX window matches the window's live position, or its title and "
+                      + "size, so it will NOT come forward")
             return
         }
 

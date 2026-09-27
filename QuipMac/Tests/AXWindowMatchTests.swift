@@ -71,4 +71,75 @@ final class AXWindowMatchTests: XCTestCase {
     func testNegativeCoordinatesMatchByDistance() {
         XCTAssertEqual(match(CGPoint(x: -225, y: 66), [CGPoint(x: -228, y: 70)]), .unique(0))
     }
+
+    // MARK: - Q-22: resolve by position + size + title (public API only)
+
+    private typealias C = WindowManager.AXCandidate
+
+    private func resolve(origin: CGPoint, size: CGSize, title: String,
+                         _ candidates: [C]) -> WindowManager.AXWindowMatch {
+        WindowManager.resolveAXWindow(
+            target: .init(origin: origin, size: size, title: title), candidates: candidates)
+    }
+
+    /// The measured desk: Chrome 1710 and 1711 both at (692,56). The one asked
+    /// for is the SECOND element; the old matcher raised the first.
+    func testSameOriginResolvesToTheRequestedWindowBySize() {
+        let result = resolve(origin: CGPoint(x: 692, y: 56), size: CGSize(width: 1400, height: 900),
+                             title: "Docs",
+                             [C(origin: CGPoint(x: 692, y: 56), size: CGSize(width: 800, height: 600), title: "Docs"),
+                              C(origin: CGPoint(x: 692, y: 56), size: CGSize(width: 1400, height: 900), title: "Docs")])
+        XCTAssertEqual(result, .unique(1))
+    }
+
+    func testSameOriginAndSizeResolvesByTitle() {
+        let size = CGSize(width: 1200, height: 800)
+        let result = resolve(origin: CGPoint(x: 692, y: 56), size: size, title: "Inbox",
+                             [C(origin: CGPoint(x: 692, y: 56), size: size, title: "Calendar"),
+                              C(origin: CGPoint(x: 693, y: 57), size: size, title: "Inbox")])
+        XCTAssertEqual(result, .unique(1))
+    }
+
+    func testIdenticalWindowsStayAmbiguousInsteadOfGuessing() {
+        let size = CGSize(width: 1200, height: 800)
+        let twin = C(origin: CGPoint(x: 10, y: 10), size: size, title: "zsh")
+        XCTAssertEqual(resolve(origin: CGPoint(x: 10, y: 10), size: size, title: "zsh", [twin, twin]),
+                       .ambiguous([0, 1]))
+    }
+
+    /// Moved since the 2.0s poll: position misses, title + size still identify it.
+    func testMovedWindowFallsBackToTitleAndSize() {
+        let size = CGSize(width: 900, height: 700)
+        let result = resolve(origin: CGPoint(x: 0, y: 0), size: size, title: "claude — repo",
+                             [C(origin: CGPoint(x: 400, y: 300), size: CGSize(width: 500, height: 500), title: "other"),
+                              C(origin: CGPoint(x: 850, y: 120), size: size, title: "claude — repo")])
+        XCTAssertEqual(result, .unique(1))
+    }
+
+    func testWindowWithNoReadablePositionIsFoundByTitleAndSize() {
+        let size = CGSize(width: 900, height: 700)
+        let result = resolve(origin: CGPoint(x: 50, y: 50), size: size, title: "Finder",
+                             [C(origin: nil, size: size, title: "Finder")])
+        XCTAssertEqual(result, .unique(0))
+    }
+
+    func testTitleAloneIsNotEnoughWhenSizeDiffers() {
+        let result = resolve(origin: CGPoint(x: 0, y: 0), size: CGSize(width: 900, height: 700), title: "zsh",
+                             [C(origin: CGPoint(x: 500, y: 500), size: CGSize(width: 300, height: 200), title: "zsh")])
+        XCTAssertEqual(result, .none)
+    }
+
+    func testEmptyTitleNeverMatchesByIdentity() {
+        let size = CGSize(width: 900, height: 700)
+        let result = resolve(origin: CGPoint(x: 0, y: 0), size: size, title: "",
+                             [C(origin: CGPoint(x: 500, y: 500), size: size, title: "")])
+        XCTAssertEqual(result, .none)
+    }
+
+    func testTwoMovedWindowsWithSameTitleAndSizeAreAmbiguous() {
+        let size = CGSize(width: 900, height: 700)
+        let twin = C(origin: CGPoint(x: 800, y: 800), size: size, title: "zsh")
+        XCTAssertEqual(resolve(origin: CGPoint(x: 0, y: 0), size: size, title: "zsh", [twin, twin]),
+                       .ambiguous([0, 1]))
+    }
 }
