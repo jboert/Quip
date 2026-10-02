@@ -1579,6 +1579,7 @@ struct MainiOSView: View {
     /// line), and on switching windows, because an echo is only true of the
     /// window it came from.
     @State private var lineEcho: (windowId: String, text: String)? = nil
+    @FocusState private var textInputFocused: Bool
 
     // `body` used to be one ~535-line chained expression and once failed
     // with "unable to type-check this expression in reasonable time" on an
@@ -3322,11 +3323,17 @@ struct MainiOSView: View {
         return echo.text
     }
 
-    /// Accept the shown suggestion: the Mac chooses Tab for an agent-composer
-    /// placeholder and Right-arrow for a shell ghost completion, then the phone
-    /// mirrors the resulting line into its field so the user can see it.
+    /// Accept a true trailing ghost completion: the Mac chooses the correct
+    /// acceptance key, then the phone mirrors the resulting line locally.
     private func acceptAutosuggest() {
         guard let wid = selectedWindowId, let suggestion = activeAutosuggest else { return }
+        // The Codex phrase is an empty-composer placeholder, not text that a
+        // terminal can accept. Tapping it should focus the phone's real input
+        // field; only a true trailing ghost completion gets a key injected.
+        if AutosuggestDetector.isPromptMarkerOnly(suggestion.typed) {
+            focusTextInput()
+            return
+        }
         // `send` returns false when there is no socket. Ignoring it is how an
         // accept became a tap that did nothing, with no trace on either peer:
         // the suggestion maps outlive a disconnect, so the row was still there
@@ -3344,6 +3351,20 @@ struct MainiOSView: View {
         // keystroke — same 300ms the quick-action path already uses.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [client] in
             client.send(RequestContentMessage(windowId: wid))
+        }
+    }
+
+    private var isPromptPlaceholderAutosuggest: Bool {
+        guard let suggestion = activeAutosuggest else { return false }
+        return AutosuggestDetector.isPromptMarkerOnly(suggestion.typed)
+    }
+
+    private func focusTextInput() {
+        lineEcho = nil
+        textInputValue = ""
+        showTextInput = true
+        DispatchQueue.main.async {
+            textInputFocused = true
         }
     }
 
@@ -3400,6 +3421,7 @@ struct MainiOSView: View {
             autosuggestRow
             HStack(spacing: 6) {
                 TextField("Type a prompt\u{2026}", text: $textInputValue)
+                    .focused($textInputFocused)
                     .font(.system(size: 12, design: .monospaced))
                     // While the field mirrors the Mac's input line it is not a
                     // draft, it is a readout — dimmed so the two never look
@@ -3845,11 +3867,15 @@ struct MainiOSView: View {
                 if let wid = selectedWindowId { onRequestContent(wid) }
             },
             onSendAction: { action, fingerprint in
-                // The header's accept-autocomplete button and the suggestion
-                // row are the same act — route both through `acceptAutosuggest`
-                // so either one leaves the phone knowing what it just typed.
+                // Route the shared action through the live suggestion type:
+                // placeholder taps focus the phone field, while real shell
+                // ghost text is accepted on the Mac.
                 if action == "press_right", activeAutosuggest != nil {
-                    acceptAutosuggest()
+                    if isPromptPlaceholderAutosuggest {
+                        focusTextInput()
+                    } else {
+                        acceptAutosuggest()
+                    }
                     return
                 }
                 if let wid = selectedWindowId {
@@ -6292,12 +6318,12 @@ struct InlineTerminalContent: View {
             .padding(.vertical, 6)
             .background(Color.white.opacity(0.06))
 
-            // The terminal screenshot is pixels, so tapping the visible ghost
-            // text cannot carry an action. Surface the same text as a real
-            // Button immediately above the image: this is the mobile equivalent
-            // of pressing Tab/Right-arrow on the Mac, and it remains reachable
-            // even when the separate phone compose field is hidden.
+            // The terminal screenshot is pixels, so tapping the visible text
+            // cannot carry an action. Surface it as a real Button immediately
+            // above the image. A Codex placeholder focuses the phone field;
+            // true ghost text remains the mobile equivalent of Right-arrow.
             if let autosuggest {
+                let isPromptPlaceholder = AutosuggestDetector.isPromptMarkerOnly(autosuggest.typed)
                 Button {
                     Self.acceptAutosuggest(using: onSendAction)
                 } label: {
@@ -6321,8 +6347,12 @@ struct InlineTerminalContent: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("terminal-autosuggest-accept")
-                .accessibilityLabel("Accept suggestion: \(autosuggest.suggestion)")
-                .accessibilityHint("Accepts the greyed suggestion on the Mac")
+                .accessibilityLabel(isPromptPlaceholder
+                                    ? "Focus prompt input"
+                                    : "Accept suggestion: \(autosuggest.suggestion)")
+                .accessibilityHint(isPromptPlaceholder
+                                   ? "Opens the phone keyboard for a new prompt"
+                                   : "Accepts the greyed suggestion on the Mac")
             }
 
             // §18 — context-aware numbered-prompt chips. When the shared
