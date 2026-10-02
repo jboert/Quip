@@ -1239,6 +1239,9 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     var recentConnectionsJSON: String?
     /// Which backend was active, so a reinstalled phone re-selects it.
     var activeBackendID: String?
+    /// JSON text of the phone's prompt usage (`PromptRanker.Store`), so the
+    /// picker order survives a reinstall. Merged on restore, never clobbered.
+    var promptUsageJSON: String?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -1262,7 +1265,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         followFrontmost: Bool? = nil,
         pairedBackendsJSON: String? = nil,
         recentConnectionsJSON: String? = nil,
-        activeBackendID: String? = nil
+        activeBackendID: String? = nil,
+        promptUsageJSON: String? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -1286,6 +1290,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.pairedBackendsJSON = pairedBackendsJSON
         self.recentConnectionsJSON = recentConnectionsJSON
         self.activeBackendID = activeBackendID
+        self.promptUsageJSON = promptUsageJSON
     }
 }
 

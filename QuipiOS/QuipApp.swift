@@ -1423,12 +1423,13 @@ struct MainiOSView: View {
     // User-defined custom buttons. JSON-encoded `[CustomButton]`. Defaults
     // to "[]". Slots reference these by UUID via `.custom(id)`.
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
-    // MRU log for prompts fired from this device. JSON `[String: String]`
-    // mapping prompt id → ISO-8601 lastUsed. Surfaces most-recently-used
-    // prompts at the top of the picker (`.promptsPicker` slot).
-    // Phone-local; doesn't sync to Mac because each device's usage
-    // pattern is its own — Mac keeps the catalog, phone keeps the order.
+    // Legacy last-use log (prompt id → ISO-8601). Read once to seed
+    // `promptUsageJSON`, then cleared; kept only for that migration.
     @AppStorage("promptUsageMRUJSON") private var promptUsageMRUJSON: String = "{}"
+    // Per-device prompt usage (`PromptRanker.Store`): use counts, frecency and
+    // per-agent frecency. Orders the picker and the broadcast sheet. Backed up
+    // to the Mac in `PreferencesSnapshot` and merged on restore, never clobbered.
+    @AppStorage("promptUsageJSON") private var promptUsageJSON: String = "{}"
     /// Prompts the user hid on this phone (VibeCut inherit, US-005). Shared with
     /// the settings editor via the same @AppStorage key; drives the picker filter.
     @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
@@ -1972,7 +1973,7 @@ struct MainiOSView: View {
         .sheet(isPresented: $showPromptsPickerSheet) {
             NavigationStack {
                 PromptsQuickPickerSheet(
-                    entries: sortedPromptsByMRU(),
+                    entries: rankedPrompts(context: selectedPromptContext),
                     onPick: { entry, pressReturn in
                         firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
                         showPromptsPickerSheet = false
@@ -1984,7 +1985,8 @@ struct MainiOSView: View {
         .sheet(isPresented: $showBroadcastPromptSheet) {
             BroadcastPromptSheet(
                 windows: windows,
-                prompts: sortedPromptsByMRU(),
+                // Several targets, so no single agent context.
+                prompts: rankedPrompts(context: nil),
                 isConnected: client.isConnected,
                 initialDraft: textInputValue,
                 onSend: queueBroadcastPrompt
@@ -5154,7 +5156,7 @@ struct MainiOSView: View {
         case builtinButton(QuickButton)
         case customButton(CustomButton)
         case promptButton(promptID: String, label: String)
-        /// Single "Prompts" pill that opens the library sheet (sorted MRU).
+        /// Single "Prompts" pill that opens the library sheet (ranked by use).
         case promptsPicker
         case spacer(width: CGFloat, uid: UUID)
         case slashGroup(letter: Character, members: [SlashGroupMember])
@@ -5397,11 +5399,11 @@ struct MainiOSView: View {
     private func firePromptSlot(promptID: String, pressReturn: Bool) {
         guard let wid = selectedWindowId, !wid.isEmpty else { return }
         client.send(PastePromptMessage(id: promptID, windowId: wid, pressReturn: pressReturn))
-        recordPromptUsage(promptID)
+        recordPromptUsage(promptID, context: selectedPromptContext)
     }
 
     /// Single "Prompts" pill — opens a sheet listing every prompt in the
-    /// Mac catalog, sorted MRU-first. Replaces stuffing per-prompt
+    /// Mac catalog, ranked by use (`PromptRanker`). Replaces stuffing per-prompt
     /// `.prompt(id)` slots into the keyboard row when the user has more
     /// prompts than reasonably fit.
     @ViewBuilder
@@ -5432,42 +5434,39 @@ struct MainiOSView: View {
         // pill isn't placed in the Quick Buttons row.
     }
 
-    /// Decode the per-device MRU map and return the catalog in MRU order
-    /// (recent first, then unused alphabetically by label so the long-tail
-    /// stays predictable). Pure helper — no side effects.
-    private func sortedPromptsByMRU() -> [PromptEntry] {
-        let raw = promptUsageMRUJSON.data(using: .utf8) ?? Data()
-        let mru = (try? JSONDecoder().decode([String: String].self, from: raw)) ?? [:]
-        let formatter = ISO8601DateFormatter()
-        let usedDates: [String: Date] = mru.compactMapValues { formatter.date(from: $0) }
-        // Hidden prompts (e.g. unwanted VibeCut inherits) never reach the picker.
-        return PromptHideState.visible(client.promptLibrary, hiddenJSON: hiddenPromptIDsJSON).sorted { a, b in
-            switch (usedDates[a.id], usedDates[b.id]) {
-            case let (.some(da), .some(db)): return da > db
-            case (.some, .none): return true
-            case (.none, .some): return false
-            case (.none, .none): return a.label.localizedCaseInsensitiveCompare(b.label) == .orderedAscending
-            }
-        }
+    /// The catalog in frecency order for the given agent context (a
+    /// `CLIKind` raw value; nil ranks on global usage alone). Hidden prompts
+    /// never reach the picker. See `PromptRanker` for the ordering rules.
+    private func rankedPrompts(context: String?) -> [PromptEntry] {
+        PromptRanker.ranked(
+            PromptHideState.visible(client.promptLibrary, hiddenJSON: hiddenPromptIDsJSON),
+            store: promptUsageStore(),
+            context: context,
+            at: Date()
+        )
     }
 
-    /// Record a fresh usage timestamp for the given prompt id so it
-    /// climbs to the top of the MRU sort next time the picker opens.
-    private func recordPromptUsage(_ promptID: String) {
-        let raw = promptUsageMRUJSON.data(using: .utf8) ?? Data()
-        var mru = (try? JSONDecoder().decode([String: String].self, from: raw)) ?? [:]
-        mru[promptID] = ISO8601DateFormatter().string(from: Date())
-        // Cap at 100 entries — old, unused prompts shouldn't grow the
-        // dict forever. Drop oldest by ISO timestamp string compare,
-        // which is lexically equivalent to chronological for ISO-8601.
-        if mru.count > 100 {
-            let oldestIDs = mru.sorted(by: { $0.value < $1.value }).prefix(mru.count - 100).map(\.key)
-            for id in oldestIDs { mru.removeValue(forKey: id) }
-        }
-        if let data = try? JSONEncoder().encode(mru),
-           let json = String(data: data, encoding: .utf8) {
-            promptUsageMRUJSON = json
-        }
+    /// The agent running in the selected window, as a ranking context.
+    private var selectedPromptContext: String? {
+        guard let wid = selectedWindowId,
+              let window = windows.first(where: { $0.id == wid }) else { return nil }
+        return (window.cliKind ?? .shell).rawValue
+    }
+
+    /// Current usage store, seeded once from the legacy last-use map so an
+    /// upgrade keeps the order the user already had.
+    private func promptUsageStore() -> PromptRanker.Store {
+        let store = PromptRanker.decode(promptUsageJSON)
+        guard store.isEmpty, promptUsageMRUJSON != "{}" else { return store }
+        return PromptRanker.migrate(legacyMRUJSON: promptUsageMRUJSON)
+    }
+
+    /// Count one fire of `promptID` in `context`, so it climbs the picker.
+    private func recordPromptUsage(_ promptID: String, context: String?) {
+        promptUsageJSON = PromptRanker.encode(
+            PromptRanker.recording(promptID, context: context, at: Date(), in: promptUsageStore())
+        )
+        if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
     }
 
     /// Wire-side dispatch for a custom button. Mirrors `fireQuickButton` so
@@ -8158,7 +8157,7 @@ struct QuickButtonsSheet: View {
                     )
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Prompts")
-                    Text("Picker · MRU sorted")
+                    Text("Picker · ranked by use")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -9400,7 +9399,7 @@ private struct LatencySparkline: View {
 /// fires a `paste_prompt` to the Mac, which then sendText's the body
 /// into the currently-targeted iTerm session. Long-press → toggle
 /// Compact picker fired from the keyboard's `.promptsPicker` quick
-/// button. Lists every prompt in MRU order; tap fires paste, long-press
+/// button. Lists every prompt in ranked order; tap fires paste, long-press
 /// fires paste-and-submit. No edit/delete affordances — that lives in
 /// PromptLibrarySheet (Settings → Prompts). Shows up to 120 chars of
 /// preview per row so the user can tell similar prompts apart at a
@@ -9412,7 +9411,7 @@ struct PromptsQuickPickerSheet: View {
     @State private var query: String = ""
 
     /// Filtered against label + bodyPreview, case-insensitive. Empty query
-    /// returns the original MRU-sorted list. Long-tail prompts (Stream Deck
+    /// returns the original ranked list. Long-tail prompts (Stream Deck
     /// users with 30+) become reachable without endless scroll.
     private var filtered: [PromptEntry] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()

@@ -156,6 +156,12 @@ final class PreferencesSyncService {
         // savePaired/saveRecents writes they trigger.
         if let v = snapshot.pairedBackendsJSON { onRestorePaired?(v, snapshot.activeBackendID) }
         if let v = snapshot.recentConnectionsJSON { onRestoreRecents?(v) }
+        if let v = snapshot.promptUsageJSON {
+            // Merge: the live store may hold uses newer than the backup.
+            let local = PromptRanker.decode(d.string(forKey: "promptUsageJSON") ?? "{}")
+            let merged = PromptRanker.merged(local, with: PromptRanker.decode(v), at: Date())
+            if merged != local { d.set(PromptRanker.encode(merged), forKey: "promptUsageJSON") }
+        }
     }
 
     private func scheduleSync() {
@@ -223,7 +229,8 @@ final class PreferencesSyncService {
             followFrontmost: d.object(forKey: "followFrontmost") as? Bool,
             pairedBackendsJSON: d.data(forKey: "pairedBackendsData").flatMap { String(data: $0, encoding: .utf8) },
             recentConnectionsJSON: d.data(forKey: "recentConnectionsData").flatMap { String(data: $0, encoding: .utf8) },
-            activeBackendID: d.string(forKey: "activeBackendID")
+            activeBackendID: d.string(forKey: "activeBackendID"),
+            promptUsageJSON: d.string(forKey: "promptUsageJSON")
         )
     }
 }
