@@ -9451,6 +9451,14 @@ struct PromptsQuickPickerSheet: View {
                                     .font(.system(size: 11))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
+                                // Q-34c — what the Mac will fill in at paste.
+                                // Absent (no extra height) when there is nothing.
+                                if let hint = PromptVariables.hint(for: entry.body) {
+                                    Label(hint, systemImage: "curlybraces")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.tint)
+                                        .lineLimit(1)
+                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
@@ -9462,7 +9470,7 @@ struct PromptsQuickPickerSheet: View {
                         )
                     }
                 } footer: {
-                    Text("Tap to paste. Long-press to paste-and-submit. Recently-used appear first.")
+                    Text("Tap to paste. Long-press to paste-and-submit. Most-used for this window's agent appear first. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
                 }
             }
         }

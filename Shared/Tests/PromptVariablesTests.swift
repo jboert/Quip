@@ -48,4 +48,11 @@ final class PromptVariablesTests: XCTestCase {
         XCTAssertEqual(r.text, "In Quip (claude): fix TypeError at {{x}}")
         XCTAssertEqual(r.unresolved, [])
     }
+
+    func testHintNamesFilledAndLiteralVariables() {
+        XCTAssertNil(PromptVariables.hint(for: "no placeholders {here}"))
+        XCTAssertEqual(PromptVariables.hint(for: "{{Folder}} {{clipboard}} {{folder}}"), "fills folder, clipboard")
+        XCTAssertEqual(PromptVariables.hint(for: "{{ticket}} {{agent}}"), "fills agent · not filled: ticket")
+        XCTAssertEqual(PromptVariables.hint(for: "{{ticket}}"), "not filled: ticket")
+    }
 }

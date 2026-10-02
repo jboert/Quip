@@ -2489,3 +2489,20 @@ Reconnect after the Mac rebuild showed one `ESTABLISHED` socket over Tailscale
 (`100.x`, `auth=pin`, `client live`) while the LAN dial (`192.168.4.x`) was
 reaped before handshake. Same symptom recorded against the persist-connections
 work. Not chased this session.
+
+
+## Session log — 2026-10-01 (prompt ranking + prompt variables)
+
+Owner asks (dictated, decoded with them): rank prompts by real use, make
+the ranking per agent, back usage up to the Mac, and let prompts carry
+variables that the Mac fills in. Shipped as Q-33, Q-34a/b/c, plus Q-37 (gate
+bug found on the way). See `board.md` for the details.
+
+Still owed:
+- **Q-33a** hardware: does the picker order follow the window's agent?
+- **Q-34d** hardware: placeholders fill at paste. Needs a Mac install, which
+  wipes TCC, so batch it.
+- **Q-35** prompt generator seeded with the top-ranked prompts. Not started.
+- **Q-36** "pin a bomb": the owner said it is NOT pinning a prompt. Meaning unknown.
+- `{{branch}}` needs the pane's real path plus a git call off the main actor.
+  Not filed yet.

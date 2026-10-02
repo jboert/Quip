@@ -45,4 +45,19 @@ enum PromptVariables {
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: date)
     }
+
+    /// One short line for the phone's picker row naming what a prompt will be
+    /// filled with, or nil when it has no placeholders (the row then keeps its
+    /// height). Names the Mac cannot fill are called out, since they will be
+    /// sent literally: `fills folder, clipboard · not filled: ticket`.
+    static func hint(for body: String) -> String? {
+        let names = PromptTemplate.variables(in: body)
+        guard !names.isEmpty else { return nil }
+        let filled = names.filter { supported.contains($0) }
+        let literal = names.filter { !supported.contains($0) }
+        var parts: [String] = []
+        if !filled.isEmpty { parts.append("fills " + filled.joined(separator: ", ")) }
+        if !literal.isEmpty { parts.append("not filled: " + literal.joined(separator: ", ")) }
+        return parts.joined(separator: " · ")
+    }
 }
