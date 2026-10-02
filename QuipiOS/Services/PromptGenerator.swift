@@ -167,6 +167,66 @@ enum PromptGenerator {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: - Seeding from usage (Q-35)
+
+    /// The longest goal a seed copies out of a prompt body.
+    static let seedGoalLimit = 200
+
+    /// The prompts the user fires most in `context`, best first. Prompts that
+    /// were never fired are left out: they say nothing about habits.
+    static func topExamples(_ prompts: [PromptEntry], store: PromptRanker.Store,
+                            context: String?, at now: Date, limit: Int = 3) -> [PromptEntry] {
+        PromptRanker.ranked(prompts, store: store, context: context, at: now)
+            .filter { store[$0.id] != nil }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// The picker agent for a ranking context (a `CLIKind` raw value). Agents
+    /// the picker does not show fall back to `.any`.
+    static func agent(forContext context: String?) -> PromptGeneratorAgent {
+        guard let context, let agent = PromptGeneratorAgent(rawValue: context),
+              PromptGeneratorAgent.visibleCases.contains(agent) else { return .any }
+        return agent
+    }
+
+    /// Where the sheet starts: the agent of the selected window, and the style
+    /// the user's top prompts use most. A tie goes to the higher-ranked prompt.
+    static func initialInput(context: String?, examples: [PromptEntry]) -> PromptGeneratorInput {
+        var input = PromptGeneratorInput.empty
+        input.targetAgent = agent(forContext: context)
+        let styles = examples.compactMap(style(of:))
+        let counts = styles.reduce(into: [PromptGeneratorOutputStyle: Int]()) { $0[$1, default: 0] += 1 }
+        if let best = counts.values.max(), let style = styles.first(where: { counts[$0] == best }) {
+            input.outputStyle = style
+        }
+        return input
+    }
+
+    /// `base` with the goal, style and agent of `entry`. The name is cleared,
+    /// because the draft is a new prompt. A prompt with no stored goal gives
+    /// its first non-blank body line instead.
+    static func seeded(from entry: PromptEntry, base: PromptGeneratorInput) -> PromptGeneratorInput {
+        var input = base
+        input.title = ""
+        let description = cleanLine(entry.description ?? "")
+        let firstLine = entry.body
+            .split(whereSeparator: \.isNewline)
+            .map { cleanLine(String($0)) }
+            .first { !$0.isEmpty } ?? ""
+        input.goal = String((description.isEmpty ? firstLine : description).prefix(seedGoalLimit))
+        if let style = style(of: entry) { input.outputStyle = style }
+        if let raw = entry.targetAgent, agent(forContext: raw) != .any {
+            input.targetAgent = agent(forContext: raw)
+        }
+        return input
+    }
+
+    /// The generator style a prompt was made with, from its tags.
+    private static func style(of entry: PromptEntry) -> PromptGeneratorOutputStyle? {
+        entry.tags?.lazy.compactMap(PromptGeneratorOutputStyle.init(rawValue:)).first
+    }
+
     static func uniqueID(base: String, existingIDs: Set<String>) -> String {
         let sanitized = sanitizedID(base)
         let root = sanitized.isEmpty ? "generated-prompt" : sanitized
@@ -209,5 +269,16 @@ enum PromptGenerator {
 
     private static func cleanBlock(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+extension PromptRanker {
+    /// The usage store kept in `promptUsageJSON`, seeded once from the legacy
+    /// last-use map so an upgrade keeps the order the user already had. Lives
+    /// on the phone side because only the phone stores the legacy map.
+    static func load(usageJSON: String, legacyMRUJSON: String) -> Store {
+        let store = decode(usageJSON)
+        guard store.isEmpty, legacyMRUJSON != "{}" else { return store }
+        return migrate(legacyMRUJSON: legacyMRUJSON)
     }
 }

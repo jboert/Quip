@@ -1967,7 +1967,8 @@ struct MainiOSView: View {
                 client: client,
                 pushRegistration: pushRegistration,
                 macPermissions: macPermissions,
-                windowIdProvider: { selectedWindowId }
+                windowIdProvider: { selectedWindowId },
+                promptContextProvider: { selectedPromptContext }
             )
         }
         .sheet(isPresented: $showPromptsPickerSheet) {
@@ -5456,9 +5457,7 @@ struct MainiOSView: View {
     /// Current usage store, seeded once from the legacy last-use map so an
     /// upgrade keeps the order the user already had.
     private func promptUsageStore() -> PromptRanker.Store {
-        let store = PromptRanker.decode(promptUsageJSON)
-        guard store.isEmpty, promptUsageMRUJSON != "{}" else { return store }
-        return PromptRanker.migrate(legacyMRUJSON: promptUsageMRUJSON)
+        PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON)
     }
 
     /// Count one fire of `promptID` in `context`, so it climbs the picker.
@@ -7121,6 +7120,9 @@ struct SettingsSheet: View {
     /// (§B4 wrong-window paste bug — by-value capture froze whatever id
     /// was active at sheet open.)
     var windowIdProvider: () -> String? = { nil }
+    /// The selected window's agent as a prompt-ranking context, resolved
+    /// late for the same reason as `windowIdProvider`. Seeds the generator.
+    var promptContextProvider: () -> String? = { nil }
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     /// Same key the PTT path reads in QuipApp; @AppStorage keeps the two in
     /// step without threading a binding through the settings hierarchy.
@@ -7211,7 +7213,8 @@ struct SettingsSheet: View {
                 // the former standalone Prompts section in here).
                 Section {
                     NavigationLink {
-                        PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider)
+                        PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider,
+                                           promptContextProvider: promptContextProvider)
                     } label: {
                         settingsLinkRow(
                             title: "Prompts",
@@ -9500,6 +9503,9 @@ struct PromptLibrarySheet: View {
     /// (§B4 wrong-window bug.) Reading via a closure means every paste
     /// fetches the *current* selection at fire time.
     var windowIdProvider: () -> String?
+    /// The selected window's agent (a `CLIKind` raw value) for ranking the
+    /// generator's examples. Nil ranks on global usage.
+    var promptContextProvider: () -> String? = { nil }
     @State private var lastFiredId: String?
     @State private var editing: PromptEntry?
     @State private var creatingNew: Bool = false
@@ -9515,6 +9521,9 @@ struct PromptLibrarySheet: View {
     @State private var deleteErrorMessage: String?
     // VibeCut inherit (US-004/005): manual sync state + per-prompt hide set.
     @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
+    // Read-only here: the generator ranks its examples from them (Q-35).
+    @AppStorage("promptUsageJSON") private var promptUsageJSON: String = "{}"
+    @AppStorage("promptUsageMRUJSON") private var promptUsageMRUJSON: String = "{}"
     @State private var syncing = false
     @State private var syncResult: String?
     @State private var syncTimeout: Task<Void, Never>?
@@ -9641,7 +9650,11 @@ struct PromptLibrarySheet: View {
                 generatedDraft = draft
             }
         }) {
-            PromptGeneratorSheet(existingIDs: Set(client.promptLibrary.map(\.id))) { draft in
+            PromptGeneratorSheet(
+                existingIDs: Set(client.promptLibrary.map(\.id)),
+                context: promptContextProvider(),
+                examples: generatorExamples()
+            ) { draft in
                 pendingGeneratedDraft = draft
                 showingGenerator = false
             }
@@ -9700,6 +9713,17 @@ struct PromptLibrarySheet: View {
     /// Ask the Mac to re-read VibeCut's catalog and re-land the inherited set. The
     /// refreshed prompts arrive via the normal `prompt_library` broadcast; this ack
     /// just reports the count. 8s watchdog covers a lost ack.
+    /// The visible prompts the user fires most in the selected window's
+    /// agent, for the generator to start from (Q-35).
+    private func generatorExamples() -> [PromptEntry] {
+        PromptGenerator.topExamples(
+            PromptHideState.visible(client.promptLibrary, hiddenJSON: hiddenPromptIDsJSON),
+            store: PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON),
+            context: promptContextProvider(),
+            at: Date()
+        )
+    }
+
     private func syncFromVibeCut() {
         guard client.isConnected && client.isAuthenticated else { return }
         syncing = true

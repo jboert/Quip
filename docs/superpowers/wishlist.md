@@ -2502,7 +2502,7 @@ Still owed:
 - **Q-33a** hardware: does the picker order follow the window's agent?
 - **Q-34d** hardware: placeholders fill at paste. Needs a Mac install, which
   wipes TCC, so batch it.
-- **Q-35** prompt generator seeded with the top-ranked prompts. Not started.
+- **Q-35** prompt generator seeded with the top-ranked prompts. Shipped 2026-10-02; hardware check is **Q-35a**.
 - **Q-36** "pin a bomb": the owner said it is NOT pinning a prompt. Meaning unknown.
 - `{{branch}}` needs the pane's real path plus a git call off the main actor.
   Not filed yet.
