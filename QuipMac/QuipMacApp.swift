@@ -2558,14 +2558,25 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// (wishlist §57)
     @MainActor
     private func handlePastePrompt(_ msg: PastePromptMessage) {
-        guard let body = promptLibrary.body(for: msg.id), !body.isEmpty else {
+        guard let template = promptLibrary.body(for: msg.id), !template.isEmpty else {
             print("[Quip] paste_prompt: unknown prompt id=\(msg.id)")
             return
         }
         ensureITermSessionResolved(for: msg.windowId) { window in
             let termApp = self.terminalAppForWindow(window)
-            self.windowManager.focusWindow(msg.windowId)
             let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+            // Q-34b — fill {{name}} placeholders from this window. Read the
+            // pasteboard here, before the paste route borrows it, and only when
+            // the prompt asks for {{clipboard}}. An unfilled name stays literal.
+            let values = PromptVariables.values(
+                for: template, folder: window.subtitle, windowName: window.name,
+                agent: cliKind.rawValue, cwd: window.cwdPath, now: Date(),
+                clipboard: { NSPasteboard.general.string(forType: .string) })
+            let (body, unresolved) = PromptTemplate.expand(template, values: values)
+            if !unresolved.isEmpty {
+                appendLatency("paste_prompt unresolved_vars=\(unresolved.joined(separator: ",")) prompt_id=\(msg.id)")
+            }
+            self.windowManager.focusWindow(msg.windowId)
             let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
             let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sessionId in
                 if route == .pasteText {
