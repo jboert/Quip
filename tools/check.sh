@@ -127,8 +127,20 @@ fi
 #
 # Only compiler/XCTest/xcodebuild errors count: runtime os_log noise such as
 # "[sandbox] … (error: -9)" appears on green runs and must not read as a failure.
+#
+# Q-37 — a suite can also go red without running a single test: the simulator
+# refuses to launch the test host ("Busy (\"Application failed preflight
+# checks\")"). That log has no `error:` line in the shape above, so the gate
+# printed a bare TEST FAILED that read as a code failure. Say it was the
+# simulator, quote the reason, and give the reboot command ($2 = the sim UDID).
 summarize_suite_log() {
     grep -E '\.swift:[0-9]+(:[0-9]+)?: error:|^(xcodebuild: )?error:' "$1" | awk '!seen[$0]++' | head -15
+    if ! grep -q 'TEST SUCCEEDED' "$1" \
+        && grep -qE 'failed to launch|failed preflight checks|Test runner never began executing|Early unexpected exit' "$1"; then
+        echo "error: the test host never launched — the simulator failed, not a test"
+        grep -E '^[[:space:]]*Failure Reason:' "$1" | sed 's/^[[:space:]]*/   /' | awk '!seen[$0]++' | head -3
+        [ -n "${2:-}" ] && echo "   reboot it: xcrun simctl shutdown $2 && xcrun simctl boot $2"
+    fi
     grep -E "Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)" "$1" | tail -2
 }
 
@@ -257,7 +269,7 @@ if [ "$run_ios" = "true" ]; then
         run_bounded "$SUITE_TIMEOUT" "$ios_log" ios_suite
         ios_status=$?
         [ "$ios_status" -eq 124 ] && report_timeout "QuipiOS suite" "$IOS_SIM_UDID"
-        summarize_suite_log "$ios_log"
+        summarize_suite_log "$ios_log" "$IOS_SIM_UDID"
         rm -f "$ios_log"
         [ "$ios_status" -eq 0 ] || failures=$((failures + 1))
     else

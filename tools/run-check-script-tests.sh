@@ -80,6 +80,42 @@ else
     rm -f "$tlog"
 fi
 
+# Q-37 — a simulator that refuses to launch the test host must not read as a
+# bare TEST FAILED. Fixtures are trimmed from the real 2026-10-01 log.
+summarize_src="$(sed -n '/^summarize_suite_log()/,/^}/p' tools/check.sh)"
+if [ -z "$summarize_src" ]; then
+    checks=$((checks + 1)); failures=$((failures + 1))
+    echo "FAIL: check.sh must define summarize_suite_log"
+else
+    eval "$summarize_src"
+    slog="$(mktemp "${TMPDIR:-/tmp}/quip-summary-test.XXXXXX")"
+    sout="$(mktemp "${TMPDIR:-/tmp}/quip-summary-out.XXXXXX")"
+    cat >"$slog" <<'LOG'
+The request to open "com.fintechadventures.quip" failed.
+Failure Reason: The request was denied by service delegate (SBMainWorkspace) for reason: Busy ("Application failed preflight checks").
+2026-10-01 21:09:13.991 xcodebuild[44887:25594757] [MT] IDELaunchReport: Finished with error: Simulator device failed to launch com.fintechadventures.quip.
+Failure Reason: The request was denied by service delegate (SBMainWorkspace) for reason: Busy ("Application failed preflight checks").
+** TEST FAILED **
+LOG
+    summarize_suite_log "$slog" SIM-UDID >"$sout"
+    expect_present 'test host never launched' "$sout" "a launch failure is named as the simulator, not a test"
+    expect_present '^   Failure Reason: .*preflight checks' "$sout" "a launch failure quotes the simulator's reason"
+    checks=$((checks + 1))
+    if [ "$(grep -c 'Failure Reason' "$sout")" -ne 1 ]; then
+        echo "FAIL: a repeated Failure Reason must print once"
+        failures=$((failures + 1))
+    fi
+    expect_present 'simctl shutdown SIM-UDID && xcrun simctl boot SIM-UDID' "$sout" "a launch failure gives the reboot command"
+
+    # A launch hiccup that xcodebuild retried past is not a failure.
+    printf '%s\n' 'Simulator device failed to launch com.x.' \
+        '	 Executed 3 tests, with 0 failures (0 unexpected) in 0.1 (0.1) seconds' \
+        '** TEST SUCCEEDED **' >"$slog"
+    summarize_suite_log "$slog" SIM-UDID >"$sout"
+    expect_absent 'never launched' "$sout" "a green suite never reports a launch failure"
+    rm -f "$slog" "$sout"
+fi
+
 expect_present 'run_bounded .*xcodebuild -project QuipMac/QuipMac\.xcodeproj' tools/check.sh \
     "the QuipMac suite must run under run_bounded"
 expect_present 'run_bounded .*ios_suite' tools/check.sh \
