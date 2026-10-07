@@ -2490,6 +2490,12 @@ Reconnect after the Mac rebuild showed one `ESTABLISHED` socket over Tailscale
 reaped before handshake. Same symptom recorded against the persist-connections
 work. Not chased this session.
 
+2026-10-07 data point: after the Q-35 iOS install the phone authenticated over
+LAN (`192.168.4.50`, `auth=pin`, `client live` at 00:55:28Z) and held it. The
+per-minute dials that followed (one Tailscale, one LAN) were reaped before
+handshake, which is the 1dbd64b probe reaper working. One success does not
+close this; watch whether LAN holds across a Mac restart.
+
 
 ## Session log — 2026-10-01 (prompt ranking + prompt variables)
 
