@@ -32,7 +32,7 @@ enum AnalyzerAssets {
                 try await request.downloadAndInstall()
             }
         } catch {
-            print("[Quip][PTT] analyzer asset install failed: \(error)")
+            PhoneLog.log("analyzer model download failed: \(error)")
         }
     }
 }
@@ -70,7 +70,7 @@ final class AnalyzerSession: @unchecked Sendable {
                     onUpdate(display)
                 }
             } catch {
-                print("[Quip][PTT] analyzer results ended with error: \(error)")
+                PhoneLog.log("analyzer results ended with error: \(error)")
             }
         }
         let analyzer = self.analyzer
@@ -83,7 +83,7 @@ final class AnalyzerSession: @unchecked Sendable {
             do {
                 try await analyzer.start(inputSequence: stream)
             } catch {
-                print("[Quip][PTT] analyzer start failed: \(error)")
+                PhoneLog.log("analyzer start failed: \(error)")
             }
         }
     }

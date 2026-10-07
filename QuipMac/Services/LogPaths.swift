@@ -132,6 +132,14 @@ enum LogPaths {
         return directory.appendingPathComponent("injection.log").path
     }
 
+    /// Diagnostics the phone sends over the WebSocket (`phone_log`): which
+    /// speech engine each dictation used, model readiness, flush timeouts.
+    /// The phone's own decisions, readable without a cabled console.
+    static var phonePath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("phone.log").path
+    }
+
     static var classifyPath: String {
         ensureDirectoryExists()
         return directory.appendingPathComponent("classify.log").path

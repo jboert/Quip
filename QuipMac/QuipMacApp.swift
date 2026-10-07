@@ -67,6 +67,22 @@ fileprivate func appendWhisperDiagnostic(_ message: String) {
     }
 }
 
+/// Append `phone_log` lines to ~/Library/Logs/Quip/phone.log. Formatting
+/// (stamping, flattening, caps) lives in `PhoneLogSink`.
+fileprivate func appendPhoneLog(_ lines: [String]) {
+    let text = PhoneLogSink.format(lines, at: Date())
+    guard !text.isEmpty, let data = text.data(using: .utf8) else { return }
+    let path = LogPaths.phonePath
+    LogPaths.rotateIfNeeded(path: path)
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
+
 /// Append one structured line per image upload pipeline event. This is the
 /// companion to latency.log for the `image_upload` event slice.
 fileprivate func appendImageUploadDiagnostic(_ message: String) {
@@ -2167,6 +2183,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         case "request_diagnostics":
             handleRequestDiagnostics()
+
+        case "phone_log":
+            if let msg = MessageCoder.decode(PhoneLogMessage.self, from: data) {
+                appendPhoneLog(msg.lines)
+            }
 
         case "request_log_tail":
             if let msg = MessageCoder.decode(RequestLogTailMessage.self, from: data) {

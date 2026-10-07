@@ -1174,6 +1174,9 @@ final class WebSocketClient {
                     // Keychain-persisted UUID (survives app reinstall — same
                     // id the prefs-backup pipeline keys against).
                     sendSelfIdentity()
+                    // Phone diagnostics ride this connection to the Mac's
+                    // phone.log; anything logged while offline goes now.
+                    PhoneLog.shared.attach(self)
                 } else {
                     isAuthenticated = false
                     authError = msg.error ?? "Invalid PIN"

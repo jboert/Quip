@@ -214,9 +214,11 @@ final class SpeechService {
             }()
             NSLog("[Quip][PTT] startRecording pathRemote=%d wsReady=%d whisperReady=%d",
                   path == .remote ? 1 : 0, wsReady, whisperReady)
+            PhoneLog.log("ptt start path=\(path == .remote ? "remote" : "local") ws=\(wsReady) whisper=\(ws.whisperStatus)")
         } else {
             path = .local
             NSLog("[Quip][PTT] startRecording pathRemote=0 wsReady=-1 whisperReady=-1")
+            PhoneLog.log("ptt start path=local ws=none")
         }
 
         switch path {
@@ -233,9 +235,11 @@ final class SpeechService {
                     if finished {
                         let pending = self.pendingStopCompletion
                         self.pendingStopCompletion = nil
+                        let corrected = TranscriptCorrector.shared.correct(text ?? "")
+                        PhoneLog.log("ptt stop path=local chars=\(corrected.count)")
                         // Final transcript only (never partials) — correct Quip
                         // vocabulary mishearings before handing to the send path.
-                        pending?(TranscriptCorrector.shared.correct(text ?? ""))
+                        pending?(corrected)
                         if isCurrent { self.activeSessionToken = nil }
                     } else if isCurrent, let text {
                         self.transcribedText = text
@@ -315,6 +319,9 @@ final class SpeechService {
                     // empty too and this is a no-op.
                     let raw = text.isEmpty ? self.transcribedText : text
                     let corrected = TranscriptCorrector.shared.correct(raw)
+                    // used=captions means the Mac's Whisper sent nothing back
+                    // (timeout or error) and the phone's captions stood in.
+                    PhoneLog.log("ptt stop path=remote whisper_chars=\(text.count) used=\(text.isEmpty ? "captions" : "whisper") chars=\(corrected.count)")
                     self.transcribedText = corrected
                     self.activeSessionToken = nil
                     self.remoteSession = nil
@@ -335,6 +342,7 @@ final class SpeechService {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 guard let self, let pending = self.pendingStopCompletion else { return }
                 self.pendingStopCompletion = nil
+                PhoneLog.log("ptt stop path=local result=safety-net-3s chars=\(self.transcribedText.count)")
                 pending(self.transcribedText)
             }
         }
@@ -648,7 +656,7 @@ private class AudioWorker: @unchecked Sendable {
             self.onUpdateCallback = onUpdate
             self.lastAnalyzerText = ""
 
-            let analyzerConfig = self.analyzerConfigForPress()
+            let analyzerConfig = self.analyzerConfigForPress(purpose: "dictation")
             let recognizer = speechRecognizer
             if analyzerConfig == nil, !(recognizer?.isAvailable ?? false) {
                 onUpdate(nil, true)
@@ -814,11 +822,11 @@ private class AudioWorker: @unchecked Sendable {
             Task {
                 var (readiness, locale, format) = await AnalyzerAssets.readiness(for: Locale.current)
                 if readiness == .needsDownload {
-                    print("[Quip][PTT] analyzer model missing — downloading")
+                    PhoneLog.log("analyzer model missing, downloading locale=\(Locale.current.identifier)")
                     await AnalyzerAssets.install(for: Locale.current)
                     (readiness, locale, format) = await AnalyzerAssets.readiness(for: Locale.current)
                 }
-                print("[Quip][PTT] analyzer readiness=\(readiness)")
+                PhoneLog.log("analyzer readiness=\(readiness) locale=\(locale?.identifier ?? "none")")
                 self.queue.async {
                     self.analyzerReadiness = readiness
                     self.analyzerLocale = locale
@@ -831,13 +839,13 @@ private class AudioWorker: @unchecked Sendable {
 
     /// The locale and audio format for an analyzer session when this press
     /// should use SpeechAnalyzer, else nil (SFSpeech). Call on `queue`.
-    private func analyzerConfigForPress() -> (locale: Locale, format: AVAudioFormat)? {
+    private func analyzerConfigForPress(purpose: String) -> (locale: Locale, format: AVAudioFormat)? {
         guard #available(iOS 26, *) else { return nil }
         let legacyForced = UserDefaults.standard.bool(forKey: LabsFlags.legacySpeechRecognizer)
         let engine = SpeechEnginePolicy.choose(osSupportsAnalyzer: true,
                                                readiness: analyzerReadiness,
                                                legacyForced: legacyForced)
-        print("[Quip][PTT] engine=\(engine == .analyzer ? "analyzer" : "legacy") readiness=\(analyzerReadiness)")
+        PhoneLog.log("ptt engine=\(engine == .analyzer ? "analyzer" : "legacy") for=\(purpose) readiness=\(analyzerReadiness) legacy_forced=\(legacyForced ? 1 : 0)")
         if analyzerReadiness != .ready { refreshAnalyzerReadiness() }
         guard engine == .analyzer, let locale = analyzerLocale, let format = analyzerFormat else { return nil }
         return (locale, format)
@@ -885,7 +893,7 @@ private class AudioWorker: @unchecked Sendable {
             }
             self.queue.asyncAfter(deadline: .now() + self.policy.finishHardCap) { [weak self] in
                 guard let self, self.analyzerSession === session else { return }
-                print("[Quip][PTT] analyzer flush timeout at \(self.policy.finishHardCap)s — cancelling")
+                PhoneLog.log("analyzer flush timeout after \(self.policy.finishHardCap)s, delivered last text chars=\(self.lastAnalyzerText.count)")
                 session.cancel()
                 self.analyzerSession = nil
                 let text = self.lastAnalyzerText
@@ -972,7 +980,7 @@ private class AudioWorker: @unchecked Sendable {
     /// done, but user still talking" — start a fresh task so captions keep
     /// flowing for the duration of the remote upload.
     private func beginCaptionTask(onCaption: @escaping @Sendable (String) -> Void) {
-        if let config = analyzerConfigForPress() {
+        if let config = analyzerConfigForPress(purpose: "captions") {
             // No recycling needed: the analyzer has no one-minute ceiling.
             beginAnalyzerSession(locale: config.locale, format: config.format) { text in
                 if !text.isEmpty { onCaption(text) }

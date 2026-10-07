@@ -411,6 +411,21 @@ struct SendTextMessage: Codable, Sendable {
     }
 }
 
+/// iPhone → Mac. Phone-side diagnostic lines (PTT engine choice, speech
+/// model readiness, flush timeouts) written to the Mac's
+/// `~/Library/Logs/Quip/phone.log`. Without it, anything the phone decided
+/// on its own was visible only through a cabled device console. Each line
+/// already carries the phone's own timestamp. Older Macs ignore the type.
+struct PhoneLogMessage: Codable, Sendable {
+    let type: String
+    let lines: [String]
+
+    init(lines: [String]) {
+        self.type = "phone_log"
+        self.lines = lines
+    }
+}
+
 /// Round-trip acknowledgement Mac → iOS, sent after the keystroke / paste
 /// completes. Lets the phone derive `net_rtt = total_rtt - mac_ms`, which
 /// separates network latency from Mac-side processing — necessary for
