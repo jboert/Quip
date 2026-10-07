@@ -54,3 +54,13 @@ final class LogRotationTests: XCTestCase {
         XCTAssertFalse(LogPaths.rotateIfNeeded(path: path, maxBytes: 1024))
     }
 }
+
+/// Tests drive real loggers; they must never write into the owner's logs.
+final class LogPathsTestIsolationTests: XCTestCase {
+    func testLogsGoToAScratchFolderUnderTests() {
+        let real = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Quip").standardizedFileURL.path
+        XCTAssertFalse(LogPaths.directory.standardizedFileURL.path.hasPrefix(real))
+        XCTAssertFalse(LogPaths.swrmPath.hasPrefix(real))
+    }
+}

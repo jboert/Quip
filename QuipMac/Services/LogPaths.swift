@@ -41,7 +41,17 @@ enum LogPaths {
     }
 
     /// Parent directory for all Quip logs.
+    ///
+    /// Under XCTest the logs go to a scratch folder instead. The Mac tests are
+    /// app-hosted, so every logger a test drives used to append to the
+    /// owner's real logs: `swrm.log` carried 199 fake
+    /// `cursor load failed for /Users/me/...` lines, which read like a real
+    /// fault when debugging.
     static var directory: URL {
+        if SingleInstanceGuard.isRunningTests {
+            return URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("QuipTestLogs", isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library", isDirectory: true)
         return base.appendingPathComponent("Logs/Quip", isDirectory: true)
