@@ -10,7 +10,9 @@ Status: `ready` (picked up in priority order) · `in progress` · `blocked` · `
 
 ## In progress
 
-_(none)_
+| ID | Title | Notes |
+|----|-------|-------|
+| Q-40 | Scroll further back in a terminal on the phone (GH #37, #35) | Causes 1 + 2 fixed (2,000-line window, follow-tail only when at the bottom). Cause 3 open: Terminal.app reads `contents` (visible screen only); `history` has the buffer, but `readContentDetailed` also feeds the detectors, so switch only for `request_content`. Hardware check: `seq 1 3000` in iTerm2, scroll to the top on the phone in text mode, expect line 1001 and no snap-back. |
 
 ## Ready
 

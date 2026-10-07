@@ -2044,7 +2044,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             // the person looking at the blank screen actually is.
                             switch read {
                             case .ok(let content):
-                                redacted = content.components(separatedBy: "\n").suffix(200).joined(separator: "\n")
+                                redacted = TerminalContentWindow.tail(content)
                             case .failed:
                                 KokoroTTSDebug.log("request_content read failed for \(wid)")
                                 redacted = "[Quip could not read this window — check Automation/Accessibility permissions for Quip]"

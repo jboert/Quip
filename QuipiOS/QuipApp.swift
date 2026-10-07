@@ -5795,15 +5795,29 @@ struct LinkableTerminalText: UIViewRepresentable {
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
+        // Same text: leave the view alone so a refresh never moves the reader.
+        guard tv.attributedText.string != content else { return }
+        // Follow new output only if the reader was already at the bottom
+        // (`TerminalScrollPolicy`, same rule as the screenshot view). Scrolled
+        // up reading history, they stay where they are.
+        let pinned = TerminalScrollPolicy.isPinnedToBottom(
+            contentHeight: tv.contentSize.height,
+            offsetY: tv.contentOffset.y,
+            visibleHeight: tv.bounds.height - tv.adjustedContentInset.bottom)
+        let savedOffset = tv.contentOffset
         let attr = NSMutableAttributedString(string: content, attributes: [
             .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular),
             .foregroundColor: UIColor.white.withAlphaComponent(0.85),
         ])
         tv.attributedText = attr
-        // Auto-scroll to bottom on new content so latest output is visible
-        // (mirrors the SwiftUI ScrollViewReader.scrollTo("bottom") pattern).
-        let bottom = NSRange(location: max(0, attr.length - 1), length: 1)
-        tv.scrollRangeToVisible(bottom)
+        if pinned {
+            let bottom = NSRange(location: max(0, attr.length - 1), length: 1)
+            tv.scrollRangeToVisible(bottom)
+        } else {
+            tv.layoutIfNeeded()
+            let maxY = max(0, tv.contentSize.height - tv.bounds.height + tv.adjustedContentInset.bottom)
+            tv.setContentOffset(CGPoint(x: savedOffset.x, y: min(savedOffset.y, maxY)), animated: false)
+        }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
