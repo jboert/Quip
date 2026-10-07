@@ -1972,9 +1972,14 @@ struct MainiOSView: View {
             )
         }
         .sheet(isPresented: $showPromptsPickerSheet) {
+            // The one Prompts hub (Q-42): the same screen as Settings →
+            // Prompts, so paste, send, edit, hide and delete all live in one
+            // place. Firing goes through `firePromptSlot` so usage is counted.
             NavigationStack {
-                PromptsQuickPickerSheet(
-                    entries: rankedPrompts(context: selectedPromptContext),
+                PromptLibrarySheet(
+                    client: client,
+                    windowIdProvider: { selectedWindowId },
+                    promptContextProvider: { selectedPromptContext },
                     onPick: { entry, pressReturn in
                         firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
                         showPromptsPickerSheet = false
@@ -8359,7 +8364,7 @@ struct QuickButtonsSheet: View {
                             showAddSheet = false
                             showPromptPicker = true
                         } label: {
-                            Label("Prompt from library…", systemImage: "doc.text")
+                            Label("One prompt as its own button…", systemImage: "doc.text")
                         }
                     }
                     let pickerPlaced = slots.contains(where: {
@@ -8369,7 +8374,7 @@ struct QuickButtonsSheet: View {
                         addPromptsPicker()
                         showAddSheet = false
                     } label: {
-                        Label("Prompts picker" + (pickerPlaced ? " · added" : ""),
+                        Label("Prompts button (opens all prompts)" + (pickerPlaced ? " · added" : ""),
                               systemImage: "doc.text.magnifyingglass")
                     }
                     .disabled(pickerPlaced)
@@ -9412,102 +9417,15 @@ private struct LatencySparkline: View {
     }
 }
 
-/// Renders the Mac-managed prompt library (wishlist §57). Tapping a row
-/// fires a `paste_prompt` to the Mac, which then sendText's the body
-/// into the currently-targeted iTerm session. Long-press → toggle
-/// Compact picker fired from the keyboard's `.promptsPicker` quick
-/// button. Lists every prompt in ranked order; tap fires paste, long-press
-/// fires paste-and-submit. No edit/delete affordances — that lives in
-/// PromptLibrarySheet (Settings → Prompts). Shows up to 120 chars of
-/// preview per row so the user can tell similar prompts apart at a
-/// glance.
-struct PromptsQuickPickerSheet: View {
-    let entries: [PromptEntry]
-    let onPick: (PromptEntry, _ pressReturn: Bool) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var query: String = ""
-
-    /// Filtered against label + bodyPreview, case-insensitive. Empty query
-    /// returns the original ranked list. Long-tail prompts (Stream Deck
-    /// users with 30+) become reachable without endless scroll.
-    private var filtered: [PromptEntry] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return entries }
-        return entries.filter {
-            $0.label.lowercased().contains(q)
-                || $0.bodyPreview.lowercased().contains(q)
-                || $0.id.lowercased().contains(q)
-        }
-    }
-
-    var body: some View {
-        List {
-            if entries.isEmpty {
-                Section {
-                    Text("No prompts yet — add them in Settings → Prompts or drop .txt files into ~/Library/Application Support/Quip/prompts/ on the Mac.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-            } else if filtered.isEmpty {
-                Section {
-                    Text("No matches for \"\(query)\"")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Section {
-                    ForEach(filtered) { entry in
-                        Button {
-                            onPick(entry, false)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.label)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                Text(entry.bodyPreview)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                                // Q-34c — what the Mac will fill in at paste.
-                                // Absent (no extra height) when there is nothing.
-                                if let hint = PromptVariables.hint(for: entry.body) {
-                                    Label(hint, systemImage: "curlybraces")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.tint)
-                                        .lineLimit(1)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .simultaneousGesture(
-                            LongPressGesture(minimumDuration: 0.4)
-                                .onEnded { _ in onPick(entry, true) }
-                        )
-                    }
-                } footer: {
-                    Text("Tap to paste. Long-press to paste-and-submit. Most-used for this window's agent appear first. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Prompts")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Cancel") { dismiss() }
-            }
-        }
-    }
-}
-
-/// auto-submit (sends Return after the paste). Mirrors the Stream Deck
-/// "clipboard prompt" pattern from the streamdeck-claude-scripts
-/// project but without the .scpt round-trip — the prompt body lives on
-/// disk on the Mac (~/Library/Application Support/Quip/prompts/*.txt)
-/// and the phone never has to render the body in an editor field.
+/// The Prompts hub (Q-42), opened both from the main screen's Prompts button
+/// and from Settings → Prompts, so there is one place for everything. A tap
+/// fires a `paste_prompt` to the Mac, which pastes the body into the targeted
+/// terminal; the visible ↵ button pastes and sends; a long-press offers Edit,
+/// Hide and Delete (Delete asks first). Prompts are ranked most-used first
+/// for the selected window's agent, hidden ones fold into their own section.
+/// Mirrors the Stream Deck "clipboard prompt" pattern without the .scpt
+/// round-trip: bodies live on the Mac in
+/// ~/Library/Application Support/Quip/prompts/*.txt.
 struct PromptLibrarySheet: View {
     var client: WebSocketClient
     /// Closure resolver, NOT a captured value. The prior `var windowId: String?`
@@ -9520,6 +9438,14 @@ struct PromptLibrarySheet: View {
     /// The selected window's agent (a `CLIKind` raw value) for ranking the
     /// generator's examples. Nil ranks on global usage.
     var promptContextProvider: () -> String? = { nil }
+    /// Set when the hub is opened from the main screen: firing goes through
+    /// the caller (which records usage and closes the sheet). Nil in
+    /// Settings, where the sheet fires directly and stays open.
+    var onPick: ((PromptEntry, _ pressReturn: Bool) -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var confirmingDelete: PromptEntry?
+    @State private var showHiddenPrompts = false
     @State private var lastFiredId: String?
     @State private var editing: PromptEntry?
     @State private var creatingNew: Bool = false
@@ -9554,76 +9480,113 @@ struct PromptLibrarySheet: View {
                     Text("Library")
                 }
             } else {
-                Section {
-                    ForEach(client.promptLibrary) { entry in
-                        promptRow(entry)
-                            .swipeActions(edge: .leading) {
-                                let hidden = PromptHideState.isHidden(entry.id, in: hiddenPromptIDsJSON)
-                                Button {
-                                    hiddenPromptIDsJSON = PromptHideState.toggled(entry.id, in: hiddenPromptIDsJSON)
-                                } label: {
-                                    Label(hidden ? "Show" : "Hide",
-                                          systemImage: hidden ? "eye" : "eye.slash")
-                                }
-                                .tint(.gray)
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    deletePrompt(entry)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                .disabled(pendingDeleteIDs.contains(entry.id))
-                                Button {
-                                    editing = entry
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }
-                                .tint(.blue)
-                            }
-                    }
-                } header: {
-                    HStack {
-                        Text("Library")
-                        Spacer()
-                        if let syncResult {
-                            Text(syncResult)
-                                .font(.caption)
-                                .foregroundStyle(syncResult.contains("synced") ? .green : .orange)
-                        }
-                        Text("\(client.promptLibrary.count)")
+                let hub = hubSections
+                if hub.visible.isEmpty && hub.hidden.isEmpty {
+                    Section {
+                        Text("No matches for \"\(query)\"")
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
-                            .font(.caption)
                     }
-                } footer: {
-                    Text("Tap to paste. Long-press to paste-and-submit. Swipe a row for Edit / Delete. The ⟳ button syncs prompts from VibeCut.")
+                }
+                if !hub.visible.isEmpty {
+                    Section {
+                        ForEach(hub.visible) { entry in hubRow(entry) }
+                    } header: {
+                        HStack {
+                            Text("Most used first")
+                            Spacer()
+                            if let syncResult {
+                                Text(syncResult)
+                                    .font(.caption)
+                                    .foregroundStyle(syncResult.contains("synced") ? .green : .orange)
+                            }
+                            Text("\(client.promptLibrary.count)")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    } footer: {
+                        Text("Tap to paste. ↵ pastes and sends. Hold a prompt to edit, hide or delete it. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
+                    }
+                }
+                if !hub.hidden.isEmpty {
+                    Section {
+                        if showHiddenPrompts || !query.isEmpty {
+                            ForEach(hub.hidden) { entry in hubRow(entry) }
+                        }
+                    } header: {
+                        Button {
+                            showHiddenPrompts.toggle()
+                        } label: {
+                            Label("Hidden (\(hub.hidden.count))",
+                                  systemImage: showHiddenPrompts || !query.isEmpty ? "chevron.down" : "chevron.right")
+                        }
+                        .font(.caption)
+                    }
                 }
             }
+        }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        .confirmationDialog(
+            "Delete \"\(confirmingDelete?.label ?? "")\"?",
+            isPresented: Binding(get: { confirmingDelete != nil },
+                                 set: { if !$0 { confirmingDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let entry = confirmingDelete { deletePrompt(entry) }
+                confirmingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { confirmingDelete = nil }
+        } message: {
+            Text("This removes it from the Mac too.")
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Prompts")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingGenerator = true
-                } label: {
-                    Image(systemName: "wand.and.stars")
+            if onPick != nil {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
                 }
-                .accessibilityLabel("Generate prompt")
             }
+            // Less-used actions, named instead of three bare icons.
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    syncFromVibeCut()
+                Menu {
+                    Button {
+                        showingGenerator = true
+                    } label: {
+                        Label("Prompt generator…", systemImage: "wand.and.stars")
+                    }
+                    Button {
+                        syncFromVibeCut()
+                    } label: {
+                        Label("Sync from VibeCut", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(syncing || !(client.isConnected && client.isAuthenticated))
+                    // §6.1 — export the whole library as a shareable .quippack (Labs).
+                    if labsPromptPacks && !client.promptLibrary.isEmpty {
+                        Button {
+                            let pack = SharedPromptPack(name: "Quip Prompts",
+                                                        prompts: client.promptLibrary, buttons: [])
+                            do {
+                                shareItem = PackShareItem(url: try pack.writeToTemp(filename: "quip-prompts"))
+                            } catch {
+                                // Same dead-button failure as the buttons export.
+                                print("[Quip][Packs] export prompts FAILED err=\(error)")
+                                exportError = "Couldn't stage the prompt pack for sharing. \(error.localizedDescription)"
+                            }
+                        } label: {
+                            Label("Share prompts", systemImage: "square.and.arrow.up")
+                        }
+                    }
                 } label: {
                     if syncing {
                         ProgressView()
                     } else {
-                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
-                .disabled(syncing || !(client.isConnected && client.isAuthenticated))
-                .accessibilityLabel("Sync from VibeCut")
+                .accessibilityLabel("More prompt actions")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -9632,25 +9595,6 @@ struct PromptLibrarySheet: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("New prompt")
-            }
-            // §6.1 — export the whole library as a shareable .quippack (Labs).
-            if labsPromptPacks && !client.promptLibrary.isEmpty {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        let pack = SharedPromptPack(name: "Quip Prompts",
-                                                    prompts: client.promptLibrary, buttons: [])
-                        do {
-                            shareItem = PackShareItem(url: try pack.writeToTemp(filename: "quip-prompts"))
-                        } catch {
-                            // Same dead-button failure as the buttons export.
-                            print("[Quip][Packs] export prompts FAILED err=\(error)")
-                            exportError = "Couldn't stage the prompt pack for sharing. \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("Share prompts")
-                }
             }
         }
         .sheet(isPresented: $creatingNew) {
@@ -9811,17 +9755,86 @@ struct PromptLibrarySheet: View {
         .opacity(hidden ? 0.4 : 1)
         .contentShape(Rectangle())
         .onTapGesture { fire(entry, pressReturn: false) }
-        .onLongPressGesture(minimumDuration: 0.4) { fire(entry, pressReturn: true) }
-        // Both actions are gesture-only, which VoiceOver cannot discover: the
-        // row reads as static text and long-press has no spoken equivalent at
-        // all. Declaring the button trait plus a named custom action makes
-        // "paste and send" reachable without the gesture.
+        // Send stays a visible button (`hubRow`); a long-press here is the
+        // context menu, so it cannot also mean "send".
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(entry.label)
         .accessibilityValue(hidden ? "Hidden" : entry.bodyPreview)
         .accessibilityHint("Pastes this prompt into the active terminal")
         .accessibilityAction(named: "Paste and send") { fire(entry, pressReturn: true) }
+    }
+
+    /// One hub row: the prompt (tap pastes), a visible ↵ that pastes and
+    /// sends, and Edit / Hide / Delete on long-press. Swipes stay as
+    /// shortcuts for the same actions.
+    @ViewBuilder
+    private func hubRow(_ entry: PromptEntry) -> some View {
+        let hidden = PromptHideState.isHidden(entry.id, in: hiddenPromptIDsJSON)
+        HStack(spacing: 10) {
+            promptRow(entry)
+            Button {
+                fire(entry, pressReturn: true)
+            } label: {
+                Image(systemName: "return")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 36, height: 36)
+                    .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Paste and send \(entry.label)")
+        }
+        .contextMenu {
+            Button {
+                editing = entry
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            Button {
+                hiddenPromptIDsJSON = PromptHideState.toggled(entry.id, in: hiddenPromptIDsJSON)
+            } label: {
+                Label(hidden ? "Show" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
+            }
+            Button(role: .destructive) {
+                confirmingDelete = entry
+            } label: {
+                Label("Delete…", systemImage: "trash")
+            }
+            .disabled(pendingDeleteIDs.contains(entry.id))
+        }
+        .swipeActions(edge: .leading) {
+            Button {
+                hiddenPromptIDsJSON = PromptHideState.toggled(entry.id, in: hiddenPromptIDsJSON)
+            } label: {
+                Label(hidden ? "Show" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
+            }
+            .tint(.gray)
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                confirmingDelete = entry
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(pendingDeleteIDs.contains(entry.id))
+            Button {
+                editing = entry
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .tint(.blue)
+        }
+    }
+
+    private var hubSections: PromptHub.Sections {
+        PromptHub.sections(
+            client.promptLibrary,
+            hiddenJSON: hiddenPromptIDsJSON,
+            store: PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON),
+            context: promptContextProvider(),
+            query: query,
+            at: Date()
+        )
     }
 
     /// Compact provenance / state capsule, quieter than the label so the merged
@@ -9837,6 +9850,10 @@ struct PromptLibrarySheet: View {
     }
 
     private func fire(_ entry: PromptEntry, pressReturn: Bool) {
+        if let onPick {
+            onPick(entry, pressReturn)
+            return
+        }
         guard let wid = windowIdProvider(), !wid.isEmpty else { return }
         client.send(PastePromptMessage(id: entry.id, windowId: wid, pressReturn: pressReturn))
         lastFiredId = entry.id
