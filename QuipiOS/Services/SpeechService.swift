@@ -563,7 +563,22 @@ private class AudioWorker: @unchecked Sendable {
     private let ring = AudioRingBuffer(window: 0.5)
     private var isArmed = false
 
+    // SpeechAnalyzer engine (iOS 26+). Readiness is probed ahead of time so a
+    // PTT press can build its session synchronously; anything short of ready
+    // uses the SFSpeech code below, unchanged. See `SpeechEnginePolicy`.
+    private var analyzerReadiness: AnalyzerReadiness = .unsupported
+    private var analyzerLocale: Locale?
+    private var analyzerFormat: AVAudioFormat?
+    private var analyzerProbeInFlight = false
+    /// The live `AnalyzerSession` (typed `AnyObject` because the class is
+    /// iOS 26 only). Set on `queue`; read by the tap like `recognitionRequest`.
+    private var analyzerSession: AnyObject?
+    /// Latest text from the local-path analyzer session, delivered as final
+    /// if its flush times out.
+    private var lastAnalyzerText = ""
+
     func arm() {
+        refreshAnalyzerReadiness()
         queue.async { [self] in
             guard !self.isArmed else { return }
             let session = AVAudioSession.sharedInstance()
@@ -586,6 +601,7 @@ private class AudioWorker: @unchecked Sendable {
                 let now = Date()
                 // Always forward to the live request when one is attached.
                 self.recognitionRequest?.append(buffer)
+                self.appendToAnalyzer(buffer)
                 // Always retain last 500ms for pre-roll replay.
                 self.ring.append(buffer: buffer, at: now)
             }
@@ -608,6 +624,7 @@ private class AudioWorker: @unchecked Sendable {
             self.recognitionTask?.cancel()
             self.recognitionTask = nil
             self.recognitionRequest = nil
+            self.cancelAnalyzerSession()
             self.audioEngine.stop()
             self.audioEngine.inputNode.removeTap(onBus: 0)
             self.ring.clear()
@@ -629,8 +646,11 @@ private class AudioWorker: @unchecked Sendable {
             self.isStopping = false
             self.isFlushing = false
             self.onUpdateCallback = onUpdate
+            self.lastAnalyzerText = ""
 
-            guard let recognizer = speechRecognizer, recognizer.isAvailable else {
+            let analyzerConfig = self.analyzerConfigForPress()
+            let recognizer = speechRecognizer
+            if analyzerConfig == nil, !(recognizer?.isAvailable ?? false) {
                 onUpdate(nil, true)
                 return
             }
@@ -643,6 +663,7 @@ private class AudioWorker: @unchecked Sendable {
                 let format = input.outputFormat(forBus: 0)
                 input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                     self?.recognitionRequest?.append(buffer)
+                    self?.appendToAnalyzer(buffer)
                 }
                 do {
                     self.audioEngine.prepare()
@@ -653,6 +674,15 @@ private class AudioWorker: @unchecked Sendable {
                 }
             }
 
+            if let analyzerConfig {
+                self.beginAnalyzerSession(locale: analyzerConfig.locale, format: analyzerConfig.format) { [weak self] text in
+                    guard let self else { return }
+                    self.lastAnalyzerText = text
+                    self.onUpdateCallback?(text, false)
+                }
+                return
+            }
+            guard let recognizer else { return }
             self.beginRecognitionTask(recognizer: recognizer)
 
             // Replay pre-roll into the request we just created.
@@ -729,6 +759,10 @@ private class AudioWorker: @unchecked Sendable {
     func stop() {
         queue.async { [self] in
             guard !self.isFlushing else { return }
+            if let session = self.analyzerSession {
+                self.finishAnalyzerSession(session)
+                return
+            }
             guard !self.isStopping || self.recognitionTask != nil else { return }
             self.isStopping = true
             self.isFlushing = true
@@ -765,6 +799,108 @@ private class AudioWorker: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    // MARK: - SpeechAnalyzer engine
+
+    /// Probes whether the iOS 26 SpeechAnalyzer model can run, downloading it
+    /// once if the locale is supported but the asset is missing. Until it
+    /// reports ready, every press uses SFSpeech.
+    func refreshAnalyzerReadiness() {
+        guard #available(iOS 26, *) else { return }
+        queue.async { [self] in
+            guard !self.analyzerProbeInFlight, self.analyzerReadiness != .ready else { return }
+            self.analyzerProbeInFlight = true
+            Task {
+                var (readiness, locale, format) = await AnalyzerAssets.readiness(for: Locale.current)
+                if readiness == .needsDownload {
+                    print("[Quip][PTT] analyzer model missing — downloading")
+                    await AnalyzerAssets.install(for: Locale.current)
+                    (readiness, locale, format) = await AnalyzerAssets.readiness(for: Locale.current)
+                }
+                print("[Quip][PTT] analyzer readiness=\(readiness)")
+                self.queue.async {
+                    self.analyzerReadiness = readiness
+                    self.analyzerLocale = locale
+                    self.analyzerFormat = format
+                    self.analyzerProbeInFlight = false
+                }
+            }
+        }
+    }
+
+    /// The locale and audio format for an analyzer session when this press
+    /// should use SpeechAnalyzer, else nil (SFSpeech). Call on `queue`.
+    private func analyzerConfigForPress() -> (locale: Locale, format: AVAudioFormat)? {
+        guard #available(iOS 26, *) else { return nil }
+        let legacyForced = UserDefaults.standard.bool(forKey: LabsFlags.legacySpeechRecognizer)
+        let engine = SpeechEnginePolicy.choose(osSupportsAnalyzer: true,
+                                               readiness: analyzerReadiness,
+                                               legacyForced: legacyForced)
+        print("[Quip][PTT] engine=\(engine == .analyzer ? "analyzer" : "legacy") readiness=\(analyzerReadiness)")
+        if analyzerReadiness != .ready { refreshAnalyzerReadiness() }
+        guard engine == .analyzer, let locale = analyzerLocale, let format = analyzerFormat else { return nil }
+        return (locale, format)
+    }
+
+    /// Starts an analyzer session fed by the tap. Pre-roll is replayed before
+    /// the session is published, so the tap never appends concurrently with
+    /// the replay. Call on `queue`; `onText` runs on `queue`.
+    private func beginAnalyzerSession(locale: Locale, format: AVAudioFormat,
+                                      onText: @escaping (String) -> Void) {
+        guard #available(iOS 26, *) else { return }
+        let session = AnalyzerSession(locale: locale, format: format, vocab: cachedVocab) { [weak self] text in
+            self?.queue.async { onText(text) }
+        }
+        for entry in ring.entries(relativeTo: Date()) { session.append(entry.buffer) }
+        analyzerSession = session
+    }
+
+    private func appendToAnalyzer(_ buffer: AVAudioPCMBuffer) {
+        guard #available(iOS 26, *), let session = analyzerSession as? AnalyzerSession else { return }
+        session.append(buffer)
+    }
+
+    /// Local-path release: keep feeding the tap for the trailing window, then
+    /// finalize. Same hard cap as the SFSpeech flush, delivering the last
+    /// text seen if the analyzer never finishes. Call on `queue`.
+    private func finishAnalyzerSession(_ object: AnyObject) {
+        guard #available(iOS 26, *), let session = object as? AnalyzerSession else { return }
+        guard !isFlushing else { return }
+        isStopping = true
+        isFlushing = true
+        queue.asyncAfter(deadline: .now() + policy.trailingWindow) { [weak self] in
+            guard let self, self.analyzerSession === session else { return }
+            if !self.isArmed, self.audioEngine.isRunning {
+                self.audioEngine.stop()
+                self.audioEngine.inputNode.removeTap(onBus: 0)
+            }
+            session.finish { text in
+                self.queue.async {
+                    guard self.analyzerSession === session else { return }
+                    self.analyzerSession = nil
+                    self.onUpdateCallback?(text.isEmpty ? nil : text, true)
+                    self.isFlushing = false
+                }
+            }
+            self.queue.asyncAfter(deadline: .now() + self.policy.finishHardCap) { [weak self] in
+                guard let self, self.analyzerSession === session else { return }
+                print("[Quip][PTT] analyzer flush timeout at \(self.policy.finishHardCap)s — cancelling")
+                session.cancel()
+                self.analyzerSession = nil
+                let text = self.lastAnalyzerText
+                self.onUpdateCallback?(text.isEmpty ? nil : text, true)
+                self.isFlushing = false
+            }
+        }
+    }
+
+    /// Drops any analyzer session without a final callback. Call on `queue`.
+    private func cancelAnalyzerSession() {
+        if #available(iOS 26, *), let session = analyzerSession as? AnalyzerSession {
+            session.cancel()
+        }
+        analyzerSession = nil
     }
 
     /// Remote-path variant: forward mic buffers to `onBuffer` and optionally
@@ -813,6 +949,7 @@ private class AudioWorker: @unchecked Sendable {
                 guard let self else { return }
                 // Feed captions recognizer if active. Same buffer, two consumers.
                 self.recognitionRequest?.append(buffer)
+                self.appendToAnalyzer(buffer)
                 self.ring.append(buffer: buffer, at: Date())
             }
             // Replay the ~500ms pre-roll into the Whisper sender too. Before
@@ -835,6 +972,13 @@ private class AudioWorker: @unchecked Sendable {
     /// done, but user still talking" — start a fresh task so captions keep
     /// flowing for the duration of the remote upload.
     private func beginCaptionTask(onCaption: @escaping @Sendable (String) -> Void) {
+        if let config = analyzerConfigForPress() {
+            // No recycling needed: the analyzer has no one-minute ceiling.
+            beginAnalyzerSession(locale: config.locale, format: config.format) { text in
+                if !text.isEmpty { onCaption(text) }
+            }
+            return
+        }
         guard let recognizer = speechRecognizer, recognizer.isAvailable else { return }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -874,12 +1018,14 @@ private class AudioWorker: @unchecked Sendable {
             self.recognitionTask?.cancel()
             self.recognitionTask = nil
             self.recognitionRequest = nil
+            self.cancelAnalyzerSession()
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
             let format = input.outputFormat(forBus: 0)
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 guard let self else { return }
                 self.recognitionRequest?.append(buffer)
+                self.appendToAnalyzer(buffer)
                 self.ring.append(buffer: buffer, at: Date())
             }
         }

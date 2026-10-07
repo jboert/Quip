@@ -25,6 +25,9 @@ enum LabsFlags {
     /// (a minimized terminal reads as "Hidden"), which is the opposite of what
     /// someone reaching for their phone wants.
     static let windowFilters = "labs.windowFilters"
+    /// Escape hatch for the iOS 26 SpeechAnalyzer engine on the local PTT
+    /// path. Off = new engine (when its model is installed).
+    static let legacySpeechRecognizer = "labs.legacySpeechRecognizer"
 
     /// One row per visible flag for the Settings → Quip Labs section.
     /// Order here is display order. Cursor stays out of Settings for now.
@@ -35,6 +38,8 @@ enum LabsFlags {
          "Share and import prompts and custom buttons as files."),
         (windowFilters, "Window filters",
          "Adds a filter row above the grid: show only on-screen windows, or only one monitor's."),
+        (legacySpeechRecognizer, "Older iPhone speech recognizer",
+         "Use the pre-iOS 26 recognizer when the Mac is not reachable. Turn on only if the new one misbehaves."),
     ]
 }
 
