@@ -1,15 +1,20 @@
 import SwiftUI
 import UIKit
 
-/// Pick the color a window is drawn in, from the window card's long-press menu.
+/// Pick a color: the shared palette as swatches, a custom picker, and a
+/// reset. Used for window colors (card long-press → "Color…") and keyboard
+/// button colors (Quick Buttons editor).
 ///
-/// The Mac owns window colors, so a choice is sent as `set_color` and shows up
-/// when the Mac re-broadcasts the layout: the Mac sidebar and every connected
-/// phone change together. A swatch applies and closes; the custom picker sends
-/// once the color stops changing, so dragging across the wheel does not flood
-/// the socket.
-struct WindowColorSheet: View {
-    let window: WindowState
+/// A swatch applies and closes. The custom picker reports once the color stops
+/// changing, so dragging across the wheel does not fire a choice per frame
+/// (for windows, each choice is a `set_color` message to the Mac). A custom
+/// color still waiting out that pause is reported when the sheet closes.
+struct ColorChoiceSheet: View {
+    let title: String
+    /// The color in use now, `#RRGGBB`; nil when the item has none of its own.
+    let current: String?
+    let resetLabel: String
+    /// The chosen color, or nil for reset.
     let onChoose: (String?) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -19,13 +24,14 @@ struct WindowColorSheet: View {
     /// closes first.
     @State private var pendingHex: String?
 
-    init(window: WindowState, onChoose: @escaping (String?) -> Void) {
-        self.window = window
+    init(title: String, current: String?, resetLabel: String = "Reset to automatic",
+         onChoose: @escaping (String?) -> Void) {
+        self.title = title
+        self.current = current.flatMap(WindowColor.normalized)
+        self.resetLabel = resetLabel
         self.onChoose = onChoose
-        _custom = State(initialValue: Color(hex: window.color))
+        _custom = State(initialValue: current.map { Color(hex: $0) } ?? .gray)
     }
-
-    private var current: String? { WindowColor.normalized(window.color) }
 
     var body: some View {
         NavigationStack {
@@ -42,8 +48,7 @@ struct WindowColorSheet: View {
                                     if current == hex {
                                         Image(systemName: "checkmark")
                                             .font(.system(size: 16, weight: .bold))
-                                            .foregroundStyle(.white)
-                                            .shadow(radius: 1)
+                                            .foregroundStyle(KeyColors.prefersDarkText(on: hex) ? .black : .white)
                                     }
                                 }
                         }
@@ -58,14 +63,14 @@ struct WindowColorSheet: View {
                         sendSoon(Self.hex(of: color))
                     }
 
-                Button("Reset to automatic") {
+                Button(resetLabel) {
                     choose(nil)
                 }
                 .font(.subheadline)
             }
             .padding()
             .frame(maxHeight: .infinity, alignment: .top)
-            .navigationTitle(window.folder?.isEmpty == false ? window.folder! : window.name)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -103,5 +108,19 @@ struct WindowColorSheet: View {
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
         UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         return WindowColor.hex(red: Double(red), green: Double(green), blue: Double(blue))
+    }
+}
+
+/// How a keyboard button draws the color the user gave it (see `KeyColors`):
+/// the color as its fill, and black or white text, whichever reads better.
+/// A button with no color keeps its normal look.
+enum KeyTint {
+    static func fill(_ hex: String?, default fallback: Color) -> Color {
+        hex.map { Color(hex: $0) } ?? fallback
+    }
+
+    static func text(_ hex: String?, default fallback: Color) -> Color {
+        guard let hex else { return fallback }
+        return KeyColors.prefersDarkText(on: hex) ? .black : .white
     }
 }

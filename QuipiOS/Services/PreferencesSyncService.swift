@@ -149,6 +149,7 @@ final class PreferencesSyncService {
         if let v = snapshot.terminalTextSize { d.set(v, forKey: "terminalTextSize") }
         if let v = snapshot.quickSlotsJSON { d.set(v, forKey: "quickSlotsJSON") }
         if let v = snapshot.customButtonsJSON { d.set(v, forKey: "customButtonsJSON") }
+        if let v = snapshot.quickSlotColorsJSON { d.set(v, forKey: KeyColors.storageKey) }
         if let v = snapshot.followFrontmost { d.set(v, forKey: "followFrontmost") }
         // Connection memory: hand to the merge hooks rather than writing the
         // blob directly (a direct write would clobber the live, overwrite-only
@@ -228,6 +229,7 @@ final class PreferencesSyncService {
             terminalTextSize: d.object(forKey: "terminalTextSize") as? Double,
             quickSlotsJSON: d.string(forKey: "quickSlotsJSON"),
             customButtonsJSON: d.string(forKey: "customButtonsJSON"),
+            quickSlotColorsJSON: d.string(forKey: KeyColors.storageKey),
             followFrontmost: d.object(forKey: "followFrontmost") as? Bool,
             pairedBackendsJSON: d.data(forKey: "pairedBackendsData").flatMap { String(data: $0, encoding: .utf8) },
             recentConnectionsJSON: d.data(forKey: "recentConnectionsData").flatMap { String(data: $0, encoding: .utf8) },

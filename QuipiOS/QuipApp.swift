@@ -1577,6 +1577,9 @@ struct MainiOSView: View {
     /// long-press menu.
     @State private var colorSheetWindowId: String? = nil
 
+    /// Colors the user gave keyboard buttons (see `KeyColors`).
+    @AppStorage(KeyColors.storageKey) private var quickSlotColorsJSON: String = "{}"
+
     /// What the phone typed on the Mac by accepting an autosuggestion, and the
     /// window it typed it on. While the compose field still matches `text`, the
     /// Mac's input line holds exactly this, so Send means "press Return" — see
@@ -2038,7 +2041,10 @@ struct MainiOSView: View {
         )) {
             if let id = colorSheetWindowId,
                let window = windows.first(where: { $0.id == id }) {
-                WindowColorSheet(window: window) { hex in
+                ColorChoiceSheet(
+                    title: window.folder?.isEmpty == false ? window.folder! : window.name,
+                    current: window.color
+                ) { hex in
                     client.send(SetColorMessage(windowId: id, color: hex))
                 }
             }
@@ -5354,26 +5360,29 @@ struct MainiOSView: View {
     @ViewBuilder
     private func slotRowView(_ slots: [QuickSlot]) -> some View {
         let items = rowItems(slots, defs: customButtonDefs)
+        // Decoded once per row, not per pill: this body re-evaluates on every
+        // terminal update.
+        let tints = KeyColors.decode(quickSlotColorsJSON)
         ForEach(items) { item in
             switch item {
             case .builtinButton(let b):
                 // Slash pills (incl. the bare "/") get the hold-for-all-slash
                 // palette; answer/keystroke pills don't (slash-only gesture).
                 if b.isSlashCommand {
-                    slashPalette(quickActionButton(b))
+                    slashPalette(quickActionButton(b, tint: tints[QuickSlot.builtin(b).id]))
                 } else {
-                    quickActionButton(b)
+                    quickActionButton(b, tint: tints[QuickSlot.builtin(b).id])
                 }
             case .customButton(let c):
                 if case .slash = c.payload {
-                    slashPalette(customQuickButton(c))
+                    slashPalette(customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id]))
                 } else {
-                    customQuickButton(c)
+                    customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id])
                 }
             case .promptButton(let pid, let label):
-                promptQuickButton(promptID: pid, label: label)
+                promptQuickButton(promptID: pid, label: label, tint: tints[QuickSlot.prompt(promptID: pid).id])
             case .promptsPicker:
-                promptsPickerButton()
+                promptsPickerButton(tint: tints[QuickSlot.promptsPicker.id])
             case .spacer(let w, _):
                 Spacer().frame(width: w)
             case .slashGroup(let letter, let members):
@@ -5390,7 +5399,7 @@ struct MainiOSView: View {
     /// the Mac hasn't broadcast its catalog (label = id) so a stale
     /// slot doesn't fire to a window with nothing to paste. (§B3)
     @ViewBuilder
-    private func promptQuickButton(promptID: String, label: String) -> some View {
+    private func promptQuickButton(promptID: String, label: String, tint: String? = nil) -> some View {
         let entry = client.promptLibrary.first(where: { $0.id == promptID })
         let canFire = entry != nil && client.isConnected && selectedWindowId != nil
         Button {
@@ -5405,8 +5414,8 @@ struct MainiOSView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(canFire ? Color.purple.opacity(0.55) : Color.gray.opacity(0.25))
-            .foregroundStyle(.white)
+            .background(canFire ? KeyTint.fill(tint, default: Color.purple.opacity(0.55)) : Color.gray.opacity(0.25))
+            .foregroundStyle(canFire ? KeyTint.text(tint, default: .white) : .white)
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
@@ -5431,7 +5440,7 @@ struct MainiOSView: View {
     /// `.prompt(id)` slots into the keyboard row when the user has more
     /// prompts than reasonably fit.
     @ViewBuilder
-    private func promptsPickerButton() -> some View {
+    private func promptsPickerButton(tint: String? = nil) -> some View {
         let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
         Button {
             showPromptsPickerSheet = true
@@ -5444,8 +5453,8 @@ struct MainiOSView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(canFire ? Color.purple.opacity(0.55) : Color.gray.opacity(0.25))
-            .foregroundStyle(.white)
+            .background(canFire ? KeyTint.fill(tint, default: Color.purple.opacity(0.55)) : Color.gray.opacity(0.25))
+            .foregroundStyle(canFire ? KeyTint.text(tint, default: .white) : .white)
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
@@ -5529,7 +5538,7 @@ struct MainiOSView: View {
     /// Pill rendering for a custom button. Uses the same outer chrome as
     /// `quickActionButton` so customs visually match built-ins.
     @ViewBuilder
-    private func customQuickButton(_ btn: CustomButton) -> some View {
+    private func customQuickButton(_ btn: CustomButton, tint: String? = nil) -> some View {
         Button {
             fireCustomButton(btn)
         } label: {
@@ -5547,11 +5556,11 @@ struct MainiOSView: View {
                         .minimumScaleFactor(0.55)
                 }
             }
-            .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
+            .foregroundStyle(KeyTint.text(tint, default: colors.chipText).opacity(selectedWindowId != nil ? 1.0 : 0.4))
             .padding(.horizontal, 4)
             .padding(.vertical, 5)
             .frame(minWidth: 20)
-            .background(colors.chipFill)
+            .background(KeyTint.fill(tint, default: colors.chipFill).opacity(selectedWindowId != nil || tint == nil ? 1.0 : 0.4))
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
@@ -5561,7 +5570,7 @@ struct MainiOSView: View {
     }
 
     @ViewBuilder
-    private func quickActionButton(_ button: QuickButton) -> some View {
+    private func quickActionButton(_ button: QuickButton, tint: String? = nil) -> some View {
         Button {
             fireQuickButton(button)
         } label: {
@@ -5587,11 +5596,11 @@ struct MainiOSView: View {
                         .minimumScaleFactor(0.55)
                 }
             }
-            .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
+            .foregroundStyle(KeyTint.text(tint, default: colors.chipText).opacity(selectedWindowId != nil ? 1.0 : 0.4))
             .padding(.horizontal, 4)
             .padding(.vertical, 5)
             .frame(minWidth: 20)
-            .background(colors.chipFill)
+            .background(KeyTint.fill(tint, default: colors.chipFill).opacity(selectedWindowId != nil || tint == nil ? 1.0 : 0.4))
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .disabled(selectedWindowId == nil)
@@ -7930,8 +7939,13 @@ struct QuickButtonsSheet: View {
     var client: WebSocketClient?
     @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
+    @AppStorage(KeyColors.storageKey) private var quickSlotColorsJSON: String = "{}"
+    /// The row entry whose color sheet is open.
+    @State private var coloringSlot: QuickSlot?
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
+
+    private var slotColors: [String: String] { KeyColors.decode(quickSlotColorsJSON) }
 
     @State private var editingCustomID: UUID?
     @State private var addingCustom: Bool = false
@@ -7997,7 +8011,10 @@ struct QuickButtonsSheet: View {
                         .font(.system(size: 13))
                 } else {
                     ForEach(slots) { slot in
-                        slotRow(slot)
+                        HStack(spacing: 8) {
+                            slotRow(slot)
+                            slotColorButton(slot)
+                        }
                     }
                     .onMove(perform: moveSlots)
                     .onDelete(perform: deleteSlots)
@@ -8011,7 +8028,7 @@ struct QuickButtonsSheet: View {
                         .font(.caption)
                 }
             } footer: {
-                Text("Drag the handle to reorder. Swipe to remove. Spacers add fixed gaps between buttons.")
+                Text("Drag the handle to reorder. Swipe to remove. Tap the dot to color a button. Spacers add fixed gaps between buttons.")
             }
 
             if !customs.isEmpty {
@@ -8026,7 +8043,7 @@ struct QuickButtonsSheet: View {
                         // fires on a clean tap, restoring smooth scrolling
                         // and reliable .onDelete swipes.
                         HStack {
-                            customPillPreview(c)
+                            customPillPreview(c, tint: slotColors[QuickSlot.custom(c.id).id])
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(c.label).foregroundStyle(.primary)
                                 Text(payloadSummary(c.payload))
@@ -8133,6 +8150,15 @@ struct QuickButtonsSheet: View {
         .sheet(isPresented: $showPromptPicker) {
             promptPickerSheet
         }
+        .sheet(item: $coloringSlot) { slot in
+            ColorChoiceSheet(
+                title: slotTitle(slot),
+                current: slotColors[slot.id],
+                resetLabel: "Reset to default"
+            ) { hex in
+                quickSlotColorsJSON = KeyColors.encode(KeyColors.setting(hex, for: slot.id, in: slotColors))
+            }
+        }
         .sheet(isPresented: $showAddSheet) {
             addSheet
         }
@@ -8191,12 +8217,50 @@ struct QuickButtonsSheet: View {
         persistSlots(s)
     }
 
+    /// The dot that opens a button's color sheet. Shows the button's color,
+    /// or a palette outline when it has none. Spacers have nothing to color.
+    @ViewBuilder
+    private func slotColorButton(_ slot: QuickSlot) -> some View {
+        if case .spacer = slot {
+            EmptyView()
+        } else {
+            Button {
+                coloringSlot = slot
+            } label: {
+                if let hex = slotColors[slot.id] {
+                    Circle()
+                        .fill(Color(hex: hex))
+                        .frame(width: 22, height: 22)
+                } else {
+                    Image(systemName: "paintpalette")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                }
+            }
+            // Borderless: a plain Button in a List row would take taps
+            // anywhere on the row.
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Color for \(slotTitle(slot))")
+        }
+    }
+
+    private func slotTitle(_ slot: QuickSlot) -> String {
+        switch slot {
+        case .builtin(let b): return b.displayName
+        case .custom(let id): return customsByID[id]?.label ?? "Custom button"
+        case .prompt(let pid): return promptLabelByID[pid] ?? pid
+        case .promptsPicker: return "Prompts"
+        case .spacer: return "Spacer"
+        }
+    }
+
     @ViewBuilder
     private func slotRow(_ slot: QuickSlot) -> some View {
         switch slot {
         case .builtin(let b):
             HStack(spacing: 12) {
-                builtinPillPreview(b)
+                builtinPillPreview(b, tint: slotColors[slot.id])
                 VStack(alignment: .leading, spacing: 2) {
                     Text(b.displayName)
                     Text("Built-in")
@@ -8208,7 +8272,7 @@ struct QuickButtonsSheet: View {
         case .custom(let id):
             if let def = customsByID[id] {
                 HStack(spacing: 12) {
-                    customPillPreview(def)
+                    customPillPreview(def, tint: slotColors[slot.id])
                     VStack(alignment: .leading, spacing: 2) {
                         Text(def.label)
                         Text("Custom · \(payloadSummary(def.payload))")
@@ -8322,13 +8386,14 @@ struct QuickButtonsSheet: View {
     /// styling (the editor doesn't need to grey out its preview).
     private var previewRowItems: [(String, AnyView)] {
         var result: [(String, AnyView)] = []
+        let tints = slotColors
         for slot in slots {
             switch slot {
             case .builtin(let b):
-                result.append((slot.id, AnyView(builtinPillPreview(b))))
+                result.append((slot.id, AnyView(builtinPillPreview(b, tint: tints[slot.id]))))
             case .custom(let id):
                 if let def = customsByID[id] {
-                    result.append((slot.id, AnyView(customPillPreview(def))))
+                    result.append((slot.id, AnyView(customPillPreview(def, tint: tints[slot.id]))))
                 }
             case .spacer:
                 result.append((slot.id, AnyView(
@@ -8336,9 +8401,9 @@ struct QuickButtonsSheet: View {
                 )))
             case .prompt(let pid):
                 let label = promptLabelByID[pid] ?? pid
-                result.append((slot.id, AnyView(promptPillPreview(label: label))))
+                result.append((slot.id, AnyView(promptPillPreview(label: label, tint: tints[slot.id]))))
             case .promptsPicker:
-                result.append((slot.id, AnyView(promptsPickerPillPreview())))
+                result.append((slot.id, AnyView(promptsPickerPillPreview(tint: tints[slot.id]))))
             }
         }
         return result
@@ -8347,7 +8412,7 @@ struct QuickButtonsSheet: View {
     /// Editor-only mock of the Prompts-picker pill so the preview row
     /// renders correctly when the user has the picker slot configured.
     @ViewBuilder
-    private func promptsPickerPillPreview() -> some View {
+    private func promptsPickerPillPreview(tint: String? = nil) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 9, weight: .semibold))
@@ -8356,15 +8421,15 @@ struct QuickButtonsSheet: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(Color.purple.opacity(0.55))
-        .foregroundStyle(.white)
+        .background(KeyTint.fill(tint, default: Color.purple.opacity(0.55)))
+        .foregroundStyle(KeyTint.text(tint, default: .white))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     /// Editor-only mock of the prompt pill — same purple tint + doc.text
     /// icon as the live keyboard renderer in `promptQuickButton`. (§B3)
     @ViewBuilder
-    private func promptPillPreview(label: String) -> some View {
+    private func promptPillPreview(label: String, tint: String? = nil) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "doc.text")
                 .font(.system(size: 9, weight: .semibold))
@@ -8374,15 +8439,15 @@ struct QuickButtonsSheet: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(Color.purple.opacity(0.55))
-        .foregroundStyle(.white)
+        .background(KeyTint.fill(tint, default: Color.purple.opacity(0.55)))
+        .foregroundStyle(KeyTint.text(tint, default: .white))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     /// Pill mock that matches the keyboard's `quickActionButton` chrome.
     /// Intentionally non-interactive in the editor — just a visual proxy.
     @ViewBuilder
-    private func builtinPillPreview(_ b: QuickButton) -> some View {
+    private func builtinPillPreview(_ b: QuickButton, tint: String? = nil) -> some View {
         Group {
             if let sym = b.systemImage {
                 Image(systemName: sym)
@@ -8394,16 +8459,16 @@ struct QuickButtonsSheet: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(colors.chipText)
+        .foregroundStyle(KeyTint.text(tint, default: colors.chipText))
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(colors.chipFill)
+        .background(KeyTint.fill(tint, default: colors.chipFill))
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
     @ViewBuilder
-    private func customPillPreview(_ c: CustomButton) -> some View {
+    private func customPillPreview(_ c: CustomButton, tint: String? = nil) -> some View {
         Group {
             if let sym = c.systemImage, !sym.isEmpty {
                 Image(systemName: sym)
@@ -8415,11 +8480,11 @@ struct QuickButtonsSheet: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(colors.chipText)
+        .foregroundStyle(KeyTint.text(tint, default: colors.chipText))
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(colors.chipFill)
+        .background(KeyTint.fill(tint, default: colors.chipFill))
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 

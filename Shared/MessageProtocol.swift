@@ -1246,6 +1246,10 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// slot list via UUID. Persisted separately so re-ordering doesn't
     /// rewrite definitions.
     var customButtonsJSON: String?
+    /// JSON object of keyboard button colors, `QuickSlot.id` → `#RRGGBB`
+    /// (see the phone's `KeyColors`). Optional so a backup from before the
+    /// field decodes as nil and the phone keeps its colors.
+    var quickSlotColorsJSON: String?
     /// (wishlist §B16.) Whether the phone auto-retargets `selectedWindowId`
     /// to follow the Mac's frontmost window. Optional so older Macs decode
     /// cleanly as nil → phone keeps whatever local default it had.
@@ -1282,6 +1286,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         terminalTextSize: Double? = nil,
         quickSlotsJSON: String? = nil,
         customButtonsJSON: String? = nil,
+        quickSlotColorsJSON: String? = nil,
         followFrontmost: Bool? = nil,
         pairedBackendsJSON: String? = nil,
         recentConnectionsJSON: String? = nil,
@@ -1307,6 +1312,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.terminalTextSize = terminalTextSize
         self.quickSlotsJSON = quickSlotsJSON
         self.customButtonsJSON = customButtonsJSON
+        self.quickSlotColorsJSON = quickSlotColorsJSON
         self.followFrontmost = followFrontmost
         self.pairedBackendsJSON = pairedBackendsJSON
         self.recentConnectionsJSON = recentConnectionsJSON

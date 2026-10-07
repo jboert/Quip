@@ -1389,4 +1389,14 @@ final class MessageProtocolTests: XCTestCase {
         let old = try JSONDecoder().decode(PreferencesSnapshot.self, from: Data(#"{"ttsEnabled":true}"#.utf8))
         XCTAssertNil(old.terminalTextSize)
     }
+
+    // Keyboard button colors ride the prefs backup.
+    func testQuickSlotColorsRideThePreferencesSnapshot() throws {
+        let json = ##"{"b:esc":"#4A90D9"}"##
+        let blob = try JSONEncoder().encode(PreferencesSnapshot(quickSlotColorsJSON: json))
+        let back = try JSONDecoder().decode(PreferencesSnapshot.self, from: blob)
+        XCTAssertEqual(back.quickSlotColorsJSON, json)
+        let old = try JSONDecoder().decode(PreferencesSnapshot.self, from: Data(#"{"ttsEnabled":true}"#.utf8))
+        XCTAssertNil(old.quickSlotColorsJSON)
+    }
 }
