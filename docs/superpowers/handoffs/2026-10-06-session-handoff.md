@@ -86,3 +86,17 @@ GitHub issues opened tonight: **#37** (scrollback, three causes) and **#38** (ph
 ### Resume
 
 "Read the 2026-10-06 handoff and its addendum, confirm Accessibility is granted and the phone runs the new build (`phone.log` exists), then walk me through the Q-40, Q-41, Q-42 and Q-38a hardware checks."
+
+---
+
+## Addendum 2 — 2026-10-07
+
+| Hash | Why |
+|------|-----|
+| `a707035` | Q-44: long-press a window card → **Color…** (10 swatches, custom picker, reset). `set_color` to the Mac, which keeps the choice per window id (`windowColorOverrides`). Installed on Mac and phone. |
+| `7dbebe9` | Open thread 2 fixed: services start from `applicationDidFinishLaunching` (`LaunchHook`), so a windowless relaunch still listens on 8765. **Built and tested, NOT installed** (a Mac install wipes Accessibility again). |
+| `0172a72` | Open thread 3 fixed: under XCTest `LogPaths.directory` is a temp folder; tests no longer write into `~/Library/Logs/Quip`. NOT installed (test-only effect anyway). |
+
+Mac tests now run with the live Quip still up (XCTest guard skips services); expect ~50-90 s instead of ~20 s.
+
+Still owed by the owner: re-grant Accessibility (focus errors `AXError -25204` continue), relaunch Quip on the phone (`phone.log` still empty at 17:52Z), hardware checks Q-38a, Q-40, Q-41, Q-42, Q-44.
