@@ -10118,7 +10118,9 @@ struct PromptEditorSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("Sent verbatim to the active terminal when you tap the row in Prompts. No Markdown parsing, no template expansion.")
+                    // Names match PromptVariables.supported (Shared/PromptVariables.swift);
+                    // {{cwd}} is iTerm2-only because Terminal.app gives no working directory.
+                    Text("Tap a prompt to paste it into the selected window. The Mac fills {{folder}}, {{window}}, {{agent}}, {{date}} and {{clipboard}} ({{cwd}} in iTerm2 only). Any other {{name}} is sent as written.")
                 }
 
                 if let saveError {
