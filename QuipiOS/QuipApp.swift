@@ -10108,11 +10108,11 @@ struct PromptEditorSheet: View {
                 }
 
                 Section {
-                    TextEditor(text: $bodyText)
-                        .font(.system(size: 13, design: .monospaced))
+                    // A UITextView wrapper: SwiftUI's TextEditor cannot turn
+                    // off smart quotes and dashes, which turned `echo 'x'`
+                    // into `echo ‘x’` on save.
+                    PlainTextEditor(text: $bodyText)
                         .frame(minHeight: 220)
-                        .autocorrectionDisabled(true)
-                        .textInputAutocapitalization(.never)
                 } header: {
                     HStack {
                         Text("Prompt body")
