@@ -259,6 +259,11 @@ final class BackendConnectionManager {
     /// auth-required for the active backend) the user is left staring
     /// at "Authenticating…" with no actual PIN entry field.
     func bootstrap() {
+        // An XCTest host wires its sessions like the app but never dials:
+        // on 2026-10-07 the unit suite's host app, on a simulator that was
+        // still paired, authenticated against the owner's Mac, and the Mac
+        // broadcast the simulator's settings to the owner's phone.
+        let mayConnect = !TestHostGuard.isRunningTests
         for backend in paired {
             // Guard against two paired rows sharing an id (a rekey/merge
             // race): overwriting sessions[id] would orphan a still-wired,
@@ -268,7 +273,7 @@ final class BackendConnectionManager {
             let session = BackendSession(backendID: backend.id, client: WebSocketClient())
             wire(session: session)
             sessions[backend.id] = session
-            if backend.enabled {
+            if backend.enabled, mayConnect {
                 let urls = urlList(for: backend)
                 if !urls.isEmpty {
                     primePINIfPresent(session: session)
@@ -279,6 +284,7 @@ final class BackendConnectionManager {
         if activeBackendID.isEmpty, let first = paired.first {
             activeBackendID = first.id
         }
+        guard mayConnect else { return }
         startPathMonitor()
         // Phase 3: bring up the latency probe + swap evaluator targeting
         // whichever backend is active. Both stay live across foreground/
