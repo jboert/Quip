@@ -9660,6 +9660,10 @@ struct PromptLibrarySheet: View {
             }
         }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+        // Prompt ids are lower-case ("ship-it"); a capitalized or autocorrected
+        // query would show "Ship-it" and still match, which reads as a bug.
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled(true)
         .confirmationDialog(
             "Delete \"\(confirmingDelete?.label ?? "")\"?",
             isPresented: Binding(get: { confirmingDelete != nil },
