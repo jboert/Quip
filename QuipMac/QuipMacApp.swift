@@ -173,6 +173,7 @@ enum ContentSettleOutcome: Sendable, Equatable {
 
 @main
 struct QuipMacApp: App {
+    @NSApplicationDelegateAdaptor(QuipAppDelegate.self) private var appDelegate
     @State private var windowManager = WindowManager()
     @State private var webSocketServer = WebSocketServer()
     @State private var bonjourAdvertiser = BonjourAdvertiser()
@@ -318,6 +319,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     @State private var hasBroadcastFrontmostOnce: Bool = false
 
     var body: some Scene {
+        // Start services at launch whether or not a window opens (see
+        // LaunchHook). Deferred a turn so the state it writes is never written
+        // while SwiftUI is evaluating this body.
+        let _ = QuipAppDelegate.launchHook.register {
+            DispatchQueue.main.async { startServicesOnce() }
+        }
         WindowGroup {
             MainWindow()
                 .environment(windowManager)
