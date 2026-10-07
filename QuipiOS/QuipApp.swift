@@ -9875,6 +9875,14 @@ struct PromptLibrarySheet: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            // Q-34c — what the Mac will fill in at paste.
+            // Absent (no extra height) when there is nothing.
+            if let hint = PromptVariables.hint(for: entry.body) {
+                Label(hint, systemImage: "curlybraces")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tint)
+                    .lineLimit(1)
+            }
             if lastFiredId == entry.id {
                 Text("Pasted ✓")
                     .font(.system(size: 10))
@@ -9894,7 +9902,9 @@ struct PromptLibrarySheet: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(entry.label)
-        .accessibilityValue(hidden ? "Hidden" : entry.bodyPreview)
+        .accessibilityValue([hidden ? "Hidden" : entry.bodyPreview, PromptVariables.hint(for: entry.body)]
+            .compactMap { $0 }
+            .joined(separator: ". "))
         .accessibilityHint("Pastes this prompt into the active terminal")
         .accessibilityAction(named: "Paste and send") { fire(entry, pressReturn: true) }
     }
