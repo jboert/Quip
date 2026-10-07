@@ -1573,6 +1573,10 @@ struct MainiOSView: View {
     @State private var showQAPicker: Bool = false
     @State private var qaPickerSourceWindow: String? = nil
 
+    /// The window whose color sheet is open, from "Color…" in the card's
+    /// long-press menu.
+    @State private var colorSheetWindowId: String? = nil
+
     /// What the phone typed on the Mac by accepting an autosuggestion, and the
     /// window it typed it on. While the compose field still matches `text`, the
     /// Mac's input line holds exactly this, so Send means "press Return" — see
@@ -2028,6 +2032,17 @@ struct MainiOSView: View {
         // derived from the source window's classification — long-pressed
         // a Simulator → pick a terminal; long-pressed a terminal → pick
         // a Simulator.
+        .sheet(isPresented: Binding(
+            get: { colorSheetWindowId != nil },
+            set: { if !$0 { colorSheetWindowId = nil } }
+        )) {
+            if let id = colorSheetWindowId,
+               let window = windows.first(where: { $0.id == id }) {
+                WindowColorSheet(window: window) { hex in
+                    client.send(SetColorMessage(windowId: id, color: hex))
+                }
+            }
+        }
         .sheet(isPresented: $showQAPicker) {
             if let sourceId = qaPickerSourceWindow,
                let source = windows.first(where: { $0.id == sourceId }) {
@@ -5030,6 +5045,9 @@ struct MainiOSView: View {
         case .duplicate: return  // handled above
         case .closeWindow: return // handled above
         case .togglePin: return   // handled above
+        case .chooseColor:
+            colorSheetWindowId = windowId
+            return
         case .pairForQA:
             qaPickerSourceWindow = windowId
             showQAPicker = true

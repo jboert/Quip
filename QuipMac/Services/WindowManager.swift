@@ -156,10 +156,7 @@ final class WindowManager {
     nonisolated private static let axMatchGate = LogTransitionGate<String>()
 
     // Rich, vibrant color palette for window identification
-    static let colorPalette: [String] = [
-        "#F5A623", "#4A90D9", "#7ED321", "#D0021B", "#9013FE",
-        "#50E3C2", "#BD10E0", "#B8E986", "#F8E71C", "#FF6B6B"
-    ]
+    static let colorPalette: [String] = WindowColor.palette
 
     /// All currently tracked windows
     var windows: [ManagedWindow] = []
@@ -201,6 +198,29 @@ final class WindowManager {
     }
 
     func isPinned(_ id: String) -> Bool { pinnedWindowIDs.contains(id) }
+
+    /// Colors the user chose for windows, by window id. Persisted, and keyed
+    /// the same way as pins: a choice follows the window it was made on and
+    /// is applied again when that window is first seen after a relaunch.
+    private(set) var colorOverrides: [String: String] =
+        UserDefaults.standard.dictionary(forKey: WindowManager.colorOverridesKey) as? [String: String] ?? [:]
+    static let colorOverridesKey = "windowColorOverrides"
+
+    /// Set the color `id` is drawn in, or clear the user's choice with nil,
+    /// which gives the window the next palette color. A value that is not a
+    /// hex color is ignored.
+    func setColor(_ id: String, hex: String?) {
+        if let hex {
+            guard let color = WindowColor.normalized(hex) else { return }
+            colorOverrides[id] = color
+        } else {
+            colorOverrides.removeValue(forKey: id)
+        }
+        UserDefaults.standard.set(colorOverrides, forKey: Self.colorOverridesKey)
+        if let index = windows.firstIndex(where: { $0.id == id }) {
+            windows[index].assignedColor = colorOverrides[id] ?? assignColor()
+        }
+    }
 
     /// Re-float the pins over whatever order the list is in now. Called on a
     /// pin change so the row moves under the click, and after every snapshot so
@@ -598,7 +618,7 @@ final class WindowManager {
                     id: info.id, name: info.name, app: info.app,
                     subtitle: "", cwdPath: nil,
                     bundleId: info.bundleId, icon: icon,
-                    isEnabled: false, assignedColor: assignColor(),
+                    isEnabled: false, assignedColor: colorOverrides[info.id] ?? assignColor(),
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
                     iterm2Tty: nil,

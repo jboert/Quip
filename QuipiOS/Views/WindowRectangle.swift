@@ -206,6 +206,12 @@ struct WindowRectangle: View {
                       systemImage: window.isPinned ? "pin.slash" : "pin")
             }
 
+            Button {
+                triggerAction(.chooseColor)
+            } label: {
+                Label("Color\u{2026}", systemImage: "paintpalette")
+            }
+
             if window.isTarget || window.isTerminal {
                 Button {
                     triggerAction(.pairForQA)
@@ -299,6 +305,9 @@ enum WindowAction {
     /// Pin or unpin. The Mac owns the pin set and re-broadcasts the order it
     /// produced, so the phone sends intent rather than reordering locally.
     case togglePin
+    /// Open the color sheet. The Mac owns window colors, so the sheet sends
+    /// `set_color` and the card changes on the next layout broadcast.
+    case chooseColor
 }
 
 #Preview {

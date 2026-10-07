@@ -525,6 +525,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         self.broadcastLayout()
                     }
                 }
+            // Phone chose a color for a window (or cleared its choice). The
+            // Mac owns colors for the same reason it owns pins.
+            case "set_color":
+                if let msg = MessageCoder.decode(SetColorMessage.self, from: data) {
+                    DispatchQueue.main.async {
+                        self.windowManager.setColor(msg.windowId, hex: msg.color)
+                        self.broadcastLayout()
+                    }
+                }
             case "set_qa_pair":
                 if let msg = MessageCoder.decode(SetQAPairMessage.self, from: data) {
                     DispatchQueue.main.async {

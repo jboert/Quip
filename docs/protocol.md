@@ -136,6 +136,26 @@ carrying the order it produced. Pinned windows are already floated to the front
 of `windows`, so a client that ignores `WindowState.isPinned` still renders the
 right order; the flag is what lets it draw the pin and offer to toggle it.
 
+### set_color
+
+Phone → Mac. Sets the color a window is drawn in, or clears the user's choice.
+
+```json
+{
+  "type": "set_color",
+  "windowId": "com.googlecode.iterm2.1234",
+  "color": "#4A90D9"
+}
+```
+
+`color` is `#RRGGBB`. Omit it (or send `null`) to go back to automatic, which
+gives the window the next palette color. The Mac owns window colors for the
+same reason it owns pins: every peer must draw a window the same way. It keeps
+the choice per window id across relaunches, ignores a value that is not a
+6-digit hex color, and answers with a fresh `layout_update` whose
+`WindowState.color` carries the new color. The palette both peers offer is
+`WindowColor.palette` in `Shared/WindowColor.swift`.
+
 ### output_delta
 
 Streaming chunk of new terminal output for a window — used to drive the in-app terminal mirror without polling. Each delta carries a contiguous slice of new text. `isFinal: true` marks the end of a coalescing batch.
