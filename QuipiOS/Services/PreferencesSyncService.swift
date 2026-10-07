@@ -146,6 +146,7 @@ final class PreferencesSyncService {
         if let v = snapshot.liveActivitiesEnabled { d.set(v, forKey: "liveActivitiesEnabled") }
         if let v = snapshot.ttsEnabled { d.set(v, forKey: "ttsEnabled") }
         if let v = snapshot.dictationAutoSend { d.set(v, forKey: "dictation.autoSend") }
+        if let v = snapshot.terminalTextSize { d.set(v, forKey: "terminalTextSize") }
         if let v = snapshot.quickSlotsJSON { d.set(v, forKey: "quickSlotsJSON") }
         if let v = snapshot.customButtonsJSON { d.set(v, forKey: "customButtonsJSON") }
         if let v = snapshot.followFrontmost { d.set(v, forKey: "followFrontmost") }
@@ -224,6 +225,7 @@ final class PreferencesSyncService {
             liveActivitiesEnabled: d.object(forKey: "liveActivitiesEnabled") as? Bool,
             ttsEnabled: d.object(forKey: "ttsEnabled") as? Bool,
             dictationAutoSend: d.object(forKey: "dictation.autoSend") as? Bool,
+            terminalTextSize: d.object(forKey: "terminalTextSize") as? Double,
             quickSlotsJSON: d.string(forKey: "quickSlotsJSON"),
             customButtonsJSON: d.string(forKey: "customButtonsJSON"),
             followFrontmost: d.object(forKey: "followFrontmost") as? Bool,

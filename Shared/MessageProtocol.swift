@@ -1232,6 +1232,10 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// Optional so a Mac that predates the setting decodes as nil and the
     /// phone keeps its own value rather than being reset on every restore.
     var dictationAutoSend: Bool?
+    /// The phone's own terminal font size in points (GH #38). Optional for
+    /// the same reason as `dictationAutoSend`: an older backup decodes as nil
+    /// and the phone keeps its current size.
+    var terminalTextSize: Double?
     /// JSON-encoded ordered slot list from the Apple-toolbar-style editor.
     /// Supersedes `enabledQuickButtons` (kept for downgrade safety) — the
     /// CSV is regenerated from the slot list's built-in entries on each
@@ -1275,6 +1279,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         liveActivitiesEnabled: Bool? = nil,
         ttsEnabled: Bool? = nil,
         dictationAutoSend: Bool? = nil,
+        terminalTextSize: Double? = nil,
         quickSlotsJSON: String? = nil,
         customButtonsJSON: String? = nil,
         followFrontmost: Bool? = nil,
@@ -1299,6 +1304,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.ttsEnabled = ttsEnabled
         self.dictationAutoSend = dictationAutoSend
+        self.terminalTextSize = terminalTextSize
         self.quickSlotsJSON = quickSlotsJSON
         self.customButtonsJSON = customButtonsJSON
         self.followFrontmost = followFrontmost

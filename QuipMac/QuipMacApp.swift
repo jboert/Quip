@@ -2050,9 +2050,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             // padding already dropped and secrets already
                             // redacted, so the phone and the Mac's own detectors
                             // reason over identical bytes (see readContent).
+                            // Full scrollback for the phone (GH #37): Terminal.app's
+                            // default read is the visible screen only.
                             let read = keystrokeInjector.readContentDetailed(terminalApp: termApp,
                                                                             cgWindowNumber: wn,
-                                                                            iterm2SessionId: sessionId)
+                                                                            iterm2SessionId: sessionId,
+                                                                            fullHistory: true)
                             // A failed read used to ship "" and the phone drew an
                             // empty terminal — indistinguishable from a window that
                             // genuinely has nothing in it, and with no hint that

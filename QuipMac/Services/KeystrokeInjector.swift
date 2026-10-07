@@ -1262,7 +1262,11 @@ final class KeystrokeInjector {
     }
 
     /// `readContent` without the lossy `String?` collapse. Same thread rules.
-    nonisolated func readContentDetailed(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil) -> ContentRead {
+    /// `fullHistory` asks Terminal.app for the whole scrollback (`history`)
+    /// instead of the visible screen (`contents`). Only the phone's
+    /// `request_content` read wants it (GH #37); detectors keep reading the
+    /// screen. iTerm2's `contents` already includes scrollback.
+    nonisolated func readContentDetailed(terminalApp: TerminalApp, cgWindowNumber: CGWindowID = 0, iterm2SessionId: String? = nil, fullHistory: Bool = false) -> ContentRead {
         let script: String
         switch terminalApp {
         case .claudeDesktop:
@@ -1282,18 +1286,7 @@ final class KeystrokeInjector {
             //
             // `front window` stays as the fallback for a caller that has no
             // window number, which is what every caller used to get anyway.
-            script = cgWindowNumber != 0 ? """
-            tell application "Terminal"
-                if (exists window id \(cgWindowNumber)) then
-                    return contents of window id \(cgWindowNumber)
-                end if
-                return contents of front window
-            end tell
-            """ : """
-            tell application "Terminal"
-                return contents of front window
-            end tell
-            """
+            script = Self.terminalAppReadScript(windowNumber: cgWindowNumber, fullHistory: fullHistory)
         case .iterm2:
             // Read falls under the same "don't guess" rule as sendText. Without
             // a verified session id, the old fallback returned the contents of
@@ -1349,6 +1342,33 @@ final class KeystrokeInjector {
         // whole class. `redact` is a fixed set of regex substitutions — same
         // input, same output — so hashes stay stable.
         return .ok(SecretRedactor.redact(Self.trimTrailingBlankLines(raw)))
+    }
+
+    /// The AppleScript that reads a Terminal.app window. `contents` is "the
+    /// currently visible contents of the tab"; `history` is "the contents of
+    /// the entire scrolling buffer" (Terminal's scripting dictionary). Both
+    /// live on the tab, so read the window's selected tab.
+    nonisolated static func terminalAppReadScript(windowNumber: CGWindowID, fullHistory: Bool) -> String {
+        // The visible-screen form is unchanged from before GH #37, since the
+        // prompt detectors depend on it.
+        let target: (String) -> String = { window in
+            fullHistory ? "history of selected tab of \(window)" : "contents of \(window)"
+        }
+        guard windowNumber != 0 else {
+            return """
+            tell application "Terminal"
+                return \(target("front window"))
+            end tell
+            """
+        }
+        return """
+        tell application "Terminal"
+            if (exists window id \(windowNumber)) then
+                return \(target("window id \(windowNumber)"))
+            end if
+            return \(target("front window"))
+        end tell
+        """
     }
 
     /// Drop the blank lines a terminal pads its buffer with below the last

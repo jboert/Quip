@@ -1378,4 +1378,15 @@ final class MessageProtocolTests: XCTestCase {
         let decoded = try MessageCoder.decoder.decode(PreferencesSnapshot.self, from: data)
         XCTAssertEqual(decoded.dictationAutoSend, false)
     }
+
+    // GH #38: the phone's terminal text size rides the prefs backup.
+    func testTerminalTextSizeRidesThePreferencesSnapshot() throws {
+        let blob = try JSONEncoder().encode(PreferencesSnapshot(terminalTextSize: 13.5))
+        let back = try JSONDecoder().decode(PreferencesSnapshot.self, from: blob)
+        XCTAssertEqual(back.terminalTextSize, 13.5)
+        // A backup written before the field existed still decodes, as nil,
+        // so a restore leaves the phone's current size alone.
+        let old = try JSONDecoder().decode(PreferencesSnapshot.self, from: Data(#"{"ttsEnabled":true}"#.utf8))
+        XCTAssertNil(old.terminalTextSize)
+    }
 }
