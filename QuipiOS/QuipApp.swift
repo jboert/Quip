@@ -5778,6 +5778,10 @@ struct AttentionPulseDot: View {
 /// attributed string by hand).
 struct LinkableTerminalText: UIViewRepresentable {
     let content: String
+    /// The phone's own font size (GH #38); never affects the Mac terminal.
+    var fontSize: Double = TerminalTextSize.standard
+    /// Receives the new size when a pinch ends.
+    var onFontSizeChange: ((Double) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -5796,12 +5800,23 @@ struct LinkableTerminalText: UIViewRepresentable {
         ]
         tv.delegate = context.coordinator
         tv.alwaysBounceVertical = true
+        // Pinch previews with a transform and commits the size on release, so
+        // a 2,000-line re-layout happens once per pinch, not once per frame.
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.handlePinch(_:)))
+        tv.addGestureRecognizer(pinch)
         return tv
     }
 
     func updateUIView(_ tv: UITextView, context: Context) {
-        // Same text: leave the view alone so a refresh never moves the reader.
-        guard tv.attributedText.string != content else { return }
+        let coordinator = context.coordinator
+        coordinator.fontSize = fontSize
+        coordinator.onFontSizeChange = onFontSizeChange
+        // Same text at the same size: leave the view alone so a refresh never
+        // moves the reader.
+        let sizeChanged = coordinator.renderedFontSize != fontSize
+        guard tv.attributedText.string != content || sizeChanged else { return }
+        coordinator.renderedFontSize = fontSize
         // Follow new output only if the reader was already at the bottom
         // (`TerminalScrollPolicy`, same rule as the screenshot view). Scrolled
         // up reading history, they stay where they are.
@@ -5810,8 +5825,11 @@ struct LinkableTerminalText: UIViewRepresentable {
             offsetY: tv.contentOffset.y,
             visibleHeight: tv.bounds.height - tv.adjustedContentInset.bottom)
         let savedOffset = tv.contentOffset
+        // A size change keeps the reader at the same place in the text, not
+        // the same pixel offset (which would land elsewhere at a new size).
+        let savedFraction = tv.contentSize.height > 0 ? tv.contentOffset.y / tv.contentSize.height : 0
         let attr = NSMutableAttributedString(string: content, attributes: [
-            .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+            .font: UIFont.monospacedSystemFont(ofSize: CGFloat(fontSize), weight: .regular),
             .foregroundColor: UIColor.white.withAlphaComponent(0.85),
         ])
         tv.attributedText = attr
@@ -5821,11 +5839,30 @@ struct LinkableTerminalText: UIViewRepresentable {
         } else {
             tv.layoutIfNeeded()
             let maxY = max(0, tv.contentSize.height - tv.bounds.height + tv.adjustedContentInset.bottom)
-            tv.setContentOffset(CGPoint(x: savedOffset.x, y: min(savedOffset.y, maxY)), animated: false)
+            let y = sizeChanged ? savedFraction * tv.contentSize.height : savedOffset.y
+            tv.setContentOffset(CGPoint(x: savedOffset.x, y: min(max(0, y), maxY)), animated: false)
         }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        var fontSize: Double = TerminalTextSize.standard
+        var renderedFontSize: Double?
+        var onFontSizeChange: ((Double) -> Void)?
+
+        @objc func handlePinch(_ pinch: UIPinchGestureRecognizer) {
+            guard let tv = pinch.view else { return }
+            switch pinch.state {
+            case .changed:
+                let preview = TerminalTextSize.pinched(fontSize, scale: pinch.scale) / fontSize
+                tv.transform = CGAffineTransform(scaleX: preview, y: preview)
+            case .ended:
+                tv.transform = .identity
+                onFontSizeChange?(TerminalTextSize.pinched(fontSize, scale: pinch.scale))
+            default:
+                tv.transform = .identity
+            }
+        }
+
         /// iOS 17+ tap handler. The OLD `shouldInteractWith url:in:interaction:`
         /// delegate method is deprecated; iOS 17 routes taps through this method
         /// instead and falls through to a no-op if it returns nil. Returning
@@ -6098,10 +6135,13 @@ struct InlineTerminalContent: View {
     /// finds in the 200-line scrape window; iOS caps here so a `tail -f`
     /// log doesn't produce a pill strip that scrolls for days.
     @AppStorage("urlTrayLimit") private var urlTrayLimit = 10
-    /// Zoom level index into `ContentZoomLevel.allCases`. Persisted so the
-    /// user's pick survives relaunch, and shared between portrait and
-    /// landscape views so cycling in one affects both.
-    @AppStorage("contentZoomLevel") private var contentZoomLevel = 1
+    /// The phone's own terminal font size (GH #38). Never sent to the Mac.
+    /// Persisted, and shared between portrait and landscape.
+    @AppStorage("terminalTextSize") private var terminalTextSize = TerminalTextSize.standard
+    /// Screenshot pinch zoom, 1× = fit to width. Not persisted: a new
+    /// session starts fitted.
+    @State private var screenshotZoom: CGFloat = 1
+    @State private var screenshotZoomAtPinchStart: CGFloat = 1
     /// `auto` (default) preserves the image > text > loading priority and
     /// last-good-screenshot caching. `image` and `text` are hard overrides
     /// that lock the renderer to one branch — useful when the Mac screenshot
@@ -6249,16 +6289,33 @@ struct InlineTerminalContent: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer()
-                // Text-size cycler — taps through the three zoom presets so
-                // you can trade panel fill for more terminal content on
-                // screen at once. Icon's the A+/A− "text size" symbol.
+                // Phone-only text size (GH #38): changes how the phone draws
+                // the text, never the Mac terminal's font. Pinching the text
+                // does the same. Hold either button to reset.
                 Button {
-                    contentZoomLevel = ContentZoomLevel.from(raw: contentZoomLevel).next
+                    terminalTextSize = TerminalTextSize.stepped(terminalTextSize, by: -1)
                 } label: {
-                    Image(systemName: "textformat.size")
+                    Image(systemName: "textformat.size.smaller")
                         .font(.system(size: 13))
-                        .foregroundStyle(Color.white.opacity(0.5))
+                        .foregroundStyle(Color.white.opacity(terminalTextSize > TerminalTextSize.minimum ? 0.5 : 0.2))
                 }
+                .disabled(terminalTextSize <= TerminalTextSize.minimum)
+                .contextMenu {
+                    Button("Reset text size") { terminalTextSize = TerminalTextSize.standard }
+                }
+                .accessibilityLabel("Smaller text")
+                Button {
+                    terminalTextSize = TerminalTextSize.stepped(terminalTextSize, by: 1)
+                } label: {
+                    Image(systemName: "textformat.size.larger")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(terminalTextSize < TerminalTextSize.maximum ? 0.5 : 0.2))
+                }
+                .disabled(terminalTextSize >= TerminalTextSize.maximum)
+                .contextMenu {
+                    Button("Reset text size") { terminalTextSize = TerminalTextSize.standard }
+                }
+                .accessibilityLabel("Larger text")
                 // Expand / collapse — hides the window-picker card above to
                 // give the terminal more vertical real estate. Tap again to
                 // bring the picker back. Compact: single icon button, reuses
@@ -6473,13 +6530,32 @@ struct InlineTerminalContent: View {
                     // distance-from-bottom and only re-pin when within
                     // ~40pt of the floor (close enough that they were
                     // clearly following the live tail).
+                    // GH #38 — pinch to zoom (1×–4×), pan while zoomed,
+                    // double-tap to fit again. GeometryReader outside the
+                    // ScrollView (the reverse does not lay out).
+                    GeometryReader { geo in
                     ScrollViewReader { proxy in
-                        let baseScroll = ScrollView {
+                        let baseScroll = ScrollView(screenshotZoom > 1 ? [.vertical, .horizontal] : .vertical) {
                             Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(maxWidth: .infinity)
+                                .frame(width: geo.size.width * screenshotZoom)
                                 .id("bottom")
+                        }
+                        .simultaneousGesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    screenshotZoom = ScreenshotZoom.clamped(screenshotZoomAtPinchStart * value)
+                                }
+                                .onEnded { _ in
+                                    screenshotZoomAtPinchStart = screenshotZoom
+                                }
+                        )
+                        .onTapGesture(count: 2) {
+                            withAnimation {
+                                screenshotZoom = 1
+                                screenshotZoomAtPinchStart = 1
+                            }
                         }
 
                         if #available(iOS 18.0, *) {
@@ -6499,10 +6575,13 @@ struct InlineTerminalContent: View {
                             baseScroll
                         }
                     }
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             case .text:
-                LinkableTerminalText(content: content)
+                LinkableTerminalText(content: content, fontSize: terminalTextSize) { size in
+                    terminalTextSize = size
+                }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loading:
                 Text(loadingPlaceholder)
@@ -6559,7 +6638,8 @@ struct InlineTerminalContent: View {
                     // Only show drag feedback when the motion is clearly
                     // horizontal — otherwise the panel twitches sideways
                     // when the user is trying to scroll the screenshot.
-                    guard abs(dx) > abs(dy) * 2 else {
+                    // A zoomed screenshot pans instead of switching windows.
+                    guard screenshotZoom <= 1, abs(dx) > abs(dy) * 2 else {
                         if swipeOffset != 0 { swipeOffset = 0 }
                         return
                     }
@@ -6570,7 +6650,7 @@ struct InlineTerminalContent: View {
                     let dx = value.translation.width
                     let dy = value.translation.height
                     swipeOffset = 0
-                    guard abs(dx) > 90, abs(dx) > abs(dy) * 2 else { return }
+                    guard screenshotZoom <= 1, abs(dx) > 90, abs(dx) > abs(dy) * 2 else { return }
                     // Left swipe (dx < 0) advances to the NEXT window,
                     // matching the iOS convention of "content slides left
                     // to reveal what comes next," like Photos or TabView.
@@ -8893,35 +8973,6 @@ enum ConnectionTestState: Equatable {
 
 private enum ConnectionProbeError: Error {
     case timeout(TimeInterval)
-}
-
-/// Three-way zoom control for the terminal content screenshot. Shared by
-/// portrait InlineTerminalContent and landscape TerminalContentOverlay so
-/// cycling in one carries over to the other.
-///
-/// Percentage-based (of container width) rather than fixed point padding —
-/// landscape is >2x as wide as portrait, so a fixed 24pt margin in portrait
-/// is barely visible in landscape and text still renders huge.
-enum ContentZoomLevel: Int, CaseIterable {
-    case fill = 0, medium = 1, small = 2
-
-    /// Fraction of the container width the image should fill. Remaining
-    /// space becomes evenly-split horizontal margin.
-    var widthFraction: CGFloat {
-        switch self {
-        case .fill: return 1.0
-        case .medium: return 0.82
-        case .small: return 0.62
-        }
-    }
-
-    static func from(raw: Int) -> ContentZoomLevel {
-        ContentZoomLevel(rawValue: raw) ?? .fill
-    }
-
-    var next: Int {
-        (rawValue + 1) % ContentZoomLevel.allCases.count
-    }
 }
 
 // MARK: - Connection Diagnostics
