@@ -3,6 +3,17 @@ import Foundation
 import WhisperKit
 #endif
 
+/// Whisper models to try at setup, best first. large-v3 turbo (v20240930,
+/// 626 MB quantized) is far stronger on jargon than small.en. small.en is
+/// last because every existing install already has it on disk, so a failed
+/// or offline turbo download still ends in a working model.
+enum WhisperModelLadder {
+    static let models = [
+        "openai_whisper-large-v3-v20240930_626MB",
+        "openai_whisper-small.en",
+    ]
+}
+
 /// Abstraction so `WhisperDictationService` can be unit-tested without a
 /// real WhisperKit instance.
 protocol WhisperTranscriber: Sendable {
@@ -19,15 +30,18 @@ final class WhisperKitTranscriber: WhisperTranscriber, @unchecked Sendable {
         // rewrites the final transcript after the fact, and WhisperKit (unlike
         // the local SFSpeech request) has no contextualStrings hook. Guarded by
         // the optional tokenizer (nil until the model loads): no tokenizer ⇒
-        // `decodeOptions: nil` ⇒ the exact prior unbiased behavior, no regression.
-        let decodeOptions: DecodingOptions?
+        // no prompt, otherwise the same decode.
+        //
+        // English is forced on both branches: large-v3 is multilingual, and a
+        // short or noisy clip could otherwise be decoded as another language.
+        let decodeOptions: DecodingOptions
         if let tokenizer = kit.tokenizer,
            let prompt = QuipDictationVocabulary.promptTokens(
                encode: tokenizer.encode(text:),
                specialTokenBegin: tokenizer.specialTokens.specialTokenBegin) {
-            decodeOptions = DecodingOptions(promptTokens: prompt)
+            decodeOptions = DecodingOptions(language: "en", detectLanguage: false, promptTokens: prompt)
         } else {
-            decodeOptions = nil
+            decodeOptions = DecodingOptions(language: "en", detectLanguage: false)
         }
         let results: [TranscriptionResult] = try await kit.transcribe(
             audioArray: audioArray, decodeOptions: decodeOptions)

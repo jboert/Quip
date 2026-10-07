@@ -2428,13 +2428,27 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Quip", isDirectory: true)
             try? FileManager.default.createDirectory(at: modelBase, withIntermediateDirectories: true)
-            // small.en over base: base is the weakest tier and mangles jargon
-            // (audit.log 2026-07-10 — "codex", model names, inverted negations)
-            // even with promptTokens biasing. One-shot decode at PTT release,
-            // so the extra latency is per-utterance, not per-chunk.
+            // Best model first (see `WhisperModelLadder`): large-v3 turbo, then
+            // small.en, which is already on disk. base was dropped earlier for
+            // mangling jargon (audit.log 2026-07-10 — "codex", model names,
+            // inverted negations). One-shot decode at PTT release, so a bigger
+            // model costs latency per utterance, not per chunk.
             appendWhisperDiagnostic("downloadBase=\(modelBase.path)")
-            let config = WhisperKitConfig(model: "openai_whisper-small.en", downloadBase: modelBase)
-            let kit = try await WhisperKit(config)
+            var loaded: WhisperKit?
+            var lastError: Error?
+            for name in WhisperModelLadder.models {
+                do {
+                    loaded = try await WhisperKit(WhisperKitConfig(model: name, downloadBase: modelBase))
+                    appendWhisperDiagnostic("model=\(name) loaded")
+                    break
+                } catch {
+                    lastError = error
+                    appendWhisperDiagnostic("model=\(name) failed error=\(error)")
+                }
+            }
+            guard let kit = loaded else {
+                throw lastError ?? CocoaError(.featureUnsupported)
+            }
             let transcriber = WhisperKitTranscriber(kit: kit)
             self.whisperService = WhisperDictationService(transcriber: transcriber) { msg in
                 // Hop back to Main to use the existing broadcast helper.

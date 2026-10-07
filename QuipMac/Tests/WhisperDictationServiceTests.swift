@@ -110,4 +110,16 @@ final class WhisperDictationServiceTests: XCTestCase {
         svc.purgeStaleSessions()
         XCTAssertFalse(svc.hasBuffer(for: sid))
     }
+
+    // MARK: - Model ladder
+
+    func test_ladderPrefersTurboThenTheModelAlreadyOnDisk() {
+        XCTAssertEqual(WhisperModelLadder.models.first, "openai_whisper-large-v3-v20240930_626MB")
+    }
+
+    func test_ladderEndsOnTheModelAlreadyOnDisk() {
+        // small.en is what every existing install already downloaded, so a
+        // failed turbo download still leaves dictation working.
+        XCTAssertEqual(WhisperModelLadder.models.last, "openai_whisper-small.en")
+    }
 }
