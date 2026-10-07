@@ -1352,12 +1352,23 @@ struct PreferenceRequestMessage: Codable, Sendable {
 /// Mac → iPhone in response to `PreferenceRequestMessage`. The phone applies
 /// these into UserDefaults during a brief sync-suppression window so it
 /// doesn't echo the restore right back to the Mac.
+///
+/// `deviceID` names the device the snapshot belongs to, so a phone can drop a
+/// restore meant for another device. It is optional on the wire: a Mac from
+/// before this field sends none, and the phone applies such a restore as it
+/// always did.
 struct PreferenceRestoreMessage: Codable, Sendable {
     let type: String
+    let deviceID: String?
     let preferences: PreferencesSnapshot
 
     init(preferences: PreferencesSnapshot) {
+        self.init(deviceID: nil, preferences: preferences)
+    }
+
+    init(deviceID: String?, preferences: PreferencesSnapshot) {
         self.type = "preferences_restore"
+        self.deviceID = deviceID
         self.preferences = preferences
     }
 }

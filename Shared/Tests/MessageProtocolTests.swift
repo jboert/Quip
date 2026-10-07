@@ -1391,6 +1391,29 @@ final class MessageProtocolTests: XCTestCase {
     }
 
     // Keyboard button colors ride the prefs backup.
+    func testPreferenceRestoreMessageNamesItsDevice() throws {
+        let msg = PreferenceRestoreMessage(deviceID: "DEV-1", preferences: PreferencesSnapshot())
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["type"] as? String, "preferences_restore")
+        XCTAssertEqual(dict["deviceID"] as? String, "DEV-1")
+
+        let back = try MessageCoder.decoder.decode(PreferenceRestoreMessage.self, from: data)
+        XCTAssertEqual(back.deviceID, "DEV-1")
+    }
+
+    func testPreferenceRestoreMessageFromAnOlderMacHasNoDevice() throws {
+        // A Mac from before the field sends none; the phone must still decode it.
+        let old = try MessageCoder.decoder.decode(
+            PreferenceRestoreMessage.self,
+            from: Data(#"{"type":"preferences_restore","preferences":{"ttsEnabled":true}}"#.utf8))
+        XCTAssertNil(old.deviceID)
+        XCTAssertEqual(old.preferences.ttsEnabled, true)
+
+        let legacyInit = PreferenceRestoreMessage(preferences: PreferencesSnapshot())
+        XCTAssertNil(legacyInit.deviceID)
+    }
+
     func testQuickSlotColorsRideThePreferencesSnapshot() throws {
         let json = ##"{"b:esc":"#4A90D9"}"##
         let blob = try JSONEncoder().encode(PreferencesSnapshot(quickSlotColorsJSON: json))

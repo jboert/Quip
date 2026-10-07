@@ -1130,7 +1130,17 @@ final class WebSocketClient {
         }
     }
 
-    private func handleMessage(_ data: Data) {
+    /// Whether a `preferences_restore` is for this device. A message that
+    /// names no device comes from a Mac older than the field and is applied,
+    /// as it always was.
+    static func restoreIsForThisDevice(_ messageDeviceID: String?, own: String) -> Bool {
+        guard let messageDeviceID else { return true }
+        return messageDeviceID == own
+    }
+
+    /// Dispatches one wire message. Internal, not private, so tests can feed
+    /// messages without a socket.
+    func handleMessage(_ data: Data) {
         struct TypePeek: Codable { let type: String }
         guard let peek = Self.decodeMessage(TypePeek.self, from: data, msgType: "<peek>") else {
             NSLog("[WebSocketClient] Could not peek type from %d bytes", data.count)
@@ -1168,6 +1178,15 @@ final class WebSocketClient {
                             timeToAuthMs: Int(Date().timeIntervalSince(started) * 1000))
                     }
                     authError = nil
+                    // A PIN rejected earlier on this connection left
+                    // "Auth failed: …" in lastError and lastDisconnectReason;
+                    // the connected bar showed it in red next to "Connected"
+                    // until the next reconnect. Any other reason stays for
+                    // the diagnostics sheet.
+                    lastError = nil
+                    if case .authFailed? = lastDisconnectReason {
+                        lastDisconnectReason = nil
+                    }
                     // §B5: tell the Mac who we are so its MenuBarExtra and
                     // Settings → Connection list can show "iPhone 17 Pro Max"
                     // instead of an opaque endpoint string. deviceID is the
@@ -1273,6 +1292,14 @@ final class WebSocketClient {
         case "preferences_restore":
             guard isAuthenticated else { return }
             if let msg = Self.decodeMessage(PreferenceRestoreMessage.self, from: data, msgType: peek.type) {
+                // A Mac that names the device gets its restore applied only
+                // on that device; one that names none (older Mac) is applied
+                // as before. Without this, every device connected to the Mac
+                // took on the settings of whichever device authenticated last.
+                guard Self.restoreIsForThisDevice(msg.deviceID, own: KeychainDeviceID.get()) else {
+                    PhoneLog.log("prefs restore ignored: for another device")
+                    return
+                }
                 onPreferencesRestore?(msg.preferences)
             }
         case "project_directories":
