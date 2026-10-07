@@ -551,6 +551,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 DispatchQueue.main.async {
                     self.applyClearQAPair(connection: connection)
                 }
+            // Handled HERE, where the originating connection is known, because
+            // the reply must go back to that one connection only. It used to
+            // live in `handleIncomingMessage` and `broadcast` the snapshot, so
+            // every connected phone received whichever device had just
+            // authenticated — and lost its own settings to it (US-014).
+            case "preferences_request":
+                if let msg = MessageCoder.decode(PreferenceRequestMessage.self, from: data) {
+                    DispatchQueue.main.async {
+                        self.applyPreferencesRequest(msg, connection: connection)
+                    }
+                }
             default:
                 break
             }
@@ -2331,41 +2342,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 }
             }
 
-        // Phone (typically right after authenticating from a fresh install)
-        // is asking for any backup we have. Always respond — if no backup
-        // exists we send an empty snapshot so the phone knows to stop
-        // waiting.
-        case "preferences_request":
-            if let msg = MessageCoder.decode(PreferenceRequestMessage.self, from: data) {
-                let key = phonePrefsKey(deviceID: msg.deviceID)
-                let snapshot: PreferencesSnapshot
-                // Two very different states used to collapse into one branch —
-                // and into one LIE. "No backup exists" is ordinary (fresh
-                // pairing). "A backup exists but won't decode" means we're about
-                // to hand the phone defaults and silently wipe its real settings
-                // — yet the old code logged "no backup for device" for BOTH.
-                // Schema drift on PreferencesSnapshot lands squarely here.
-                if let blob = UserDefaults.standard.data(forKey: key) {
-                    do {
-                        snapshot = try JSONDecoder().decode(PreferencesSnapshot.self, from: blob)
-                        print("[Quip] preferences_request: restoring snapshot for device \(msg.deviceID.prefix(8))")
-                    } catch {
-                        snapshot = PreferencesSnapshot()
-                        QuipLog.write(
-                            severity: .error, subsystem: "prefs",
-                            message: "preferences_request: a backup EXISTS for device "
-                                   + "\(msg.deviceID.prefix(8)) (\(blob.count) bytes) but failed to "
-                                   + "decode: \(error). Sending defaults — this phone's saved "
-                                   + "settings are being silently replaced.",
-                            to: LogPaths.webSocketPath
-                        )
-                    }
-                } else {
-                    snapshot = PreferencesSnapshot()
-                    print("[Quip] preferences_request: no backup for device \(msg.deviceID.prefix(8))")
-                }
-                webSocketServer.broadcast(PreferenceRestoreMessage(preferences: snapshot))
-            }
+        // "preferences_request" is handled in `onMessageWithConnection`: the
+        // reply is addressed to the one connection that asked (US-014).
 
         case "open_mac_settings_pane":
             if let msg = MessageCoder.decode(OpenMacSettingsPaneMessage.self, from: data) {
@@ -2429,6 +2407,41 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// lives. Per-device so a household with two phones doesn't collide.
     private func phonePrefsKey(deviceID: String) -> String {
         "phonePrefs.\(deviceID)"
+    }
+
+    /// Phone (typically right after authenticating from a fresh install) is
+    /// asking for any backup we have. Always respond — if no backup exists we
+    /// send an empty snapshot so the phone knows to stop waiting.
+    ///
+    /// The reply goes to `connection` and nowhere else. Broadcasting it (the
+    /// old shape) delivered the requesting device's settings to every
+    /// connected phone, which then applied them over its own (US-014).
+    @MainActor
+    private func applyPreferencesRequest(_ msg: PreferenceRequestMessage, connection: NWConnection) {
+        let blob = UserDefaults.standard.data(forKey: phonePrefsKey(deviceID: msg.deviceID))
+        let reply = PreferenceRestoreRouting.reply(for: msg.deviceID, blob: blob)
+        // Two very different states used to collapse into one branch — and
+        // into one LIE. "No backup exists" is ordinary (fresh pairing). "A
+        // backup exists but won't decode" means we're about to hand the phone
+        // defaults and silently wipe its real settings — yet the old code
+        // logged "no backup for device" for BOTH. Schema drift on
+        // PreferencesSnapshot lands squarely here.
+        switch reply.outcome {
+        case .restored:
+            print("[Quip] preferences_request: restoring snapshot for device \(msg.deviceID.prefix(8))")
+        case .noBackup:
+            print("[Quip] preferences_request: no backup for device \(msg.deviceID.prefix(8))")
+        case .undecodable(let bytes, let error):
+            QuipLog.write(
+                severity: .error, subsystem: "prefs",
+                message: "preferences_request: a backup EXISTS for device "
+                       + "\(msg.deviceID.prefix(8)) (\(bytes) bytes) but failed to "
+                       + "decode: \(error). Sending defaults — this phone's saved "
+                       + "settings are being silently replaced.",
+                to: LogPaths.webSocketPath
+            )
+        }
+        webSocketServer.sendToClient(reply.message, connection: connection)
     }
 
     @MainActor
