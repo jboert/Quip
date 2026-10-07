@@ -1472,6 +1472,10 @@ struct MainiOSView: View {
     /// (classic path), "attach" shows the list of iTerm windows currently
     /// open on the Mac that Quip isn't already tracking.
     @State private var spawnSheetTab: SpawnSheetTab = .new
+    /// iTerm session ids attached from this phone that the Mac's scan has not
+    /// yet reported as tracked. Survives the sheet closing, so the row shows
+    /// "Attached" on the next open without a manual rescan.
+    @State private var recentlyAttachedSessionIds: Set<String> = []
     @State private var recentConnections: [SavedConnection] = []
     @State private var editingConnection: SavedConnection?
     @State private var renameText: String = ""
@@ -2163,7 +2167,11 @@ struct MainiOSView: View {
                 // The Mac answered (via manager.onITermWindowList) — the wait is
                 // over. This is the only thing that can retire the scan short of
                 // its deadline.
-                if results != nil { iTermScanRequest.resolve(.succeeded) }
+                if let results {
+                    iTermScanRequest.resolve(.succeeded)
+                    recentlyAttachedSessionIds = AttachListState.pruned(
+                        recentlyAttachedSessionIds, afterScan: results)
+                }
             }
             .onChange(of: showSpawnPicker) { _, isShowing in
                 // Reset tab + scan state whenever the sheet closes so the
@@ -2279,9 +2287,13 @@ struct MainiOSView: View {
 
     @ViewBuilder
     private func iTermWindowRow(info: ITermWindowInfo) -> some View {
-        let dimmed = info.isAlreadyTracked || info.isMiniaturized
+        // The Mac's scan can lag behind an attach by several seconds, so a row
+        // tapped from this phone counts as attached until a scan agrees.
+        let attached = AttachListState.isAttached(info, recent: recentlyAttachedSessionIds)
+        let dimmed = attached || info.isMiniaturized
         Button {
-            guard !info.isAlreadyTracked else { return }
+            guard !attached else { return }
+            recentlyAttachedSessionIds.insert(info.sessionId)
             client.send(AttachITermWindowMessage(
                 windowNumber: info.windowNumber,
                 sessionId: info.sessionId
@@ -2290,7 +2302,7 @@ struct MainiOSView: View {
         } label: {
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: "terminal.fill")
-                    .foregroundStyle(info.isAlreadyTracked ? Color.secondary : Color.green)
+                    .foregroundStyle(attached ? Color.secondary : Color.green)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(info.title.isEmpty ? "(untitled)" : info.title)
                         .font(.body)
@@ -2308,7 +2320,7 @@ struct MainiOSView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if info.isAlreadyTracked {
+                if attached {
                     Text("Attached")
                         .font(.caption2)
                         .fontWeight(.semibold)
@@ -2319,10 +2331,10 @@ struct MainiOSView: View {
                 }
             }
             .contentShape(Rectangle())
-            .opacity(dimmed && !info.isAlreadyTracked ? 0.6 : 1.0)
+            .opacity(dimmed && !attached ? 0.6 : 1.0)
         }
         .buttonStyle(.plain)
-        .disabled(info.isAlreadyTracked)
+        .disabled(attached)
     }
 
     /// Trim the cwd to the last two path components so the row doesn't wrap
