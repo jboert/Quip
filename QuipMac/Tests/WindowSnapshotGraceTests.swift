@@ -149,17 +149,28 @@ final class WindowSnapshotGraceTests: XCTestCase {
                        "its remembered automatic color still applies: that memory lasts 24 h")
     }
 
+    /// A manual order that differs from screen order, and an enabled window:
+    /// without the grace both were lost, while screen order dealt the same
+    /// order and first-free colors again, so order and colors alone could not
+    /// tell.
     func testAnEmptySnapshotInTheMiddleChangesNothing() {
-        let m = placedManager()
+        let m = manager()
+        m.applyWindowSnapshot(snapshot(ids))
+        m.setOrder(ids.reversed())
+        m.toggleWindow("C", enabled: true)
         let before = m.windows.map { ($0.id, $0.assignedColor) }
+        XCTAssertEqual(before.map(\.0), Array(ids.reversed()), "precondition: not the screen order")
         clock.advance(2)
         m.applyWindowSnapshot([])
         XCTAssertTrue(m.windows.isEmpty)
         clock.advance(2)
         m.applyWindowSnapshot(snapshot(ids))
         let after = m.windows.map { ($0.id, $0.assignedColor) }
+        XCTAssertTrue(m.usesManualOrder, "the user's order is still the user's")
         XCTAssertEqual(after.map(\.0), before.map(\.0), "same order")
+        XCTAssertEqual(m.customOrder, Array(ids.reversed()))
         XCTAssertEqual(after.map(\.1), before.map(\.1), "same colors")
+        XCTAssertEqual(window("C", in: m)?.isEnabled, true, "still enabled")
     }
 
     func testANewWindowDoesNotTakeAHeldWindowsColor() {
@@ -214,6 +225,12 @@ final class WindowSnapshotGraceTests: XCTestCase {
         let automatic = window("B", in: m)?.assignedColor
         m.setColor("B", hex: "#123456")
         XCTAssertEqual(window("B", in: m)?.assignedColor, "#123456")
+        // A takes a picked color too, so the first free palette color is A's old
+        // one, not B's: only the remembered color can give B its own back.
+        m.setColor("A", hex: "#654321")
+        let others = Set(m.windows.filter { $0.id != "B" }.map(\.assignedColor))
+        XCTAssertNotEqual(WindowManager.firstUnusedPaletteColor(avoiding: others), automatic,
+                          "precondition: a fresh pick would not be B's old color")
         m.setColor("B", hex: nil)
         XCTAssertEqual(window("B", in: m)?.assignedColor, automatic)
     }
