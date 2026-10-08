@@ -23,7 +23,9 @@ repo="${SRCROOT:-$(pwd)}/.."
 commit="unknown"
 if git -C "$repo" rev-parse --short=7 HEAD >/dev/null 2>&1; then
   commit="$(git -C "$repo" rev-parse --short=7 HEAD)"
-  if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no -- . ':(exclude)*.pbxproj' 2>/dev/null)" ]; then
+  # Generated project files and the tracked plugin database that tooling
+  # rewrites on its own are not source changes.
+  if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no -- . ':(exclude)*.pbxproj' ':(exclude)*.db' 2>/dev/null)" ]; then
     commit="${commit}-dirty"
   fi
 fi
