@@ -196,11 +196,13 @@ final class WindowSnapshotGraceTests: XCTestCase {
         let first = manager()
         first.applyWindowSnapshot(snapshot(fifteen))
         let colors = Dictionary(uniqueKeysWithValues: first.windows.map { ($0.id, $0.assignedColor) })
-        XCTAssertEqual(colors["w10"], colors["w0"], "precondition: two windows share a color")
+        XCTAssertEqual(colors["w11"], colors["w1"], "precondition: two windows share a color")
+        XCTAssertNotEqual(colors["w1"], WindowColor.palette[0],
+                          "precondition: a re-colored w1 would get the first palette color, so this can tell")
 
         let second = manager()
-        // w10 first: it remembers w0's color, which used to push w0 to a fresh one.
-        second.applyWindowSnapshot(snapshot(["w10"] + fifteen.filter { $0 != "w10" }))
+        // w11 first: it remembers w1's color, which used to push w1 to a fresh one.
+        second.applyWindowSnapshot(snapshot(["w11"] + fifteen.filter { $0 != "w11" }))
         for id in fifteen {
             XCTAssertEqual(window(id, in: second)?.assignedColor, colors[id], "window \(id)")
         }
