@@ -368,7 +368,7 @@ Type text into a window. `pressReturn` defaults to `true`.
 }
 ```
 
-`messageId` (optional) is the idempotency token and what `send_text_ack` / `error` echo. `raiseWindow` (optional, since US-116): `false` asks the desktop not to raise the window before injecting, which a broadcast sends so many iTerm2 windows do not flash in turn. Absent means raise, as before. The desktop always raises Terminal.app, Claude Desktop and generic-app targets, since their input goes to the frontmost window; for Terminal.app the keystroke script raises its own window by id and fails the request with an attributed `error` if another window is still in front.
+`messageId` (optional) is the idempotency token and what `send_text_ack` / `error` echo. `raiseWindow` (optional, since US-116): `false` asks the desktop not to raise the window before injecting, which a broadcast sends so many iTerm2 windows do not flash in turn. Absent means raise, as before. The desktop always raises Claude Desktop and generic-app targets, since their input goes to the frontmost window. Terminal.app keystrokes also go to the frontmost window, so its script raises its own window by id inside the serial AppleScript queue and fails the request with an attributed `error` if another window is still in front; a quiet request therefore skips the separate Accessibility raise there too (a target with no window id keeps it). One iTerm2 route is not quiet: Codex and Grok sessions, and any multi-line body, are pasted with Cmd+V, which needs iTerm2 activated with that session selected, so those targets still come to the front in turn. Claude and shell sessions take `write text` by session id and never do.
 
 ### paste_prompt
 

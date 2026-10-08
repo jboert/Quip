@@ -133,7 +133,7 @@ the handlers in `QuipMac/QuipMacApp.swift`.
 | more than 10 messages a second | The extras are dropped and logged, as the Mac drops them silently. |
 | `send_text` | `send_text_ack` with the same `messageId` after a simulated 38–165 ms injection. `path` is `sendText`, `pasteText` (Codex or Grok in iTerm2) or `genericApp` (non-terminal app), as on the Mac. A dead window gets nothing; a missing window gets `error` "Window no longer exists". No `messageId`, no ack. |
 | repeated `messageId` within 30 s | No reply (the Mac's dedupe table). |
-| `paste_prompt` | Logged with the body filled for the target window (`{{folder}}`, `{{window}}`, `{{agent}}`, `{{cwd}}`, `{{date}}`). No ack, as today's Mac; with `--ack-paste`, acked like `send_text`. Unknown prompt ids are ignored. |
+| `paste_prompt` | Logged with the body filled for the target window (`{{folder}}`, `{{window}}`, `{{agent}}`, `{{cwd}}`, `{{date}}`). No ack, as a Mac from before US-115; with `--ack-paste`, acked like `send_text`, and an unknown prompt id gets `error` "Prompt paste failed: no prompt … on this Mac" (with the `messageId` under `--error-ids`), as the Mac since US-115. Without `--ack-paste` an unknown id is ignored. |
 | `quick_action` | Logged; never acked, as on the Mac. A missing window gets `error`. |
 | `request_content` | `terminal_content` from the window's fixture `content`, at most twice a second per window. |
 | `preferences_request` | `preferences_restore` with the requester's `deviceID` and an empty snapshot, to that phone only: the Mac's "no backup" reply. |

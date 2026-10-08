@@ -944,7 +944,15 @@ final class FakeMac: @unchecked Sendable {
             return
         }
         guard let prompt = prompts.first(where: { $0.id == promptId }) else {
-            log.line(line + " -> unknown prompt id: ignored, no reply (as the real Mac)")
+            // The Mac answers an attributed error since US-115; before it the
+            // request was dropped silently, which --ack-paste off reproduces.
+            guard options.ackPaste else {
+                log.line(line + " -> unknown prompt id: ignored, no reply (a Mac from before US-115)")
+                return
+            }
+            let reason = "Prompt paste failed: no prompt \"\(promptId)\" on this Mac"
+            log.line(line + " -> unknown prompt id: error \"\(reason)\"")
+            broadcast(ErrorMsg(reason: reason, messageId: options.errorIDs ? messageId : nil))
             return
         }
         if let window = windows.first(where: { $0.id == windowId }) {
