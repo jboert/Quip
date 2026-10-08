@@ -932,9 +932,10 @@ final class BackendConnectionManager {
     ///    was rekeyed to the real Mac UUID and the other still has its
     ///    `legacy-` synthetic id, so id-grouping alone misses them).
     ///
-    /// URL ordering: Bonjour `.local` first, then RFC1918 LAN
-    /// (192.168.*, 10.*, 172.16-31.*), then Tailscale CGNAT (100.64-127.*),
-    /// then anything else (Cloudflare tunnel, MagicDNS, etc). `enabled` is
+    /// URL ordering: Tailscale first (`mergedURLOrder`), then Bonjour
+    /// `.local`, then RFC1918 LAN (192.168.*, 10.*, 172.16-31.*), then
+    /// link-local (169.254.*), then anything else (Cloudflare tunnel etc).
+    /// `enabled` is
     /// the OR of all merged rows. `lastUsed` becomes the most recent. Other
     /// fields take the first row's values.
     ///
@@ -999,7 +1000,7 @@ final class BackendConnectionManager {
     /// id OR overlapping URL set). First row's metadata wins for
     /// non-mergeable fields (name, kind, pinned).
     /// Order merged URLs Tailscale-FIRST, then by `urlPriority`. A Tailscale
-    /// peer (100.64/10 or *.ts.net, i.e. `urlPriority == 2`) is reachable on
+    /// peer (100.64/10 or *.ts.net, i.e. `tailscalePriority`) is reachable on
     /// any network, so for a phone that roams off home Wi-Fi it's the stable
     /// primary — it avoids the reconnect churn of a LAN-only primary that
     /// dies every time you leave the LAN. LAN/Bonjour stay as faster
@@ -1007,7 +1008,7 @@ final class BackendConnectionManager {
     /// backends are unaffected since there's nothing to reorder.)
     static func mergedURLOrder(_ urls: [String]) -> [String] {
         urls.sorted { a, b in
-            let ta = urlPriority(a) == 2, tb = urlPriority(b) == 2
+            let ta = urlPriority(a) == tailscalePriority, tb = urlPriority(b) == tailscalePriority
             if ta != tb { return ta }                  // Tailscale first
             let pa = urlPriority(a), pb = urlPriority(b)
             if pa != pb { return pa < pb }             // else existing priority
@@ -1033,38 +1034,54 @@ final class BackendConnectionManager {
         return merged
     }
 
+    /// `urlPriority` buckets, lowest dialed first among the non-Tailscale
+    /// URLs (`mergedURLOrder` puts Tailscale ahead of all of them). Link-local
+    /// got its own bucket in US-012 (2026-10-07), which moved Tailscale from 2
+    /// to 3 and the rest from 3 to 4.
+    static let bonjourPriority = 0      // *.local
+    static let lanPriority = 1          // RFC1918
+    static let linkLocalPriority = 2    // 169.254/16: LAN-class, last resort
+    static let tailscalePriority = 3    // 100.64/10, *.ts.net
+    static let remotePriority = 4       // tunnels, public hosts
+
     /// Lower number = preferred for connect (tried first). Bonjour `.local`
-    /// is fastest when reachable, then RFC1918 LAN, then Tailscale CGNAT,
-    /// then everything else. Conservative parse — anything that doesn't
-    /// look like a URL falls into the last bucket.
+    /// is fastest when reachable, then RFC1918 LAN, then link-local, then
+    /// Tailscale CGNAT, then everything else. Conservative parse — anything
+    /// that doesn't look like a URL falls into the last bucket.
+    ///
+    /// Link-local (169.254/16) used to fall through to the last bucket with
+    /// Cloudflare tunnels, so it was labelled "Remote", never counted as LAN,
+    /// and never replaced when the Mac announced its routable LAN URLs. It is
+    /// a LAN address, but the least stable one: it vanishes with the
+    /// interface that carried it (US-012).
     static func urlPriority(_ urlString: String) -> Int {
         guard let url = URL(string: urlString), let host = url.host else { return 99 }
         let h = host.lowercased()
-        if h.hasSuffix(".local") { return 0 }
+        if h.hasSuffix(".local") { return bonjourPriority }
         // RFC1918 LAN ranges — delegate to the shared NetworkClassifier so the
         // phone's LAN bucket and the Mac's isPrivateIPv4 advertise gate stay in
         // lockstep (single source of truth). `url.host` strips the port, so `h`
         // is a bare IP literal for LAN URLs.
-        if NetworkClassifier.isRFC1918IPv4(h) { return 1 }
+        if NetworkClassifier.isRFC1918IPv4(h) { return lanPriority }
+        if BonjourAddressPicker.isLinkLocalIPv4(h) { return linkLocalPriority }
         // Tailscale CGNAT (100.64.0.0/10)
         if h.hasPrefix("100.") {
             let parts = h.split(separator: ".")
             if parts.count >= 2, let second = Int(parts[1]), (64...127).contains(second) {
-                return 2
+                return tailscalePriority
             }
         }
         // Tailscale MagicDNS suffix
-        if h.hasSuffix(".ts.net") { return 2 }
-        return 3
+        if h.hasSuffix(".ts.net") { return tailscalePriority }
+        return remotePriority
     }
 
     // MARK: - Local-network switch (§ "Use Local Network")
 
-    /// True when `url` is a local-network endpoint — Bonjour `.local`
-    /// (priority 0) or an RFC1918 LAN IP (priority 1). Tailscale and tunnels
-    /// are not LAN. Drives the picker's "Use Local Network" affordance.
+    /// True when `url` is a local-network endpoint — Bonjour `.local`, an
+    /// RFC1918 LAN IP, or a link-local IP. Tailscale and tunnels are not LAN.
     static func isLANURL(_ url: URL) -> Bool {
-        urlPriority(url.absoluteString) <= 1
+        urlPriority(url.absoluteString) <= linkLocalPriority
     }
 
     /// Human label for the transport a URL rides on. Shown next to the
@@ -1072,30 +1089,38 @@ final class BackendConnectionManager {
     static func pathLabel(for url: URL?) -> String {
         guard let url else { return "—" }
         switch urlPriority(url.absoluteString) {
-        case 0, 1: return "Local network"
-        case 2:    return "Tailscale"
-        default:   return "Remote"
+        case bonjourPriority, lanPriority, linkLocalPriority: return "Local network"
+        case tailscalePriority: return "Tailscale"
+        default: return "Remote"
         }
     }
 
     /// Pure refresh of the LAN-class URLs in an existing `urlsInOrder` list
     /// against the Mac's freshly-advertised `localURLs`. The Mac's DHCP LAN IP
     /// can change between connects, so `localURLs` is treated as *current
-    /// truth*: stale LAN-class entries (`urlPriority <= 1`) are DROPPED and
-    /// replaced with the advertised set — never accumulated. Non-LAN transports
-    /// (Tailscale, tunnels) are left untouched, and the result is re-sorted
-    /// Tailscale-first so the live primary isn't disturbed. Empty `localURLs`
-    /// (older Mac that doesn't advertise) is a no-op — we never strip the only
-    /// known LAN path on the strength of silence. Pure / unit-testable.
-    static func urlsByRefreshingLocal(_ existing: [String], _ localURLs: [String]) -> [String] {
+    /// truth*: stale raw-IP LAN entries (RFC1918 and link-local) are DROPPED
+    /// and replaced with the advertised set — never accumulated. Non-LAN
+    /// transports (Tailscale, tunnels) are left untouched, and the result is
+    /// re-sorted Tailscale-first so the live primary isn't disturbed. Empty
+    /// `localURLs` (older Mac that doesn't advertise) is a no-op — we never
+    /// strip the only known LAN path on the strength of silence.
+    ///
+    /// `liveURL`, when given, is the URL the identity just arrived over: it
+    /// is proven to work right now, so it is kept even when it is a raw-IP
+    /// LAN URL the Mac did not announce (a link-local address never is). It
+    /// sorts after the announced routable URLs and is dropped by the next
+    /// identity that arrives over another path. Pure / unit-testable.
+    static func urlsByRefreshingLocal(_ existing: [String], _ localURLs: [String],
+                                      keeping liveURL: String? = nil) -> [String] {
         guard !localURLs.isEmpty else { return existing }   // silence ≠ "drop LAN"
-        // Keep every URL that isn't a raw private-IP LAN URL (urlPriority 1) and
-        // replace those with the advertised set. The Bonjour `.local` fallback
-        // (urlPriority 0) is DHCP-stable — it re-resolves after the Mac's LAN IP
+        // Keep every URL that isn't a raw-IP LAN URL (RFC1918 or link-local)
+        // and replace those with the advertised set. The Bonjour `.local`
+        // fallback is DHCP-stable — it re-resolves after the Mac's LAN IP
         // changes — so it is PRESERVED across a raw-IP refresh, never dropped.
         var all = existing.filter { u in
-            guard let url = URL(string: u) else { return true }
-            return urlPriority(url.absoluteString) != 1
+            if u == liveURL { return true }
+            let p = urlPriority(u)
+            return p != lanPriority && p != linkLocalPriority
         }
         for u in localURLs where !all.contains(u) { all.append(u) }
         let refreshed = mergedURLOrder(all)
@@ -1103,14 +1128,16 @@ final class BackendConnectionManager {
     }
 
     /// Merge LAN URLs from a peer's `device_identity` into the paired row at
-    /// `backendID`. Updates the persisted URL list only — does not touch the
-    /// live socket (fallback URLs are consumed on the next reconnect, and the
-    /// manual `switchToLANPath` triggers that explicitly). No-op when there's
-    /// nothing new to add.
-    private func ingestLocalURLs(_ localURLs: [String], into backendID: String) {
+    /// `backendID`, keeping `liveURL` (see `urlsByRefreshingLocal`). Updates
+    /// the persisted URL list only — does not touch the live socket (fallback
+    /// URLs are consumed on the next reconnect, and the manual
+    /// `switchToLANPath` triggers that explicitly). No-op when there's nothing
+    /// new to add.
+    private func ingestLocalURLs(_ localURLs: [String], into backendID: String,
+                                 keeping liveURL: String? = nil) {
         guard !localURLs.isEmpty,
               let i = paired.firstIndex(where: { $0.id == backendID }) else { return }
-        let merged = Self.urlsByRefreshingLocal(paired[i].urlsInOrder, localURLs)
+        let merged = Self.urlsByRefreshingLocal(paired[i].urlsInOrder, localURLs, keeping: liveURL)
         guard merged != paired[i].urlsInOrder else { return }
         paired[i].url = merged.first ?? paired[i].url
         paired[i].fallbackURLs = Array(merged.dropFirst())
@@ -1125,14 +1152,16 @@ final class BackendConnectionManager {
     /// the switch is tactical, matching the hot-swap contract. No-op when the
     /// session is already on its LAN URL or has no LAN URL to switch to.
     /// The LAN URL to switch a live connection onto, preferring a concrete
-    /// reachable RFC1918 IP (urlPriority 1) over a Bonjour `.local` host
-    /// (urlPriority 0). A flaky or permission-off mDNS resolver can leave
-    /// `.local` unresolvable, so an explicit "Use Local Network" tap must not
-    /// dead-end on it while a raw IP is available; `.local` is the last LAN
-    /// resort, used only when no concrete IP is known. Pure / unit-testable.
+    /// reachable RFC1918 IP over a Bonjour `.local` host. A flaky or
+    /// permission-off mDNS resolver can leave `.local` unresolvable, so an
+    /// explicit "Use Local Network" tap must not dead-end on it while a raw
+    /// IP is available; `.local` is the last LAN resort, used only when no
+    /// concrete IP is known. A link-local URL is never chosen: it is dialed
+    /// only in its place in the row's order, when nothing else answered
+    /// (US-012). Pure / unit-testable.
     static func preferredLANURL(from urls: [URL]) -> URL? {
-        urls.first(where: { urlPriority($0.absoluteString) == 1 })
-            ?? urls.first(where: { urlPriority($0.absoluteString) == 0 })
+        urls.first(where: { urlPriority($0.absoluteString) == lanPriority })
+            ?? urls.first(where: { urlPriority($0.absoluteString) == bonjourPriority })
     }
 
     func switchToLANPath(_ id: String) {
@@ -1251,9 +1280,14 @@ final class BackendConnectionManager {
 
     /// The LAN URL the active/given backend could switch to, or nil when none
     /// is known. Used by the picker to decide whether to show the switch tile.
+    /// A link-local URL is LAN-class but never offered: `switchToLANPath`
+    /// would not switch to it (see `preferredLANURL`), so the tile would do
+    /// nothing.
     func lanURL(for id: String) -> URL? {
         guard let backend = paired.first(where: { $0.id == id }) else { return nil }
-        return backend.urlsInOrder.compactMap { URL(string: $0) }.first(where: { Self.isLANURL($0) })
+        return backend.urlsInOrder.compactMap { URL(string: $0) }.first(where: {
+            Self.isLANURL($0) && Self.urlPriority($0.absoluteString) != Self.linkLocalPriority
+        })
     }
 
     /// True when the given backend's live socket is currently on a LAN URL —
@@ -1261,6 +1295,146 @@ final class BackendConnectionManager {
     func isOnLANPath(_ id: String) -> Bool {
         guard let url = sessions[id]?.client.serverURL else { return false }
         return Self.isLANURL(url)
+    }
+
+    // MARK: - Recovery from a dead address (US-012)
+
+    /// Builds the browser a rediscovery uses. Tests swap in a fake.
+    var makeRediscoveryBrowser: @MainActor () -> any MacRediscovering = { BonjourBrowser() }
+    /// How long a rediscovery browses for the Mac before it gives up.
+    var rediscoveryWindow: TimeInterval = 5
+    /// A backend is rediscovered at most once per this many seconds.
+    static let rediscoveryThrottle: TimeInterval = 30
+    private var lastRediscoveryAt: [String: Date] = [:]
+    /// Rediscoveries in a row per backend since it last authenticated. Only
+    /// the first and every 20th are logged, so a Mac that is simply off for
+    /// a night does not fill the phone log's offline buffer.
+    private var rediscoveryStreak: [String: Int] = [:]
+
+    nonisolated static func mayRediscover(lastAt: Date?, now: Date) -> Bool {
+        guard let lastAt else { return true }
+        return now.timeIntervalSince(lastAt) >= rediscoveryThrottle
+    }
+
+    /// The host Bonjour found for the Mac with `deviceID` (TXT `did`), a
+    /// routable address before a link-local one.
+    static func bestHost(for deviceID: String, in hosts: [DiscoveredHost]) -> DiscoveredHost? {
+        let mine = hosts.filter { $0.deviceID == deviceID }
+        return mine.first(where: { !BonjourAddressPicker.isLinkLocalIPv4($0.host) }) ?? mine.first
+    }
+
+    /// The URL list a finished rediscovery should dial, preferred URL first,
+    /// or nil when it learned nothing the client is not already cycling
+    /// through (the client then keeps retrying on its own). The preferred URL
+    /// is the address Bonjour just resolved for this Mac, else the row's LAN
+    /// URL (`preferredLANURL`), else the row's own order. Pure /
+    /// unit-testable.
+    static func rediscoveryDialList(rowURLs: [URL], clientURLs: [URL],
+                                    discovered: URL?) -> [URL]? {
+        let found = discovered.flatMap { rowURLs.contains($0) ? $0 : nil }
+        let learnedSomething = rowURLs != clientURLs || (found != nil && found != clientURLs.first)
+        guard learnedSomething, !rowURLs.isEmpty else { return nil }
+        var list = rowURLs
+        if let preferred = found ?? preferredLANURL(from: rowURLs) {
+            list.removeAll { $0 == preferred }
+            list.insert(preferred, at: 0)
+        }
+        return list
+    }
+
+    /// Every URL in `session`'s list failed and its client wrapped back to the
+    /// first. Browse Bonjour for this Mac for up to `rediscoveryWindow`, fold
+    /// the address it advertises into the row, then reconnect on the row's
+    /// current URLs — which also picks up announced LAN URLs the client's
+    /// older list lacked — preferring that fresh address, or the row's LAN
+    /// URL. At most once per `rediscoveryThrottle` per backend. Returns the
+    /// browse task (tests await it), or nil when throttled or not applicable.
+    @discardableResult
+    func rediscover(after session: BackendSession, now: Date = Date()) -> Task<Void, Never>? {
+        let id = session.backendID
+        guard let entry = paired.first(where: { $0.id == id }), entry.enabled,
+              Self.mayRediscover(lastAt: lastRediscoveryAt[id], now: now) else { return nil }
+        lastRediscoveryAt[id] = now
+        let streak = (rediscoveryStreak[id] ?? 0) + 1
+        rediscoveryStreak[id] = streak
+        let loud = streak == 1 || streak % 20 == 0
+        if loud {
+            PhoneLog.log("ws rediscovery start backend=\(id.prefix(8)) urls=\(entry.urlsInOrder.count) streak=\(streak)")
+        }
+        let browser = makeRediscoveryBrowser()
+        browser.startBrowsing()
+        let window = rediscoveryWindow
+        return Task { [weak self, weak session] in
+            let deadline = Date().addingTimeInterval(window)
+            var found = Self.bestHost(for: id, in: browser.discoveredHosts)
+            while found.map({ BonjourAddressPicker.isLinkLocalIPv4($0.host) }) ?? true, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                found = Self.bestHost(for: id, in: browser.discoveredHosts)
+            }
+            browser.stopBrowsing()
+            guard let self, let session else { return }
+            self.finishRediscovery(session: session, found: found, loud: loud)
+        }
+    }
+
+    private func finishRediscovery(session: BackendSession, found: DiscoveredHost?, loud: Bool) {
+        guard let id = survivingBackendID(for: session.backendID),
+              let live = sessions[id] else { return }
+        if let found, let url = found.wsURL?.absoluteString {
+            ingestDiscoveredHost(deviceID: found.deviceID, url: url)
+        }
+        let foundLabel = found.map { $0.host } ?? "none"
+        guard let i = paired.firstIndex(where: { $0.id == id }), paired[i].enabled else { return }
+        guard !live.client.isAuthenticated else {
+            if loud { PhoneLog.log("ws rediscovery backend=\(id.prefix(8)) found=\(foundLabel) — already reconnected") }
+            return
+        }
+        let rowURLs = urlList(for: paired[i])
+        guard let list = Self.rediscoveryDialList(rowURLs: rowURLs, clientURLs: live.client.failover.urls,
+                                                  discovered: found?.wsURL) else {
+            if loud { PhoneLog.log("ws rediscovery backend=\(id.prefix(8)) found=\(foundLabel) — nothing new, client keeps retrying") }
+            return
+        }
+        if loud {
+            PhoneLog.log("ws rediscovery backend=\(id.prefix(8)) found=\(foundLabel) urls=\(list.count) dialing=\(list[0].host ?? "?")")
+        }
+        reconnect(session: live, entry: paired[i], preferring: list[0])
+    }
+
+    /// The backend authenticated: end its rediscovery streak, saying so when
+    /// a rediscovery had been needed.
+    private func noteRecovered(_ id: String) {
+        guard let streak = rediscoveryStreak.removeValue(forKey: id) else { return }
+        PhoneLog.log("ws recovered backend=\(id.prefix(8)) after \(streak) rediscovery(s)")
+    }
+
+    /// Backends whose socket is up right now, authenticated or not. A paired
+    /// Mac in this set is not offered again in the connect bar's Bonjour list.
+    var connectedBackendIDs: Set<String> {
+        Set(sessions.compactMap { $0.value.client.isConnected ? $0.key : nil })
+    }
+
+    /// The user tapped a Bonjour-discovered Mac. When it is a paired Mac (TXT
+    /// `did` matches a row): fold the tapped address into that row, make the
+    /// row active and enabled, and reconnect it preferring that address,
+    /// instead of creating a second row for the same Mac; returns true. A Mac
+    /// with no row returns false, so the caller pairs it as new.
+    @discardableResult
+    func reconnectToDiscoveredHost(deviceID: String?, url: URL) -> Bool {
+        guard let deviceID, paired.contains(where: { $0.id == deviceID }) else { return false }
+        ingestDiscoveredHost(deviceID: deviceID, url: url.absoluteString)
+        guard let i = paired.firstIndex(where: { $0.id == deviceID }) else { return false }
+        ensureSession(for: deviceID)
+        guard let session = sessions[deviceID] else { return false }
+        paired[i].enabled = true
+        paired[i].lastUsed = Date()
+        let becameActive = activeBackendID != deviceID
+        activeBackendID = deviceID
+        savePaired()
+        if becameActive { rebindProbeService() }
+        PhoneLog.log("bonjour tap backend=\(deviceID.prefix(8)) reconnecting on the discovered address")
+        reconnect(session: session, entry: paired[i], preferring: url)
+        return true
     }
 
     // MARK: - Internals
@@ -1437,6 +1611,7 @@ final class BackendConnectionManager {
             guard let self, let session else { return }
             if success {
                 session.reachability = .connected
+                self.noteRecovered(session.backendID)
                 // Re-announce our currently-selected window so the Mac's
                 // `clientSelectedWindowId` lines up with what the phone is
                 // actually showing. After a Mac restart (or any phone
@@ -1462,15 +1637,24 @@ final class BackendConnectionManager {
         c.onDeviceIdentity = { [weak self, weak session] identity in
             guard let self, let session else { return }
 
+            // Count only: whether the Mac announced its LAN URLs at all is
+            // what tells "the Mac sent none" apart from "the phone dropped
+            // them in a merge" when a row ends up with only a dead address
+            // (US-012, open question 6).
+            PhoneLog.log("device_identity localURLs=\(identity.localURLs?.count ?? 0)")
+
             // Learn the Mac's LAN URL(s) from its identity so a "Use Local
             // Network" switch is possible even when this phone only ever
             // paired over Tailscale. Done BEFORE the rekey/merge branches so
             // the new fallback URLs ride along when the row is rekeyed or
             // folded into an existing same-Mac row. Keyed on the session's
             // current id (synthetic pre-rekey, real post-rekey) — whichever
-            // row this path owns right now.
+            // row this path owns right now. The URL this identity arrived
+            // over is kept: a row whose only URL is link-local gets the
+            // announced routable URLs ahead of it, not instead of it.
+            let liveURL = session.client.serverURL?.absoluteString
             if let localURLs = identity.localURLs, !localURLs.isEmpty {
-                self.ingestLocalURLs(localURLs, into: session.backendID)
+                self.ingestLocalURLs(localURLs, into: session.backendID, keeping: liveURL)
             }
 
             // Break the dual-path flap: fold any stuck same-Mac duplicate row
@@ -1540,6 +1724,11 @@ final class BackendConnectionManager {
                 KeychainBackendPINs.carryOver(from: oldID, to: identity.deviceID, preferOld: true)
                 self.noteSurvivor(of: oldID, is: identity.deviceID)
                 if self.activeBackendID == oldID { self.activeBackendID = identity.deviceID }
+                // The announced URLs reached the keeper through the union
+                // above; refresh the keeper's own stale LAN entries as well.
+                if let localURLs = identity.localURLs, !localURLs.isEmpty {
+                    self.ingestLocalURLs(localURLs, into: identity.deviceID, keeping: liveURL)
+                }
                 self.savePaired()
                 // The keeper (id == deviceID) is now canonical — fold any other
                 // stuck same-Mac rows into it.
@@ -1608,6 +1797,13 @@ final class BackendConnectionManager {
         c.onTranscriptResult = { [weak self, weak session] sid, text, error in
             guard let self, let session else { return }
             self.onTranscriptResult?(session, sid, text, error)
+        }
+
+        // Every URL failed and the client wrapped to the first: look for the
+        // Mac again before redialing a dead address (US-012).
+        c.onURLListExhausted = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.rediscover(after: session)
         }
 
         // image_upload_ack and image_upload_error were dropped from the

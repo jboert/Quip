@@ -19,9 +19,40 @@ struct DiscoveredHost: Identifiable, Equatable {
     }
 }
 
+/// Which discovered Macs the connect bar offers (PRD 2026-10-07, US-012).
+///
+/// A Mac whose TXT `did` matches a paired row used to be hidden outright, on
+/// the assumption that `ingestDiscoveredHost` had folded its address into
+/// that row. When the row's own URLs were dead, that left nothing to tap:
+/// the only one-tap option redialed the dead address. A paired Mac is now
+/// listed whenever its row is not connected, so there is always a way back
+/// in; a paired Mac that is connected stays hidden, since its row already
+/// works. Pure / unit-testable.
+enum DiscoveredHostFilter {
+    static func visible(hosts: [DiscoveredHost],
+                        paired: [PairedBackend],
+                        connectedBackendIDs: Set<String>) -> [DiscoveredHost] {
+        hosts.filter { host in
+            guard let did = host.deviceID,
+                  paired.contains(where: { $0.id == did }) else { return true }  // a new Mac
+            return !connectedBackendIDs.contains(did)
+        }
+    }
+}
+
+/// The part of a Bonjour browse that `BackendConnectionManager` uses to find
+/// a Mac again after all of its saved URLs stopped answering (US-012).
+/// `BonjourBrowser` is the real one; tests pass a fake.
+@MainActor
+protocol MacRediscovering: AnyObject {
+    var discoveredHosts: [DiscoveredHost] { get }
+    func startBrowsing()
+    func stopBrowsing()
+}
+
 @Observable
 @MainActor
-final class BonjourBrowser {
+final class BonjourBrowser: MacRediscovering {
 
     private(set) var discoveredHosts: [DiscoveredHost] = []
     private(set) var isSearching = false
@@ -50,6 +81,40 @@ final class BonjourBrowser {
         captured == current && isSearching
     }
 
+    /// Two discovered rows describe the same Mac when both carry a TXT
+    /// deviceID and it matches, or, when either has none (an older Mac, or
+    /// the TXT record not read yet), when the Bonjour service name matches.
+    /// Bonjour keeps service names unique on a link.
+    static func sameService(_ a: DiscoveredHost, _ b: DiscoveredHost) -> Bool {
+        if let da = a.deviceID, let db = b.deviceID { return da == db }
+        return a.name == b.name
+    }
+
+    /// `hosts` with `host` folded in. A row for the same Mac at a different
+    /// address is replaced, so an address resolved later takes the earlier
+    /// row's place instead of sitting next to it as a second row for one Mac:
+    /// the browser used to dedupe on host + port, which listed a Mac's
+    /// link-local and LAN addresses as two Macs. A routable address is never
+    /// replaced by a link-local one, and a repeat of the same address keeps
+    /// the existing row (only learning a deviceID it lacked). Pure /
+    /// unit-testable.
+    static func merging(_ hosts: [DiscoveredHost], with host: DiscoveredHost) -> [DiscoveredHost] {
+        var out = hosts
+        guard let i = out.firstIndex(where: { sameService($0, host) }) else {
+            out.append(host)
+            return out
+        }
+        let sameAddress = out[i].host == host.host && out[i].port == host.port
+        let wouldDowngrade = !BonjourAddressPicker.isLinkLocalIPv4(out[i].host)
+            && BonjourAddressPicker.isLinkLocalIPv4(host.host)
+        if sameAddress || wouldDowngrade {
+            if out[i].deviceID == nil, let did = host.deviceID { out[i].deviceID = did }
+        } else {
+            out[i] = host
+        }
+        return out
+    }
+
     func startBrowsing() {
         guard !isSearching else { return }
         discoveredHosts = []
@@ -60,9 +125,8 @@ final class BonjourBrowser {
         let del = BonjourDelegate { [weak self] host in
             Task { @MainActor in
                 guard let self else { return }
-                if !self.discoveredHosts.contains(where: { $0.host == host.host && $0.port == host.port }) {
-                    self.discoveredHosts.append(host)
-                }
+                let merged = Self.merging(self.discoveredHosts, with: host)
+                if merged != self.discoveredHosts { self.discoveredHosts = merged }
             }
         } onRemove: { [weak self] name in
             Task { @MainActor in
@@ -94,13 +158,28 @@ final class BonjourBrowser {
     }
 }
 
-// Non-isolated delegate that handles NetService callbacks
+// Non-isolated delegate that handles NetService callbacks. NetService delivers
+// them on the run loop that started the browse and the resolve, the main one
+// (`startBrowsing` is main-actor), so the held-pick bookkeeping below is only
+// touched on the main thread.
 private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     private let browser = NetServiceBrowser()
     private var resolvingServices: [NetService] = []
     private let onDiscover: (DiscoveredHost) -> Void
     private let onRemove: (String) -> Void
     private let serviceType = "_quip._tcp."
+
+    /// How long a link-local pick waits for a routable address from a later
+    /// `netServiceDidResolveAddress` before it is offered anyway. The resolve
+    /// stopping releases it sooner.
+    static let linkLocalHoldSeconds: TimeInterval = 1.0
+
+    /// Link-local picks waiting out `linkLocalHoldSeconds`, by service name.
+    /// `netServiceDidResolveAddress` can fire more than once per resolve as
+    /// addresses arrive; the old code offered the link-local fallback at the
+    /// end of the first callback, so a routable address in a later one came
+    /// too late to win (US-012).
+    private var heldLinkLocal: [String: (host: DiscoveredHost, release: DispatchWorkItem)] = [:]
 
     init(onDiscover: @escaping (DiscoveredHost) -> Void, onRemove: @escaping (String) -> Void) {
         self.onDiscover = onDiscover
@@ -116,6 +195,8 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
     func stop() {
         browser.stop()
         resolvingServices.removeAll()
+        for held in heldLinkLocal.values { held.release.cancel() }
+        heldLinkLocal.removeAll()
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
@@ -126,6 +207,7 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        heldLinkLocal.removeValue(forKey: service.name)?.release.cancel()
         onRemove(service.name)
         resolvingServices.removeAll { $0 === service }
     }
@@ -139,46 +221,50 @@ private class BonjourDelegate: NSObject, NetServiceBrowserDelegate, NetServiceDe
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
-        guard let addresses = sender.addresses else { return }
-        let port = sender.port
-        let did = deviceID(from: sender)
-
-        var linkLocalFallback: String?
-
-        for data in addresses {
-            var addr = sockaddr()
-            (data as NSData).getBytes(&addr, length: MemoryLayout<sockaddr>.size)
-
-            if addr.sa_family == UInt8(AF_INET) {
-                var addr4 = sockaddr_in()
-                (data as NSData).getBytes(&addr4, length: MemoryLayout<sockaddr_in>.size)
-                let ip = String(cString: inet_ntoa(addr4.sin_addr))
-                if ip.hasPrefix("127.") {
-                    print("[BonjourBrowser] Skipping loopback address: \(ip)")
-                    continue
-                }
-                // Prefer real LAN IPs over link-local (169.254.x.x) — the USB
-                // interface's link-local address often resets mid-handshake.
-                // Keep it as a fallback in case there's no LAN IP at all.
-                if ip.hasPrefix("169.254.") {
-                    print("[BonjourBrowser] Deferring link-local address: \(ip)")
-                    if linkLocalFallback == nil { linkLocalFallback = ip }
-                    continue
-                }
-                print("[BonjourBrowser] Resolved: \(sender.name) -> \(ip):\(port) did=\(did?.prefix(8) ?? "nil")")
-                onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port, deviceID: did))
-                return
-            }
+        let ipv4 = BonjourAddressPicker.ipv4Strings(from: sender.addresses ?? [])
+        guard let ip = BonjourAddressPicker.pick(ipv4) else {
+            print("[BonjourBrowser] \(sender.name): no usable IPv4 yet (\(ipv4.count) IPv4 address(es))")
+            return
         }
-
-        // No real LAN IP found — use link-local as last resort
-        if let ip = linkLocalFallback {
-            print("[BonjourBrowser] Resolved (link-local fallback): \(sender.name) -> \(ip):\(port)")
-            onDiscover(DiscoveredHost(name: sender.name, host: ip, port: port, deviceID: did))
+        let host = DiscoveredHost(name: sender.name, host: ip, port: sender.port,
+                                  deviceID: deviceID(from: sender))
+        guard BonjourAddressPicker.isLinkLocalIPv4(ip) else {
+            // A routable address wins at once, over any link-local pick still
+            // being held for this service.
+            heldLinkLocal.removeValue(forKey: sender.name)?.release.cancel()
+            print("[BonjourBrowser] Resolved: \(sender.name) -> \(ip):\(sender.port) did=\(host.deviceID?.prefix(8) ?? "nil")")
+            onDiscover(host)
+            return
         }
+        // Link-local only, so far. Hold it so a routable address from a later
+        // callback can win; the first hold's timer stands, a repeat callback
+        // only refreshes what will be offered.
+        if let held = heldLinkLocal[sender.name] {
+            heldLinkLocal[sender.name] = (host, held.release)
+            return
+        }
+        print("[BonjourBrowser] \(sender.name): only link-local \(ip) so far — holding \(Self.linkLocalHoldSeconds)s for a routable address")
+        let name = sender.name
+        let release = DispatchWorkItem { [weak self] in self?.releaseHeld(name) }
+        heldLinkLocal[name] = (host, release)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.linkLocalHoldSeconds, execute: release)
+    }
+
+    /// The resolve is over (timed out, or stopped): a held link-local pick
+    /// is the best this service will get, so offer it now.
+    func netServiceDidStop(_ sender: NetService) {
+        releaseHeld(sender.name)
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
         print("[BonjourBrowser] Failed to resolve \(sender.name): \(errorDict)")
+        releaseHeld(sender.name)
+    }
+
+    private func releaseHeld(_ name: String) {
+        guard let held = heldLinkLocal.removeValue(forKey: name) else { return }
+        held.release.cancel()
+        print("[BonjourBrowser] Resolved (link-local fallback): \(name) -> \(held.host.host):\(held.host.port)")
+        onDiscover(held.host)
     }
 }

@@ -2466,7 +2466,12 @@ struct MainiOSView: View {
                     ForEach(newDiscoveredHosts) { host in
                         Button {
                             if let url = host.wsURL {
-                                connectToBackendURL(url)
+                                // A Mac that already has a row reconnects that
+                                // row on this address instead of becoming a
+                                // second row (US-012).
+                                if !manager.reconnectToDiscoveredHost(deviceID: host.deviceID, url: url) {
+                                    connectToBackendURL(url)
+                                }
                                 addToRecents(url.absoluteString)
                             }
                         } label: {
@@ -4956,15 +4961,16 @@ struct MainiOSView: View {
 
     // MARK: - Recent Connections
 
-    /// Discovered Bonjour hosts we don't already have a paired row for — the
-    /// only ones worth offering as a NEW connection. A host whose TXT deviceID
-    /// matches a paired row is folded into that row (see the .onChange above)
-    /// and hidden here, so a known Mac never shows up as a second backend.
+    /// Discovered Bonjour hosts worth offering: Macs with no paired row, and
+    /// paired Macs whose row is not connected right now (US-012), so a Mac
+    /// Bonjour can see is always one tap away even when its row's saved URLs
+    /// are dead. A host whose TXT deviceID matches a paired row is also
+    /// folded into that row (see the .onChange above), and tapping it
+    /// reconnects that row rather than adding a second backend.
     private var newDiscoveredHosts: [DiscoveredHost] {
-        bonjourBrowser.discoveredHosts.filter { host in
-            guard let did = host.deviceID else { return true }   // unknown Mac → offer it
-            return !manager.paired.contains { $0.id == did }
-        }
+        DiscoveredHostFilter.visible(hosts: bonjourBrowser.discoveredHosts,
+                                     paired: manager.paired,
+                                     connectedBackendIDs: manager.connectedBackendIDs)
     }
 
     private func loadRecents() {

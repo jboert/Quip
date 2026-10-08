@@ -10,28 +10,31 @@ import XCTest
 @MainActor
 final class BackendConnectionManagerURLMergeTests: XCTestCase {
 
+    // Buckets renumbered on purpose in US-012 (2026-10-07): link-local got
+    // bucket 2, which moved Tailscale to 3 and everything else to 4.
     private let bonjour = "ws://quip-mac.local:8765"     // urlPriority 0
     private let lan     = "ws://192.168.4.26:8765"       // urlPriority 1
-    private let ts      = "ws://100.120.141.122:8765"    // urlPriority 2 (Tailscale CGNAT)
-    private let tsDNS   = "wss://mac.tail1234.ts.net"    // urlPriority 2 (Tailscale MagicDNS)
-    private let other   = "wss://abc.trycloudflare.com"  // urlPriority 3
+    private let ts      = "ws://100.120.141.122:8765"    // urlPriority 3 (Tailscale CGNAT)
+    private let tsDNS   = "wss://mac.tail1234.ts.net"    // urlPriority 3 (Tailscale MagicDNS)
+    private let other   = "wss://abc.trycloudflare.com"  // urlPriority 4
 
     // MARK: - urlPriority buckets
 
     func testURLPriorityBuckets() {
         XCTAssertEqual(BackendConnectionManager.urlPriority(bonjour), 0)
         XCTAssertEqual(BackendConnectionManager.urlPriority(lan), 1)
-        XCTAssertEqual(BackendConnectionManager.urlPriority(ts), 2)
-        XCTAssertEqual(BackendConnectionManager.urlPriority(tsDNS), 2)
-        XCTAssertEqual(BackendConnectionManager.urlPriority(other), 3)
+        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://169.254.1.2:8765"), 2)
+        XCTAssertEqual(BackendConnectionManager.urlPriority(ts), 3)
+        XCTAssertEqual(BackendConnectionManager.urlPriority(tsDNS), 3)
+        XCTAssertEqual(BackendConnectionManager.urlPriority(other), 4)
     }
 
     func testURLPriorityRFC1918Boundaries() {
         XCTAssertEqual(BackendConnectionManager.urlPriority("ws://10.0.0.5:8765"), 1)
         XCTAssertEqual(BackendConnectionManager.urlPriority("ws://172.16.0.1:8765"), 1)
         XCTAssertEqual(BackendConnectionManager.urlPriority("ws://172.31.255.1:8765"), 1)
-        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://172.32.0.1:8765"), 3) // just outside 16-31
-        XCTAssertEqual(BackendConnectionManager.urlPriority("wss://relay.example.com:443"), 3) // parseable, non-RFC1918/Tailscale
+        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://172.32.0.1:8765"), 4) // just outside 16-31
+        XCTAssertEqual(BackendConnectionManager.urlPriority("wss://relay.example.com:443"), 4) // parseable, non-RFC1918/Tailscale
         XCTAssertEqual(BackendConnectionManager.urlPriority("not a url"), 99) // unparseable → conservative last bucket
     }
 
@@ -55,7 +58,7 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
         XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("quip-mac.local"))
         // urlPriority == 1 iff the host is RFC1918 per the shared classifier.
         XCTAssertEqual(BackendConnectionManager.urlPriority("ws://192.168.4.26:8765"), 1)
-        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://100.120.141.122:8765"), 2)
+        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://100.120.141.122:8765"), 3)
     }
 
     // MARK: - mergedURLOrder (Tailscale-first contract)

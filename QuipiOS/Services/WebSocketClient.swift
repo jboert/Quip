@@ -210,6 +210,75 @@ final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
     }
 }
 
+/// The client's place in its URL list, and the rule for leaving a URL
+/// (PRD 2026-10-07, US-012). A value type so the rule is unit-testable
+/// without a socket.
+///
+/// A URL is abandoned for the next one when it has not authenticated since
+/// it became current (the first failure moves on, as before), when it has
+/// failed twice in a row since it last authenticated, or at once on an
+/// address-class error. Before this, a URL that had authenticated once was
+/// retried forever: the 2026-10-07 QA pass redialed a vanished link-local
+/// address for over two minutes while the Mac answered on its LAN address.
+/// Leaving the last URL wraps to the first, which means every URL failed.
+struct URLFailoverCursor: Equatable {
+    private(set) var urls: [URL] = []
+    private(set) var index = 0
+    /// The current URL authenticated since it became current.
+    private(set) var authenticatedOnCurrent = false
+    /// Failed attempts on the current URL since it last authenticated (or
+    /// became current). A drop of a working connection counts as one.
+    private(set) var failuresOnCurrent = 0
+
+    enum Step: Equatable {
+        /// Keep the current URL; retry it after the backoff.
+        case retry
+        /// Moved on to the next URL; dial it now.
+        case advanced
+        /// Every URL failed and the cursor is back on the first; dial it
+        /// after the backoff.
+        case wrapped
+    }
+
+    init(urls: [URL] = []) {
+        self.urls = urls
+    }
+
+    var current: URL? { urls.indices.contains(index) ? urls[index] : nil }
+    var hasFallback: Bool { index + 1 < urls.count }
+
+    mutating func noteAuthenticated() {
+        authenticatedOnCurrent = true
+        failuresOnCurrent = 0
+    }
+
+    /// Back to the primary for the next dial (a network path change). Keeps
+    /// `authenticatedOnCurrent`, so a rewound primary gets a retry before it
+    /// is given up on. Returns false when already there.
+    @discardableResult
+    mutating func rewindToPrimary() -> Bool {
+        guard !urls.isEmpty, index != 0 else { return false }
+        index = 0
+        failuresOnCurrent = 0
+        return true
+    }
+
+    mutating func noteFailure(addressClassError: Bool) -> Step {
+        guard !urls.isEmpty else { return .retry }
+        failuresOnCurrent += 1
+        let abandon = !authenticatedOnCurrent || failuresOnCurrent >= 2 || addressClassError
+        guard abandon else { return .retry }
+        authenticatedOnCurrent = false
+        failuresOnCurrent = 0
+        if index + 1 < urls.count {
+            index += 1
+            return .advanced
+        }
+        index = 0
+        return .wrapped
+    }
+}
+
 @Observable
 @MainActor
 final class WebSocketClient {
@@ -294,6 +363,11 @@ final class WebSocketClient {
     /// Mac confirms a VibeCut prompt sync completed (with the synced/skipped
     /// counts), or reports why it could not run.
     var onSyncVibeCutAck: ((SyncVibeCutAckMessage) -> Void)?
+    /// Every URL in the list failed and the client wrapped back to the first.
+    /// Fires once per exhausted pass, before the first URL is dialed again,
+    /// so the connection manager can re-run Bonjour and rebuild the list from
+    /// the Mac's announced URLs instead of redialing a dead address (US-012).
+    var onURLListExhausted: (() -> Void)?
     /// Cached catalog from the Mac — published so SwiftUI views can
     /// observe directly (avoids piping through host state).
     var promptLibrary: [PromptEntry] = []
@@ -306,12 +380,14 @@ final class WebSocketClient {
     private var pinningDelegate: CloudflareCertificatePinningDelegate?
     private var intentionalDisconnect = false
     /// Full URL list for the current pairing — primary at index 0,
-    /// fallbacks after. Used by the auto-fallback flow: on connect
-    /// failure or auth-timeout, the client advances to the next URL
-    /// in this list and re-establishes. Reset to index 0 on every
-    /// fresh connect call and on NWPathMonitor path-change.
-    private var connectURLs: [URL] = []
-    private var currentURLIndex: Int = 0
+    /// fallbacks after — and the position in it. On a failure the cursor
+    /// decides whether to retry the URL, move to the next one, or wrap to the
+    /// first (see `URLFailoverCursor`). Reset on every fresh connect call;
+    /// rewound to the primary on an NWPathMonitor path change. Internal, not
+    /// private, so tests can place it without dialing; production code moves
+    /// it only through connect, `handleDisconnect`, `resetToPrimaryURL` and
+    /// auth success.
+    var failover = URLFailoverCursor()
     private var reconnectDelay: TimeInterval = 1.0
     private var reconnectTask: Task<Void, Never>?
     private var connectionTimeoutTask: Task<Void, Never>?
@@ -634,9 +710,7 @@ final class WebSocketClient {
     func connect(toURLs urls: [URL]) {
         guard let first = urls.first else { return }
         intentionalDisconnect = false
-        connectURLs = urls
-        currentURLIndex = 0
-        hasEverConnectedOnCurrentURL = false
+        failover = URLFailoverCursor(urls: urls)
         serverURL = first
         reconnectDelay = 1.0
         lastError = nil
@@ -652,26 +726,42 @@ final class WebSocketClient {
     /// `NWPathMonitor` path-change — after a Wi-Fi join/leave the LAN
     /// URL may have become reachable again and we want to prefer it.
     func resetToPrimaryURL() {
-        guard !connectURLs.isEmpty, currentURLIndex != 0 else { return }
-        currentURLIndex = 0
-        if let first = connectURLs.first { serverURL = first }
+        guard failover.rewindToPrimary() else { return }
+        if let first = failover.current { serverURL = first }
         logEvent("resetToPrimaryURL: rewound to index 0")
     }
 
-    /// Advance to the next URL in `connectURLs`. Returns true if there
-    /// was a next URL to advance to (caller should retry connect),
-    /// false if we exhausted the list (caller falls back to standard
-    /// reconnect-with-backoff on the current URL).
-    @discardableResult
-    private func advanceToNextURL() -> Bool {
-        let nextIndex = currentURLIndex + 1
-        guard nextIndex < connectURLs.count else { return false }
-        currentURLIndex = nextIndex
-        hasEverConnectedOnCurrentURL = false
-        serverURL = connectURLs[nextIndex]
-        connectionMetrics.recordFailover()
-        logEvent("advanceToNextURL: trying [\(nextIndex)] \(connectURLs[nextIndex].absoluteString)")
-        return true
+    /// POSIX errnos meaning the address itself is unusable, not just slow:
+    /// 49 EADDRNOTAVAIL (the local address vanished with its interface),
+    /// 50 ENETDOWN, 51 ENETUNREACH, 65 EHOSTUNREACH. One of these abandons a
+    /// URL at once instead of after two failures (US-012). iOS reports its
+    /// own errno, which can differ from what the Mac logged for the same
+    /// outage.
+    nonisolated static let addressClassPOSIXCodes: Set<Int> = [49, 50, 51, 65]
+
+    /// The POSIX errno behind a socket error, wherever it was put: an
+    /// `NSPOSIXErrorDomain` error (what a dropped established socket
+    /// reports), a Network.framework `NWError.posix`, CFNetwork's stream
+    /// error keys, or an underlying error. nil when there is none: a dial
+    /// URLSession could not complete reports only `NSURLErrorDomain` -1004.
+    nonisolated static func posixCode(of error: Error?) -> Int? {
+        guard let error else { return nil }
+        if let nw = error as? NWError, case .posix(let code) = nw { return Int(code.rawValue) }
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain { return ns.code }
+        if (ns.userInfo["_kCFStreamErrorDomainKey"] as? Int) == 1,
+           let code = ns.userInfo["_kCFStreamErrorCodeKey"] as? Int {
+            return code
+        }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+            return posixCode(of: underlying)
+        }
+        return nil
+    }
+
+    nonisolated static func isAddressClassError(_ error: Error?) -> Bool {
+        guard let code = posixCode(of: error) else { return false }
+        return addressClassPOSIXCodes.contains(code)
     }
 
     func disconnect() {
@@ -989,7 +1079,7 @@ final class WebSocketClient {
         // (no fallback left) keep the full 8s so a slow-but-reachable tunnel
         // link still gets a fair chance. A reachable LAN/tunnel handshake +
         // ping completes well under 4s, so this only trims the dead-primary case.
-        let hasFallbackURL = currentURLIndex + 1 < connectURLs.count
+        let hasFallbackURL = failover.hasFallback
         let connectTimeoutNs: UInt64 = hasFallbackURL ? 4_000_000_000 : 8_000_000_000
         connectionTimeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: connectTimeoutNs)
@@ -1009,6 +1099,11 @@ final class WebSocketClient {
         task.sendPing { [weak self] error in
             guard let self else { return }
             DispatchQueue.main.async {
+                // A socket this client already replaced or tore down still
+                // answers its pending ping, with NSURLErrorCancelled. Acting
+                // on that cancelled the NEXT attempt's timeout and sent it
+                // through handleDisconnect, which now also counts failures.
+                guard self.webSocketTask === task else { return }
                 self.connectionTimeoutTask?.cancel()
                 self.connectionTimeoutTask = nil
 
@@ -1017,7 +1112,7 @@ final class WebSocketClient {
                     let reason: DisconnectReason = .networkError(error.localizedDescription)
                     self.lastDisconnectReason = reason
                     self.lastError = reason.label
-                    self.handleDisconnect()
+                    self.handleDisconnect(error: error)
                 } else {
                     self.logEvent("connected, awaiting authentication")
                     self.isConnected = true
@@ -1027,12 +1122,12 @@ final class WebSocketClient {
                     self.lastError = nil
                     self.lastDisconnectReason = nil
                     self.reconnectDelay = 1.0
-                    // Do NOT mark hasEverConnectedOnCurrentURL here: the
-                    // transport is up but UNauthenticated. Marking it now would
-                    // suppress the multi-URL failover (see connect(toURLs:) /
-                    // the `!hasEverConnectedOnCurrentURL` guard) and strand us
-                    // on a path that opens but never returns auth_result. It is
-                    // set on auth_result success instead.
+                    // Do NOT mark the URL authenticated here (failover
+                    // .noteAuthenticated): the transport is up but
+                    // UNauthenticated. Marking it now would delay the multi-URL
+                    // failover (see URLFailoverCursor) on a path that opens but
+                    // never returns auth_result. It is set on auth_result
+                    // success instead.
                     self.startKeepalive()
                     self.startAuthTimeout()
                     // Don't send auth eagerly — wait for the server's first
@@ -1053,7 +1148,17 @@ final class WebSocketClient {
 
     private func receiveNext() {
         guard let task = webSocketTask else { return }
+        receive(on: task)
+    }
 
+    /// One receive on `task`, re-armed on that same task after each message.
+    /// Bound to the task rather than to whatever `webSocketTask` is by the
+    /// time it completes: a socket that was replaced or torn down still
+    /// completes its pending receive (with NSURLErrorCancelled), and that late
+    /// failure used to reach handleDisconnect and tear down the attempt that
+    /// had replaced it — after a manager reconnect, often skipping straight
+    /// past the URL it meant to prefer.
+    private func receive(on task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
             guard let self else { return }
 
@@ -1071,6 +1176,7 @@ final class WebSocketClient {
 
                 if !data.isEmpty {
                     DispatchQueue.main.async {
+                        guard self.webSocketTask === task else { return }
                         // Mark connected on first successful message if ping hasn't fired yet
                         if !self.isConnected {
                             self.isConnected = true
@@ -1087,12 +1193,15 @@ final class WebSocketClient {
                     }
                 }
 
-                // Continue receiving
-                self.receiveNext()
+                // Continue receiving on this socket; its failure ends the loop.
+                self.receive(on: task)
 
             case .failure(let error):
                 NSLog("[WebSocketClient] Receive error: %@", error.localizedDescription)
                 DispatchQueue.main.async {
+                    // A replaced socket's late failure is not this
+                    // connection's (see the comment on this function).
+                    guard self.webSocketTask === task else { return }
                     // Receive errors land here on socket close (normal or
                     // abnormal). URLSession surfaces "Software caused
                     // connection abort" on a server-side close, "The
@@ -1104,7 +1213,7 @@ final class WebSocketClient {
                         self.lastDisconnectReason = reason
                         self.lastError = reason.label
                     }
-                    self.handleDisconnect()
+                    self.handleDisconnect(error: error)
                 }
             }
         }
@@ -1170,9 +1279,10 @@ final class WebSocketClient {
                 if msg.success {
                     isAuthenticated = true
                     // Only now is this URL proven fully usable — mark it so the
-                    // multi-URL failover stops treating it as a candidate to
-                    // abandon. (Set here, NOT on ping-success — see startAuthTimeout.)
-                    hasEverConnectedOnCurrentURL = true
+                    // multi-URL failover gives it a retry before abandoning it,
+                    // and clear its failure count. (Set here, NOT on
+                    // ping-success — see startAuthTimeout.)
+                    failover.noteAuthenticated()
                     if let started = connectStartedAt {
                         connectionMetrics.recordAuthSuccess(
                             timeToAuthMs: Int(Date().timeIntervalSince(started) * 1000))
@@ -1442,7 +1552,11 @@ final class WebSocketClient {
         }
     }
 
-    private func handleDisconnect() {
+    /// One failed attempt (or a dropped connection) on the current URL.
+    /// `error` is the socket error when there is one; an address-class POSIX
+    /// error abandons the URL at once. Internal, not private, so tests can
+    /// drive the failover without a socket.
+    func handleDisconnect(error: Error? = nil) {
         guard !intentionalDisconnect else { return }
         keepaliveTask?.cancel()
         keepaliveTask = nil
@@ -1462,24 +1576,44 @@ final class WebSocketClient {
         session?.invalidateAndCancel()
         session = nil
 
-        // Multi-URL fallback: if we have unused fallback URLs in the
-        // current pairing's list, try the next one immediately (no
-        // backoff sleep) before falling back to standard reconnect-with-
-        // backoff on whatever URL we end up on. Only kick in if the
-        // current URL never reached `connected` — once a URL has worked
-        // we stick with it across transient failures (don't ping-pong
-        // between LAN and Tailscale on every brief drop).
-        if !connectURLs.isEmpty, currentURLIndex + 1 < connectURLs.count, !hasEverConnectedOnCurrentURL {
-            let advanced = advanceToNextURL()
-            if advanced {
-                logEvent("falling back to next URL immediately")
-                reconnectTask?.cancel()
-                reconnectTask = Task { [weak self] in
-                    guard let self, !Task.isCancelled, !self.intentionalDisconnect else { return }
-                    self.establishConnection()
-                }
-                return
+        // Multi-URL fallback (US-012). A URL that never authenticated is left
+        // for the next one immediately (no backoff sleep), as before. A URL
+        // that did work keeps one retry, so a brief drop doesn't ping-pong
+        // between LAN and Tailscale, but is left after its second failure in
+        // a row, or at once on an address-class error: it used to be retried
+        // forever. Leaving the last URL wraps to the first and tells the
+        // manager, which re-runs Bonjour and rebuilds the list.
+        let failedURL = serverURL
+        let hadWorked = failover.authenticatedOnCurrent
+        let failures = failover.failuresOnCurrent + 1
+        let posix = Self.posixCode(of: error)
+        let addressClass = Self.isAddressClassError(error)
+        let step = failover.noteFailure(addressClassError: addressClass)
+        if step != .retry {
+            serverURL = failover.current
+            if serverURL != failedURL { connectionMetrics.recordFailover() }
+            if hadWorked {
+                let reason = addressClass ? "address-error posix=\(posix ?? 0)" : "failed \(failures)x"
+                PhoneLog.log("ws url abandoned reason=\(reason) from=\(failedURL?.host ?? "?") "
+                             + "next=\(serverURL?.host ?? "?") urls=\(failover.urls.count)"
+                             + (step == .wrapped ? " (list exhausted)" : ""))
             }
+        }
+        switch step {
+        case .advanced:
+            logEvent("advanceToNextURL: trying [\(failover.index)] \(serverURL?.absoluteString ?? "?")")
+            logEvent("falling back to next URL immediately")
+            reconnectTask?.cancel()
+            reconnectTask = Task { [weak self] in
+                guard let self, !Task.isCancelled, !self.intentionalDisconnect else { return }
+                self.establishConnection()
+            }
+            return
+        case .wrapped:
+            logEvent("all \(failover.urls.count) URL(s) failed — wrapping to [0] \(serverURL?.absoluteString ?? "?")")
+            onURLListExhausted?()
+        case .retry:
+            break
         }
 
         logEvent("will reconnect in \(Int(reconnectDelay))s")
@@ -1493,11 +1627,4 @@ final class WebSocketClient {
             self.establishConnection()
         }
     }
-
-    /// True once the current `serverURL` has reached the `connected` state
-    /// at least once. Reset whenever `advanceToNextURL` flips the URL or
-    /// `connect(toURLs:)` is called fresh. Used by `handleDisconnect` to
-    /// decide whether transient drops should fail-fast over to the next
-    /// URL or reconnect-with-backoff on the current one.
-    private var hasEverConnectedOnCurrentURL = false
 }
