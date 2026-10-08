@@ -44,8 +44,8 @@ Everything from `5ffd8f2` back is addendum 3's.
 
 | Peer | Installed | Code it is missing |
 | --- | --- | --- |
-| Mac `/Applications/Quip.app` | 1.5.6, binary built Oct 7 11:10 (the .app directory says Sep 22 because ditto keeps its mtime; trust the binary). Carries Q-39's WhisperModelLadder, not WindowRaisePolicy. | Every Mac commit after Oct 7 11:10: the QA-fix Mac batch (US-008 to US-011, US-014 Mac half, APNs test backing), US-115/116, Q-53. The owner must be off the phone for the install (TCC re-grant drops the link); recipe in `reference_quip_install_recipe.md`. |
-| iPhone (owner's primary) | eb-branch `23c1060`, 1.5.7, Debug, installed over the air 2026-10-08 ~08:15 (devicectl, localNetwork transport). Settings now shows the commit and build time (tools/stamp-build-info.sh, every build) | Nothing; carries Q-45 colours, Broadcast, Q-53 phone half, the QA-fix phone batch and the review fixes. The Mac is still behind, so prompt broadcasts read "sent to N" and Minimize errors until the Mac install. |
+| Mac `/Applications/Quip.app` | eb-branch `c825a59`, 1.5.7 Release, Developer ID, installed 2026-10-08 08:28 (fresh pid 37401, port 8765 listening). Menu panel shows `v1.5.7 c825a59`. | Nothing. Phone had not reconnected at handoff time (relaunch Quip on the phone); check the Mac Status row for Accessibility / Screen Recording after reconnect, re-grant if red. |
+| iPhone (owner's primary) | eb-branch `c825a59`, 1.5.7, Debug, installed over the air 2026-10-08 08:28 (devicectl, localNetwork transport). Settings shows `1.5.7 (c825a59, 2026-10-08 08:28)` | Nothing. Force-quit and relaunch after the install. |
 | QA simulator D8C5154B | Nothing installed; must never pair with the real Mac | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check. |
 
 One phone socket was ESTABLISHED on port 8765 at handoff time.
@@ -59,7 +59,7 @@ One phone socket was ESTABLISHED on port 8765 at handoff time.
 | Minimize (Q-53) | green | possible now with fake Mac, not done | not installed; check listed under Q-53 |
 | QA-fix batch (addendum 3) | green | partly | not installed |
 
-Nothing from today has run on hardware.
+Both peers now carry today's code (installed 2026-10-08 08:28); the hardware checks listed under Q-49 and Q-53 are runnable.
 
 ## Open threads
 
@@ -69,8 +69,8 @@ Nothing from today has run on hardware.
   catalog file; the QA simulator's fake Mac serves 12 invented prompts. Owner
   must say which surface showed the gap and whether Proceed should inherit.
   Memory: `project_vibecut_sync_gaps.md`.
-- **Push still dark** until the Mac install lands `118c58d` and the owner
-  re-enters Team ID + .p8 (board Q-48).
+- **Push**: the Mac install (`c825a59`, includes `118c58d`) landed 2026-10-08;
+  the owner re-enters Team ID + .p8 in Settings once, then push is back (board Q-48).
 - **Quick-button backup restore** still owed on the owner's "restore buttons"
   (recipe in addendum 3).
 - **Q-50 key styles, Q-51 long-press discoverability**: PRDs/spec pending owner
