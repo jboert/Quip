@@ -73,8 +73,8 @@ final class WindowColorOverrideTests: XCTestCase {
 
     private let palette = WindowColor.palette
 
-    private func raw(_ id: String, _ slot: Int) -> WindowManager.RawWindowInfo {
-        WindowManager.RawWindowInfo(id: id, name: id, app: "Test", bundleId: "com.test",
+    private func raw(_ id: String, _ slot: Int, bundleId: String = "com.test") -> WindowManager.RawWindowInfo {
+        WindowManager.RawWindowInfo(id: id, name: id, app: "Test", bundleId: bundleId,
                                     pid: 1, windowNumber: CGWindowID(slot + 1),
                                     bounds: CGRect(x: 60 * slot, y: 80, width: 400, height: 300),
                                     spaceID: nil)
@@ -172,5 +172,81 @@ final class WindowColorOverrideTests: XCTestCase {
         XCTAssertEqual(WindowManager.colorsToAvoid(all: full, shown: [palette[3]]), [palette[3]])
         XCTAssertNil(WindowManager.firstUnusedPaletteColor(avoiding: full))
         XCTAssertEqual(WindowManager.firstUnusedPaletteColor(avoiding: [palette[0]]), palette[1])
+    }
+
+    // MARK: - Enabling a window keeps the enabled windows' colors apart
+
+    // A snapshot deals colors while every new window is still disabled, so with
+    // more than ten windows window k+10 gets window k's color. Enabling both put
+    // that duplicate on the phone grid, and US-010 remembered it on every launch.
+
+    /// The session-map pass of the 2 s poll: iTerm2 reports each window's
+    /// session, which the user attached, and attached windows are enabled.
+    private func attach(_ ids: [String], in m: WindowManager) {
+        let sessions = ids.compactMap { id -> WindowManager.Iterm2SessionInfo? in
+            guard let w = m.windows.first(where: { $0.id == id }) else { return nil }
+            return WindowManager.Iterm2SessionInfo(windowNumber: w.windowNumber, bounds: w.bounds,
+                                                   uuid: "session-\(id)", tty: "")
+        }
+        m.applyIterm2SessionIds(sessions)
+        for id in ids { m.markSessionAttached(sessionId: "session-\(id)") }
+        m.enableAttachedWindows()
+    }
+
+    func testEnablingWindowsTenApartGivesTheSecondAColorNoEnabledWindowShows() {
+        let m = WindowManager(defaults: defaults)
+        m.applyWindowSnapshot((0..<12).map { raw("w\($0)", $0) })
+        XCTAssertEqual(color(of: "w11", in: m), palette[1], "precondition: w11 shares w1's color")
+        m.toggleWindow("w1", enabled: true)
+        m.toggleWindow("w11", enabled: true)
+        XCTAssertEqual(color(of: "w1", in: m), palette[1], "the window enabled first keeps its color")
+        XCTAssertNotEqual(color(of: "w11", in: m), palette[1], "two enabled windows share an automatic color")
+        XCTAssertEqual(m.autoColors["w11"], color(of: "w11", in: m), "the new color is w11's automatic color")
+    }
+
+    func testWhileFewerThanTenAreEnabledNoTwoShareAColor() {
+        let m = WindowManager(defaults: defaults)
+        m.applyWindowSnapshot((0..<20).map { raw("w\($0)", $0) })
+        let nine = ["w0", "w10", "w1", "w11", "w2", "w12", "w3", "w13", "w4"]
+        for id in nine { m.toggleWindow(id, enabled: true) }
+        let colors = nine.compactMap { color(of: $0, in: m) }
+        XCTAssertEqual(Set(colors).count, 9, "enabled windows' colors: \(colors)")
+    }
+
+    /// The live case: two attached iTerm2 windows at positions k and k+10.
+    func testAttachedWindowsTenApartKeepDistinctColorsAcrossARestart() {
+        let iterm = TerminalApp.iterm2.bundleIdentifier
+        let snapshot = (0..<12).map { raw("w\($0)", $0, bundleId: iterm) }
+        let first = WindowManager(defaults: defaults)
+        first.applyWindowSnapshot(snapshot)
+        attach(["w1", "w11"], in: first)
+        let c1 = color(of: "w1", in: first), c11 = color(of: "w11", in: first)
+        XCTAssertEqual(c1, palette[1])
+        XCTAssertNotEqual(c11, c1, "two attached windows show the same color on the phone grid")
+
+        // A restart: a new manager on the same defaults. Every window is new and
+        // disabled again, so its color can only come from what was saved.
+        let second = WindowManager(defaults: defaults)
+        second.applyWindowSnapshot(snapshot)
+        XCTAssertEqual(color(of: "w11", in: second), c11, "the de-duplicated color was saved")
+        XCTAssertEqual(color(of: "w1", in: second), c1)
+        attach(["w1", "w11"], in: second)
+        XCTAssertEqual(color(of: "w1", in: second), c1)
+        XCTAssertEqual(color(of: "w11", in: second), c11)
+    }
+
+    func testEnablingNeverRepicksAUserPickedColor() {
+        let m = WindowManager(defaults: defaults)
+        m.applyWindowSnapshot((0..<13).map { raw("w\($0)", $0) })
+        XCTAssertEqual(color(of: "w12", in: m), palette[2], "precondition: w12 shares w2's color")
+        m.setColor("w11", hex: palette[2])   // the user picks w2's color for w11
+        m.toggleWindow("w2", enabled: true)
+        m.toggleWindow("w11", enabled: true)
+        m.toggleWindow("w12", enabled: true)
+        XCTAssertEqual(color(of: "w11", in: m), palette[2], "a user-picked color is never re-picked")
+        XCTAssertEqual(m.colorOverrides["w11"], palette[2])
+        XCTAssertEqual(color(of: "w2", in: m), palette[2])
+        XCTAssertNotEqual(color(of: "w12", in: m), palette[2],
+                          "an automatic color another enabled window shows is re-picked")
     }
 }

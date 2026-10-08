@@ -781,7 +781,10 @@ final class WindowManager {
         // using. Collect every color this snapshot keeps (a tracked or returning
         // window keeps its own; a held window is expected back; a new one may
         // carry the user's pick) BEFORE deciding any new color, so a new window
-        // cannot take the color of a window further down the list.
+        // cannot take the color of a window further down the list. New windows
+        // start disabled, so `colorsShown` is empty at launch; a window is kept
+        // apart from the enabled ones when it is enabled
+        // (`recolorIfAnEnabledWindowShowsItsColor`).
         var colorsOnScreen = Set<String>()
         var colorsShown = Set<String>()
         func take(_ window: ManagedWindow) {
@@ -1446,10 +1449,37 @@ final class WindowManager {
 
     // MARK: - Toggle Window
 
-    /// Enable or disable a window for layout management
+    /// Enable or disable a window for layout management. A window that becomes
+    /// enabled is kept apart from the other enabled windows' colors.
     func toggleWindow(_ windowId: String, enabled: Bool) {
         guard let index = windows.firstIndex(where: { $0.id == windowId }) else { return }
+        let wasEnabled = windows[index].isEnabled
         windows[index].isEnabled = enabled
+        if enabled, !wasEnabled, recolorIfAnEnabledWindowShowsItsColor(at: index) {
+            persistAutoColors()
+        }
+    }
+
+    /// A window that has just been enabled, in the color of another enabled
+    /// window, gets a new automatic color: the first palette color no enabled
+    /// window shows (no window at all while one is free), the rotation only
+    /// when enabled windows show all ten. It is remembered as the window's
+    /// automatic color; the caller persists. A user-picked color is never
+    /// changed. Returns whether the window was re-colored.
+    ///
+    /// Needed because a snapshot deals colors while every new window is still
+    /// disabled: with more than ten windows, window k+10 gets window k's color,
+    /// and US-010 remembers it, so two attached iTerm2 windows ten apart showed
+    /// the same color on the phone grid on every launch.
+    private func recolorIfAnEnabledWindowShowsItsColor(at index: Int) -> Bool {
+        let id = windows[index].id
+        guard colorOverrides[id] == nil else { return false }
+        let inUse = colorsInUse(excluding: id)
+        guard inUse.shown.contains(windows[index].assignedColor) else { return false }
+        let color = assignColor(avoiding: Self.colorsToAvoid(all: inUse.all, shown: inUse.shown))
+        windows[index].assignedColor = color
+        rememberAutoColor(color, for: id, at: clock())
+        return true
     }
 
     // MARK: - Color Assignment
@@ -1957,14 +1987,18 @@ final class WindowManager {
     /// session the user previously attached is flagged enabled. Without
     /// this, attached windows wouldn't come back enabled after a Quip
     /// restart — they'd be in the list but invisible to the default
-    /// (non-mirror) picker. Call after `applyIterm2SessionIds`.
+    /// (non-mirror) picker. Call after `applyIterm2SessionIds`. A window it
+    /// enables is kept apart from the other enabled windows' colors, as a
+    /// toggle is.
     func enableAttachedWindows() {
         guard !attachedSessionIds.isEmpty else { return }
-        for i in windows.indices {
-            if let sid = windows[i].iterm2SessionId, attachedSessionIds.contains(sid) {
-                windows[i].isEnabled = true
-            }
+        var recolored = false
+        for i in windows.indices where !windows[i].isEnabled {
+            guard let sid = windows[i].iterm2SessionId, attachedSessionIds.contains(sid) else { continue }
+            windows[i].isEnabled = true
+            if recolorIfAnEnabledWindowShowsItsColor(at: i) { recolored = true }
         }
+        if recolored { persistAutoColors() }
     }
 
     /// Consecutive `.failed` fetches. Drives the log throttle below — and it is
