@@ -258,7 +258,7 @@ struct QuipMacApp: App {
 /// rapid waiting↔thinking↔waiting bursts don't AppleScript-storm. Cached
 /// options/fingerprint reused inside `recentScrapeTTL`.
 @State private var lastWaitingScrapeAt: [String: Date] = [:]
-@State private var cachedWaitingScrape: [String: (options: [Int]?, isYesNo: Bool, fingerprint: String?)] = [:]
+@State private var cachedWaitingScrape: [String: (options: [Int]?, isYesNo: Bool, fingerprint: String?, preview: String?)] = [:]
 private static let recentScrapeTTL: TimeInterval = 0.75
     /// First-seen-offscreen timestamp keyed by "<connId>:<windowId>". Drives
     /// the 5s grace period before emitting `qa_pair_lost { reason: "window_offscreen" }`.
@@ -688,6 +688,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 pendingInputForWindow.remove(windowId)
                 KokoroTTSDebug.log("pendingInput cleared for \(windowId) — Claude is processing")
             }
+            // Q-56 — a queued push for this window is dropped (a blip, not a
+            // prompt); a pushed prompt starts its worked-for clock.
+            if oldState == .waitingForInput, newState != .waitingForInput {
+                pushNotificationService.windowLeftWaiting(windowId)
+            }
 
             if newState == .waitingForInput {
                 thinkingWindows.remove(windowId)
@@ -730,7 +735,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             windowId: windowId, windowName: windowName, projectName: project,
                             attentionCount: 1, selectedWindowId: clientSelectedWindowId,
                             options: cached.options, isYesNo: cached.isYesNo,
-                            promptFingerprint: cached.fingerprint
+                            promptFingerprint: cached.fingerprint, promptPreview: cached.preview
                         )
                     } else {
                         let wn = window.windowNumber
@@ -745,13 +750,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             let options = NumberedPromptDetector.answerableOptions(in: content)
                             let isYesNo = NumberedPromptDetector.detectYesNo(in: content)
                             let fingerprint = NumberedPromptDetector.fingerprint(in: content)
+                            // Q-56 — the question line, shown only to phones
+                            // that opted into prompt text.
+                            let preview = PromptPreview.line(in: content)
                             DispatchQueue.main.async {
                                 self.lastWaitingScrapeAt[windowId] = Date()
-                                self.cachedWaitingScrape[windowId] = (options, isYesNo, fingerprint)
+                                self.cachedWaitingScrape[windowId] = (options, isYesNo, fingerprint, preview)
                                 pushNotificationService.notifyWaitingForInput(
                                     windowId: windowId, windowName: windowName, projectName: project,
                                     attentionCount: 1, selectedWindowId: clientSelectedWindowId,
-                                    options: options, isYesNo: isYesNo, promptFingerprint: fingerprint
+                                    options: options, isYesNo: isYesNo, promptFingerprint: fingerprint,
+                                    promptPreview: preview
                                 )
                             }
                         }
@@ -2009,7 +2018,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         windowName: "Test",
                         projectName: "Quip",
                         attentionCount: 1,
-                        selectedWindowId: testId
+                        selectedWindowId: testId,
+                        promptPreview: "This is what a prompt's question looks like",
+                        immediate: true
                     )
                     break
                 }
@@ -2346,10 +2357,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     timeZone: msg.timeZone,
                     // (wishlist §15.) Defaults false → "selected only" so
                     // older clients keep the prior behavior.
-                    notifyAllWindows: msg.notifyAllWindows ?? false
+                    notifyAllWindows: msg.notifyAllWindows ?? false,
+                    showPromptText: msg.showPromptText ?? false
                 )
                 pushNotificationService.updatePreferences(forDevice: msg.deviceToken, prefs: prefs)
-                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") tz=\(msg.timeZone ?? "nil") allWindows=\(msg.notifyAllWindows ?? false) device=\(msg.deviceToken.prefix(8))")
+                print("[Quip] push_preferences updated: paused=\(msg.paused) sound=\(msg.sound) qh=\(msg.quietHoursStart?.description ?? "nil")-\(msg.quietHoursEnd?.description ?? "nil") tz=\(msg.timeZone ?? "nil") allWindows=\(msg.notifyAllWindows ?? false) promptText=\(msg.showPromptText ?? false) device=\(msg.deviceToken.prefix(8))")
             }
 
         case "attach_iterm_window":

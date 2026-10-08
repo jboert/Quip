@@ -60,6 +60,9 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
     /// `waiting_for_input`, not just the selected one. Defaults false to
     /// preserve the existing "no flood from background Claudes" behavior.
     var notifyAllWindows: Bool = false
+    /// Q-56: the push body is the question the prompt asks. Off by default:
+    /// prompt text can quote the user's own files.
+    var showPromptText: Bool = false
 
     static let defaults = DevicePushPreferences()
 
@@ -83,6 +86,7 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
         self.bannerEnabled = try c.decodeIfPresent(Bool.self, forKey: .bannerEnabled) ?? true
         self.timeZone = try c.decodeIfPresent(String.self, forKey: .timeZone)
         self.notifyAllWindows = try c.decodeIfPresent(Bool.self, forKey: .notifyAllWindows) ?? false
+        self.showPromptText = try c.decodeIfPresent(Bool.self, forKey: .showPromptText) ?? false
     }
 
     init(paused: Bool = false,
@@ -92,7 +96,8 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
          foregroundBanner: Bool = false,
          bannerEnabled: Bool = true,
          timeZone: String? = nil,
-         notifyAllWindows: Bool = false) {
+         notifyAllWindows: Bool = false,
+         showPromptText: Bool = false) {
         self.paused = paused
         self.quietHoursStart = quietHoursStart
         self.quietHoursEnd = quietHoursEnd
@@ -101,6 +106,7 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
         self.bannerEnabled = bannerEnabled
         self.timeZone = timeZone
         self.notifyAllWindows = notifyAllWindows
+        self.showPromptText = showPromptText
     }
 
     /// True if the current wall-clock hour falls inside the quiet-hours
@@ -144,22 +150,6 @@ final class PushNotificationService {
     /// restart even if the iOS client doesn't immediately re-send on
     /// reconnect.
     private(set) var preferences: [String: DevicePushPreferences] = [:]
-
-    /// Debounce timestamps — last time we fired a push for a given
-    /// `windowId + device.token` pair. Prevents rapid-fire pushes when
-    /// terminal state oscillates. Not persisted — a 30s debounce across
-    /// a restart is fine to violate.
-    private var lastPushTimes: [String: Date] = [:]
-
-    /// Max one push per window per this interval (per device).
-    private let debounceInterval: TimeInterval = 30.0
-
-    /// Per-device sliding window of (windowId, eventTime) pairs used to
-    /// build the batched body text — `"🤖 AI is waiting"` for one,
-    /// `"🤖 N AIs waiting"` for many. Pruned to entries within the last
-    /// `batchWindow` on every send. (wishlist §15.)
-    private var recentWaitingByDevice: [String: [(windowId: String, at: Date)]] = [:]
-    private let batchWindow: TimeInterval = 30.0
 
     /// Shared APNs client — lifetime of the service so its JWT cache
     /// survives across Test Push clicks + real triggers. APNs rate-
@@ -433,13 +423,19 @@ final class PushNotificationService {
     /// `quip_options` + `quip_prompt_fingerprint` only when present.
     nonisolated static func buildPayload(windowId: String, title: String, body: String,
                                          attentionCount: Int, sound: Bool, isYesNo: Bool,
-                                         options: [Int]?, promptFingerprint: String?) -> [String: Any] {
+                                         options: [Int]?, promptFingerprint: String?,
+                                         windowIds: [String]? = nil, threadId: String? = nil,
+                                         interruptionLevel: String? = nil) -> [String: Any] {
         var aps: [String: Any] = [
             "alert": ["title": title, "body": body],
             "badge": attentionCount,
             "category": waitingCategory(options: options, isYesNo: isYesNo)
         ]
         if sound { aps["sound"] = "default" }
+        // Q-56: one thread per Mac so the phone stacks these as a group;
+        // Yes/No prompts are time-sensitive.
+        if let threadId { aps["thread-id"] = threadId }
+        if let interruptionLevel { aps["interruption-level"] = interruptionLevel }
         var payload: [String: Any] = [
             "aps": aps,
             "quip_window_id": windowId,
@@ -447,6 +443,9 @@ final class PushNotificationService {
         ]
         if let options { payload["quip_options"] = options }
         if let promptFingerprint { payload["quip_prompt_fingerprint"] = promptFingerprint }
+        // Every window the bundle covers; `quip_window_id` stays the first for
+        // phones that predate the field.
+        if let windowIds, windowIds.count > 1 { payload["quip_window_ids"] = windowIds }
         return payload
     }
 
@@ -549,11 +548,119 @@ final class PushNotificationService {
         }
     }
 
+    /// A window is waiting for input. Nothing is sent here: the coalescer
+    /// decides when (Q-56: dwell, one push per prompt, siblings bundled) and
+    /// `flush` sends. `immediate` skips all of that for the phone's test push.
     func notifyWaitingForInput(windowId: String, windowName: String, projectName: String?,
                                attentionCount: Int, selectedWindowId: String?,
                                options: [Int]? = nil, isYesNo: Bool = false,
-                               promptFingerprint: String? = nil) {
+                               promptFingerprint: String? = nil, promptPreview: String? = nil,
+                               immediate: Bool = false) {
         guard !devices.isEmpty else { return }
+        lastSelectedWindowId = selectedWindowId
+        let wait = PushCoalescer.Wait(windowId: windowId, windowName: windowName, projectName: projectName,
+                                      options: options, isYesNo: isYesNo,
+                                      promptFingerprint: promptFingerprint, promptPreview: promptPreview)
+        if immediate {
+            sendDigest([wait], selectedWindowId: selectedWindowId, now: Date())
+            return
+        }
+        let now = Date()
+        if coalescer.waiting(wait, at: now) {
+            quipPushLog("queued \(windowId) — pushes after \(Int(coalescer.dwell)) s of waiting, siblings within \(Int(coalescer.coalesce)) s share it")
+        } else {
+            quipPushLog("skip same_prompt — \(windowId) came back with the prompt already pushed")
+        }
+        scheduleFlush()
+    }
+
+    /// The window stopped waiting (its agent went back to work, or it was
+    /// answered). A pending push is dropped; a pushed prompt starts its
+    /// "worked for N s" clock, after which the same prompt may push again.
+    func windowLeftWaiting(_ windowId: String) {
+        coalescer.leftWaiting(windowId, at: Date())
+        scheduleFlush()
+    }
+
+    func windowClosed(_ windowId: String) {
+        coalescer.forget(windowId)
+        scheduleFlush()
+    }
+
+    // MARK: - Coalescing (Q-56)
+
+    private var coalescer = PushCoalescer()
+    private var flushTask: Task<Void, Never>?
+    /// The phone's selected window as of the last waiting event; the
+    /// "selected window only" filter is applied when the push goes out.
+    private var lastSelectedWindowId: String?
+    /// One push per device per this many seconds, whatever else happens.
+    /// Below dwell + coalesce, so it never spaces the normal flow; it only
+    /// stops a burst of immediate (test) pushes.
+    private let perDeviceFloor: TimeInterval = 15
+    private var lastSendByDevice: [String: Date] = [:]
+
+    private func scheduleFlush() {
+        flushTask?.cancel()
+        guard let deadline = coalescer.nextDeadline() else { flushTask = nil; return }
+        flushTask = Task { @MainActor [weak self] in
+            let delay = max(0, deadline.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.flush()
+        }
+    }
+
+    private func flush() {
+        let now = Date()
+        let due = coalescer.due(at: now)
+        if !due.isEmpty {
+            sendDigest(due, selectedWindowId: lastSelectedWindowId, now: now)
+        }
+        scheduleFlush()
+    }
+
+    /// What one push says for the windows it covers. Pure, so tests lock the
+    /// wording. With `showPromptText` the single-window body is the question
+    /// the prompt asks; otherwise it names the window and says nothing of
+    /// the prompt's content.
+    nonisolated static func digestText(_ waits: [PushCoalescer.Wait], showPromptText: Bool) -> (title: String, body: String) {
+        func label(_ w: PushCoalescer.Wait) -> String {
+            if let project = w.projectName, !project.isEmpty { return project }
+            return w.windowName
+        }
+        guard let first = waits.first else { return ("Quip", "Waiting for your answer") }
+        if waits.count == 1 {
+            let title = label(first)
+            if showPromptText, let preview = first.promptPreview, !preview.isEmpty {
+                return (title, preview)
+            }
+            if first.windowName != title, !first.windowName.isEmpty {
+                return (title, "\(first.windowName) is waiting for your answer")
+            }
+            return (title, "Waiting for your answer")
+        }
+        var names: [String] = []
+        for w in waits {
+            let name = label(w)
+            if !names.contains(name) { names.append(name) }
+        }
+        let shown = names.prefix(3).joined(separator: ", ")
+        let more = names.count > 3 ? " +\(names.count - 3) more" : ""
+        return ("\(waits.count) waiting", shown + more)
+    }
+
+    /// Yes/No prompts may break through Focus (time-sensitive, when the app is
+    /// entitled; APNs delivers it as active otherwise); everything else is an
+    /// ordinary alert.
+    nonisolated static func interruptionLevel(for waits: [PushCoalescer.Wait]) -> String {
+        waits.contains(where: \.isYesNo) ? "time-sensitive" : "active"
+    }
+
+    /// Send one push per device for `waits`, each device seeing only the
+    /// windows its preferences allow.
+    private func sendDigest(_ waits: [PushCoalescer.Wait], selectedWindowId: String?, now: Date) {
+        guard !devices.isEmpty, !waits.isEmpty else { return }
 
         // GH #22 — APNs metadata moved from UserDefaults to Keychain via
         // APNsMetadataStore. The accessor handles the one-shot migration on
@@ -575,9 +682,10 @@ final class PushNotificationService {
             return
         }
 
+        let threadId = "quip.\(WebSocketServer.deviceID())"
         let devicesSnapshot = devices
         let prefsSnapshot = preferences
-        let now = Date()
+        let allIds = waits.map(\.windowId).joined(separator: ",")
 
         for device in devicesSnapshot {
             let prefs = prefsSnapshot[device.token] ?? .defaults
@@ -585,19 +693,20 @@ final class PushNotificationService {
             // (wishlist §15.) Per-device "all windows" gate. Default false
             // → only the phone's currently-selected window pushes for this
             // device; the user can opt into all-windows in iOS settings.
-            if !prefs.notifyAllWindows, windowId != selectedWindowId {
-                quipPushLog("skip selection_mismatch — device=\(tokenPrefix) selected=\(selectedWindowId ?? "nil") event=\(windowId)")
+            let mine = prefs.notifyAllWindows ? waits : waits.filter { $0.windowId == selectedWindowId }
+            if mine.isEmpty {
+                quipPushLog("skip selection_mismatch — device=\(tokenPrefix) selected=\(selectedWindowId ?? "nil") event=\(allIds)")
                 continue
             }
             if prefs.paused {
-                quipPushLog("skip paused — device=\(tokenPrefix) window=\(windowId)")
+                quipPushLog("skip paused — device=\(tokenPrefix) windows=\(allIds)")
                 continue
             }
             if !prefs.bannerEnabled {
                 // Banner disabled in iOS Settings → no APNs push. Live
                 // Activity still runs via WebSocket so the island keeps
                 // showing thinking/waiting without the alert tray clutter.
-                quipPushLog("skip banner_disabled — device=\(tokenPrefix) window=\(windowId)")
+                quipPushLog("skip banner_disabled — device=\(tokenPrefix) windows=\(allIds)")
                 continue
             }
             if prefs.isQuietNow(now: now) {
@@ -605,59 +714,27 @@ final class PushNotificationService {
                 quipPushLog("skip quiet_hours — device=\(tokenPrefix) tz=\(prefs.timeZone ?? "mac") range=\(range)")
                 continue
             }
-            // Per (windowId, device) debounce
-            let debounceKey = "\(windowId)|\(device.token)"
-            if let last = lastPushTimes[debounceKey], now.timeIntervalSince(last) < debounceInterval {
-                let elapsed = String(format: "%.1f", now.timeIntervalSince(last))
-                quipPushLog("skip debounce — device=\(tokenPrefix) window=\(windowId) last=\(elapsed)s ago")
+            if let last = lastSendByDevice[device.token], now.timeIntervalSince(last) < perDeviceFloor {
+                quipPushLog("skip device_floor — device=\(tokenPrefix) last=\(Int(now.timeIntervalSince(last)))s ago")
                 continue
             }
-            lastPushTimes[debounceKey] = now
+            lastSendByDevice[device.token] = now
 
-            // (wishlist §15.) Sliding window of recent waiting events for
-            // this device — drives the batched body text. Insert this
-            // event, prune anything past `batchWindow`.
-            var recent = recentWaitingByDevice[device.token] ?? []
-            let batchCutoff = now.addingTimeInterval(-batchWindow)
-            recent.removeAll { $0.at < batchCutoff }
-            // Replace any prior entry for the same window with the fresh
-            // one — a window oscillating in/out of waiting still counts
-            // as ONE distinct waiter, not many.
-            recent.removeAll { $0.windowId == windowId }
-            recent.append((windowId: windowId, at: now))
-            recentWaitingByDevice[device.token] = recent
-            let distinctCount = recent.count
-
-            // Prefer the project (cwd basename like "Quip" or "credit-unions")
-            // in the title — that's how users mentally identify which session
-            // needs them. Fall back to "Quip" when we don't have a project.
-            let title: String
-            if distinctCount >= 2 {
-                title = "Quip"
-            } else if let p = projectName, !p.isEmpty {
-                title = p
-            } else {
-                title = "Quip"
-            }
-            // Body deliberately minimal — privacy-friendly, no prompt
-            // content. Single = "🤖 AI is waiting"; multi = "🤖 N AIs
-            // waiting". Tap deep-links via `quip_window_id` payload key.
-            let body: String = {
-                if distinctCount >= 2 {
-                    return "🤖 \(distinctCount) AIs waiting"
-                }
-                return "🤖 AI is waiting"
-            }()
+            let text = Self.digestText(mine, showPromptText: prefs.showPromptText)
+            let single = mine.count == 1 ? mine[0] : nil
             let payload = Self.buildPayload(
-                windowId: windowId, title: title, body: body,
-                attentionCount: attentionCount, sound: prefs.sound,
-                isYesNo: isYesNo, options: options, promptFingerprint: promptFingerprint
+                windowId: mine[0].windowId, title: text.title, body: text.body,
+                attentionCount: mine.count, sound: prefs.sound,
+                isYesNo: single?.isYesNo ?? false, options: single?.options,
+                promptFingerprint: single?.promptFingerprint,
+                windowIds: mine.map(\.windowId), threadId: threadId,
+                interruptionLevel: Self.interruptionLevel(for: mine)
             )
 
             // Encode now (on main) so the Task below captures Sendable Data
             // instead of an [String: Any] which is not Sendable.
             guard let payloadData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
-                quipPushLog("could not encode payload for \(windowId)")
+                quipPushLog("could not encode payload for \(allIds)")
                 continue
             }
 
@@ -666,11 +743,9 @@ final class PushNotificationService {
             let capturedClient = client
             let capturedDevice = device
             let capturedToken = capturedDevice.token
-            // (wishlist §15.) Shared collapseId across all waiting events
-            // so APNs replaces the prior unread alert with the latest
-            // batched one. Prevents 5 separate banners stacking on the
-            // lock screen when 5 windows hit waiting_for_input within
-            // batchWindow.
+            let sentIds = mine.map(\.windowId).joined(separator: ",")
+            // (wishlist §15.) One collapse id across waiting pushes, so APNs
+            // replaces the unread alert with the latest bundle.
             let collapse = "waiting-batch"
             Task {
                 do {
@@ -679,7 +754,7 @@ final class PushNotificationService {
                         toDevice: capturedDevice,
                         collapseId: collapse
                     )
-                    quipPushLog("push sent to \(capturedToken.prefix(8))… for \(windowId)")
+                    quipPushLog("push sent to \(capturedToken.prefix(8))… for \(sentIds) (\(mine.count) window\(mine.count == 1 ? "" : "s"))")
                 } catch APNsError.unregistered {
                     await MainActor.run {
                         self.removeDevice(token: capturedToken)

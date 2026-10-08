@@ -1220,10 +1220,13 @@ struct PushPreferencesMessage: Codable, Sendable {
     /// Optional in the wire format so older iOS clients decode cleanly as
     /// `nil` → Mac treats as `false`.
     let notifyAllWindows: Bool?
+    /// Q-56: when true the push body is the question the prompt asks;
+    /// false or absent keeps the body to the window's name.
+    let showPromptText: Bool?
 
     init(deviceToken: String, paused: Bool, quietHoursStart: Int?, quietHoursEnd: Int?,
          sound: Bool, foregroundBanner: Bool, bannerEnabled: Bool? = nil,
-         timeZone: String? = nil, notifyAllWindows: Bool? = nil) {
+         timeZone: String? = nil, notifyAllWindows: Bool? = nil, showPromptText: Bool? = nil) {
         self.type = "push_preferences"
         self.deviceToken = deviceToken
         self.paused = paused
@@ -1234,6 +1237,7 @@ struct PushPreferencesMessage: Codable, Sendable {
         self.bannerEnabled = bannerEnabled
         self.timeZone = timeZone
         self.notifyAllWindows = notifyAllWindows
+        self.showPromptText = showPromptText
     }
 }
 
@@ -1264,6 +1268,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// (wishlist §15.) Optional so older Macs decode cleanly as nil →
     /// phone keeps whatever local default it had.
     var pushNotifyAllWindows: Bool?
+    /// Q-56; optional for the same reason.
+    var pushShowPromptText: Bool?
     var liveActivitiesEnabled: Bool?
     var ttsEnabled: Bool?
     /// Press Return automatically once a dictation finishes, instead of
@@ -1319,6 +1325,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         pushQuietHoursStart: Int? = nil,
         pushQuietHoursEnd: Int? = nil,
         pushNotifyAllWindows: Bool? = nil,
+        pushShowPromptText: Bool? = nil,
         liveActivitiesEnabled: Bool? = nil,
         ttsEnabled: Bool? = nil,
         dictationAutoSend: Bool? = nil,
@@ -1345,6 +1352,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.pushQuietHoursStart = pushQuietHoursStart
         self.pushQuietHoursEnd = pushQuietHoursEnd
         self.pushNotifyAllWindows = pushNotifyAllWindows
+        self.pushShowPromptText = pushShowPromptText
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.ttsEnabled = ttsEnabled
         self.dictationAutoSend = dictationAutoSend

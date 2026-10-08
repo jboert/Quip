@@ -57,6 +57,62 @@ final class PushPayloadShapeTests: XCTestCase {
         XCTAssertEqual(dict["quip_options"] as? [Int], [1, 2, 3, 4, 5])
     }
 
+    // MARK: Q-56 bundle fields
+
+    func test_payload_bundleCarriesThreadLevelAndEveryWindow() throws {
+        let dict = PushNotificationService.buildPayload(
+            windowId: "w1", title: "2 waiting", body: "api, web",
+            attentionCount: 2, sound: true, isYesNo: false,
+            options: nil, promptFingerprint: nil,
+            windowIds: ["w1", "w2"], threadId: "quip.MAC", interruptionLevel: "active"
+        )
+        let aps = try XCTUnwrap(dict["aps"] as? [String: Any])
+        XCTAssertEqual(aps["thread-id"] as? String, "quip.MAC")
+        XCTAssertEqual(aps["interruption-level"] as? String, "active")
+        XCTAssertEqual(dict["quip_window_id"] as? String, "w1", "first window keeps the legacy key")
+        XCTAssertEqual(dict["quip_window_ids"] as? [String], ["w1", "w2"])
+    }
+
+    func test_payload_singleWindowOmitsTheIdList() throws {
+        let dict = PushNotificationService.buildPayload(
+            windowId: "w1", title: "api", body: "Waiting for your answer",
+            attentionCount: 1, sound: true, isYesNo: true,
+            options: nil, promptFingerprint: "yn", windowIds: ["w1"], threadId: "quip.MAC",
+            interruptionLevel: "time-sensitive"
+        )
+        XCTAssertNil(dict["quip_window_ids"])
+        let aps = try XCTUnwrap(dict["aps"] as? [String: Any])
+        XCTAssertEqual(aps["interruption-level"] as? String, "time-sensitive")
+    }
+
+    func test_digestText_namesTheWindowOrShowsThePromptOnlyWhenAsked() {
+        let api = PushCoalescer.Wait(windowId: "a", windowName: "zsh — api", projectName: "api", options: nil,
+                                     isYesNo: false, promptFingerprint: "f", promptPreview: "Apply the migration?")
+        let plain = PushNotificationService.digestText([api], showPromptText: false)
+        XCTAssertEqual(plain.title, "api")
+        XCTAssertEqual(plain.body, "zsh — api is waiting for your answer")
+        let shown = PushNotificationService.digestText([api], showPromptText: true)
+        XCTAssertEqual(shown.body, "Apply the migration?")
+        let noProject = PushCoalescer.Wait(windowId: "b", windowName: "Terminal", projectName: nil, options: nil,
+                                           isYesNo: false, promptFingerprint: nil, promptPreview: nil)
+        let fallback = PushNotificationService.digestText([noProject], showPromptText: true)
+        XCTAssertEqual(fallback.title, "Terminal")
+        XCTAssertEqual(fallback.body, "Waiting for your answer", "no preview: never an empty body")
+    }
+
+    func test_digestText_bundleListsProjectsAndCountsTheRest() {
+        func w(_ id: String, _ project: String?) -> PushCoalescer.Wait {
+            PushCoalescer.Wait(windowId: id, windowName: id, projectName: project, options: nil,
+                               isYesNo: id == "d", promptFingerprint: nil, promptPreview: "secret question")
+        }
+        let waits = [w("a", "api"), w("b", "web"), w("c", "api"), w("d", "db"), w("e", "ops")]
+        let text = PushNotificationService.digestText(waits, showPromptText: true)
+        XCTAssertEqual(text.title, "5 waiting")
+        XCTAssertEqual(text.body, "api, web, db +1 more", "duplicates merged, prompt text never leaks into a bundle")
+        XCTAssertEqual(PushNotificationService.interruptionLevel(for: waits), "time-sensitive")
+        XCTAssertEqual(PushNotificationService.interruptionLevel(for: [w("a", "api")]), "active")
+    }
+
     // MARK: swrm "story started" payload (US-005)
 
     func test_swrmPayload_titleBodyAndExtras() throws {

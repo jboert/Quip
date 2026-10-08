@@ -959,6 +959,16 @@ final class MessageProtocolTests: XCTestCase {
     /// The phone sets its TZ alongside quiet hours so the Mac can evaluate
     /// "10 PM" in the phone's clock, not the Mac's — matters when the two
     /// aren't co-located. Older iOS clients omit the field, and we verify
+    func testPushPreferencesMessageCarriesShowPromptText() throws {
+        let msg = PushPreferencesMessage(deviceToken: "TKN", paused: false, quietHoursStart: nil, quietHoursEnd: nil,
+                                         sound: true, foregroundBanner: false, showPromptText: true)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        XCTAssertEqual(try jsonDict(from: data)["showPromptText"] as? Bool, true)
+        let legacy = #"{"type":"push_preferences","deviceToken":"TKN","paused":false,"sound":true,"foregroundBanner":false}"#
+        let decoded = try XCTUnwrap(MessageCoder.decode(PushPreferencesMessage.self, from: Data(legacy.utf8)))
+        XCTAssertNil(decoded.showPromptText, "an older phone leaves it unset; the desktop treats that as off")
+    }
+
     /// it round-trips both ways.
     func testPushPreferencesMessageCarriesTimeZone() throws {
         let msg = PushPreferencesMessage(

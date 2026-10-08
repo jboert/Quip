@@ -905,7 +905,8 @@ struct QuipApp: App {
                                 foregroundBanner: ud.bool(forKey: "pushForegroundBanner"),
                                 bannerEnabled: ud.object(forKey: "pushBannerEnabled") as? Bool ?? true,
                                 timeZone: TimeZone.current.identifier,
-                                notifyAllWindows: ud.bool(forKey: "pushNotifyAllWindows")
+                                notifyAllWindows: ud.bool(forKey: "pushNotifyAllWindows"),
+                                showPromptText: ud.bool(forKey: "pushShowPromptText")
                             )
                             client.send(prefs)
                         }
@@ -7687,6 +7688,7 @@ struct SettingsSheet: View {
     /// window's `waiting_for_input` events push. True → every enabled
     /// window's transitions push. Synced to Mac via PushPreferencesMessage.
     @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
+    @AppStorage("pushShowPromptText") private var pushShowPromptText = false
     // Device-local only — Live Activities don't flow through the Mac's
     // APNs prefs, so no sendPrefs() wiring. The main app reads this
     // @AppStorage key too and gates its liveActivity.startOrUpdate calls.
@@ -8065,7 +8067,8 @@ struct SettingsSheet: View {
             foregroundBanner: pushForegroundBanner,
             bannerEnabled: pushBannerEnabled,
             timeZone: TimeZone.current.identifier,
-            notifyAllWindows: pushNotifyAllWindows
+            notifyAllWindows: pushNotifyAllWindows,
+            showPromptText: pushShowPromptText
         )
         client.send(msg)
     }
@@ -8137,6 +8140,9 @@ struct NotificationsSettingsSheet: View {
     /// window's `waiting_for_input` events push. True → every enabled
     /// window's transitions push. Synced to Mac via PushPreferencesMessage.
     @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
+    /// Q-56 — the push body is the prompt's question instead of the window's
+    /// name. Off by default: prompts can quote your own files.
+    @AppStorage("pushShowPromptText") private var pushShowPromptText = false
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
 
     var body: some View {
@@ -8176,14 +8182,17 @@ struct NotificationsSettingsSheet: View {
                         // On → every enabled window pushes (still
                         // batched into one alert via collapseId on Mac).
                         Toggle("All Windows", isOn: $pushNotifyAllWindows)
+                        Toggle("Show Prompt Text", isOn: $pushShowPromptText)
                     }
                 } header: {
                     Text("Banner")
                 } footer: {
                     if pushBannerEnabled {
-                        Text(pushNotifyAllWindows
-                             ? "Pushes for any window's waiting prompt. Multiple within 30s collapse to one alert."
-                             : "Pushes only for the window you have selected.")
+                        Text((pushNotifyAllWindows
+                              ? "Pushes for any window's waiting prompt. "
+                              : "Pushes only for the window you have selected. ")
+                             + "A window alerts once per prompt, after it has waited 10 seconds; windows that start waiting together share one alert."
+                             + (pushShowPromptText ? " The alert shows the question the prompt asks." : ""))
                     } else {
                         Text("Banner is off. Live Activities below will still update on the lock screen.")
                     }
@@ -8256,6 +8265,7 @@ struct NotificationsSettingsSheet: View {
         .onChange(of: pushSound) { _, _ in sendPrefs() }
         .onChange(of: pushForegroundBanner) { _, _ in sendPrefs() }
         .onChange(of: pushNotifyAllWindows) { _, _ in sendPrefs() }
+        .onChange(of: pushShowPromptText) { _, _ in sendPrefs() }
         .onChange(of: quietHoursEnabled) { _, _ in sendPrefs() }
         .onChange(of: quietHoursStart) { _, _ in sendPrefs() }
         .onChange(of: quietHoursEnd) { _, _ in sendPrefs() }

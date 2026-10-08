@@ -580,11 +580,15 @@ User notification preferences. Synced on every toggle change AND on every succes
   "sound": true,
   "foregroundBanner": false,
   "bannerEnabled": true,
-  "timeZone": "America/Phoenix"
+  "timeZone": "America/Phoenix",
+  "notifyAllWindows": false,
+  "showPromptText": false
 }
 ```
 
-`quietHoursStart` / `quietHoursEnd` are integer hours of day (0–23) in the time zone identified by `timeZone` (IANA identifier, e.g., `"America/Phoenix"`). Either being `null` disables quiet hours. `bannerEnabled: false` keeps Live Activities updating via WebSocket but suppresses the APNs banner — "island-only" mode. `bannerEnabled` and `timeZone` are optional for backward compat with older clients.
+`quietHoursStart` / `quietHoursEnd` are integer hours of day (0–23) in the time zone identified by `timeZone` (IANA identifier, e.g., `"America/Phoenix"`). Either being `null` disables quiet hours. `bannerEnabled: false` keeps Live Activities updating via WebSocket but suppresses the APNs banner — "island-only" mode. `bannerEnabled`, `timeZone`, `notifyAllWindows` and `showPromptText` are optional for backward compat with older clients.
+
+**When the desktop pushes (Q-56).** A window must wait 10 s without interruption before it counts (shorter blips are an agent blocked on the network). A window pushes once per prompt: the same prompt fingerprint coming back within 30 s of the agent leaving waiting is the same episode and does not push again; a different prompt, or 30 s of work in between, does. After the first window is due the desktop waits 8 s so windows that start waiting together share one push. The payload is the `waiting_for_input` shape with `aps.thread-id` = `quip.<desktop device id>` so alerts stack as one group, `aps.interruption-level` = `time-sensitive` for Yes/No prompts and `active` otherwise, `quip_window_id` = the first window and, for a bundle, `quip_window_ids` = all of them. The alert title is the project (or window name), or "N waiting" for a bundle whose body lists the projects; with `showPromptText` the single-window body is the question the prompt asks, else the window's name.
 
 ### preferences_snapshot
 
