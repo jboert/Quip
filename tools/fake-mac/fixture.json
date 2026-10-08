@@ -1,0 +1,160 @@
+{
+  "_comment": "Invented QA data for tools/fake-mac/fake-mac.swift. Windows are WindowState, prompts are PromptEntry (Shared/MessageProtocol.swift). Fake-only window fields, never sent in layout_update: dead (start with acks off), content (served as terminal_content), cwd (fills {{cwd}}). Keep monitor unlike any real display name: the phone treats an equal monitor name as same-Mac evidence.",
+  "displayName": "Fake Mac (QA)",
+  "monitor": "FakeMac Display",
+  "screenAspect": 1.6,
+  "spanAspect": 1.6,
+  "displays": [
+    {
+      "id": "424242",
+      "name": "FakeMac Display",
+      "isPrimary": true,
+      "aspect": 1.6,
+      "spanFrame": { "x": 0, "y": 0, "width": 1, "height": 1 }
+    }
+  ],
+  "spaces": [
+    { "id": "space-current", "name": "On Screen", "isCurrent": true }
+  ],
+  "frontmostWindowId": "com.googlecode.iterm2.4101",
+  "projectDirectories": [
+    "/Users/qa/dev/dotfiles",
+    "/Users/qa/dev/lantern-web",
+    "/Users/qa/dev/orchard-api",
+    "/Users/qa/dev/pebble-docs"
+  ],
+  "windows": [
+    {
+      "id": "com.googlecode.iterm2.4101",
+      "name": "✳ Rate limiting for /v1/orders",
+      "app": "iTerm2",
+      "folder": "orchard-api",
+      "enabled": true,
+      "frame": { "x": 0.0, "y": 0.03, "width": 0.5, "height": 0.48 },
+      "state": "waiting_for_input",
+      "color": "#F5A623",
+      "isThinking": false,
+      "claudeMode": "normal",
+      "cliKind": "claude",
+      "displayID": "424242",
+      "spaceID": "space-current",
+      "isPinned": true,
+      "cwd": "/Users/qa/dev/orchard-api",
+      "content": "~/dev/orchard-api (feature/rate-limits) $ claude\n\n> Add rate limiting to the /v1/orders endpoint\n\n⏺ I'll add a token-bucket limiter in middleware/ratelimit.go and wire it\n  into the orders router, with tests in middleware/ratelimit_test.go.\n\n⏺ Update(middleware/ratelimit.go)\n  ⎿  Added 64 lines\n\n Do you want to make this edit to router.go?\n ❯ 1. Yes\n   2. Yes, allow all edits during this session (shift+tab)\n   3. No, and tell Claude what to do differently (esc)\n"
+    },
+    {
+      "id": "com.googlecode.iterm2.4117",
+      "name": "codex — lantern-web",
+      "app": "iTerm2",
+      "folder": "lantern-web",
+      "enabled": true,
+      "frame": { "x": 0.5, "y": 0.03, "width": 0.5, "height": 0.48 },
+      "state": "neutral",
+      "color": "#4A90D9",
+      "isThinking": true,
+      "cliKind": "codex",
+      "displayID": "424242",
+      "spaceID": "space-current",
+      "cwd": "/Users/qa/dev/lantern-web",
+      "content": "~/dev/lantern-web (main) $ codex\n\n› Migrate the settings page to the new form components\n\n• Read src/pages/settings/SettingsPage.tsx\n• Edited src/pages/settings/SettingsForm.tsx (+42 -57)\n• Ran npm test -- settings\n  └ 18 passed, 0 failed\n\n  Working (14s • esc to interrupt)\n"
+    },
+    {
+      "id": "com.apple.Terminal.2290",
+      "name": "dotfiles — -zsh — 120×36",
+      "app": "Terminal",
+      "folder": "dotfiles",
+      "enabled": true,
+      "frame": { "x": 0.0, "y": 0.52, "width": 0.5, "height": 0.48 },
+      "state": "neutral",
+      "color": "#7ED321",
+      "cliKind": "shell",
+      "displayID": "424242",
+      "spaceID": "space-current",
+      "content": "~/dev/dotfiles (main) $ git status\nOn branch main\nYour branch is up to date with 'origin/main'.\n\nChanges not staged for commit:\n  modified:   zsh/aliases.zsh\n  modified:   git/gitconfig\n\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n~/dev/dotfiles (main) $ "
+    },
+    {
+      "id": "com.apple.Safari.3318",
+      "name": "Release checklist — Pebble Docs",
+      "app": "Safari",
+      "enabled": true,
+      "frame": { "x": 0.5, "y": 0.52, "width": 0.5, "height": 0.48 },
+      "state": "neutral",
+      "color": "#9013FE",
+      "displayID": "424242",
+      "spaceID": "space-current"
+    }
+  ],
+  "prompts": [
+    {
+      "id": "commit-message",
+      "label": "Commit with a clear message",
+      "body": "Stage only the files that belong to this change and write a commit message in the imperative mood: a subject under 60 characters, a blank line, then a short body that says why the change was needed. Show me the message before you commit.",
+      "tags": ["git", "commit"]
+    },
+    {
+      "id": "review-diff",
+      "label": "Review the open diff",
+      "body": "Review every uncommitted change in this repository as a strict senior reviewer. List real bugs first, then risky assumptions, then missing tests. Quote the file and line for each finding and skip style nits unless they change behaviour.",
+      "targetAgent": "claude",
+      "description": "Strict review of the uncommitted changes before they are committed."
+    },
+    {
+      "id": "ship-it",
+      "label": "Ship it",
+      "body": "Run the tests, and if they pass, rebase on main, push the branch and open a pull request with a short summary of what changed and how it was tested. Stop and tell me if anything fails instead of working around it."
+    },
+    {
+      "id": "release-runbook",
+      "label": "Release runbook",
+      "body": "Release runbook for shipping a minor version. Work through every step in order and stop to ask me before anything irreversible. If a step fails, stop there, explain what happened and suggest the safest way forward.\n\n1. Confirm the branch is up to date with main and the working tree is clean. If anything is uncommitted, list it and wait.\n2. Run the full test suite, then the slow integration tests. Paste a one-line summary for each suite with the pass and fail counts.\n3. Read the pull requests merged since the last tag and group them into Added, Changed, Fixed and Removed. Keep each entry to one line and include the PR number.\n4. Bump the version in the manifest and on the about screen, following semantic versioning. Say why this is a minor release and not a patch or a major one.\n5. Update CHANGELOG.md with the grouped entries under a heading for the new version and today's date.\n6. Build the release artifacts locally and record their sizes next to the previous release, so a sudden jump is easy to spot.\n7. Create an annotated tag, but do not push it yet. Show me the tag message first.\n8. Draft the announcement for the team channel: three sentences on what changed for users, one on anything they need to do, and a link to the changelog.\n9. Check the rollback plan: name the previous artifact, the command that redeploys it, and who to call if the database migration has already run.\n10. When I say go, push the tag, publish the artifacts and post the announcement. Then watch the error dashboard for fifteen minutes and report anything new.\n11. Open a follow-up issue for anything you skipped, with the reason and the step number, so nothing is lost between releases.\n12. Write a short retrospective note: what slowed this release down, what went well, and one change to try next time.\n\nFinish with a status table that has one row per step and columns for step, result and notes. Render it with zebra striping so the rows are easy to scan on a phone, and keep each note under ten words.",
+      "tags": ["release", "checklist"]
+    },
+    {
+      "id": "folder-catch-up",
+      "label": "Catch me up on this folder",
+      "body": "Summarize what changed in {{folder}} over the last three days: new commits, open branches, and any TODO or FIXME comments added since then. Finish with the one thing you would look at first. (Asked on {{date}}.)"
+    },
+    {
+      "id": "fix-tests",
+      "label": "Fix the failing tests",
+      "body": "Run the test suite, pick the first failing test and find the root cause before changing anything. Fix the code rather than the test unless the test is clearly wrong, and say which one it was. Re-run the whole suite at the end.",
+      "tags": ["tests", "ci"]
+    },
+    {
+      "id": "explain-error",
+      "label": "Explain this error",
+      "body": "Explain the last error in this terminal in plain words: what failed, the most likely root cause, and the smallest change that would fix it. Do not apply the fix yet.",
+      "description": "Ask for the root cause of the last error, not a workaround."
+    },
+    {
+      "id": "pr-description",
+      "label": "Write the PR description",
+      "body": "Write the pull request description for {{ticket}} from the commits on this branch: a one-paragraph summary, a bulleted list of changes, how it was tested, and anything a reviewer should look at closely.",
+      "tags": ["git", "review"]
+    },
+    {
+      "id": "squash-commits",
+      "label": "Squash fixup commits",
+      "body": "Squash the fixup and wip commits on this branch into the commits they belong to, keeping one commit per logical change. Show me the resulting commit list before rewriting anything, and never force-push without asking."
+    },
+    {
+      "id": "review-checklist",
+      "label": "Code review checklist",
+      "body": "Go through this change with a review checklist: correctness, error handling, concurrency, security, performance, naming and tests. For each item say pass, fail or not applicable, with one line of evidence.",
+      "targetAgent": "codex"
+    },
+    {
+      "id": "plan-first",
+      "label": "Plan before coding",
+      "body": "Before writing any code, outline your plan: the files you will touch, the order of the changes, and the risks. Wait for my go-ahead, then implement it step by step.",
+      "targetAgent": "any",
+      "description": "Outline the approach and wait for a go-ahead before editing files."
+    },
+    {
+      "id": "seed-cafe-data",
+      "label": "Seed café demo data",
+      "body": "Create seed data for the demo café: twelve menu items with prices, three opening-hour rules including a holiday closure, and five sample orders. Use realistic names, keep prices in whole cents, and write it as a JSON fixture.",
+      "tags": ["fixtures", "demo"]
+    }
+  ]
+}
