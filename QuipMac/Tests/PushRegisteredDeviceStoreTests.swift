@@ -13,20 +13,20 @@ import XCTest
 @MainActor
 final class PushRegisteredDeviceStoreTests: XCTestCase {
 
-    // Use a unique suite per test so parallel runs don't step on each other.
-    private var suiteName: String!
+    // One fixed suite, emptied around every test. A suite per test (a UUID
+    // name) left an empty plist in ~/Library/Preferences for each test, every
+    // run: removePersistentDomain empties a domain but keeps its file.
+    private static let suiteName = "com.quip.mac.tests.push-registry"
     private var defaults: UserDefaults!
 
     override func setUpWithError() throws {
-        suiteName = "PushRegisteredDeviceStoreTests-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
-        defaults.removePersistentDomain(forName: suiteName)
+        defaults = TestSafeDefaults.suite("push-registry")
+        defaults.removePersistentDomain(forName: Self.suiteName)
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
+        defaults.removePersistentDomain(forName: Self.suiteName)
         defaults = nil
-        suiteName = nil
     }
 
     func test_defaultStore_isNotTheOwnersDomainUnderTests() {

@@ -173,8 +173,8 @@ final class WindowManager {
     /// Persisted: a pinned order that silently unpinned itself on relaunch
     /// would be the same surprise in the other direction.
     var usesManualOrder: Bool {
-        get { UserDefaults.standard.bool(forKey: Self.manualOrderKey) }
-        set { UserDefaults.standard.set(newValue, forKey: Self.manualOrderKey) }
+        get { defaults.bool(forKey: Self.manualOrderKey) }
+        set { defaults.set(newValue, forKey: Self.manualOrderKey) }
     }
     static let manualOrderKey = "windowOrderIsManual"
 
@@ -186,14 +186,12 @@ final class WindowManager {
     /// the window it was made on and does NOT transfer to a window reopened in
     /// its place; that is the honest behaviour, since nothing in the id says
     /// the new window is the same work.
-    private(set) var pinnedWindowIDs: Set<String> = Set(
-        UserDefaults.standard.stringArray(forKey: WindowManager.pinnedKey) ?? []
-    )
+    private(set) var pinnedWindowIDs: Set<String> = []
     static let pinnedKey = "pinnedWindowIDs"
 
     func togglePin(_ id: String) {
         if pinnedWindowIDs.contains(id) { pinnedWindowIDs.remove(id) } else { pinnedWindowIDs.insert(id) }
-        UserDefaults.standard.set(Array(pinnedWindowIDs), forKey: Self.pinnedKey)
+        defaults.set(Array(pinnedWindowIDs), forKey: Self.pinnedKey)
         applyPinsToCurrentOrder()
     }
 
@@ -202,8 +200,7 @@ final class WindowManager {
     /// Colors the user chose for windows, by window id. Persisted, and keyed
     /// the same way as pins: a choice follows the window it was made on and
     /// is applied again when that window is first seen after a relaunch.
-    private(set) var colorOverrides: [String: String] =
-        UserDefaults.standard.dictionary(forKey: WindowManager.colorOverridesKey) as? [String: String] ?? [:]
+    private(set) var colorOverrides: [String: String] = [:]
     static let colorOverridesKey = "windowColorOverrides"
 
     /// Set the color `id` is drawn in, or clear the user's choice with nil,
@@ -216,7 +213,7 @@ final class WindowManager {
         } else {
             colorOverrides.removeValue(forKey: id)
         }
-        UserDefaults.standard.set(colorOverrides, forKey: Self.colorOverridesKey)
+        defaults.set(colorOverrides, forKey: Self.colorOverridesKey)
         if let index = windows.firstIndex(where: { $0.id == id }) {
             windows[index].assignedColor = colorOverrides[id] ?? assignColor()
         }
@@ -291,7 +288,21 @@ final class WindowManager {
 
     // MARK: - Init / Attached Session Persistence
 
-    init() {
+    /// Where the user's window choices persist: manual order, pins, picked
+    /// colors and attached iTerm2 sessions.
+    private let defaults: UserDefaults
+
+    /// `.standard` in the app. Under XCTest a throwaway suite: the Mac suite is
+    /// app-hosted with the real bundle id, so `.standard` there IS the owner's
+    /// com.quip.mac domain. Order tests set `windowOrderIsManual`, which the
+    /// running app reads on every snapshot, and a snapshot in a test could
+    /// clear it again; color tests removed and rewrote `windowColorOverrides`.
+    nonisolated static var defaultStore: UserDefaults { TestSafeDefaults.store("windows") }
+
+    init(defaults: UserDefaults = WindowManager.defaultStore) {
+        self.defaults = defaults
+        pinnedWindowIDs = Set(defaults.stringArray(forKey: Self.pinnedKey) ?? [])
+        colorOverrides = defaults.dictionary(forKey: Self.colorOverridesKey) as? [String: String] ?? [:]
         loadAttachedSessionIds()
     }
 
@@ -299,7 +310,7 @@ final class WindowManager {
     /// Called once at init. Missing / corrupt data is treated as an empty
     /// list — we never throw since a corrupt pref shouldn't brick the app.
     private func loadAttachedSessionIds() {
-        guard let arr = UserDefaults.standard.array(forKey: Self.attachedSessionIdsKey) as? [String] else { return }
+        guard let arr = defaults.array(forKey: Self.attachedSessionIdsKey) as? [String] else { return }
         attachedSessionIds = Set(arr)
         if !attachedSessionIds.isEmpty {
             print("[WindowManager] loaded \(attachedSessionIds.count) attached iTerm session(s)")
@@ -307,7 +318,7 @@ final class WindowManager {
     }
 
     private func persistAttachedSessionIds() {
-        UserDefaults.standard.set(Array(attachedSessionIds), forKey: Self.attachedSessionIdsKey)
+        defaults.set(Array(attachedSessionIds), forKey: Self.attachedSessionIdsKey)
     }
 
     /// Remember this iTerm session UUID as one the user has attached.

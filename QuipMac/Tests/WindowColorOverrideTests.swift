@@ -1,27 +1,28 @@
 import XCTest
 @testable import Quip
 
-/// A color chosen on the phone lives on the Mac, survives a relaunch, and is
-/// what every peer is sent.
 @MainActor
 final class WindowColorOverrideTests: XCTestCase {
 
-    private var savedOverrides: Any?
+    // The manager persists to this suite, never the owner's com.quip.mac domain
+    // (this file used to remove and rewrite the real windowColorOverrides).
+    private static let suiteName = "com.quip.mac.tests.window-colors"
+    private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        // The test host is the app itself: keep the owner's real choices.
-        savedOverrides = UserDefaults.standard.object(forKey: WindowManager.colorOverridesKey)
-        UserDefaults.standard.removeObject(forKey: WindowManager.colorOverridesKey)
+        defaults = TestSafeDefaults.suite("window-colors")
+        defaults.removePersistentDomain(forName: Self.suiteName)
     }
 
     override func tearDown() {
-        UserDefaults.standard.set(savedOverrides, forKey: WindowManager.colorOverridesKey)
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        defaults = nil
         super.tearDown()
     }
 
     private func manager(ids: [String]) -> WindowManager {
-        let m = WindowManager()
+        let m = WindowManager(defaults: defaults)
         m.windows = ids.map { id in
             ManagedWindow(id: id, name: id, app: "Test", subtitle: "",
                           cwdPath: nil, bundleId: "com.test", icon: nil,
@@ -43,7 +44,7 @@ final class WindowColorOverrideTests: XCTestCase {
 
     func testChoiceSurvivesANewManager() {
         manager(ids: ["a"]).setColor("a", hex: "#FF6B6B")
-        XCTAssertEqual(WindowManager().colorOverrides["a"], "#FF6B6B")
+        XCTAssertEqual(WindowManager(defaults: defaults).colorOverrides["a"], "#FF6B6B")
     }
 
     func testResetDropsTheChoiceAndGivesAPaletteColor() {
@@ -52,7 +53,7 @@ final class WindowColorOverrideTests: XCTestCase {
         m.setColor("a", hex: nil)
         XCTAssertNil(m.colorOverrides["a"])
         XCTAssertTrue(WindowColor.palette.contains(m.windows[0].assignedColor))
-        XCTAssertNil(WindowManager().colorOverrides["a"])
+        XCTAssertNil(WindowManager(defaults: defaults).colorOverrides["a"])
     }
 
     func testMalformedColorIsIgnored() {
@@ -60,5 +61,11 @@ final class WindowColorOverrideTests: XCTestCase {
         m.setColor("a", hex: "blue")
         XCTAssertEqual(m.windows[0].assignedColor, "#000000")
         XCTAssertTrue(m.colorOverrides.isEmpty)
+    }
+
+    func testManagerWithoutAnExplicitStoreStaysOutOfTheOwnersDomain() {
+        XCTAssertTrue(SingleInstanceGuard.isRunningTests)
+        XCTAssertFalse(WindowManager.defaultStore === UserDefaults.standard,
+                       "WindowManager() in a test must not read or write com.quip.mac")
     }
 }
