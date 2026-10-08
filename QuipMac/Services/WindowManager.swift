@@ -801,10 +801,17 @@ final class WindowManager {
         // US-010 — then remembered automatic colors, so a window keeps its color
         // across a restart and a fresh pick cannot take a color a window
         // remembers. A remembered color is given up only to a window it must
-        // stay distinct from (`colorsToAvoid`).
+        // stay distinct from, as in `colorsToAvoid`. Whether the palette is full
+        // is judged on every color the snapshot would show with each window in
+        // its remembered color, not window by window: with more windows than
+        // colors, deciding it halfway through a restart re-colored windows whose
+        // only fault was sharing a color with one earlier in the list.
+        let rememberedColors = newIDs.filter { colorForNew[$0] == nil }.compactMap { autoColors[$0] }
+        let paletteFull = Self.firstUnusedPaletteColor(
+            avoiding: colorsOnScreen.union(rememberedColors)) == nil
         for id in newIDs where colorForNew[id] == nil {
             guard let remembered = autoColors[id],
-                  !Self.colorsToAvoid(all: colorsOnScreen, shown: colorsShown).contains(remembered)
+                  !(paletteFull ? colorsShown : colorsOnScreen).contains(remembered)
             else { continue }
             colorForNew[id] = remembered
             colorsOnScreen.insert(remembered)

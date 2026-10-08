@@ -188,6 +188,24 @@ final class WindowSnapshotGraceTests: XCTestCase {
         }
     }
 
+    /// The owner's list holds dozens of windows over ten colors, so many share
+    /// one. A restart must not re-color a window just because a window earlier
+    /// in the new snapshot remembered the same color.
+    func testARestartWithMoreWindowsThanColorsKeepsEveryColor() {
+        let fifteen = (0..<15).map { "w\($0)" }
+        let first = manager()
+        first.applyWindowSnapshot(snapshot(fifteen))
+        let colors = Dictionary(uniqueKeysWithValues: first.windows.map { ($0.id, $0.assignedColor) })
+        XCTAssertEqual(colors["w10"], colors["w0"], "precondition: two windows share a color")
+
+        let second = manager()
+        // w10 first: it remembers w0's color, which used to push w0 to a fresh one.
+        second.applyWindowSnapshot(snapshot(["w10"] + fifteen.filter { $0 != "w10" }))
+        for id in fifteen {
+            XCTAssertEqual(window(id, in: second)?.assignedColor, colors[id], "window \(id)")
+        }
+    }
+
     func testPickThenResetGivesBackThePreviousAutomaticColor() {
         let m = manager()
         m.applyWindowSnapshot(snapshot(["A", "B", "C"]))
