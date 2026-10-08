@@ -198,6 +198,30 @@ Generic out-of-band error so clients can surface feedback when the desktop drops
 }
 ```
 
+`messageId` (optional, since US-115) names the `send_text` or `paste_prompt` the error answers, so a phone can mark that one target of a broadcast as failed instead of waiting for its deadline. Absent for errors that belong to no message. Reasons that carry it: `Text send failed: …`, `Prompt paste failed: …` (including `no prompt "<id>" on this Mac`), `Window no longer exists`.
+
+```json
+{
+  "type": "error",
+  "reason": "Prompt paste failed: Quip: Terminal window 968 is not frontmost",
+  "messageId": "6F9619FF-8B86-D011-B42D-00C04FC964FF"
+}
+```
+
+### send_text_ack
+
+Mac → iPhone after a `send_text` or (since US-115) a `paste_prompt` landed. `messageId` echoes the request's. `injectMs` is the AppleScript/paste time alone; `totalMs` runs from message arrival to "text landed". `path` is the routing branch (`sendText`, `pasteText`, `genericApp`). A request without a `messageId` gets no ack.
+
+```json
+{
+  "type": "send_text_ack",
+  "messageId": "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+  "injectMs": 180,
+  "totalMs": 410,
+  "path": "sendText"
+}
+```
+
 ### project_directories
 
 Snapshot of the desktop's configured project directories, sent so the phone can offer a "spawn new window in…" picker.
@@ -336,7 +360,26 @@ Type text into a window. `pressReturn` defaults to `true`.
   "type": "send_text",
   "windowId": "Terminal.12345",
   "text": "ls -la",
-  "pressReturn": true
+  "pressReturn": true,
+  "messageId": "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+  "raiseWindow": false
+}
+```
+
+`messageId` (optional) is the idempotency token and what `send_text_ack` / `error` echo. `raiseWindow` (optional, since US-116): `false` asks the desktop not to raise the window before injecting, which a broadcast sends so many iTerm2 windows do not flash in turn. Absent means raise, as before. The desktop always raises Terminal.app, Claude Desktop and generic-app targets, since their input goes to the frontmost window; for Terminal.app the keystroke script raises its own window by id and fails the request with an attributed `error` if another window is still in front.
+
+### paste_prompt
+
+Paste a library prompt by id into a window. The desktop fills `{{folder}}`, `{{window}}`, `{{agent}}`, `{{cwd}}`, `{{date}}` and `{{clipboard}}` for that window. `pressReturn` defaults to `false`. `messageId` and `raiseWindow` as for `send_text`; the desktop answers with `send_text_ack` or an attributed `error` (US-115).
+
+```json
+{
+  "type": "paste_prompt",
+  "id": "vibecut__code-review",
+  "windowId": "iTerm2.12345",
+  "pressReturn": true,
+  "messageId": "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+  "raiseWindow": false
 }
 ```
 

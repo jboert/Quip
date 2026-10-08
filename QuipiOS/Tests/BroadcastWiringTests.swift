@@ -64,6 +64,39 @@ final class BroadcastAckWiringTests: XCTestCase {
 
     /// The latency tracker forgets ids beyond its cap and never saw
     /// `paste_prompt` ids; a broadcast still needs those acks.
+    func test_theClientReportsAnAttributedErrorByIdAndStillByReason() throws {
+        let client = WebSocketClient()
+        client.isAuthenticated = true   // `error` is dropped before auth
+        var failed: [UUID] = []
+        var reasons: [String] = []
+        client.onSendTextError = { failed.append($0) }
+        client.onError = { reasons.append($0) }
+        let id = UUID()
+
+        client.handleMessage(try JSONEncoder().encode(ErrorMessage(reason: "Prompt paste failed: gone", messageId: id)))
+        client.handleMessage(try JSONEncoder().encode(ErrorMessage(reason: "Window no longer exists")))
+
+        XCTAssertEqual(failed, [id], "only the attributed error names a message")
+        XCTAssertEqual(reasons, ["Prompt paste failed: gone", "Window no longer exists"])
+    }
+
+    func test_theManagerForwardsASessionsAttributedErrorWithTheSession() throws {
+        let sandbox = Sandbox()
+        addTeardownBlock { sandbox.restore() }
+        let manager = BackendConnectionManager()
+        manager.ensureImplicitDefault(url: "ws://127.0.0.1:9")
+        let session = try XCTUnwrap(manager.sessions[manager.activeBackendID])
+        session.client.isAuthenticated = true
+        var received: [(backendID: String, messageID: UUID)] = []
+        manager.onSendTextError = { session, id in received.append((session.backendID, id)) }
+        let id = UUID()
+
+        session.client.handleMessage(try JSONEncoder().encode(ErrorMessage(reason: "x", messageId: id)))
+
+        XCTAssertEqual(received.map(\.messageID), [id])
+        XCTAssertEqual(received.first?.backendID, session.backendID)
+    }
+
     func test_theClientReportsAnAckItWasNotTiming() throws {
         let client = WebSocketClient()
         var acked: [UUID] = []

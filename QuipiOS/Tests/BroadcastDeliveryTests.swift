@@ -81,11 +81,43 @@ final class BroadcastDeliveryTests: XCTestCase {
         XCTAssertTrue(delivery.isSettled)
         XCTAssertEqual(delivery.targets.map(\.status), [.sent, .sent])
         XCTAssertEqual(delivery.summary, "Broadcast sent to 2")
-        XCTAssertFalse(delivery.confirm(messageID: ids[0]))
-        XCTAssertFalse(delivery.fail(messageID: ids[1]))
-        XCTAssertFalse(delivery.expire(at: deadline()))
+        XCTAssertFalse(delivery.expire(at: deadline()), "nothing waits for a deadline")
+        XCTAssertFalse(delivery.confirm(messageID: UUID()))
         XCTAssertEqual(delivery.summary, "Broadcast sent to 2")
         XCTAssertEqual(delivery.retryWindowIDs, [])
+    }
+
+    // MARK: - US-115: a Mac that acks paste_prompt settles sent targets too
+
+    func test_aMacThatAcksPastesTurnsSentIntoDelivered() {
+        var delivery = broadcast(to: 2, expectsAck: false)
+        XCTAssertTrue(delivery.confirm(messageID: ids[0]))
+        XCTAssertEqual(delivery.summary, "Broadcast sent to 2", "one ack is not every ack")
+        XCTAssertTrue(delivery.confirm(messageID: ids[1]))
+        XCTAssertEqual(delivery.summary, "Broadcast delivered to 2 of 2")
+        XCTAssertFalse(delivery.confirm(messageID: ids[1]), "a repeat changes nothing")
+    }
+
+    func test_anAttributedErrorFailsASentTargetAndNamesIt() {
+        var delivery = broadcast(to: 3, expectsAck: false)
+        XCTAssertTrue(delivery.fail(messageID: ids[1]))
+        XCTAssertEqual(delivery.targets.map(\.status), [.sent, .failed, .sent])
+        XCTAssertEqual(delivery.retryWindowIDs, ["w1"])
+        XCTAssertEqual(delivery.summary, "Broadcast: 2 of 3 sent — api failed")
+        XCTAssertFalse(delivery.confirm(messageID: ids[1]), "an ack does not undo a failure")
+        delivery.confirm(messageID: ids[0])
+        delivery.confirm(messageID: ids[2])
+        XCTAssertEqual(delivery.summary, "Broadcast: 2 of 3 sent — api failed",
+                       "a mix of confirmed and failed on the no-ack route still reads as sent")
+    }
+
+    func test_anAttributedErrorOnTheAckRouteFailsBeforeTheDeadline() {
+        var delivery = broadcast(to: 2)
+        XCTAssertTrue(delivery.fail(messageID: ids[0]))
+        XCTAssertTrue(delivery.confirm(messageID: ids[1]))
+        XCTAssertTrue(delivery.isSettled, "no target waits for the deadline")
+        XCTAssertEqual(delivery.summary, "Broadcast: 1 of 2 confirmed — web did not answer")
+        XCTAssertEqual(delivery.retryWindowIDs, ["w0"])
     }
 
     func test_aFailedTargetIsOfferedForRetry() {

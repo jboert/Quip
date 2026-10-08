@@ -1894,6 +1894,10 @@ struct MainiOSView: View {
                 guard session.backendID == manager.activeBackendID else { return }
                 DispatchQueue.main.async { confirmBroadcastTarget(messageID) }
             }
+            manager.onSendTextError = { session, messageID in
+                guard session.backendID == manager.activeBackendID else { return }
+                DispatchQueue.main.async { failBroadcastTarget(messageID) }
+            }
         }
         .onChange(of: client.isConnected) { _, connected in
             withAnimation(.easeInOut(duration: 0.5)) {
@@ -3598,12 +3602,16 @@ struct MainiOSView: View {
             let messageID = UUID()
             let sent: Bool
             switch send.route {
+            // US-116 — raiseWindow: false, so the Mac does not raise every
+            // iTerm2 window in turn (Terminal.app targets are raised anyway).
             case .pastePrompt(let promptID):
                 sent = client.send(PastePromptMessage(id: promptID, windowId: windowID,
-                                                      pressReturn: send.pressReturn, messageId: messageID))
+                                                      pressReturn: send.pressReturn, messageId: messageID,
+                                                      raiseWindow: false))
             case .sendText(let text):
                 sent = client.send(SendTextMessage(windowId: windowID, text: text,
-                                                   pressReturn: send.pressReturn, messageId: messageID))
+                                                   pressReturn: send.pressReturn, messageId: messageID,
+                                                   raiseWindow: false))
             }
             if sent { queued.append((windowID, broadcastTargetName(windowID), messageID)) }
         }
@@ -3622,7 +3630,8 @@ struct MainiOSView: View {
                 promptID, contexts: queued.map { promptContext(forWindow: $0.windowID) },
                 at: Date(), in: promptUsageStore()))
             if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
-            // The Mac does not ack `paste_prompt` until US-115 ships.
+            // A Mac from before US-115 does not ack `paste_prompt`; one that
+            // does still confirms each target (BroadcastDelivery).
             expectsAck = false
         }
         trackBroadcast(BroadcastDelivery(text: send.text, source: send.source, targets: queued,
@@ -3721,6 +3730,16 @@ struct MainiOSView: View {
         if delivery.isSettled && delivery.retryWindowIDs.isEmpty {
             hideBroadcastResult(delivery.startedAt, after: 4)
         }
+    }
+
+    /// An `error` named one of the last broadcast's messages (US-115): that
+    /// target failed now, without waiting for the deadline, and the line
+    /// stays long enough to tap Retry.
+    private func failBroadcastTarget(_ messageID: UUID) {
+        guard var delivery = broadcastDelivery else { return }
+        guard delivery.fail(messageID: messageID) else { return }
+        broadcastDelivery = delivery
+        hideBroadcastResult(delivery.startedAt, after: 15)
     }
 
     private func hideBroadcastResult(_ startedAt: Date, after seconds: TimeInterval) {

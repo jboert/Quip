@@ -1423,3 +1423,70 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertNil(old.quickSlotColorsJSON)
     }
 }
+
+/// US-115 / US-116: the additive broadcast fields. Each one is optional on
+/// the wire, absent when nil, and JSON from before it existed still decodes.
+final class BroadcastWireFieldsTests: XCTestCase {
+
+    private func json(_ data: Data) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func test_errorWithoutMessageIdIsUnchangedOnTheWire() throws {
+        let data = try XCTUnwrap(MessageCoder.encode(ErrorMessage(reason: "boom")))
+        let dict = try json(data)
+        XCTAssertEqual(dict["type"] as? String, "error")
+        XCTAssertEqual(dict["reason"] as? String, "boom")
+        XCTAssertNil(dict["messageId"], "nil must be absent, not null")
+        let decoded = try XCTUnwrap(MessageCoder.decode(ErrorMessage.self, from: data))
+        XCTAssertNil(decoded.messageId)
+    }
+
+    func test_errorWithMessageIdRoundTrips() throws {
+        let id = UUID()
+        let data = try XCTUnwrap(MessageCoder.encode(ErrorMessage(reason: "Text send failed: x", messageId: id)))
+        XCTAssertEqual(try json(data)["messageId"] as? String, id.uuidString)
+        let decoded = try XCTUnwrap(MessageCoder.decode(ErrorMessage.self, from: data))
+        XCTAssertEqual(decoded.messageId, id)
+        XCTAssertEqual(decoded.reason, "Text send failed: x")
+    }
+
+    func test_oldErrorJsonDecodes() throws {
+        let data = Data(#"{"type":"error","reason":"Window no longer exists"}"#.utf8)
+        let decoded = try XCTUnwrap(MessageCoder.decode(ErrorMessage.self, from: data))
+        XCTAssertEqual(decoded.reason, "Window no longer exists")
+        XCTAssertNil(decoded.messageId)
+    }
+
+    func test_sendTextRaiseWindowIsAbsentUnlessSet() throws {
+        let plain = try XCTUnwrap(MessageCoder.encode(SendTextMessage(windowId: "w", text: "t")))
+        XCTAssertNil(try json(plain)["raiseWindow"])
+        XCTAssertNil(try XCTUnwrap(MessageCoder.decode(SendTextMessage.self, from: plain)).raiseWindow)
+
+        let quiet = try XCTUnwrap(MessageCoder.encode(SendTextMessage(windowId: "w", text: "t", raiseWindow: false)))
+        XCTAssertEqual(try json(quiet)["raiseWindow"] as? Bool, false)
+        XCTAssertEqual(try XCTUnwrap(MessageCoder.decode(SendTextMessage.self, from: quiet)).raiseWindow, false)
+    }
+
+    func test_pastePromptRaiseWindowIsAbsentUnlessSet() throws {
+        let plain = try XCTUnwrap(MessageCoder.encode(PastePromptMessage(id: "p", windowId: "w")))
+        XCTAssertNil(try json(plain)["raiseWindow"])
+        XCTAssertNil(try XCTUnwrap(MessageCoder.decode(PastePromptMessage.self, from: plain)).raiseWindow)
+
+        let quiet = try XCTUnwrap(MessageCoder.encode(PastePromptMessage(id: "p", windowId: "w", raiseWindow: false)))
+        XCTAssertEqual(try json(quiet)["raiseWindow"] as? Bool, false)
+        XCTAssertEqual(try XCTUnwrap(MessageCoder.decode(PastePromptMessage.self, from: quiet)).raiseWindow, false)
+    }
+
+    func test_oldSendTextAndPastePromptJsonDecode() throws {
+        let sendText = Data(#"{"type":"send_text","windowId":"w","text":"t","pressReturn":true}"#.utf8)
+        let decodedSend = try XCTUnwrap(MessageCoder.decode(SendTextMessage.self, from: sendText))
+        XCTAssertNil(decodedSend.raiseWindow)
+        XCTAssertNil(decodedSend.messageId)
+
+        let paste = Data(#"{"type":"paste_prompt","id":"p","windowId":"w","pressReturn":false}"#.utf8)
+        let decodedPaste = try XCTUnwrap(MessageCoder.decode(PastePromptMessage.self, from: paste))
+        XCTAssertNil(decodedPaste.raiseWindow)
+        XCTAssertEqual(decodedPaste.id, "p")
+    }
+}

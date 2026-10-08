@@ -400,14 +400,20 @@ struct SendTextMessage: Codable, Sendable {
     /// Idempotency token (wishlist §27). Optional for backwards compat —
     /// older clients that omit it still work but won't be deduped.
     let messageId: UUID?
+    /// `false` asks the Mac not to raise the window before injecting, so a
+    /// broadcast to many iTerm2 windows does not flash each one (US-116).
+    /// Absent or `nil` is today's behaviour (raise). Terminal.app targets are
+    /// always raised: its keystrokes land in the frontmost window.
+    let raiseWindow: Bool?
 
     init(windowId: String, text: String, pressReturn: Bool = true,
-         messageId: UUID? = UUID()) {
+         messageId: UUID? = UUID(), raiseWindow: Bool? = nil) {
         self.type = "send_text"
         self.windowId = windowId
         self.text = text
         self.pressReturn = pressReturn
         self.messageId = messageId
+        self.raiseWindow = raiseWindow
     }
 }
 
@@ -732,10 +738,16 @@ struct TTSAudioMessage: Codable, Sendable {
 struct ErrorMessage: Codable, Sendable {
     let type: String
     let reason: String
+    /// The `send_text` or `paste_prompt` this error answers, so the phone can
+    /// mark that one target of a broadcast as failed instead of waiting for
+    /// its deadline (US-115). Absent for errors that belong to no message;
+    /// older peers ignore it.
+    let messageId: UUID?
 
-    init(reason: String) {
+    init(reason: String, messageId: UUID? = nil) {
         self.type = "error"
         self.reason = reason
+        self.messageId = messageId
     }
 }
 
@@ -914,14 +926,17 @@ struct PastePromptMessage: Codable, Sendable {
     let windowId: String
     let pressReturn: Bool
     let messageId: UUID?
+    /// See `SendTextMessage.raiseWindow` (US-116).
+    let raiseWindow: Bool?
 
     init(id: String, windowId: String, pressReturn: Bool = false,
-         messageId: UUID? = UUID()) {
+         messageId: UUID? = UUID(), raiseWindow: Bool? = nil) {
         self.type = "paste_prompt"
         self.id = id
         self.windowId = windowId
         self.pressReturn = pressReturn
         self.messageId = messageId
+        self.raiseWindow = raiseWindow
     }
 }
 

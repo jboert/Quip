@@ -1618,9 +1618,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // tEnd = right after the inject closure returns. AppleScript
                 // is synchronous, so this is the actual "text landed" instant.
                 let tRecv = Date()
-                ensureITermSessionResolved(for: msg.windowId) { window in
+                ensureITermSessionResolved(for: msg.windowId, onMissing: {
+                    // US-115 — a gone window fails this request by id, so a
+                    // broadcast marks that one target instead of waiting.
+                    self.webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists", messageId: msg.messageId))
+                }) { window in
                     let termApp = self.terminalAppForWindow(window)
-                    self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
                     let wn = window.windowNumber
                     // GH I follow-up — branch by detected CLI:
@@ -1666,6 +1669,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         iterm2SessionId: window.iterm2SessionId
                     )
                     let isGenericApp = !self.isFirstClassHost(window)
+                    // US-116 — a broadcast (`raiseWindow: false`) does not flash
+                    // every iTerm2 window; Terminal.app, Claude Desktop and
+                    // generic apps still need the raise.
+                    if WindowRaisePolicy.shouldRaise(requested: msg.raiseWindow, terminalApp: termApp,
+                                                     isGenericApp: isGenericApp) {
+                        self.windowManager.focusWindow(msg.windowId)
+                    }
                     // US-008 — multi-line text into a terminal never runs line by
                     // line: a shell gets one pasted block and no Return, and an
                     // agent CLI in Terminal.app a paste with Return only at the
@@ -1710,7 +1720,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                                                    to: msg.windowId,
                                                                    pressReturn: sendReturn,
                                                                    terminalApp: termApp,
-                                                                   iterm2SessionId: window.iterm2SessionId)
+                                                                   iterm2SessionId: window.iterm2SessionId,
+                                                                   cgWindowNumber: wn)
                         }
                     } else {
                         NSLog("[Quip] send_text routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
@@ -1746,7 +1757,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             let tStart = Date()
                             Self.pasteInjectQueue.async {
                                 let primary = ksi.pasteText(text, to: wid, pressReturn: pr,
-                                                            terminalApp: termApp, iterm2SessionId: sid)
+                                                            terminalApp: termApp, iterm2SessionId: sid,
+                                                            cgWindowNumber: wn)
                                 Task { @MainActor [self] in
                                     var result = primary
                                     var selfHealed = false
@@ -1758,19 +1770,19 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                             NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", wid)
                                             selfHealed = true
                                             result = await self.keystrokeInjector.pasteText(text, to: wid, pressReturn: pr,
-                                                                                            terminalApp: termApp, iterm2SessionId: newId)
+                                                                                            terminalApp: termApp, iterm2SessionId: newId,
+                                                                                            cgWindowNumber: wn)
                                         }
                                     }
                                     let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
                                     let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
                                     let rid = mid?.uuidString.prefix(8) ?? "nil"
                                     appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(textLen) press_return=\(requestedReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
-                                    if !result.success {
-                                        self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(result.error ?? "unknown injection failure")"))
-                                    }
-                                    if result.success, let mid {
-                                        self.webSocketServer.broadcast(SendTextAckMessage(messageId: mid, injectMs: injectMs, totalMs: totalMs, path: routingPath))
-                                    }
+                                    let replies = InjectionReply.messages(result: result, messageId: mid, injectMs: injectMs,
+                                                                          totalMs: totalMs, path: routingPath,
+                                                                          failurePrefix: "Text send failed")
+                                    if let error = replies.error { self.webSocketServer.broadcast(error) }
+                                    if let ack = replies.ack { self.webSocketServer.broadcast(ack) }
                                 }
                             }
                         }
@@ -1801,12 +1813,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
                             let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
                             appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
-                            if !result.success {
-                                self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(result.error ?? "unknown injection failure")"))
-                            }
-                            if result.success, let mid = msg.messageId {
-                                self.webSocketServer.broadcast(SendTextAckMessage(messageId: mid, injectMs: injectMs, totalMs: totalMs, path: routingPath))
-                            }
+                            let replies = InjectionReply.messages(result: result, messageId: msg.messageId, injectMs: injectMs,
+                                                                  totalMs: totalMs, path: routingPath,
+                                                                  failurePrefix: "Text send failed")
+                            if let error = replies.error { self.webSocketServer.broadcast(error) }
+                            if let ack = replies.ack { self.webSocketServer.broadcast(ack) }
                         }
                         if delay == 0 {
                             Task { await injectAndLog() }
@@ -2638,9 +2649,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     private func handlePastePrompt(_ msg: PastePromptMessage) {
         guard let template = promptLibrary.body(for: msg.id), !template.isEmpty else {
             print("[Quip] paste_prompt: unknown prompt id=\(msg.id)")
+            // US-115 — was silent; a broadcast target waited out its deadline.
+            webSocketServer.broadcast(ErrorMessage(reason: "Prompt paste failed: no prompt \"\(msg.id)\" on this Mac",
+                                                   messageId: msg.messageId))
             return
         }
-        ensureITermSessionResolved(for: msg.windowId) { window in
+        let tRecv = Date()
+        ensureITermSessionResolved(for: msg.windowId, onMissing: {
+            self.webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists", messageId: msg.messageId))
+        }) { window in
             let termApp = self.terminalAppForWindow(window)
             // Re-classified when the cache says `.shell`, as send_text does: a
             // stale `.shell` for a Claude window in iTerm2 made the multi-line
@@ -2657,7 +2674,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             if !unresolved.isEmpty {
                 appendLatency("paste_prompt unresolved_vars=\(unresolved.joined(separator: ",")) prompt_id=\(msg.id)")
             }
-            self.windowManager.focusWindow(msg.windowId)
+            // US-116 — see send_text: a broadcast does not raise iTerm2 windows.
+            if WindowRaisePolicy.shouldRaise(requested: msg.raiseWindow, terminalApp: termApp, isGenericApp: false) {
+                self.windowManager.focusWindow(msg.windowId)
+            }
             // US-008 — a multi-line prompt (a {{clipboard}} of several lines,
             // say) never runs line by line in a shell, and never submits after
             // its first line in Terminal.app. The clipboard was read above,
@@ -2672,7 +2692,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 if route == .pasteText {
                     return await self.keystrokeInjector.pasteText(
                         pasteBody, to: msg.windowId, pressReturn: decision.pressReturn,
-                        terminalApp: termApp, iterm2SessionId: sessionId)
+                        terminalApp: termApp, iterm2SessionId: sessionId,
+                        cgWindowNumber: window.windowNumber)
                 } else {
                     return await self.keystrokeInjector.sendText(
                         pasteBody, to: msg.windowId, pressReturn: decision.pressReturn,
@@ -2683,6 +2704,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             NSLog("[Quip] paste_prompt routing: %@ (cliKind=%@, term=%@, window=%@)",
                   route.rawValue, cliKind.rawValue, termApp.rawValue, msg.windowId)
             Task { @MainActor in
+                let tStart = Date()
                 var result = await doInject(window.iterm2SessionId)
                 // (#1) Same self-heal as send_text: stale iTerm2 session id → refresh + retry once.
                 var selfHealed = false
@@ -2696,12 +2718,20 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         result = await doInject(newId)
                     }
                 }
-                appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
+                let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
+                let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
+                let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
+                appendLatency("paste_prompt rid=\(rid) path=\(route.rawValue) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) inject_ms=\(injectMs) total_ms=\(totalMs) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
                 if !result.success {
-                    let reason = result.error ?? "unknown"
-                    print("[Quip] paste_prompt FAILED: \(reason)")
-                    self.webSocketServer.broadcast(ErrorMessage(reason: "Prompt paste failed: \(reason)"))
+                    print("[Quip] paste_prompt FAILED: \(result.error ?? "unknown")")
                 }
+                // US-115 — a paste is acked like a send_text, and a failure
+                // names the request, so a broadcast can settle each target.
+                let replies = InjectionReply.messages(result: result, messageId: msg.messageId, injectMs: injectMs,
+                                                      totalMs: totalMs, path: route.rawValue,
+                                                      failurePrefix: "Prompt paste failed")
+                if let error = replies.error { self.webSocketServer.broadcast(error) }
+                if let ack = replies.ack { self.webSocketServer.broadcast(ack) }
             }
         }
     }

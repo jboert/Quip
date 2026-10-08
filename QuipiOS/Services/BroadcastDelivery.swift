@@ -8,9 +8,11 @@ import Foundation
 /// are offered for retry. A late ack still confirms, so a slow Mac is not
 /// reported as a lost window for good.
 ///
-/// The Mac does not ack `paste_prompt` until US-115 ships, so a delivery
-/// that expects no ack counts every target as sent at once and its summary
-/// says "sent", never "delivered".
+/// A Mac from before US-115 does not ack `paste_prompt`, so a delivery that
+/// expects no ack counts every target as sent at once and its summary says
+/// "sent". A Mac that does ack still confirms each sent target, and an
+/// error naming a sent target's id still fails it, so the same delivery
+/// reads "delivered" or names a failure once the newer Mac answers.
 struct BroadcastDelivery: Equatable, Sendable {
     /// Seconds a target may wait for its ack before it is unconfirmed.
     static let deadline: TimeInterval = 8
@@ -20,7 +22,8 @@ struct BroadcastDelivery: Equatable, Sendable {
         case pending
         /// The Mac acked this target's message.
         case confirmed
-        /// Queued on a route the Mac does not ack; nothing to wait for.
+        /// Queued on a route an older Mac does not ack; nothing to wait for,
+        /// but an ack or an error for it still counts.
         case sent
         /// No ack by the deadline. A late ack still confirms it.
         case unconfirmed
@@ -57,8 +60,8 @@ struct BroadcastDelivery: Equatable, Sendable {
         }
     }
 
-    /// The Mac acked `messageID`. False, changing nothing, when no target is
-    /// waiting on it: another message's ack, a repeat, or a target that
+    /// The Mac acked `messageID`. False, changing nothing, when no target
+    /// can take it: another message's ack, a repeat, or a target that
     /// already failed.
     @discardableResult
     mutating func confirm(messageID: UUID) -> Bool {
@@ -96,18 +99,23 @@ struct BroadcastDelivery: Equatable, Sendable {
     }
 
     /// The one-line result: "Broadcasting to 3…", "Broadcast sent to 3",
-    /// "Broadcast delivered to 3 of 3", or "Broadcast: 1 of 3 confirmed —
-    /// web, api did not answer". Past two names, the rest are counted.
+    /// "Broadcast delivered to 3 of 3", "Broadcast: 1 of 3 confirmed —
+    /// web, api did not answer", or, on the no-ack route, "Broadcast: 2 of
+    /// 3 sent — api failed". Past two names, the rest are counted.
     var summary: String {
         let count = targets.count
         if !isSettled { return "Broadcasting to \(count)…" }
-        if !expectsAck { return "Broadcast sent to \(count)" }
         let confirmed = targets.filter { $0.status == .confirmed }.count
         if confirmed == count { return "Broadcast delivered to \(count) of \(count)" }
-        let names = retryTargets.map(\.name)
+        let retry = retryTargets
+        if retry.isEmpty { return "Broadcast sent to \(count)" }
+        let names = retry.map(\.name)
         let named = names.count <= 2
             ? names.joined(separator: ", ")
             : names.prefix(2).joined(separator: ", ") + " +\(names.count - 2) more"
+        if targets.contains(where: { $0.status == .sent }) || !expectsAck {
+            return "Broadcast: \(count - retry.count) of \(count) sent — \(named) failed"
+        }
         return "Broadcast: \(confirmed) of \(count) confirmed — \(named) did not answer"
     }
 
@@ -115,11 +123,12 @@ struct BroadcastDelivery: Equatable, Sendable {
         targets.filter { $0.status == .unconfirmed || $0.status == .failed }
     }
 
-    /// Moves the first target still waiting on `messageID`, pending or past
-    /// the deadline, to `status`.
+    /// Moves the first target that can still take an answer for `messageID`
+    /// (pending, past the deadline, or sent without an ack) to `status`.
     private mutating func settle(_ messageID: UUID, as status: Status) -> Bool {
         guard let index = targets.firstIndex(where: {
-            $0.messageID == messageID && ($0.status == .pending || $0.status == .unconfirmed)
+            $0.messageID == messageID
+                && ($0.status == .pending || $0.status == .unconfirmed || $0.status == .sent)
         }) else { return false }
         targets[index].status = status
         return true

@@ -342,6 +342,10 @@ final class WebSocketClient {
     /// argument is the message's id. Fires for every ack, including ids the
     /// latency tracker has evicted, so a broadcast can count each target.
     var onSendTextAck: ((UUID) -> Void)?
+    /// Mac reported an `error` that names the `send_text` or `paste_prompt`
+    /// it answers (US-115); argument is that message's id. Fires before
+    /// `onError`, which still shows the reason.
+    var onSendTextError: ((UUID) -> Void)?
     /// Latest Whisper model lifecycle state from the Mac. Starts as .preparing
     /// until the Mac broadcasts its status. SpeechService reads this at PTT-start
     /// to decide between remote (Whisper) and local (SFSpeech) paths.
@@ -1432,6 +1436,7 @@ final class WebSocketClient {
         case "error":
             guard isAuthenticated else { return }
             if let msg = Self.decodeMessage(ErrorMessage.self, from: data, msgType: peek.type) {
+                if let messageId = msg.messageId { onSendTextError?(messageId) }
                 onError?(msg.reason)
             }
         case "image_upload_ack":

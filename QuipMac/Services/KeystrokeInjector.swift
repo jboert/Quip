@@ -303,16 +303,10 @@ final class KeystrokeInjector {
             if pressReturn {
                 keystrokeCmds.append("key code 36") // Return
             }
-            let cmds = keystrokeCmds.joined(separator: "\n                        ")
-            script = """
-            tell application "Terminal" to activate
-            delay 0.1
-            tell application "System Events"
-                tell process "Terminal"
-                    \(cmds)
-                end tell
-            end tell
-            """
+            // US-116 — the window is raised and verified inside the script
+            // (see `terminalWindowGuard`), so a broadcast to two Terminal.app
+            // windows cannot type one copy into the other.
+            script = Self.terminalKeystrokeScript(commands: keystrokeCmds, windowNumber: cgWindowNumber)
 
         case .iterm2:
             // No session id → no safe target. Falling back to `current session
@@ -534,7 +528,8 @@ final class KeystrokeInjector {
     /// which is the same work with the wait moved off main.
     @discardableResult
     nonisolated func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
-                               terminalApp: TerminalApp, iterm2SessionId: String?) -> InjectionResult {
+                               terminalApp: TerminalApp, iterm2SessionId: String?,
+                               cgWindowNumber: CGWindowID = 0) -> InjectionResult {
         let pb = NSPasteboard.general
         // Shared coordinator restores the user's clipboard once after the
         // burst — overlapping grok/codex pastes (serial queue, ~0.5s apart,
@@ -562,9 +557,10 @@ final class KeystrokeInjector {
             // Multi-line text (US-008, MultiLineSendPolicy). Typed as keystrokes
             // it would press Return between lines; pasted, Terminal.app delivers
             // it as one block (bracketed when the shell asks), so a shell keeps it
-            // on the command line and Claude Code gets one message. The target
-            // window was raised by `focusWindow` before this call.
-            let script = Self.terminalPasteTextScript(pressReturn: pressReturn)
+            // on the command line and Claude Code gets one message. The script
+            // raises and verifies the target window itself when it has its
+            // number (US-116); `focusWindow` before this call is belt and braces.
+            let script = Self.terminalPasteTextScript(pressReturn: pressReturn, windowNumber: cgWindowNumber)
             return executeAppleScript(script, op: "pasteText", windowId: windowId,
                                       terminalApp: terminalApp)
 
@@ -583,10 +579,12 @@ final class KeystrokeInjector {
     /// resolve to it).
     @discardableResult
     func pasteText(_ text: String, to windowId: String, pressReturn: Bool,
-                   terminalApp: TerminalApp, iterm2SessionId: String?) async -> InjectionResult {
+                   terminalApp: TerminalApp, iterm2SessionId: String?,
+                   cgWindowNumber: CGWindowID = 0) async -> InjectionResult {
         await AppleScriptRunner.offMain {
             self.pasteText(text, to: windowId, pressReturn: pressReturn,
-                           terminalApp: terminalApp, iterm2SessionId: iterm2SessionId)
+                           terminalApp: terminalApp, iterm2SessionId: iterm2SessionId,
+                           cgWindowNumber: cgWindowNumber)
         }
     }
 
@@ -635,15 +633,55 @@ final class KeystrokeInjector {
     /// same way as `pasteTextScript`. The text is never in the script: it rides
     /// the clipboard, so nothing in it can be read as AppleScript or keystrokes.
     /// Return is pressed once, after the paste, and only when asked.
-    nonisolated static func terminalPasteTextScript(pressReturn: Bool) -> String {
+    nonisolated static func terminalPasteTextScript(pressReturn: Bool, windowNumber: CGWindowID = 0) -> String {
         let returnCmd = pressReturn ? "\n        key code 36" : ""
         return """
-        tell application "Terminal" to activate
+        \(terminalWindowGuard(windowNumber: windowNumber))
         delay 0.1
         tell application "System Events"
             tell process "Terminal"
                 keystroke "v" using command down\(returnCmd)
             end tell
+        end tell
+        """
+    }
+
+    /// The Terminal.app keystroke script `sendText` runs: the window guard,
+    /// then `commands` (System Events `keystroke` / `key code` lines) into
+    /// the Terminal process. Pure, so tests can lock its shape.
+    nonisolated static func terminalKeystrokeScript(commands: [String], windowNumber: CGWindowID) -> String {
+        let cmds = commands.joined(separator: "\n                ")
+        return """
+        \(terminalWindowGuard(windowNumber: windowNumber))
+        delay 0.1
+        tell application "System Events"
+            tell process "Terminal"
+                \(cmds)
+            end tell
+        end tell
+        """
+    }
+
+    /// The lines that put the right Terminal.app window in front before any
+    /// keystroke (US-116). Terminal.app keystrokes land in whichever of its
+    /// windows is frontmost, and a broadcast raises window A, queues A's
+    /// keystrokes, raises B, queues B's: A's text would land in B. Raising
+    /// inside the script keeps raise and keystrokes together on the one
+    /// serial AppleScript queue, and the check refuses to type when another
+    /// window is still in front (the error is attributed to this request).
+    /// Terminal.app's AppleScript `window id` is the CGWindowID, see
+    /// `terminalAppReadScript`. Without a number (0) the script activates
+    /// Terminal as before and types into its front window.
+    nonisolated static func terminalWindowGuard(windowNumber: CGWindowID) -> String {
+        guard windowNumber != 0 else {
+            return "tell application \"Terminal\" to activate"
+        }
+        return """
+        tell application "Terminal"
+            activate
+            if not (exists window id \(windowNumber)) then error "Quip: Terminal window \(windowNumber) is gone"
+            set frontmost of window id \(windowNumber) to true
+            if id of front window is not \(windowNumber) then error "Quip: Terminal window \(windowNumber) is not frontmost"
         end tell
         """
     }
