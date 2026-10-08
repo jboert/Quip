@@ -1655,10 +1655,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     // .claude within one poll gap still routes sendText for that
                     // press; empirically unobserved across a day of presses —
                     // classify.log/latency cached_cli will surface it if real.)
-                    let cachedCliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
-                    let cliKind = cachedCliKind == .shell
-                        ? self.terminalStateDetector.refreshCLIKind(for: msg.windowId)
-                        : cachedCliKind
+                    let (cachedCliKind, cliKind) = self.routingCLIKind(for: msg.windowId)
                     // Diagnostic: log tracked PID + tty so post-mortem can
                     // tell stale-PID respawn from genuine "no codex running"
                     // when cliKind=shell but an agent CLI is visible on screen.
@@ -2645,7 +2642,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
         ensureITermSessionResolved(for: msg.windowId) { window in
             let termApp = self.terminalAppForWindow(window)
-            let cliKind = self.terminalStateDetector.windowCLIKind[msg.windowId] ?? .shell
+            // Re-classified when the cache says `.shell`, as send_text does: a
+            // stale `.shell` for a Claude window in iTerm2 made the multi-line
+            // policy paste a prompt with no Return where it used to submit.
+            let (cachedCliKind, cliKind) = self.routingCLIKind(for: msg.windowId)
             // Q-34b — fill {{name}} placeholders from this window. Read the
             // pasteboard here, before the paste route borrows it, and only when
             // the prompt asks for {{clipboard}}. An unfilled name stays literal.
@@ -2696,7 +2696,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         result = await doInject(newId)
                     }
                 }
-                appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
+                appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
                 if !result.success {
                     let reason = result.error ?? "unknown"
                     print("[Quip] paste_prompt FAILED: \(reason)")
@@ -2704,6 +2704,25 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 }
             }
         }
+    }
+
+    /// The CLI kind `send_text` and `paste_prompt` pick a route by, with the
+    /// cached kind it started from (both go to latency.log). Why only `.shell`
+    /// is re-classified is explained where `send_text` calls this.
+    @MainActor
+    private func routingCLIKind(for windowId: String) -> (cached: CLIKind, chosen: CLIKind) {
+        let cached = terminalStateDetector.windowCLIKind[windowId]
+        let chosen = Self.routingCLIKind(cached: cached) {
+            terminalStateDetector.refreshCLIKind(for: windowId)
+        }
+        return (cached ?? .shell, chosen)
+    }
+
+    /// Pure half of `routingCLIKind(for:)`: a cached agent kind is trusted, and
+    /// `.shell` or no kind at all is re-classified.
+    nonisolated static func routingCLIKind(cached: CLIKind?, reclassify: () -> CLIKind) -> CLIKind {
+        guard let cached, cached != .shell else { return reclassify() }
+        return cached
     }
 
     /// Phone tapped "Sync from VibeCut". The read/map/replace pipeline lives in

@@ -173,3 +173,43 @@ final class TerminalPasteTextScriptTests: XCTestCase {
         }
     }
 }
+
+/// The CLI kind `send_text` and `paste_prompt` hand to `MultiLineSendPolicy`
+/// (`QuipMacApp.routingCLIKind`). paste_prompt used the cached kind as it was,
+/// so a stale `.shell` cache on a Claude window turned a multi-line prompt into
+/// a paste with no Return.
+final class RoutingCLIKindTests: XCTestCase {
+
+    private let threeLines = "line one\nline two\nline three"
+
+    func test_aShellOrMissingCacheIsReclassified() {
+        XCTAssertEqual(QuipMacApp.routingCLIKind(cached: .shell) { .claude }, .claude)
+        XCTAssertEqual(QuipMacApp.routingCLIKind(cached: nil) { .codex }, .codex)
+        XCTAssertEqual(QuipMacApp.routingCLIKind(cached: .shell) { .shell }, .shell,
+                       "a window that really is a shell stays one")
+    }
+
+    func test_aCachedAgentKindIsTrustedWithoutReclassifying() {
+        for kind in CLIKind.allCases where kind != .shell {
+            var reclassified = false
+            let chosen = QuipMacApp.routingCLIKind(cached: kind) { reclassified = true; return .shell }
+            XCTAssertEqual(chosen, kind)
+            XCTAssertFalse(reclassified, "\(kind): a re-classify on every press is the latency cost send_text avoids")
+        }
+    }
+
+    /// The regression: a multi-line prompt with Return to Claude Code in iTerm2
+    /// while the cache still said `.shell`.
+    func test_aStaleShellCacheOnClaudeInITerm2StillSubmitsAMultiLinePrompt() {
+        let stale = MultiLineSendPolicy.decide(text: threeLines, cliKind: .shell,
+                                               terminalApp: .iterm2, pressReturn: true)
+        XCTAssertEqual(stale.route, .pasteText, "precondition: decided on the stale kind, the Return is dropped")
+        XCTAssertFalse(stale.pressReturn)
+
+        let kind = QuipMacApp.routingCLIKind(cached: .shell) { .claude }
+        let d = MultiLineSendPolicy.decide(text: threeLines, cliKind: kind,
+                                           terminalApp: .iterm2, pressReturn: true)
+        XCTAssertEqual(d.route, .sendText)
+        XCTAssertTrue(d.pressReturn, "submitted, as it was before US-008")
+    }
+}
