@@ -7984,6 +7984,10 @@ struct QuickButtonsSheet: View {
     /// (iOS Menu has a fixed render window and clips long labels mid-word).
     @State private var showAddSheet: Bool = false
     @State private var addSheetQuery: String = ""
+    /// Search over Row Order and Custom Buttons (US-103). While it holds a
+    /// query, drag-to-reorder is off: moving rows of a filtered list is
+    /// ambiguous.
+    @State private var editorQuery: String = ""
     @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
     @State private var shareItem: PackShareItem?
     @State private var exportError: String?
@@ -8008,6 +8012,34 @@ struct QuickButtonsSheet: View {
     /// snapshot breaks that observation chain.
     @State private var promptLabelByID: [String: String] = [:]
     @State private var promptByteSizeByID: [String: Int] = [:]
+
+    private var isFilteringEditor: Bool { !QuipSearch.tokens(editorQuery).isEmpty }
+
+    /// Row Order slots matching the editor search, best match first; every
+    /// slot in row order without a query.
+    private var visibleSlots: [QuickSlot] {
+        guard isFilteringEditor else { return slots }
+        let rows = slots.map { QuickButtonSearch.row($0, customs: customsByID, promptLabels: promptLabelByID) }
+        return QuickButtonSearch.filter(rows, query: editorQuery).map(\.slot)
+    }
+
+    private var visibleCustoms: [CustomButton] {
+        QuickButtonSearch.filter(customs, query: editorQuery)
+    }
+
+    /// Swipe-to-remove on the possibly filtered Row Order list: the offsets
+    /// index `visibleSlots`, so remove by slot id.
+    private func deleteVisibleSlots(at offsets: IndexSet) {
+        let shown = visibleSlots
+        let removed = Set(offsets.map { shown[$0].id })
+        persistSlots(slots.filter { !removed.contains($0.id) })
+    }
+
+    private func deleteVisibleCustoms(at offsets: IndexSet) {
+        let shown = visibleCustoms
+        let removedIDs = Set(offsets.map { shown[$0].id })
+        deleteCustomDefs(at: IndexSet(customs.indices.filter { removedIDs.contains(customs[$0].id) }))
+    }
 
     /// Set of built-in QuickButton rawValues already placed in the slot
     /// list — used to disable duplicate adds in the "+" menu so the user
@@ -8038,31 +8070,37 @@ struct QuickButtonsSheet: View {
                     Text("No buttons yet. Tap + → “Custom Button” to make your own, or pick a built-in.")
                         .foregroundStyle(.secondary)
                         .font(.system(size: 13))
+                } else if isFilteringEditor && visibleSlots.isEmpty {
+                    Text("No buttons in the row match \"\(editorQuery)\".")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
                 } else {
-                    ForEach(slots) { slot in
+                    ForEach(visibleSlots) { slot in
                         HStack(spacing: 8) {
                             slotRow(slot)
                             slotColorButton(slot)
                         }
                     }
-                    .onMove(perform: moveSlots)
-                    .onDelete(perform: deleteSlots)
+                    .onMove(perform: isFilteringEditor ? nil : moveSlots)
+                    .onDelete(perform: deleteVisibleSlots)
                 }
             } header: {
                 HStack {
                     Text("Row Order")
                     Spacer()
-                    Text("\(slots.count)")
+                    Text(isFilteringEditor ? "\(visibleSlots.count) of \(slots.count)" : "\(slots.count)")
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
             } footer: {
-                Text("Drag the handle to reorder. Swipe to remove. Tap the dot to color a button. Spacers add fixed gaps between buttons.")
+                Text(isFilteringEditor
+                     ? "Clear the search to reorder. Swipe to remove. Tap the dot to color a button."
+                     : "Drag the handle to reorder. Swipe to remove. Tap the dot to color a button. Spacers add fixed gaps between buttons.")
             }
 
-            if !customs.isEmpty {
+            if !visibleCustoms.isEmpty {
                 Section {
-                    ForEach(customs) { c in
+                    ForEach(visibleCustoms) { c in
                         // HStack + .contentShape + .onTapGesture instead of
                         // Button { } .buttonStyle(.plain) — the Button form
                         // eats scroll gestures inside a List, making the
@@ -8088,12 +8126,12 @@ struct QuickButtonsSheet: View {
                         .contentShape(Rectangle())
                         .onTapGesture { editingCustomID = c.id }
                     }
-                    .onDelete(perform: deleteCustomDefs)
+                    .onDelete(perform: deleteVisibleCustoms)
                 } header: {
                     HStack {
                         Text("Custom Buttons")
                         Spacer()
-                        Text("\(customs.count)")
+                        Text(isFilteringEditor ? "\(visibleCustoms.count) of \(customs.count)" : "\(customs.count)")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -8103,6 +8141,10 @@ struct QuickButtonsSheet: View {
             }
         }
         .listStyle(.insetGrouped)
+        .searchable(text: $editorQuery, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: "Search buttons")
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled(true)
         .navigationTitle("Quick Buttons")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -8538,40 +8580,15 @@ struct QuickButtonsSheet: View {
     private var addSheet: some View {
         NavigationStack {
             List {
-                Section {
-                    Button {
-                        showAddSheet = false
-                        addingCustom = true
-                    } label: {
-                        Label("Custom Button…", systemImage: "plus.square.dashed")
-                    }
-                    Button {
-                        addSpacer()
-                        showAddSheet = false
-                    } label: {
-                        Label("Spacer", systemImage: "arrow.left.and.right")
-                    }
-                    if !promptLabelByID.isEmpty {
-                        Button {
-                            showAddSheet = false
-                            showPromptPicker = true
-                        } label: {
-                            Label("One prompt as its own button…", systemImage: "doc.text")
+                let topItems = filteredAddItems
+                if !topItems.isEmpty {
+                    Section {
+                        ForEach(topItems, id: \.self) { item in addItemRow(item) }
+                    } footer: {
+                        if topItems.contains(.customButton) {
+                            Text("“Custom Button” makes your own slash, text, or keystroke key with a live preview.")
                         }
                     }
-                    let pickerPlaced = slots.contains(where: {
-                        if case .promptsPicker = $0 { return true } else { return false }
-                    })
-                    Button {
-                        addPromptsPicker()
-                        showAddSheet = false
-                    } label: {
-                        Label("Prompts button (opens all prompts)" + (pickerPlaced ? " · added" : ""),
-                              systemImage: "doc.text.magnifyingglass")
-                    }
-                    .disabled(pickerPlaced)
-                } footer: {
-                    Text("“Custom Button” makes your own slash, text, or keystroke key with a live preview.")
                 }
 
                 let slashMatches = filteredBuiltins(category: .slash)
@@ -8592,11 +8609,20 @@ struct QuickButtonsSheet: View {
                         ForEach(keystrokeMatches) { btn in addSheetRow(btn) }
                     }
                 }
+                if topItems.isEmpty && slashMatches.isEmpty && answerMatches.isEmpty && keystrokeMatches.isEmpty {
+                    Section {
+                        Text("No buttons match \"\(addSheetQuery)\".")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Add Button")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $addSheetQuery, placement: .navigationBarDrawer(displayMode: .always))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { showAddSheet = false }
@@ -8606,17 +8632,59 @@ struct QuickButtonsSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    /// Filter QuickButton cases for the add sheet — applies the search query
-    /// to both `displayName` and `label` so users can find items by either
-    /// the long name (`/commit-commands:commit-push-pr`) or short label
-    /// (`/ship`).
+    /// Built-ins of one category for the add sheet, matched by the search
+    /// engine (US-103) on the short label (`/ship`), the full name
+    /// (`/commit-commands:commit-push-pr`), the id and what the button
+    /// sends, so "escape" finds Esc. Best match first while searching.
     private func filteredBuiltins(category: QuickButton.Category) -> [QuickButton] {
-        let q = addSheetQuery.trimmingCharacters(in: .whitespaces).lowercased()
-        return QuickButton.allCases.filter { btn in
-            guard btn.category == category else { return false }
-            if q.isEmpty { return true }
-            return btn.displayName.lowercased().contains(q)
-                || btn.label.lowercased().contains(q)
+        QuickButtonSearch.filter(QuickButton.allCases.filter { $0.category == category }, query: addSheetQuery)
+    }
+
+    /// The entries above the built-ins, filtered by the same search. "One
+    /// prompt…" is offered only once the Mac has sent its prompts.
+    private var filteredAddItems: [QuickButtonSearch.AddItem] {
+        var items: [QuickButtonSearch.AddItem] = [.customButton, .spacer]
+        if !promptLabelByID.isEmpty { items.append(.onePrompt) }
+        items.append(.promptsPicker)
+        return QuickButtonSearch.filter(items, query: addSheetQuery)
+    }
+
+    @ViewBuilder
+    private func addItemRow(_ item: QuickButtonSearch.AddItem) -> some View {
+        switch item {
+        case .customButton:
+            Button {
+                showAddSheet = false
+                addingCustom = true
+            } label: {
+                Label("Custom Button…", systemImage: "plus.square.dashed")
+            }
+        case .spacer:
+            Button {
+                addSpacer()
+                showAddSheet = false
+            } label: {
+                Label("Spacer", systemImage: "arrow.left.and.right")
+            }
+        case .onePrompt:
+            Button {
+                showAddSheet = false
+                showPromptPicker = true
+            } label: {
+                Label("One prompt as its own button…", systemImage: "doc.text")
+            }
+        case .promptsPicker:
+            let pickerPlaced = slots.contains(where: {
+                if case .promptsPicker = $0 { return true } else { return false }
+            })
+            Button {
+                addPromptsPicker()
+                showAddSheet = false
+            } label: {
+                Label("Prompts button (opens all prompts)" + (pickerPlaced ? " · added" : ""),
+                      systemImage: "doc.text.magnifyingglass")
+            }
+            .disabled(pickerPlaced)
         }
     }
 
