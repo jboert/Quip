@@ -16,8 +16,7 @@ enum MinimizedTray {
     /// so the tray and the grid agree.
     static func entries(_ windows: [WindowState]) -> [Entry] {
         windows.filter(\.isMinimized).map { window in
-            let folder = window.folder ?? ""
-            return Entry(id: window.id, title: folder.isEmpty ? window.name : folder, color: window.color)
+            Entry(id: window.id, title: window.displayTitle, color: window.color)
         }
     }
 }

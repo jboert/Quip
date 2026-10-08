@@ -353,7 +353,7 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Push not configured — missing \(missing.joined(separator: ", "))")
                     .font(.system(size: 12, weight: .semibold))
-                Text("\(pushService.devices.count) registered device\(pushService.devices.count == 1 ? "" : "s") — pushes will not deliver until it is entered in Settings → Notifications.")
+                Text("^[\(pushService.devices.count) registered device](inflect: true) — pushes will not deliver until it is entered in Settings → Notifications.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -420,14 +420,12 @@ struct MenuBarView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
-            if let version = Self.appVersionString {
-                Text("·")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Text("v\(version)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
+            Text("·")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text("v\(Self.appVersionString)")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
 
             Spacer()
 
@@ -444,7 +442,7 @@ struct MenuBarView: View {
     /// "1.5.7 a8f2308": the version with the commit the build was stamped
     /// with (tools/stamp-build-info.sh), so an installed Mac app can be told
     /// from the last one.
-    private static var appVersionString: String? {
+    private static var appVersionString: String {
         BuildInfo.shortDisplay(BuildInfo.current)
     }
 

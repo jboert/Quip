@@ -1459,10 +1459,17 @@ struct MainiOSView: View {
     /// The last broadcast's delivery, one line in the toast area until it is
     /// tapped or times out (US-111). A new broadcast replaces it.
     @State private var broadcastDelivery: BroadcastDelivery?
-    /// Bumped by every `hideBroadcastResult` so only the latest hide fires:
-    /// a 4 s hide armed when a paste-route broadcast settled must not cut
-    /// short the 15 s a later attributed error gives the Retry tap.
-    @State private var broadcastHideGeneration = 0
+    /// The pending hide of the result line. Cancelled by every new hide, so
+    /// a 4 s hide armed when a paste-route broadcast settled cannot cut short
+    /// the 15 s a later attributed error gives the Retry tap.
+    @State private var broadcastHideTask: Task<Void, Never>?
+    /// The deadline that marks unanswered targets (US-111); a new broadcast
+    /// cancels the old one.
+    @State private var broadcastDeadlineTask: Task<Void, Never>?
+    @State private var broadcastToastTask: Task<Void, Never>?
+    /// Bumped to play the warning haptic when Broadcast cannot open.
+    @State private var broadcastWarningTick = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Full-width Broadcast bar above the main row (US-109). Off hides it;
     /// Broadcast can still be a Quick Button.
     @AppStorage("mainRow.broadcastBar") private var mainRowBroadcastBar: Bool = true
@@ -1734,13 +1741,15 @@ struct MainiOSView: View {
                         .padding(.vertical, 6)
                         .background(Color.red.opacity(0.85))
                         .clipShape(Capsule())
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .transition(toastTransition)
                         .animation(.easeInOut(duration: 0.3), value: errorToast)
                 }
                 broadcastResultLine
             }
             .padding(.top, 50)
+            .animation(.easeInOut(duration: 0.3), value: broadcastDelivery?.startedAt)
         }
+        .sensoryFeedback(.warning, trigger: broadcastWarningTick)
         .environment(\.quipColors, colors)
     }
 
@@ -1896,11 +1905,11 @@ struct MainiOSView: View {
             }
             manager.onSendTextAck = { session, messageID in
                 guard session.backendID == manager.activeBackendID else { return }
-                DispatchQueue.main.async { confirmBroadcastTarget(messageID) }
+                Task { @MainActor in confirmBroadcastTarget(messageID) }
             }
             manager.onSendTextError = { session, messageID in
                 guard session.backendID == manager.activeBackendID else { return }
-                DispatchQueue.main.async { failBroadcastTarget(messageID) }
+                Task { @MainActor in failBroadcastTarget(messageID) }
             }
         }
         .onChange(of: client.isConnected) { _, connected in
@@ -3290,6 +3299,7 @@ struct MainiOSView: View {
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: isPortrait ? 50 : 36)
         }
+        .accessibilityInputLabels(["Broadcast", "Broadcast Prompt"])
         .buttonStyle(.borderedProminent)
         .tint(colors.buttonPrimary)
         .disabled(!canOpen)
@@ -3639,16 +3649,14 @@ struct MainiOSView: View {
             expectsAck = false
         }
         trackBroadcast(BroadcastDelivery(text: send.text, source: send.source, targets: queued,
-                                         expectsAck: expectsAck, startedAt: Date()))
+                                         expectsAck: expectsAck, startedAt: .now))
         return Set(queued.map(\.windowID))
     }
 
     /// The name a broadcast result line uses for a window: its folder, as the
     /// sheet lists it, else its title.
     private func broadcastTargetName(_ windowID: String) -> String {
-        guard let window = windows.first(where: { $0.id == windowID }) else { return windowID }
-        if let folder = window.folder, !folder.isEmpty { return folder }
-        return window.name
+        windows.first(where: { $0.id == windowID })?.displayTitle ?? windowID
     }
 
     /// Why Broadcast cannot open right now, or nil when it can (US-113).
@@ -3685,7 +3693,10 @@ struct MainiOSView: View {
             openBroadcast(draft: entry.body, source: BroadcastSource(promptID: entry.id, body: entry.body))
         }
         if blocking {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: open)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(0.6))
+                open()
+            }
         } else {
             open()
         }
@@ -3695,7 +3706,7 @@ struct MainiOSView: View {
     /// says why instead of doing nothing (US-113).
     private func fireBroadcastKey() {
         if let reason = broadcastUnavailableReason {
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            broadcastWarningTick += 1
             showBroadcastToast(reason)
             return
         }
@@ -3704,9 +3715,16 @@ struct MainiOSView: View {
 
     private func showBroadcastToast(_ message: String) {
         errorToast = message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            if errorToast == message { errorToast = nil }
+        broadcastToastTask?.cancel()
+        broadcastToastTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, errorToast == message else { return }
+            errorToast = nil
         }
+    }
+
+    private var toastTransition: AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity)
     }
 
     /// Show `delivery` in the toast area, replacing any earlier one, and mark
@@ -3718,9 +3736,11 @@ struct MainiOSView: View {
             hideBroadcastResult(startedAt, after: 4)
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + BroadcastDelivery.deadline + 0.05) {
-            guard broadcastDelivery?.startedAt == startedAt else { return }
-            broadcastDelivery?.expire(at: Date())
+        broadcastDeadlineTask?.cancel()
+        broadcastDeadlineTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(BroadcastDelivery.deadline + 0.05))
+            guard !Task.isCancelled, broadcastDelivery?.startedAt == startedAt else { return }
+            broadcastDelivery?.expire(at: .now)
             let hasRetry = broadcastDelivery?.retryWindowIDs.isEmpty == false
             hideBroadcastResult(startedAt, after: hasRetry ? 15 : 4)
         }
@@ -3747,12 +3767,11 @@ struct MainiOSView: View {
     }
 
     private func hideBroadcastResult(_ startedAt: Date, after seconds: TimeInterval) {
-        broadcastHideGeneration += 1
-        let generation = broadcastHideGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-            guard broadcastHideGeneration == generation,
-                  broadcastDelivery?.startedAt == startedAt else { return }
-            withAnimation(.easeInOut(duration: 0.3)) { broadcastDelivery = nil }
+        broadcastHideTask?.cancel()
+        broadcastHideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled, broadcastDelivery?.startedAt == startedAt else { return }
+            broadcastDelivery = nil
         }
     }
 
@@ -3776,7 +3795,7 @@ struct MainiOSView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if !retryIDs.isEmpty {
-                        Text("Retry").fontWeight(.semibold)
+                        Text("Retry").bold()
                     }
                 }
                 .font(.system(size: 12, weight: .medium))
@@ -3791,7 +3810,7 @@ struct MainiOSView: View {
             .accessibilityHint(retryIDs.isEmpty
                                ? "Dismisses this message"
                                : "Opens Broadcast with only the terminals that did not confirm selected")
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .transition(toastTransition)
         }
     }
 
@@ -4233,6 +4252,7 @@ struct MainiOSView: View {
 
     /// A window the tray is about to close; drives the confirmation alert.
     @State private var trayCloseCandidate: MinimizedTray.Entry?
+    @State private var showTrayClose = false
 
     /// Q-53 — the dock-like tray: one pill per window the Mac minimized for
     /// the phone. Tapping a pill restores and raises it; the small x asks,
@@ -4242,46 +4262,49 @@ struct MainiOSView: View {
     private var minimizedTray: some View {
         let entries = MinimizedTray.entries(windows)
         if !entries.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
+            ScrollView(.horizontal) {
                 HStack(spacing: 6) {
                     Image(systemName: "dock.rectangle")
                         .font(.system(size: 11))
                         .foregroundStyle(colors.textFaint)
                         .accessibilityLabel("Minimized windows")
+                    // One pill, one tap target the size of the pill (a 9 pt x
+                    // beside it was an 18 pt target that mis-tapped into
+                    // Restore). Close is the long-press action, as on the card.
                     ForEach(entries) { entry in
-                        HStack(spacing: 5) {
-                            Button {
-                                restoreMinimizedWindow(entry.id)
-                            } label: {
-                                Label(entry.title, systemImage: "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .lineLimit(1)
-                                    .foregroundStyle(Color(hex: entry.color))
-                            }
-                            .accessibilityHint("Restores and raises the window on the Mac")
-                            Button {
-                                trayCloseCandidate = entry
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(colors.textFaint)
-                                    .frame(width: 18, height: 18)
-                            }
-                            .accessibilityLabel("Close \(entry.title)")
+                        Button {
+                            restoreMinimizedWindow(entry.id)
+                        } label: {
+                            Label(entry.title, systemImage: "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                                .foregroundStyle(Color(hex: entry.color))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(Color(hex: entry.color).opacity(0.14))
+                                .clipShape(Capsule())
+                                .contentShape(.rect)
                         }
-                        .padding(.leading, 8)
-                        .padding(.trailing, 4)
-                        .padding(.vertical, 3)
-                        .background(Color(hex: entry.color).opacity(0.14))
-                        .clipShape(Capsule())
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Restores and raises the window on the Mac")
+                        .accessibilityAction(named: "Close \(entry.title)") {
+                            trayCloseCandidate = entry
+                            showTrayClose = true
+                        }
+                        .contextMenu {
+                            Button("Close Terminal", systemImage: "xmark.circle", role: .destructive) {
+                                trayCloseCandidate = entry
+                                showTrayClose = true
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 4)
                 .padding(.bottom, 4)
             }
+            .scrollIndicators(.hidden)
             .alert("Close \(trayCloseCandidate?.title ?? "window")?",
-                   isPresented: Binding(get: { trayCloseCandidate != nil },
-                                        set: { if !$0 { trayCloseCandidate = nil } }),
+                   isPresented: $showTrayClose,
                    presenting: trayCloseCandidate) { entry in
                 Button("Cancel", role: .cancel) {}
                 Button("Close Terminal", role: .destructive) {
@@ -8122,7 +8145,7 @@ struct NotificationsSettingsSheet: View {
                 Section {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Pushes are off").font(.subheadline.weight(.medium))
+                            Text("Pushes are off").font(.subheadline)
                             Text("\(problem). Open Quip on the Mac → Settings → Notifications; the Mac shows what to enter.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

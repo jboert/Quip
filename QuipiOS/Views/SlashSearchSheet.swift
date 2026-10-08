@@ -20,9 +20,7 @@ struct SlashSearchSheet: View {
             List {
                 let shown = QuickButtonSearch.filter(members, query: query)
                 if shown.isEmpty {
-                    Text("No slash commands match \"\(query)\".")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                    ContentUnavailableView.search(text: query)
                 }
                 ForEach(shown) { member in
                     Button {

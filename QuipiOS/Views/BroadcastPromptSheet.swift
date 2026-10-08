@@ -1,25 +1,5 @@
 import SwiftUI
 
-/// What the Broadcast sheet opens with: the draft, the library prompt it came
-/// from (US-107), and which terminals start selected. `selection` nil selects
-/// every terminal; a retry (US-111) passes only the ones that did not confirm.
-struct BroadcastSheetRequest: Identifiable {
-    let id = UUID()
-    var draft: String
-    var source: BroadcastSource?
-    var selection: Set<String>?
-}
-
-/// One tap on Send, as the sheet hands it to the main screen.
-struct BroadcastSend {
-    /// The draft as sent, kept so a retry can reopen the sheet with it.
-    let text: String
-    let source: BroadcastSource?
-    let route: BroadcastRoute
-    let targetIDs: [String]
-    let pressReturn: Bool
-}
-
 extension Notification.Name {
     /// Opens the Broadcast sheet on the main screen. `object` is a
     /// `BroadcastLink.Request`: posted by the Prompts hub's "Broadcast…"
@@ -85,7 +65,7 @@ struct BroadcastPromptSheet: View {
     private var suggestions: BroadcastSuggestions.Result {
         BroadcastSuggestions.suggestions(
             draft: draft, library: library, hiddenJSON: hiddenPromptIDsJSON,
-            store: usageStore, context: nil, at: Date(),
+            store: usageStore, context: nil, at: .now,
             chosenBody: source?.body, cache: searchCache
         )
     }
@@ -93,7 +73,7 @@ struct BroadcastPromptSheet: View {
     /// Everything the "All prompts…" menu lists: visible prompts, most used first.
     private var allPrompts: [PromptEntry] {
         PromptHub.sections(library, hiddenJSON: hiddenPromptIDsJSON, store: usageStore,
-                           context: nil, query: "", at: Date()).visible
+                           context: nil, query: "", at: .now).visible
     }
 
     private var isPastingPrompt: Bool {
@@ -162,7 +142,7 @@ struct BroadcastPromptSheet: View {
             // US-107 — typed or edited text goes out as written.
             if let hint = BroadcastRoute.placeholderHint(text: draft, source: source) {
                 Label(hint, systemImage: "curlybraces")
-                    .font(.system(size: 10))
+                    .font(.caption)
                     .foregroundStyle(.orange)
             }
 
@@ -193,11 +173,11 @@ struct BroadcastPromptSheet: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(prompt.label)
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline)
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
                             Text(prompt.bodyPreview)
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -244,7 +224,7 @@ struct BroadcastPromptSheet: View {
                                                  ? Color.accentColor
                                                  : Color.secondary)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(primaryTitle(for: window))
+                                Text(window.displayTitle)
                                     .foregroundStyle(.primary)
                                 Text(window.app)
                                     .font(.caption)
@@ -256,7 +236,7 @@ struct BroadcastPromptSheet: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("\(primaryTitle(for: window)), \(window.app)")
+                    .accessibilityLabel("\(window.displayTitle), \(window.app)")
                     .accessibilityValue(selectedIDs.contains(window.id) ? "Selected" : "Not selected")
                 }
             }
@@ -294,11 +274,6 @@ struct BroadcastPromptSheet: View {
         } else {
             selectedIDs.insert(id)
         }
-    }
-
-    private func primaryTitle(for window: WindowState) -> String {
-        guard let folder = window.folder, !folder.isEmpty else { return window.name }
-        return folder
     }
 
     private func send() {
