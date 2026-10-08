@@ -5,6 +5,11 @@ import XCTest
 /// round-trip through UserDefaults across instances. These tests run the
 /// service against an isolated UserDefaults suite so they don't collide
 /// with real app state or other tests.
+///
+/// The suite has to be passed in: the Mac suite is app-hosted with the real
+/// bundle id, so `UserDefaults.standard` here is the owner's com.quip.mac
+/// domain. These tests used to register and remove ROUNDTRIP…, REMOVEME and
+/// DEDUPTOKEN in the owner's live `registeredPushDevices` list.
 @MainActor
 final class PushRegisteredDeviceStoreTests: XCTestCase {
 
@@ -24,54 +29,51 @@ final class PushRegisteredDeviceStoreTests: XCTestCase {
         suiteName = nil
     }
 
+    func test_defaultStore_isNotTheOwnersDomainUnderTests() {
+        XCTAssertTrue(SingleInstanceGuard.isRunningTests)
+        XCTAssertFalse(PushNotificationService.defaultStore === UserDefaults.standard,
+                       "a service built without an explicit suite must still stay out of com.quip.mac")
+    }
+
     func test_registerDevice_persistsSingleEntry() {
-        // PushNotificationService hardcodes UserDefaults.standard, so verify
-        // via the service's own observable state. Persistence roundtrip is
-        // covered by the next test.
-        let svc = PushNotificationService()
-        let initialCount = svc.devices.count
+        let svc = PushNotificationService(defaults: defaults)
+        XCTAssertTrue(svc.devices.isEmpty, "a fresh suite starts with no devices")
 
         svc.registerDevice(token: "ABCDEF1234", environment: "development")
 
-        XCTAssertEqual(svc.devices.count, initialCount + 1)
+        XCTAssertEqual(svc.devices.count, 1)
         XCTAssertEqual(svc.devices.last?.token, "ABCDEF1234")
         XCTAssertEqual(svc.devices.last?.environment, "development")
-
-        // Cleanup — remove so subsequent tests / real app state aren't polluted
-        svc.removeDevice(token: "ABCDEF1234")
+        XCTAssertNotNil(defaults.data(forKey: "registeredPushDevices"),
+                        "the registry persists to the injected suite")
     }
 
     func test_registerDevice_dedupesByToken() {
-        let svc = PushNotificationService()
-        let initialCount = svc.devices.count
+        let svc = PushNotificationService(defaults: defaults)
 
         svc.registerDevice(token: "DEDUPTOKEN", environment: "development")
         svc.registerDevice(token: "DEDUPTOKEN", environment: "development")
         svc.registerDevice(token: "DEDUPTOKEN", environment: "production")
 
-        XCTAssertEqual(svc.devices.count, initialCount + 1)
+        XCTAssertEqual(svc.devices.count, 1)
         XCTAssertEqual(svc.devices.last?.environment, "production",
                        "Re-registering with a different environment should update the existing entry")
-
-        svc.removeDevice(token: "DEDUPTOKEN")
     }
 
     func test_registerDevice_normalizesToUppercase() {
-        let svc = PushNotificationService()
+        let svc = PushNotificationService(defaults: defaults)
         svc.registerDevice(token: "abc123def", environment: "development")
         XCTAssertTrue(svc.devices.contains(where: { $0.token == "ABC123DEF" }))
-        svc.removeDevice(token: "ABC123DEF")
     }
 
     func test_registerDevice_rejectsEmptyToken() {
-        let svc = PushNotificationService()
-        let before = svc.devices.count
+        let svc = PushNotificationService(defaults: defaults)
         svc.registerDevice(token: "", environment: "development")
-        XCTAssertEqual(svc.devices.count, before)
+        XCTAssertTrue(svc.devices.isEmpty)
     }
 
     func test_removeDevice_dropsMatchingToken() {
-        let svc = PushNotificationService()
+        let svc = PushNotificationService(defaults: defaults)
         svc.registerDevice(token: "REMOVEME", environment: "development")
         XCTAssertTrue(svc.devices.contains(where: { $0.token == "REMOVEME" }))
         svc.removeDevice(token: "REMOVEME")
@@ -80,13 +82,11 @@ final class PushRegisteredDeviceStoreTests: XCTestCase {
 
     func test_persistence_roundTripsAcrossInstances() {
         let token = "ROUNDTRIP\(Int.random(in: 1000...9999))"
-        let first = PushNotificationService()
+        let first = PushNotificationService(defaults: defaults)
         first.registerDevice(token: token, environment: "development")
 
-        let second = PushNotificationService()
+        let second = PushNotificationService(defaults: defaults)
         XCTAssertTrue(second.devices.contains(where: { $0.token == token }),
                       "Second instance should load persisted devices from UserDefaults")
-
-        second.removeDevice(token: token)
     }
 }

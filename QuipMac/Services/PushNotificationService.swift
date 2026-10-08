@@ -7,8 +7,9 @@ import AppKit
 /// (stderr goes nowhere user-visible), so for the push pipeline — which
 /// is what users actually want to debug when "I didn't get a
 /// notification" happens — we commit to a predictable file. Safe to
-/// tail while the app is running.
-private func quipPushLog(_ message: String) {
+/// tail while the app is running. Internal so the APNs Keychain stores
+/// (`APNsKeychainLog`) can report into the same file.
+func quipPushLog(_ message: String) {
     NSLog("[PushNotif] %@", message)
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
@@ -174,9 +175,35 @@ final class PushNotificationService {
     private static let storageKey = "registeredPushDevices"
     private static let preferencesKey = "registeredPushDevicePreferences"
 
-    init() {
+    /// Where the device registry and per-device prefs persist.
+    private let defaults: UserDefaults
+
+    /// `.standard` in the app. Under XCTest a throwaway suite: the Mac suite is
+    /// app-hosted with the real bundle id, so `.standard` there IS the owner's
+    /// com.quip.mac domain, and the registry tests used to add and remove
+    /// tokens (ROUNDTRIP…, REMOVEME, DEDUPTOKEN) in the owner's live
+    /// `registeredPushDevices` list.
+    nonisolated static var defaultStore: UserDefaults { TestSafeDefaults.store("push") }
+
+    init(defaults: UserDefaults = PushNotificationService.defaultStore) {
+        self.defaults = defaults
         loadDevices()
         loadPreferences()
+    }
+
+    /// The APNs metadata fields that are empty, in a fixed order. Named in the
+    /// "not configured" skip line so push.log says what to fill in.
+    nonisolated static func missingAPNsFields(keyId: String, teamId: String, bundleId: String) -> [String] {
+        var missing: [String] = []
+        if keyId.isEmpty { missing.append("keyId") }
+        if teamId.isEmpty { missing.append("teamId") }
+        if bundleId.isEmpty { missing.append("bundleId") }
+        return missing
+    }
+
+    /// The push.log line for an event skipped because APNs is not configured.
+    nonisolated static func notConfiguredSkipLine(event: String, missing: [String]) -> String {
+        "\(event) skipped — APNs not configured (missing: \(missing.joined(separator: ", "))) in Settings → Notifications"
     }
 
     /// Pure decode seam for the persisted device list.
@@ -215,7 +242,7 @@ final class PushNotificationService {
     }
 
     private func loadDevices() {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey) else { return }
+        guard let data = defaults.data(forKey: Self.storageKey) else { return }
         let (decoded, failure) = Self.decodeDevices(data)
         if let decoded {
             devices = decoded
@@ -230,7 +257,7 @@ final class PushNotificationService {
     }
 
     private func loadPreferences() {
-        guard let data = UserDefaults.standard.data(forKey: Self.preferencesKey) else { return }
+        guard let data = defaults.data(forKey: Self.preferencesKey) else { return }
         let (decoded, failure) = Self.decodePreferences(data)
         if let decoded {
             preferences = decoded
@@ -247,7 +274,7 @@ final class PushNotificationService {
     private func persist() {
         do {
             let data = try JSONEncoder().encode(devices)
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            defaults.set(data, forKey: Self.storageKey)
         } catch {
             quipPushLog("PERSIST FAILED — devices encode error: \(error.localizedDescription) (\(devices.count) devices not saved; will be lost on relaunch)")
         }
@@ -256,7 +283,7 @@ final class PushNotificationService {
     private func persistPreferences() {
         do {
             let data = try JSONEncoder().encode(preferences)
-            UserDefaults.standard.set(data, forKey: Self.preferencesKey)
+            defaults.set(data, forKey: Self.preferencesKey)
         } catch {
             quipPushLog("PERSIST FAILED — preferences encode error: \(error.localizedDescription) (\(preferences.count) prefs entries not saved; will be lost on relaunch)")
         }
@@ -438,8 +465,9 @@ final class PushNotificationService {
         let keyId = APNsMetadataStore.keyId
         let teamId = APNsMetadataStore.teamId
         let bundleId = APNsMetadataStore.bundleId
-        guard !keyId.isEmpty, !teamId.isEmpty, !bundleId.isEmpty else {
-            quipPushLog("swrm_story_started skipped — APNs not configured in Settings → Notifications")
+        let missing = Self.missingAPNsFields(keyId: keyId, teamId: teamId, bundleId: bundleId)
+        guard missing.isEmpty else {
+            quipPushLog(Self.notConfiguredSkipLine(event: "swrm_story_started", missing: missing))
             return
         }
 
@@ -516,8 +544,9 @@ final class PushNotificationService {
         let keyId = APNsMetadataStore.keyId
         let teamId = APNsMetadataStore.teamId
         let bundleId = APNsMetadataStore.bundleId
-        guard !keyId.isEmpty, !teamId.isEmpty, !bundleId.isEmpty else {
-            quipPushLog("waiting_for_input skipped — APNs not configured in Settings → Notifications")
+        let missing = Self.missingAPNsFields(keyId: keyId, teamId: teamId, bundleId: bundleId)
+        guard missing.isEmpty else {
+            quipPushLog(Self.notConfiguredSkipLine(event: "waiting_for_input", missing: missing))
             return
         }
 

@@ -19,6 +19,9 @@ import Security
 ///
 /// Service key: `com.quip.mac.apns-metadata`
 /// Account keys: `keyId`, `teamId`, `bundleId`
+///
+/// Under XCTest every read, write and delete goes to an in-memory backing and
+/// the migration uses a throwaway UserDefaults suite (see "Test backing").
 enum APNsMetadataStore {
     private static let service = "com.quip.mac.apns-metadata"
 
@@ -84,7 +87,7 @@ enum APNsMetadataStore {
     /// purge the originals. Subsequent calls short-circuit on the
     /// `migrationDoneKey` flag so steady-state reads don't re-probe.
     private static func performMigrationIfNeeded() {
-        let d = UserDefaults.standard
+        let d = migrationDefaults
         guard !d.bool(forKey: migrationDoneKey) else { return }
 
         let legacyKeyId = d.string(forKey: legacyKeyIdDefault) ?? ""
@@ -106,7 +109,7 @@ enum APNsMetadataStore {
             || (kcTeamId == nil && !legacyTeamId.isEmpty)
             || (kcBundleId == nil && !legacyBundleId.isEmpty)
         if migratedAny {
-            print("[APNsMetadataStore] migrated APNs metadata to Keychain")
+            quipPushLog("APNs metadata migrated from UserDefaults to Keychain")
         }
 
         d.removeObject(forKey: legacyKeyIdDefault)
@@ -115,9 +118,41 @@ enum APNsMetadataStore {
         d.set(true, forKey: migrationDoneKey)
     }
 
+    // MARK: - Test backing
+
+    /// In-memory stand-in for the Keychain under XCTest, as PINStore has.
+    ///
+    /// The Mac suite is app-hosted and signed, so the test host reaches the
+    /// owner's REAL login Keychain. The old tests deleted these three items in
+    /// every setUp and tearDown (59 deletes per suite run, so every
+    /// tools/check.sh and pre-commit run), which is why push.log said
+    /// "APNs not configured" from at least 2026-09-12 on. Only the SecItem
+    /// primitives are swapped: the migration logic still runs for real, against
+    /// `migrationDefaults`.
+    nonisolated(unsafe) private static var testBacking: [String: String] = [:]
+    private static var useTestBacking: Bool { SingleInstanceGuard.isRunningTests }
+
+    /// The defaults the legacy migration reads and clears: `.standard` in the
+    /// app, a throwaway suite under XCTest, so tests never touch the owner's
+    /// com.quip.mac domain. Internal so tests can seed legacy values.
+    static var migrationDefaults: UserDefaults { TestSafeDefaults.store("apns-metadata") }
+
+    /// Clean slate for tests: empties the in-memory backing and removes the
+    /// legacy keys and the migration flag from the test suite. Does nothing
+    /// outside XCTest, so it can never reach the real Keychain or defaults.
+    static func wipeForTests() {
+        guard useTestBacking else { return }
+        testBacking.removeAll()
+        let d = migrationDefaults
+        for key in [legacyKeyIdDefault, legacyTeamIdDefault, legacyBundleIdDefault, migrationDoneKey] {
+            d.removeObject(forKey: key)
+        }
+    }
+
     // MARK: - Keychain primitives
 
     private static func read(account: String) -> String? {
+        if useTestBacking { return testBacking[account] }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -127,23 +162,27 @@ enum APNsMetadataStore {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
+        // Logged on change only: absent (-25300) means never stored or
+        // deleted; anything else is the Keychain refusing the read.
+        APNsKeychainLog.noteRead(item: account, status: status)
         if status == errSecSuccess, let data = result as? Data {
             return String(data: data, encoding: .utf8)
-        }
-        if status != errSecItemNotFound {
-            print("[APNsMetadataStore] SecItemCopyMatching(\(account)) failed: \(status)")
         }
         return nil
     }
 
     @discardableResult
     private static func write(account: String, value: String) -> Bool {
+        if useTestBacking { testBacking[account] = value; return true }
         let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
+        let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+        if deleteStatus != errSecSuccess, deleteStatus != errSecItemNotFound {
+            APNsKeychainLog.noteFailure("SecItemDelete", item: account, status: deleteStatus)
+        }
 
         // Empty string is a valid clear-out — store it so the field round-trips
         // (UI bind to AppStorage-equivalent should still see "" not nil).
@@ -157,7 +196,7 @@ enum APNsMetadataStore {
         ]
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         if status != errSecSuccess {
-            print("[APNsMetadataStore] SecItemAdd(\(account)) failed: \(status)")
+            APNsKeychainLog.noteFailure("SecItemAdd", item: account, status: status)
             return false
         }
         return true
