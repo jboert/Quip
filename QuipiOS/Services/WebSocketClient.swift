@@ -983,7 +983,11 @@ final class WebSocketClient {
         // Messages without a messageId are ignored (older protocol, Mac can't
         // ack them anyway). Cap the dict so a Mac that never acks doesn't
         // grow this unbounded.
-        if let stm = message as? SendTextMessage, let mid = stm.messageId {
+        // A paste_prompt is acked the same way since US-115, so it is tracked
+        // too; otherwise every library-prompt broadcast logged one "unknown
+        // messageId" per target.
+        let trackedID = (message as? SendTextMessage)?.messageId ?? (message as? PastePromptMessage)?.messageId
+        if let mid = trackedID {
             pendingSendTexts[mid] = Date()
             if pendingSendTexts.count > 32 {
                 if let oldest = pendingSendTexts.min(by: { $0.value < $1.value }) {

@@ -101,7 +101,9 @@ struct BroadcastDelivery: Equatable, Sendable {
     /// The one-line result: "Broadcasting to 3…", "Broadcast sent to 3",
     /// "Broadcast delivered to 3 of 3", "Broadcast: 1 of 3 confirmed —
     /// web, api did not answer", or, on the no-ack route, "Broadcast: 2 of
-    /// 3 sent — api failed". Past two names, the rest are counted.
+    /// 3 sent — api failed". A target the Mac refused with an attributed
+    /// error reads "failed" on either route; only a target that never
+    /// answered reads "did not answer". Past two names, the rest are counted.
     var summary: String {
         let count = targets.count
         if !isSettled { return "Broadcasting to \(count)…" }
@@ -109,14 +111,23 @@ struct BroadcastDelivery: Equatable, Sendable {
         if confirmed == count { return "Broadcast delivered to \(count) of \(count)" }
         let retry = retryTargets
         if retry.isEmpty { return "Broadcast sent to \(count)" }
-        let names = retry.map(\.name)
-        let named = names.count <= 2
+        if targets.contains(where: { $0.status == .sent }) || !expectsAck {
+            return "Broadcast: \(count - retry.count) of \(count) sent — \(Self.named(retry)) failed"
+        }
+        let failed = retry.filter { $0.status == .failed }
+        let unanswered = retry.filter { $0.status == .unconfirmed }
+        var parts: [String] = []
+        if !unanswered.isEmpty { parts.append("\(Self.named(unanswered)) did not answer") }
+        if !failed.isEmpty { parts.append("\(Self.named(failed)) failed") }
+        return "Broadcast: \(confirmed) of \(count) confirmed — \(parts.joined(separator: "; "))"
+    }
+
+    /// Up to two names, the rest counted.
+    private static func named(_ targets: [Target]) -> String {
+        let names = targets.map(\.name)
+        return names.count <= 2
             ? names.joined(separator: ", ")
             : names.prefix(2).joined(separator: ", ") + " +\(names.count - 2) more"
-        if targets.contains(where: { $0.status == .sent }) || !expectsAck {
-            return "Broadcast: \(count - retry.count) of \(count) sent — \(named) failed"
-        }
-        return "Broadcast: \(confirmed) of \(count) confirmed — \(named) did not answer"
     }
 
     private var retryTargets: [Target] {

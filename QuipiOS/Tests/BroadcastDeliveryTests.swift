@@ -116,7 +116,8 @@ final class BroadcastDeliveryTests: XCTestCase {
         XCTAssertTrue(delivery.fail(messageID: ids[0]))
         XCTAssertTrue(delivery.confirm(messageID: ids[1]))
         XCTAssertTrue(delivery.isSettled, "no target waits for the deadline")
-        XCTAssertEqual(delivery.summary, "Broadcast: 1 of 2 confirmed — web did not answer")
+        XCTAssertEqual(delivery.summary, "Broadcast: 1 of 2 confirmed — web failed",
+                       "the Mac answered with a reason; it is not a lost window")
         XCTAssertEqual(delivery.retryWindowIDs, ["w0"])
     }
 
@@ -131,7 +132,7 @@ final class BroadcastDeliveryTests: XCTestCase {
         delivery.expire(at: deadline())
         XCTAssertEqual(delivery.targets.map(\.status), [.confirmed, .failed, .unconfirmed])
         XCTAssertEqual(delivery.retryWindowIDs, ["w1", "w2"])
-        XCTAssertEqual(delivery.summary, "Broadcast: 1 of 3 confirmed — api, db did not answer")
+        XCTAssertEqual(delivery.summary, "Broadcast: 1 of 3 confirmed — db did not answer; api failed")
     }
 
     func test_aTargetPastTheDeadlineCanStillFail() {

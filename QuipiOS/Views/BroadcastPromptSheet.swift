@@ -49,6 +49,9 @@ struct BroadcastPromptSheet: View {
     @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON = "[]"
     @AppStorage("promptUsageJSON") private var promptUsageJSON = "{}"
     @AppStorage("promptUsageMRUJSON") private var promptUsageMRUJSON = "{}"
+    /// The usage store decoded once per change, not per keystroke: both the
+    /// suggestions and the "All prompts…" menu rank by it.
+    @State private var usageStore: PromptRanker.Store = [:]
 
     private var eligibleWindows: [WindowState] {
         BroadcastPromptPlan.eligibleWindows(windows)
@@ -67,8 +70,15 @@ struct BroadcastPromptSheet: View {
         )
     }
 
-    private var usageStore: PromptRanker.Store {
-        PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON)
+    private func reloadUsageStore() {
+        usageStore = PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON)
+    }
+
+    /// Whether the "All prompts…" menu has anything to list; cheap, unlike
+    /// ranking the whole library, which the menu does only when opened.
+    private var hasVisiblePrompts: Bool {
+        let hidden = PromptHideState.decode(hiddenPromptIDsJSON)
+        return library.contains { !hidden.contains($0.id) }
     }
 
     /// Several targets, so no single agent context ranks the library.
@@ -135,6 +145,9 @@ struct BroadcastPromptSheet: View {
                     windows: newWindows
                 )
             }
+            .onAppear(perform: reloadUsageStore)
+            .onChange(of: promptUsageJSON) { _, _ in reloadUsageStore() }
+            .onChange(of: promptUsageMRUJSON) { _, _ in reloadUsageStore() }
         }
     }
 
@@ -153,7 +166,7 @@ struct BroadcastPromptSheet: View {
                     .foregroundStyle(.orange)
             }
 
-            if !allPrompts.isEmpty {
+            if hasVisiblePrompts {
                 Menu("All prompts…", systemImage: "text.book.closed") {
                     ForEach(allPrompts) { prompt in
                         Button(prompt.label) { choose(prompt) }

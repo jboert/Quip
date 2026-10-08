@@ -381,7 +381,7 @@ struct QuipApp: App {
                 //   quip://window/<windowId> — select that window + open input
                 //   quip://perms            — pop the SettingsSheet open (Mac
                 //                             perms section is at the top)
-                guard url.scheme == "quip" else { return }
+                guard url.scheme?.lowercased() == "quip" else { return }
                 // US-114 — quip://broadcast?text=…|prompt=… opens the Broadcast
                 // sheet and never sends. Checked first: the legacy quip://<id>
                 // form would read "broadcast" as a window id.
@@ -1459,6 +1459,10 @@ struct MainiOSView: View {
     /// The last broadcast's delivery, one line in the toast area until it is
     /// tapped or times out (US-111). A new broadcast replaces it.
     @State private var broadcastDelivery: BroadcastDelivery?
+    /// Bumped by every `hideBroadcastResult` so only the latest hide fires:
+    /// a 4 s hide armed when a paste-route broadcast settled must not cut
+    /// short the 15 s a later attributed error gives the Retry tap.
+    @State private var broadcastHideGeneration = 0
     /// Full-width Broadcast bar above the main row (US-109). Off hides it;
     /// Broadcast can still be a Quick Button.
     @AppStorage("mainRow.broadcastBar") private var mainRowBroadcastBar: Bool = true
@@ -3649,9 +3653,9 @@ struct MainiOSView: View {
 
     /// Why Broadcast cannot open right now, or nil when it can (US-113).
     private var broadcastUnavailableReason: String? {
+        if BroadcastPromptPlan.canOpen(windows: windows, isConnected: client.isConnected) { return nil }
         if !client.isConnected { return "Broadcast — not connected" }
-        if BroadcastPromptPlan.eligibleWindows(windows).isEmpty { return "Broadcast — no terminals open" }
-        return nil
+        return "Broadcast — no terminals open"
     }
 
     /// Open the Broadcast sheet. Nothing is sent until the user taps Send.
@@ -3743,8 +3747,11 @@ struct MainiOSView: View {
     }
 
     private func hideBroadcastResult(_ startedAt: Date, after seconds: TimeInterval) {
+        broadcastHideGeneration += 1
+        let generation = broadcastHideGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-            guard broadcastDelivery?.startedAt == startedAt else { return }
+            guard broadcastHideGeneration == generation,
+                  broadcastDelivery?.startedAt == startedAt else { return }
             withAnimation(.easeInOut(duration: 0.3)) { broadcastDelivery = nil }
         }
     }
@@ -10526,9 +10533,14 @@ struct PromptLibrarySheet: View {
     /// hub can sit inside Settings, so it closes and the main screen opens
     /// the sheet once nothing is in the way.
     private func broadcast(_ entry: PromptEntry) {
-        dismiss()
+        // Posted before `dismiss()`: the main screen decides whether to wait
+        // for a sheet to animate away by reading its own flags, and
+        // `dismiss()` flips the main-screen hub's flag synchronously, which
+        // would make the Broadcast sheet present into a dismissal in
+        // progress and never appear.
         NotificationCenter.default.post(name: .quipOpenBroadcast,
                                         object: BroadcastLink.Request(text: nil, promptID: entry.id))
+        dismiss()
     }
 
     private var hubSections: PromptHub.Sections {
