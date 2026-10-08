@@ -24,6 +24,9 @@ struct PushCoalescer {
         var isYesNo: Bool
         var promptFingerprint: String?
         var promptPreview: String?
+        /// Option text by number, for the body line under the question
+        /// (`1 Yes · 2 No`). nil when the prompt has no numbered options.
+        var optionLabels: [Int: String]? = nil
     }
 
     var dwell: TimeInterval = 10

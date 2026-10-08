@@ -60,6 +60,11 @@ final class WindowAttentionCenter {
 /// being Sendable while still touching MainActor state.
 final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
 
+    /// One instance for the process: `AppOrientationDelegate` installs it
+    /// before launch finishes so an action tapped while the app is not
+    /// running still reaches `didReceive` (Q-57).
+    static let shared = PushNotificationCenterDelegate()
+
     /// Closure invoked when a push lands and we determine the user
     /// hasn't already got that window selected. Always on main.
     var onWaitingForInput: ((String) -> Void)?
@@ -67,13 +72,12 @@ final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDe
     /// Closure invoked when the user TAPS a push. Deep-link. Always on main.
     var onNotificationTap: ((String) -> Void)?
 
-    /// (wishlist §15 v2 / Watch-actions path A.) Fired when the user taps
-    /// one of the inline notification action buttons (yes / no / 1 / 2)
-    /// surfaced via `UNNotificationCategory("waiting_for_input")`.
-    /// QuipApp wires this to dispatch a quick_action / send_text over
-    /// the active WebSocket so the Mac responds even when the iPhone
-    /// (or paired Watch) is locked. Always invoked on main.
-    var onActionResponse: ((_ windowId: String, _ action: WaitingActionResponse, _ promptFingerprint: String?) -> Void)?
+    /// (wishlist §15 v2 / Watch-actions path A, Q-57.) An answer was queued
+    /// for `windowId`: an inline button (Yes / No / 1…4) or the Reply field.
+    /// The answer itself goes through `PushAnswerQueue.shared`, which sends
+    /// it over a live socket or wakes one, so it survives a cold launch with
+    /// no hooks wired; this only lets the UI clear attention. Always on main.
+    var onAnswerQueued: ((_ windowId: String) -> Void)?
 
     /// Returns whatever the user currently has selected on the phone so
     /// we can decide whether to suppress the banner. Called on main.
@@ -93,12 +97,14 @@ final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDe
         // so the closure capture is clean across concurrency domains.
         let userInfo = notification.request.content.userInfo
         let windowId = userInfo["quip_window_id"] as? String
+        // A bundle names every window it covers; each one needs the dot.
+        let windowIds = (userInfo["quip_window_ids"] as? [String]) ?? windowId.map { [$0] } ?? []
         let completion = UncheckedSendable(completionHandler)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { completion.value([]); return }
-            if let windowId {
-                self.onWaitingForInput?(windowId)
+            for id in windowIds {
+                self.onWaitingForInput?(id)
             }
             let bannerPref = self.foregroundBannerEnabled?() ?? false
             let selected = self.currentlySelectedWindowId?()
@@ -116,20 +122,25 @@ final class PushNotificationCenterDelegate: NSObject, UNUserNotificationCenterDe
         let windowId = userInfo["quip_window_id"] as? String
         let fingerprint = userInfo["quip_prompt_fingerprint"] as? String
         let actionId = response.actionIdentifier
+        let replyText = (response as? UNTextInputNotificationResponse)?.userText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let completion = UncheckedSendable(completionHandler)
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { completion.value(); return }
-            if let action = WaitingActionResponse(actionId: actionId), let windowId {
-                self.onActionResponse?(windowId, action, fingerprint)
-            } else if let windowId {
-                // UNNotificationDefaultActionIdentifier (tap body) or
-                // UNNotificationDismissActionIdentifier (swipe away) —
-                // tap is the deep-link path, dismiss does nothing.
-                if actionId == UNNotificationDefaultActionIdentifier {
-                    self.onNotificationTap?(windowId)
-                }
+        Task { @MainActor [weak self] in
+            defer { completion.value() }
+            guard let self, let windowId else { return }
+            if let action = WaitingActionResponse(actionId: actionId) {
+                PushAnswerQueue.shared.enqueue(PushAnswer(windowId: windowId, action: action.quickAction,
+                                                          promptFingerprint: fingerprint))
+                self.onAnswerQueued?(windowId)
+            } else if actionId == WaitingNotificationCategory.replyActionIdentifier {
+                guard let replyText, !replyText.isEmpty else { return }
+                PushAnswerQueue.shared.enqueue(PushAnswer(windowId: windowId, text: replyText,
+                                                          promptFingerprint: fingerprint))
+                self.onAnswerQueued?(windowId)
+            } else if actionId == UNNotificationDefaultActionIdentifier {
+                // Tap on the body is the deep link; dismiss does nothing.
+                self.onNotificationTap?(windowId)
             }
-            completion.value()
         }
     }
 }
@@ -197,9 +208,21 @@ enum WaitingActionResponse: String, Sendable {
 /// carries `aps.category == "waiting_for_input"`. (wishlist §15 v2.)
 enum WaitingNotificationCategory {
     static let identifier = "waiting_for_input"
+    static let replyActionIdentifier = "QUIP_ACTION_REPLY"
+    /// Reply field only: free-text prompts, menus with one or more than four
+    /// options, anything the Mac could not shape.
+    static let textIdentifier = "waiting.text"
+    /// Several prompts in one alert: no single answer fits, so no actions.
+    static let bundleIdentifier = "waiting.many"
 
     private static func action(_ r: WaitingActionResponse, _ title: String) -> UNNotificationAction {
         UNNotificationAction(identifier: r.rawIdentifier, title: title, options: [])
+    }
+
+    /// Typed answer from the lock screen, sent as `send_text` + Return.
+    private static var reply: UNNotificationAction {
+        UNTextInputNotificationAction(identifier: replyActionIdentifier, title: "Reply", options: [],
+                                      textInputButtonTitle: "Send", textInputPlaceholder: "Type an answer")
     }
 
     /// Numbered-answer actions 1...n (n ≤ 4, the lock-screen cap).
@@ -216,13 +239,17 @@ enum WaitingNotificationCategory {
         func cat(_ id: String, _ actions: [UNNotificationAction]) -> UNNotificationCategory {
             UNNotificationCategory(identifier: id, actions: actions, intentIdentifiers: [], options: [])
         }
+        // iOS shows at most four actions; Reply takes the fourth slot where
+        // one is free. The legacy set stays for Macs that predate Q-57.
         return [
             cat(identifier, [action(.yes, "Yes"), action(.no, "No"),
                              action(.choiceOne, "1"), action(.choiceTwo, "2")]),
-            cat("waiting.yn", [action(.yes, "Yes"), action(.no, "No")]),
-            cat("waiting.12", numberedActions(2)),
-            cat("waiting.123", numberedActions(3)),
+            cat("waiting.yn", [action(.yes, "Yes"), action(.no, "No"), reply]),
+            cat("waiting.12", numberedActions(2) + [reply]),
+            cat("waiting.123", numberedActions(3) + [reply]),
             cat("waiting.1234", numberedActions(4)),
+            cat(textIdentifier, [reply]),
+            cat(bundleIdentifier, []),
         ]
     }
 }

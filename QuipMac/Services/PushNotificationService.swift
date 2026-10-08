@@ -407,15 +407,20 @@ final class PushNotificationService {
     /// quiet-hours + sound toggle honored per device.
     /// Map detected prompt options to the APNs notification category whose
     /// registered action set matches (iOS caps inline lock-screen actions at
-    /// 4). Falls back to the legacy `waiting_for_input` (plain banner → open
-    /// app) for >4 options or unrecognized shapes. (§3.2)
+    /// 4). Anything else is `waiting.text`: a Reply field only, since a
+    /// prompt with >4 options, one option or no detected shape has no button
+    /// set that is right. Phones that predate `waiting.text` show a plain
+    /// banner. (§3.2, Q-57)
     nonisolated static func waitingCategory(options: [Int]?, isYesNo: Bool) -> String {
         if let opts = options, (2...4).contains(opts.count) {
             return "waiting." + opts.map(String.init).joined()
         }
         if isYesNo { return "waiting.yn" }
-        return "waiting_for_input"
+        return "waiting.text"
     }
+
+    /// A bundle covers several prompts, so no single answer fits: no actions.
+    nonisolated static let bundleCategory = "waiting.many"
 
     /// Build the APNs payload dict — pure for testability (#4). Mirrors the
     /// shape the iOS app expects: `aps.alert/badge/category`, top-level
@@ -426,10 +431,11 @@ final class PushNotificationService {
                                          options: [Int]?, promptFingerprint: String?,
                                          windowIds: [String]? = nil, threadId: String? = nil,
                                          interruptionLevel: String? = nil) -> [String: Any] {
+        let bundled = (windowIds?.count ?? 1) > 1
         var aps: [String: Any] = [
             "alert": ["title": title, "body": body],
             "badge": attentionCount,
-            "category": waitingCategory(options: options, isYesNo: isYesNo)
+            "category": bundled ? bundleCategory : waitingCategory(options: options, isYesNo: isYesNo)
         ]
         if sound { aps["sound"] = "default" }
         // Q-56: one thread per Mac so the phone stacks these as a group;
@@ -555,12 +561,13 @@ final class PushNotificationService {
                                attentionCount: Int, selectedWindowId: String?,
                                options: [Int]? = nil, isYesNo: Bool = false,
                                promptFingerprint: String? = nil, promptPreview: String? = nil,
-                               immediate: Bool = false) {
+                               optionLabels: [Int: String]? = nil, immediate: Bool = false) {
         guard !devices.isEmpty else { return }
         lastSelectedWindowId = selectedWindowId
         let wait = PushCoalescer.Wait(windowId: windowId, windowName: windowName, projectName: projectName,
                                       options: options, isYesNo: isYesNo,
-                                      promptFingerprint: promptFingerprint, promptPreview: promptPreview)
+                                      promptFingerprint: promptFingerprint, promptPreview: promptPreview,
+                                      optionLabels: optionLabels)
         if immediate {
             sendDigest([wait], selectedWindowId: selectedWindowId, now: Date())
             return
@@ -632,13 +639,21 @@ final class PushNotificationService {
         guard let first = waits.first else { return ("Quip", "Waiting for your answer") }
         if waits.count == 1 {
             let title = label(first)
+            var body: String
             if showPromptText, let preview = first.promptPreview, !preview.isEmpty {
-                return (title, preview)
+                body = preview
+            } else if first.windowName != title, !first.windowName.isEmpty {
+                body = "\(first.windowName) is waiting for your answer"
+            } else {
+                body = "Waiting for your answer"
             }
-            if first.windowName != title, !first.windowName.isEmpty {
-                return (title, "\(first.windowName) is waiting for your answer")
+            // The lock-screen buttons can only say "1" / "2"; this line says
+            // what they mean. Always shown: it is the answer set, not the
+            // question (Q-57).
+            if let line = optionsLine(options: first.options, labels: first.optionLabels) {
+                body += "\n" + line
             }
-            return (title, "Waiting for your answer")
+            return (title, body)
         }
         var names: [String] = []
         for w in waits {
@@ -648,6 +663,17 @@ final class PushNotificationService {
         let shown = names.prefix(3).joined(separator: ", ")
         let more = names.count > 3 ? " +\(names.count - 3) more" : ""
         return ("\(waits.count) waiting", shown + more)
+    }
+
+    /// `1 Yes · 2 No · 3 Cancel` for the answerable options that have a label,
+    /// at most four (the button cap) plus a count of the rest. nil when there
+    /// is nothing to say.
+    nonisolated static func optionsLine(options: [Int]?, labels: [Int: String]?) -> String? {
+        guard let options, let labels, !options.isEmpty else { return nil }
+        let labelled = options.compactMap { n in labels[n].map { "\(n) \($0)" } }
+        guard !labelled.isEmpty else { return nil }
+        let shown = labelled.prefix(4).joined(separator: " · ")
+        return labelled.count > 4 ? shown + " +\(labelled.count - 4) more" : shown
     }
 
     /// Yes/No prompts may break through Focus (time-sensitive, when the app is

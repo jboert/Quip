@@ -33,26 +33,26 @@ final class PushPayloadShapeTests: XCTestCase {
         XCTAssertNil(dict["quip_options"])
     }
 
-    func test_payload_legacyFallback_whenNothingDetected() throws {
+    func test_payload_replyOnly_whenNothingDetected() throws {
         let dict = PushNotificationService.buildPayload(
             windowId: "w", title: "Quip", body: "🤖",
             attentionCount: 1, sound: true, isYesNo: false,
             options: nil, promptFingerprint: nil
         )
         let aps = try XCTUnwrap(dict["aps"] as? [String: Any])
-        XCTAssertEqual(aps["category"] as? String, "waiting_for_input")
+        XCTAssertEqual(aps["category"] as? String, "waiting.text")
         XCTAssertNil(dict["quip_options"])
         XCTAssertNil(dict["quip_prompt_fingerprint"])
     }
 
-    func test_payload_tooManyOptions_fallsBackToLegacy() throws {
+    func test_payload_tooManyOptions_isReplyOnly() throws {
         let dict = PushNotificationService.buildPayload(
             windowId: "w", title: "Quip", body: "🤖",
             attentionCount: 1, sound: true, isYesNo: false,
             options: [1, 2, 3, 4, 5], promptFingerprint: "x"
         )
         let aps = try XCTUnwrap(dict["aps"] as? [String: Any])
-        XCTAssertEqual(aps["category"] as? String, "waiting_for_input")
+        XCTAssertEqual(aps["category"] as? String, "waiting.text")
         // Options still travel so the in-app view can render them all.
         XCTAssertEqual(dict["quip_options"] as? [Int], [1, 2, 3, 4, 5])
     }
@@ -98,6 +98,23 @@ final class PushPayloadShapeTests: XCTestCase {
         let fallback = PushNotificationService.digestText([noProject], showPromptText: true)
         XCTAssertEqual(fallback.title, "Terminal")
         XCTAssertEqual(fallback.body, "Waiting for your answer", "no preview: never an empty body")
+    }
+
+    func test_digestText_namesEachButton() {
+        let labels = [1: "Yes", 2: "Yes, don't ask again", 3: "No", 4: "Type something"]
+        let w = PushCoalescer.Wait(windowId: "a", windowName: "api", projectName: "api", options: [1, 2, 3],
+                                   isYesNo: false, promptFingerprint: "f", promptPreview: "Run the migration?",
+                                   optionLabels: labels)
+        XCTAssertEqual(PushNotificationService.digestText([w], showPromptText: false).body,
+                       "Waiting for your answer\n1 Yes · 2 Yes, don't ask again · 3 No",
+                       "the free-text row (4) is not answerable, so it is not listed")
+        XCTAssertEqual(PushNotificationService.digestText([w], showPromptText: true).body,
+                       "Run the migration?\n1 Yes · 2 Yes, don't ask again · 3 No")
+        XCTAssertNil(PushNotificationService.optionsLine(options: nil, labels: labels))
+        XCTAssertNil(PushNotificationService.optionsLine(options: [1, 2], labels: nil))
+        XCTAssertEqual(PushNotificationService.optionsLine(options: [1, 2, 3, 4, 5, 6],
+                                                           labels: [1: "a", 2: "b", 3: "c", 4: "d", 5: "e", 6: "f"]),
+                       "1 a · 2 b · 3 c · 4 d +2 more")
     }
 
     func test_digestText_bundleListsProjectsAndCountsTheRest() {

@@ -258,7 +258,7 @@ struct QuipMacApp: App {
 /// rapid waiting↔thinking↔waiting bursts don't AppleScript-storm. Cached
 /// options/fingerprint reused inside `recentScrapeTTL`.
 @State private var lastWaitingScrapeAt: [String: Date] = [:]
-@State private var cachedWaitingScrape: [String: (options: [Int]?, isYesNo: Bool, fingerprint: String?, preview: String?)] = [:]
+@State private var cachedWaitingScrape: [String: (options: [Int]?, isYesNo: Bool, fingerprint: String?, preview: String?, labels: [Int: String]?)] = [:]
 private static let recentScrapeTTL: TimeInterval = 0.75
     /// First-seen-offscreen timestamp keyed by "<connId>:<windowId>". Drives
     /// the 5s grace period before emitting `qa_pair_lost { reason: "window_offscreen" }`.
@@ -735,7 +735,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             windowId: windowId, windowName: windowName, projectName: project,
                             attentionCount: 1, selectedWindowId: clientSelectedWindowId,
                             options: cached.options, isYesNo: cached.isYesNo,
-                            promptFingerprint: cached.fingerprint, promptPreview: cached.preview
+                            promptFingerprint: cached.fingerprint, promptPreview: cached.preview,
+                            optionLabels: cached.labels
                         )
                     } else {
                         let wn = window.windowNumber
@@ -753,14 +754,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             // Q-56 — the question line, shown only to phones
                             // that opted into prompt text.
                             let preview = PromptPreview.line(in: content)
+                            // Q-57 — what each numbered button means.
+                            let labels = NumberedPromptDetector.optionLabels(in: content)
                             DispatchQueue.main.async {
                                 self.lastWaitingScrapeAt[windowId] = Date()
-                                self.cachedWaitingScrape[windowId] = (options, isYesNo, fingerprint, preview)
+                                self.cachedWaitingScrape[windowId] = (options, isYesNo, fingerprint, preview, labels)
                                 pushNotificationService.notifyWaitingForInput(
                                     windowId: windowId, windowName: windowName, projectName: project,
                                     attentionCount: 1, selectedWindowId: clientSelectedWindowId,
                                     options: options, isYesNo: isYesNo, promptFingerprint: fingerprint,
-                                    promptPreview: preview
+                                    promptPreview: preview, optionLabels: labels
                                 )
                             }
                         }
@@ -2019,7 +2022,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         projectName: "Quip",
                         attentionCount: 1,
                         selectedWindowId: testId,
+                        options: [1, 2, 3], promptFingerprint: "test",
                         promptPreview: "This is what a prompt's question looks like",
+                        optionLabels: [1: "Yes", 2: "Yes, don't ask again", 3: "No"],
                         immediate: true
                     )
                     break

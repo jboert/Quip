@@ -510,6 +510,42 @@ enum NumberedPromptDetector {
         return s.split(whereSeparator: { $0 == " " || $0 == "\t" }).joined(separator: " ")
     }
 
+    /// The text of each detected option, keyed by its number, for the push
+    /// body (`1 Yes · 2 No`): the lock-screen buttons can only say "1" / "2",
+    /// so the body has to say what they mean. Taken from the same run as
+    /// `detect`, with the number, its separator and any checkbox token
+    /// stripped, then cut to `maxLength` with an ellipsis. nil when no
+    /// numbered prompt is on screen.
+    static func optionLabels(in content: String, maxLength: Int = 28) -> [Int: String]? {
+        guard let run = bestRun(in: content) else { return nil }
+        var labels: [Int: String] = [:]
+        for m in run {
+            let label = optionLabel(fromNormalized: m.normalized, maxLength: maxLength)
+            if !label.isEmpty { labels[m.number] = label }
+        }
+        return labels.isEmpty ? nil : labels
+    }
+
+    /// `"1. [ ] Yes, proceed"` → `"Yes, proceed"`. Pure, for the tests.
+    static func optionLabel(fromNormalized normalized: String, maxLength: Int = 28) -> String {
+        var rest = Substring(normalized)
+        while let c = rest.first, c.isNumber { rest = rest.dropFirst() }
+        if let c = rest.first, c == "." || c == ")" { rest = rest.dropFirst() }
+        var label = rest.trimmingCharacters(in: .whitespaces)
+        for token in ["[ ]", "[x]", "[X]", "[✓]", "[✔]", "( )", "(x)", "(X)"] where label.hasPrefix(token) {
+            label = String(label.dropFirst(token.count)).trimmingCharacters(in: .whitespaces)
+            break
+        }
+        guard maxLength > 1, label.count > maxLength else { return label }
+        let chars = Array(label)
+        var cut = maxLength - 1
+        // Prefer a word boundary when one sits in the back half of the cut.
+        if chars[cut] != " ", let space = chars[..<cut].lastIndex(of: " "), space >= cut / 2 {
+            cut = space
+        }
+        return String(chars[..<cut]).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
     /// Stable identity of the *set of options* currently on screen, used by
     /// the Mac to re-validate that a phone's one-tap answer still matches the
     /// live prompt before injecting (§3.2). Hashes the normalized option lines

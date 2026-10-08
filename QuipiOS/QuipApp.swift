@@ -16,6 +16,17 @@ class AppOrientationDelegate: NSObject, UIApplicationDelegate {
         Self.allowAllOrientations ? .allButUpsideDown : .portrait
     }
 
+    /// The notification delegate must exist before launch finishes, or an
+    /// action tapped while the app is not running never reaches it (Q-57).
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = PushNotificationCenterDelegate.shared
+        UNUserNotificationCenter.current().setNotificationCategories(
+            Set(WaitingNotificationCategory.makeCategories())
+        )
+        return true
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { @MainActor in
             Self.pushRegistration?.registerDeviceToken(deviceToken)
@@ -97,7 +108,7 @@ struct QuipApp: App {
     @State private var bonjourBrowser = BonjourBrowser()
     @State private var pushRegistration = PushRegistrationService()
     @State private var attentionCenter = WindowAttentionCenter()
-    @State private var pushDelegate = PushNotificationCenterDelegate()
+    private var pushDelegate: PushNotificationCenterDelegate { .shared }
     @State private var watchSync = WatchSyncService()
     @State private var liveActivity = LiveActivityService()
     @State private var prefsSync = PreferencesSyncService()
@@ -295,21 +306,27 @@ struct QuipApp: App {
                 pushDelegate.foregroundBannerEnabled = {
                     UserDefaults.standard.bool(forKey: "pushForegroundBanner")
                 }
-                // (wishlist §15 v2 / Watch-actions path A.) Inline action
-                // buttons surfaced on the lock screen + Apple Watch under
-                // the `waiting_for_input` category. Tap fires here; we
-                // dispatch over the active WebSocket so the Mac responds
-                // even when the iPhone app is locked.
-                pushDelegate.onActionResponse = { windowId, action, fingerprint in
+                // (wishlist §15 v2 / Watch-actions path A, Q-57.) Lock-screen
+                // buttons and the Reply field land in PushAnswerQueue; it
+                // sends over the active socket, or wakes one and sends on
+                // auth, so an answer given while the app was suspended is
+                // not lost.
+                pushDelegate.onAnswerQueued = { windowId in
                     attentionCenter.clearAttention(for: windowId)
-                    // All answers go over the unified quick_action path with the
-                    // prompt fingerprint, so the Mac re-validates before
-                    // injecting (§3.2). nil fingerprint (older payloads) → Mac
-                    // injects without re-validation, matching prior behavior.
-                    client.send(QuickActionMessage(windowId: windowId,
-                                                   action: action.quickAction,
-                                                   promptFingerprint: fingerprint))
                 }
+                PushAnswerQueue.shared.deliver = { answer in
+                    guard client.isAuthenticated else { return false }
+                    if let text = answer.text {
+                        return client.send(SendTextMessage(windowId: answer.windowId, text: text, pressReturn: true))
+                    }
+                    // quick_action carries the prompt fingerprint, so the Mac
+                    // re-validates before injecting (§3.2).
+                    return client.send(QuickActionMessage(windowId: answer.windowId,
+                                                          action: answer.action ?? "",
+                                                          promptFingerprint: answer.promptFingerprint))
+                }
+                PushAnswerQueue.shared.wake = { manager.resumeAll() }
+                PushAnswerQueue.shared.flush()
                 // Register the category set so iOS knows which actions to
                 // surface for any push whose `aps.category` matches.
                 // Idempotent; safe to call on every cold start.
@@ -691,6 +708,9 @@ struct QuipApp: App {
         manager.onError = { session, reason in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
+                // A refused lock-screen answer has no toast to land on (Q-57).
+                PushAnswerQueue.shared.promptChanged(
+                    reason, appIsActive: UIApplication.shared.applicationState == .active)
                 errorToast = reason
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     if errorToast == reason { errorToast = nil }
@@ -1963,6 +1983,7 @@ struct MainiOSView: View {
             openBroadcast(link)
         }
         .onChange(of: client.isAuthenticated) { _, authenticated in
+            if authenticated { PushAnswerQueue.shared.flush() }
             withAnimation(.easeInOut(duration: 0.5)) {
                 if !authenticated {
                     windows = []
@@ -8144,6 +8165,8 @@ struct NotificationsSettingsSheet: View {
     /// name. Off by default: prompts can quote your own files.
     @AppStorage("pushShowPromptText") private var pushShowPromptText = false
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
+    /// Lock-screen answers still waiting for a socket (Q-57).
+    private var answerQueue: PushAnswerQueue { .shared }
 
     var body: some View {
         List {
@@ -8198,12 +8221,12 @@ struct NotificationsSettingsSheet: View {
                     }
                 }
 
-                // MARK: Action buttons info — discoverability for §15 v2 path A
+                // MARK: Answering from the alert (§15 v2 path A, Q-57)
                 Section {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Long-press an alert").font(.subheadline.weight(.medium))
-                            Text("Yes / No / 1 / 2 buttons appear inline on the lock screen and Apple Watch.")
+                            Text("Yes / No or 1–4 answer the prompt; the alert lists what each number means. Reply types an answer. Works on the lock screen and Apple Watch.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -8211,8 +8234,24 @@ struct NotificationsSettingsSheet: View {
                         Image(systemName: "hand.tap")
                             .foregroundStyle(.tint)
                     }
+                    if !answerQueue.pending.isEmpty {
+                        HStack {
+                            Label {
+                                Text("^[\(answerQueue.pending.count) answer](inflect: true) waiting for your Mac")
+                                    .font(.subheadline)
+                            } icon: {
+                                Image(systemName: "clock.arrow.circlepath").foregroundStyle(.orange)
+                            }
+                            Spacer()
+                            Button("Discard") { answerQueue.discardAll() }
+                                .buttonStyle(.borderless)
+                                .font(.subheadline)
+                        }
+                    }
                 } header: {
-                    Text("Inline Actions")
+                    Text("Answer From the Alert")
+                } footer: {
+                    Text("An answer given while the app was closed is sent as soon as the Mac is reachable, for up to 10 minutes.")
                 }
 
                 // MARK: Live Activities — own section since it bypasses APNs
