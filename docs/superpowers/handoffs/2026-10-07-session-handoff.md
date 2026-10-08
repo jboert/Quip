@@ -49,8 +49,8 @@ Everything from `5ffd8f2` back is addendum 3's.
 
 | Peer | Installed | Code it is missing |
 | --- | --- | --- |
-| Mac `/Applications/Quip.app` | eb-branch `e93df58`, 1.5.7 Release, Developer ID, installed 2026-10-08 10:26 (fresh pid 65770, port 8765 listening). Menu panel shows `v1.5.7 c825a59`. | Nothing. Phone had not reconnected at handoff time (relaunch Quip on the phone); check the Mac Status row for Accessibility / Screen Recording after reconnect, re-grant if red. |
-| iPhone (owner's primary) | eb-branch `e93df58`, 1.5.7, Debug, installed over the air 2026-10-08 10:25 (devicectl, localNetwork transport). Settings shows `1.5.7 (e93df58, 2026-10-08 10:25)` | Nothing. Force-quit and relaunch after the install. |
+| Mac `/Applications/Quip.app` | eb-branch `cea03cb`, 1.5.7 Release, Developer ID, installed 2026-10-08 11:01 (fresh pid 87267, port 8765 listening). Menu panel shows `v1.5.7 cea03cb`. | Nothing. Phone had not reconnected at handoff time (relaunch Quip on the phone); check the Mac Status row for Accessibility / Screen Recording after reconnect, re-grant if red. |
+| iPhone (owner's primary) | eb-branch `cea03cb`, 1.5.7, Debug, installed over the air 2026-10-08 11:00 (devicectl, localNetwork transport). Settings shows `1.5.7 (cea03cb, 2026-10-08 11:00)` | Nothing. Force-quit and relaunch after the install. |
 | QA simulator D8C5154B | Nothing installed; must never pair with the real Mac | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check. |
 
 One phone socket was ESTABLISHED on port 8765 at handoff time.
@@ -85,6 +85,14 @@ Both peers now carry today's code (installed 2026-10-08 08:28); the hardware che
 - **Q-56 push batching** landed `e93df58`, both peers installed 10:26. Owner
   complained of ~90 pushes/hour; now dwell 10 s, one push per prompt, 8 s
   bundle, Show Prompt Text toggle. Hardware check listed on the board.
+- **Q-57 answer from the alert** landed `b4bc759` + `38d46d7` (security review: Reply
+  needs an unlocked phone, alert text passes SecretRedactor), both peers installed
+  11:00/11:01. Body lists option labels; Reply field; `PushAnswerQueue` keeps a
+  lock-screen answer until a socket carries it; delegate installed in
+  `didFinishLaunching`. Hardware checks on the board. A watch on
+  `~/Library/Logs/Quip/phone.log` for `push_answer sent|unreachable|dropped` was
+  running at handoff. `cea03cb` stops the ruflo-rewritten `QuipiOS/ruvector.db`
+  from marking builds `-dirty`.
 - **Quick-button backup restore** still owed on the owner's "restore buttons"
   (recipe in addendum 3).
 - **Q-50 key styles, Q-51 long-press discoverability**: PRDs/spec pending owner
