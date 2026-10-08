@@ -865,7 +865,11 @@ struct QuipApp: App {
                 if let validatedPIN {
                     manager.persistValidatedPIN(validatedPIN, for: session)
                 }
-                guard session.backendID == manager.activeBackendID else { return }
+                // Compare the row that survives for this session, not its
+                // id at auth time: device_identity usually rekeys or merges a
+                // first pairing before this hop, which skipped hiding the PIN
+                // sheet, push registration and the prefs restore.
+                guard manager.survivingBackendID(for: session.backendID) == manager.activeBackendID else { return }
                 if success {
                     showPINEntry = false
                     pinText = ""
