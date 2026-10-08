@@ -40,14 +40,42 @@ enum APNsMetadataStore {
     /// Keychain doesn't keep retrying the migration on every read.
     private static let migrationDoneKey = "apnsMetadataMigrationV1Done"
 
+    /// The Key ID also rides on the .p8 Keychain item itself (`kSecAttrComment`,
+    /// see `APNsKeyStore`), so losing this item (the test suite deleted it
+    /// for weeks, 2026-09) no longer loses the kid: the key answers for itself.
     static var keyId: String {
-        get { performMigrationIfNeeded(); return read(account: keyIdAccount) ?? "" }
-        set { write(account: keyIdAccount, value: newValue) }
+        get {
+            performMigrationIfNeeded()
+            return resolvedKeyId(stored: read(account: keyIdAccount) ?? "", onKey: APNsKeyStore.keyIdLabel())
+        }
+        set {
+            write(account: keyIdAccount, value: newValue)
+            APNsKeyStore.setKeyIdLabel(newValue)
+        }
     }
 
+    /// An empty Team ID falls back to the team that signed this app
+    /// (`SigningTeam`): the APNs key belongs to the team that ships the iOS
+    /// app, which signed this Mac app too. Shown prefilled in Settings.
     static var teamId: String {
-        get { performMigrationIfNeeded(); return read(account: teamIdAccount) ?? "" }
+        get {
+            performMigrationIfNeeded()
+            return resolvedTeamId(stored: read(account: teamIdAccount) ?? "",
+                                  signingTeam: useTestBacking ? nil : SigningTeam.identifier)
+        }
         set { write(account: teamIdAccount, value: newValue) }
+    }
+
+    /// Pure: the stored kid wins; an empty one takes the kid the key carries.
+    nonisolated static func resolvedKeyId(stored: String, onKey: String?) -> String {
+        if !stored.isEmpty { return stored }
+        return onKey ?? ""
+    }
+
+    /// Pure: the stored team wins; an empty one takes the signing team.
+    nonisolated static func resolvedTeamId(stored: String, signingTeam: String?) -> String {
+        if !stored.isEmpty { return stored }
+        return signingTeam ?? ""
     }
 
     static var bundleId: String {

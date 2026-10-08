@@ -266,11 +266,15 @@ Snapshot of macOS TCC grants the desktop needs. Sent on startup, on each success
   "type": "mac_permissions",
   "accessibility": true,
   "appleEvents": true,
-  "screenRecording": false
+  "screenRecording": false,
+  "pushConfigured": false,
+  "pushMissing": ["Key ID", "Team ID"]
 }
 ```
 
 `appleEvents` reflects the Automation grant for iTerm specifically (probed via `AEDeterminePermissionToAutomateTarget`). When iTerm isn't running, the desktop returns `true` rather than false-alarming.
+
+`pushConfigured` / `pushMissing` (optional, since 2026-10-08): whether the desktop can send APNs pushes, and what its Settings → Notifications still lacks, named as that pane names them (`auth key`, `Key ID`, `Team ID`, `Bundle ID`). Absent from older desktops; a client treats absence as "unknown", never as a problem. This is how the phone can say why notifications are not arriving instead of showing "On" while every push is skipped on the desktop.
 
 ### whisper_status
 

@@ -1008,6 +1008,34 @@ final class MessageProtocolTests: XCTestCase {
         let data = try XCTUnwrap(MessageCoder.encode(msg))
         let decoded = try XCTUnwrap(MessageCoder.decode(MacPermissionsMessage.self, from: data))
         XCTAssertEqual(decoded, msg)
+        XCTAssertNil(decoded.pushConfigured)
+        XCTAssertNil(decoded.pushProblem, "a desktop without the field never raises a false alarm")
+    }
+
+    func testMacPermissionsPushStatusRoundTripsAndNamesWhatIsMissing() throws {
+        let msg = MacPermissionsMessage(accessibility: true, appleEvents: true, screenRecording: true,
+                                        pushConfigured: false, pushMissing: ["Key ID", "Team ID"])
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["pushConfigured"] as? Bool, false)
+        XCTAssertEqual(dict["pushMissing"] as? [String], ["Key ID", "Team ID"])
+        let decoded = try XCTUnwrap(MessageCoder.decode(MacPermissionsMessage.self, from: data))
+        XCTAssertEqual(decoded, msg)
+        XCTAssertEqual(decoded.pushProblem, "Mac is missing Key ID, Team ID")
+
+        let configured = MacPermissionsMessage(accessibility: true, appleEvents: true, screenRecording: true,
+                                               pushConfigured: true, pushMissing: [])
+        XCTAssertNil(configured.pushProblem)
+        let bare = MacPermissionsMessage(accessibility: true, appleEvents: true, screenRecording: true,
+                                         pushConfigured: false)
+        XCTAssertEqual(bare.pushProblem, "Push is not set up on the Mac")
+    }
+
+    func testMacPermissionsLegacyPayloadDecodesWithoutPushFields() throws {
+        let json = #"{"type":"mac_permissions","accessibility":true,"appleEvents":true,"screenRecording":true}"#
+        let decoded = try XCTUnwrap(MessageCoder.decode(MacPermissionsMessage.self, from: Data(json.utf8)))
+        XCTAssertNil(decoded.pushConfigured)
+        XCTAssertNil(decoded.pushMissing)
     }
 
     func testOpenMacSettingsPaneEncoding() throws {

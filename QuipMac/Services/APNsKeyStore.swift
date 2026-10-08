@@ -24,8 +24,8 @@ enum APNsKeyStore {
     /// Returns true on success. Logs + returns false on Keychain errors;
     /// Settings UI shows the error via a status label.
     @discardableResult
-    static func set(_ pemData: Data) -> Bool {
-        if useTestBacking { testBacking = pemData; return true }
+    static func set(_ pemData: Data, keyId: String? = nil) -> Bool {
+        if useTestBacking { testBacking = pemData; testBackingKeyId = keyId; return true }
         // Delete any existing item first — otherwise SecItemAdd returns
         // errSecDuplicateItem. Using SecItemUpdate would also work, but
         // delete-then-add handles the "first write" case without branching.
@@ -39,7 +39,7 @@ enum APNsKeyStore {
             APNsKeychainLog.noteFailure("SecItemDelete", item: account, status: deleteStatus)
         }
 
-        let addQuery: [String: Any] = [
+        var addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
@@ -48,6 +48,9 @@ enum APNsKeyStore {
             // while the user's session is active anyway.
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
         ]
+        // The kid rides on the key item (its comment attribute), so the
+        // metadata item can be lost without losing which key this is.
+        if let keyId, !keyId.isEmpty { addQuery[kSecAttrComment as String] = keyId }
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         if status != errSecSuccess {
             APNsKeychainLog.noteFailure("SecItemAdd", item: account, status: status)
@@ -93,6 +96,45 @@ enum APNsKeyStore {
 
     static var hasKey: Bool { APNsKeyStore.get() != nil }
 
+    /// The Key ID the stored key carries (its comment attribute), or nil
+    /// when there is no key or it was imported before the kid rode along.
+    static func keyIdLabel() -> String? {
+        if useTestBacking { return testBacking == nil ? nil : testBackingKeyId }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let attrs = result as? [String: Any],
+              let label = attrs[kSecAttrComment as String] as? String, !label.isEmpty else { return nil }
+        return label
+    }
+
+    /// Record the Key ID on the stored key. No key, nothing to record.
+    @discardableResult
+    static func setKeyIdLabel(_ keyId: String) -> Bool {
+        if useTestBacking {
+            guard testBacking != nil else { return false }
+            testBackingKeyId = keyId.isEmpty ? nil : keyId
+            return true
+        }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let update: [String: Any] = [kSecAttrComment as String: keyId]
+        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if status != errSecSuccess, status != errSecItemNotFound {
+            APNsKeychainLog.noteFailure("SecItemUpdate", item: account, status: status)
+        }
+        return status == errSecSuccess
+    }
+
     // MARK: - Test backing
 
     /// In-memory stand-in for the Keychain under XCTest, as PINStore and
@@ -100,11 +142,13 @@ enum APNsKeyStore {
     /// owner's real login Keychain, and this item is the one secret that cannot
     /// be re-derived: losing it means downloading a new key from Apple.
     nonisolated(unsafe) private static var testBacking: Data?
+    nonisolated(unsafe) private static var testBackingKeyId: String?
     private static var useTestBacking: Bool { SingleInstanceGuard.isRunningTests }
 
     /// Empty the in-memory backing. Does nothing outside XCTest.
     static func wipeForTests() {
         guard useTestBacking else { return }
         testBacking = nil
+        testBackingKeyId = nil
     }
 }

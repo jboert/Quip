@@ -1578,12 +1578,32 @@ struct MacPermissionsMessage: Codable, Sendable, Equatable {
     /// launched iTerm yet.
     let appleEvents: Bool
     let screenRecording: Bool
+    /// Whether the desktop can send pushes at all: APNs key, Key ID, Team ID
+    /// and Bundle ID all present (2026-10-08). nil from a desktop that
+    /// predates the field. The phone shows `pushMissing`, so "notifications
+    /// don't work" has its answer on the phone, not only in the Mac's menu.
+    let pushConfigured: Bool?
+    /// What is missing, in the words the desktop's Settings uses ("auth key",
+    /// "Key ID", "Team ID", "Bundle ID"); empty or nil when configured.
+    let pushMissing: [String]?
 
-    init(accessibility: Bool, appleEvents: Bool, screenRecording: Bool) {
+    init(accessibility: Bool, appleEvents: Bool, screenRecording: Bool,
+         pushConfigured: Bool? = nil, pushMissing: [String]? = nil) {
         self.type = "mac_permissions"
         self.accessibility = accessibility
         self.appleEvents = appleEvents
         self.screenRecording = screenRecording
+        self.pushConfigured = pushConfigured
+        self.pushMissing = pushMissing
+    }
+
+    /// One line for the phone when the desktop cannot push, else nil:
+    /// "Mac is missing Key ID, Team ID". A desktop without the field (nil)
+    /// reports nothing rather than a false alarm.
+    var pushProblem: String? {
+        guard pushConfigured == false else { return nil }
+        let missing = pushMissing ?? []
+        return missing.isEmpty ? "Push is not set up on the Mac" : "Mac is missing " + missing.joined(separator: ", ")
     }
 
     /// 0-3 — number of perms currently denied. Used by the Live Activity badge

@@ -33,11 +33,16 @@ final class PermissionProbeService: @unchecked Sendable {
         var accessibility: @Sendable () -> Bool
         var appleEvents: @Sendable () -> Bool
         var screenRecording: @Sendable () -> Bool
+        /// What the APNs setup still lacks (empty when a push can go out).
+        /// Rides the same snapshot so the phone can say why pushes are off;
+        /// three Keychain reads every 5 s, off main like the TCC probes.
+        var pushMissing: @Sendable () -> [String] = { [] }
 
         static let system = Probes(
             accessibility: { AXIsProcessTrusted() },
             appleEvents: { PermissionProbeService.systemAppleEventsProbe() },
-            screenRecording: { CGPreflightScreenCaptureAccess() }
+            screenRecording: { CGPreflightScreenCaptureAccess() },
+            pushMissing: { PushNotificationService.currentMissingAPNsSetup() }
         )
     }
 
@@ -77,10 +82,13 @@ final class PermissionProbeService: @unchecked Sendable {
         lock.unlock()
 
         queue.async { [self] in
+            let pushMissing = probes.pushMissing()
             let snapshot = MacPermissionsMessage(
                 accessibility: probes.accessibility(),
                 appleEvents: probes.appleEvents(),
-                screenRecording: probes.screenRecording()
+                screenRecording: probes.screenRecording(),
+                pushConfigured: pushMissing.isEmpty,
+                pushMissing: pushMissing
             )
 
             lock.lock()

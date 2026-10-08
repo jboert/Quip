@@ -322,11 +322,8 @@ private struct NotificationsTab: View {
                 ? "Ready · no iPhones registered yet"
                 : "Ready · \(n) device\(n == 1 ? "" : "s") registered"
         }
-        var missing: [String] = []
-        if !hasKey { missing.append("auth key") }
-        if keyId.isEmpty { missing.append("Key ID") }
-        if teamId.isEmpty { missing.append("Team ID") }
-        if bundleId.isEmpty { missing.append("Bundle ID") }
+        let missing = PushNotificationService.missingAPNsSetup(hasKey: hasKey, keyId: keyId,
+                                                               teamId: teamId, bundleId: bundleId)
         return "Missing " + missing.joined(separator: ", ")
     }
 
@@ -458,7 +455,10 @@ private struct NotificationsTab: View {
         if panel.runModal() == .OK, let url = panel.url {
             do {
                 let data = try Data(contentsOf: url)
-                if APNsKeyStore.set(data) {
+                // The kid rides on the key item so a lost metadata item cannot
+                // lose it: Apple's filename, else the Key ID already entered.
+                let fileKeyId = APNsMetadataStore.keyId(fromFilename: url.lastPathComponent)
+                if APNsKeyStore.set(data, keyId: fileKeyId ?? keyId) {
                     hasKey = true
                     var status = "Imported \(url.lastPathComponent)"
                     // The Key ID can't be derived from the key bytes, so a
@@ -466,7 +466,7 @@ private struct NotificationsTab: View {
                     // send time with `InvalidProviderToken`. Apple's filename
                     // (`AuthKey_<KEYID>.p8`) carries the kid — sync it to the
                     // stored key so the two can't drift apart.
-                    if let fileKeyId = APNsMetadataStore.keyId(fromFilename: url.lastPathComponent) {
+                    if let fileKeyId {
                         if fileKeyId != keyId {
                             let old = keyId
                             // Write the store directly, not just @State: production

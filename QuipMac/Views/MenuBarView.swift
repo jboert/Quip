@@ -33,9 +33,9 @@ struct MenuBarView: View {
             // registered but APNs metadata isn't entered. 534 silent skips/day
             // in push.log went unseen until this surfaced. Only shows when the
             // condition holds, same compact-UI discipline as the perms section.
-            if pushService.devices.count > 0 && APNsMetadataStore.keyId.isEmpty {
+            if pushService.devices.count > 0, let missing = permissionsStore.snapshot?.pushMissing, !missing.isEmpty {
                 Divider()
-                apnsWarningSection
+                apnsWarningSection(missing: missing)
             }
 
             Divider()
@@ -344,16 +344,16 @@ struct MenuBarView: View {
 
     // MARK: - Actions Section
 
-    private var apnsWarningSection: some View {
+    private func apnsWarningSection(missing: [String]) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
                 .font(.system(size: 13))
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
-                Text("APNs not configured")
+                Text("Push not configured — missing \(missing.joined(separator: ", "))")
                     .font(.system(size: 12, weight: .semibold))
-                Text("\(pushService.devices.count) registered device\(pushService.devices.count == 1 ? "" : "s") — pushes will not deliver until you enter your Apple Developer key in Settings → Notifications.")
+                Text("\(pushService.devices.count) registered device\(pushService.devices.count == 1 ? "" : "s") — pushes will not deliver until it is entered in Settings → Notifications.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

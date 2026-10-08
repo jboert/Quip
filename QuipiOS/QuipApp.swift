@@ -7769,7 +7769,8 @@ struct SettingsSheet: View {
 
                 Section {
                     NavigationLink {
-                        NotificationsSettingsSheet(client: client, pushRegistration: pushRegistration)
+                        NotificationsSettingsSheet(client: client, pushRegistration: pushRegistration,
+                                                   macPermissions: macPermissions)
                     } label: {
                         settingsLinkRow(
                             title: "Notifications",
@@ -7894,6 +7895,21 @@ struct SettingsSheet: View {
                                icon: "rectangle.dashed",
                                granted: perms.screenRecording,
                                pane: .screenRecording)
+                }
+                // Push set-up lives on the Mac; without this row the phone
+                // only ever showed "notifications: On" while every push was
+                // skipped on the Mac for a missing Key ID (2026-10-08).
+                if let problem = perms.pushProblem {
+                    HStack(spacing: 10) {
+                        settingsIcon("bell.slash", tint: .red)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Push on Mac")
+                            Text("\(problem). Quip on the Mac → Settings → Notifications.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
                 }
             } else {
                 HStack(spacing: 10) {
@@ -8044,6 +8060,7 @@ struct SettingsSheet: View {
     /// quiet-now flag; otherwise just "On" or "Banner off". Kept short so it
     /// doesn't fight the disclosure chevron for row space.
     fileprivate var notificationsSummary: String {
+        if macPermissions?.pushConfigured == false { return "Mac not set up" }
         if pushPaused { return "Paused" }
         if !pushBannerEnabled { return "Banner off" }
         if quietHoursEnabled {
@@ -8053,6 +8070,7 @@ struct SettingsSheet: View {
     }
 
     fileprivate var notificationsDetail: String {
+        if let problem = macPermissions?.pushProblem { return problem }
         if pushPaused { return "Push alerts are paused" }
         if quietHoursEnabled {
             return "Quiet hours \(formatHour(quietHoursStart))-\(formatHour(quietHoursEnd))"
@@ -8083,6 +8101,8 @@ struct SettingsSheet: View {
 struct NotificationsSettingsSheet: View {
     var client: WebSocketClient
     var pushRegistration: PushRegistrationService
+    /// The Mac's latest snapshot, for the "pushes are off on the Mac" banner.
+    var macPermissions: MacPermissionsMessage? = nil
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -8098,6 +8118,20 @@ struct NotificationsSettingsSheet: View {
 
     var body: some View {
         List {
+            if let problem = macPermissions?.pushProblem {
+                Section {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Pushes are off").font(.subheadline.weight(.medium))
+                            Text("\(problem). Open Quip on the Mac → Settings → Notifications; the Mac shows what to enter.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "bell.slash.fill").foregroundStyle(.red)
+                    }
+                }
+            }
             // MARK: Master pause + status (always visible, even when paused)
             Section {
                 Toggle("Pause All", isOn: $pushPaused)

@@ -25,6 +25,37 @@ final class PermissionProbeServiceTests: XCTestCase {
         XCTAssertFalse(flag.ranOnMain, "TCC probes ran on the main thread")
     }
 
+    /// The snapshot carries what the APNs setup lacks, probed off main with
+    /// the TCC checks, so the phone can say why pushes are off.
+    func test_refresh_carriesPushStatus() {
+        let flag = MainThreadFlag()
+        let probes = PermissionProbeService.Probes(
+            accessibility: { true }, appleEvents: { true }, screenRecording: { true },
+            pushMissing: { flag.noteIfMain(); return ["Key ID", "Team ID"] }
+        )
+        let service = PermissionProbeService(probes: probes)
+        let done = expectation(description: "refresh completed")
+        var received: MacPermissionsMessage?
+        service.refresh { received = $0; done.fulfill() }
+        wait(for: [done], timeout: 5.0)
+        XCTAssertFalse(flag.ranOnMain, "Keychain reads ran on the main thread")
+        XCTAssertEqual(received?.pushConfigured, false)
+        XCTAssertEqual(received?.pushMissing, ["Key ID", "Team ID"])
+        XCTAssertEqual(received?.pushProblem, "Mac is missing Key ID, Team ID")
+    }
+
+    func test_refresh_defaultProbesReportPushConfigured() {
+        let probes = PermissionProbeService.Probes(
+            accessibility: { true }, appleEvents: { true }, screenRecording: { true }
+        )
+        let done = expectation(description: "refresh completed")
+        var received: MacPermissionsMessage?
+        PermissionProbeService(probes: probes).refresh { received = $0; done.fulfill() }
+        wait(for: [done], timeout: 5.0)
+        XCTAssertEqual(received?.pushConfigured, true)
+        XCTAssertNil(received?.pushProblem)
+    }
+
     /// The completion must land on main — callers mutate @Observable
     /// MainActor state (permissionsStore) with it.
     func test_refresh_deliversCompletionOnMainThread() {

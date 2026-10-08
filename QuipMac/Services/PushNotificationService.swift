@@ -201,6 +201,23 @@ final class PushNotificationService {
         return missing
     }
 
+    /// The same check in the words Settings → Notifications uses, with the
+    /// auth key included: what the phone and the menubar name as missing.
+    nonisolated static func missingAPNsSetup(hasKey: Bool, keyId: String, teamId: String, bundleId: String) -> [String] {
+        var missing: [String] = []
+        if !hasKey { missing.append("auth key") }
+        if keyId.isEmpty { missing.append("Key ID") }
+        if teamId.isEmpty { missing.append("Team ID") }
+        if bundleId.isEmpty { missing.append("Bundle ID") }
+        return missing
+    }
+
+    /// Read from the stores: empty when a push can go out.
+    nonisolated static func currentMissingAPNsSetup() -> [String] {
+        missingAPNsSetup(hasKey: APNsKeyStore.hasKey, keyId: APNsMetadataStore.keyId,
+                         teamId: APNsMetadataStore.teamId, bundleId: APNsMetadataStore.bundleId)
+    }
+
     /// The push.log line for an event skipped because APNs is not configured.
     nonisolated static func notConfiguredSkipLine(event: String, missing: [String]) -> String {
         "\(event) skipped — APNs not configured (missing: \(missing.joined(separator: ", "))) in Settings → Notifications"

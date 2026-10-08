@@ -135,6 +135,66 @@ final class APNsMetadataStoreTests: XCTestCase {
     }
 }
 
+/// The Key ID rides on the key and the Team ID defaults to the signing team,
+/// so a wiped metadata item no longer silences push (2026-10-08).
+final class APNsMetadataSelfHealTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        XCTAssertTrue(SingleInstanceGuard.isRunningTests)
+        APNsMetadataStore.wipeForTests()
+        APNsKeyStore.wipeForTests()
+    }
+
+    override func tearDown() {
+        APNsMetadataStore.wipeForTests()
+        APNsKeyStore.wipeForTests()
+        super.tearDown()
+    }
+
+    func test_resolvedKeyId_storedWins_elseTheKeysOwn() {
+        XCTAssertEqual(APNsMetadataStore.resolvedKeyId(stored: "ABC", onKey: "XYZ"), "ABC")
+        XCTAssertEqual(APNsMetadataStore.resolvedKeyId(stored: "", onKey: "XYZ"), "XYZ")
+        XCTAssertEqual(APNsMetadataStore.resolvedKeyId(stored: "", onKey: nil), "")
+    }
+
+    func test_resolvedTeamId_storedWins_elseSigningTeam() {
+        XCTAssertEqual(APNsMetadataStore.resolvedTeamId(stored: "T1", signingTeam: "D2PM6R797Q"), "T1")
+        XCTAssertEqual(APNsMetadataStore.resolvedTeamId(stored: "", signingTeam: "D2PM6R797Q"), "D2PM6R797Q")
+        XCTAssertEqual(APNsMetadataStore.resolvedTeamId(stored: "", signingTeam: nil), "")
+    }
+
+    func test_keyIdSurvivesAMetadataWipe_whenTheKeyCarriesIt() {
+        XCTAssertTrue(APNsKeyStore.set(Data("not a real key".utf8), keyId: "M4XGA5PPAN"))
+        XCTAssertEqual(APNsKeyStore.keyIdLabel(), "M4XGA5PPAN")
+        APNsMetadataStore.wipeForTests()
+        XCTAssertEqual(APNsMetadataStore.keyId, "M4XGA5PPAN", "the key answers for itself")
+    }
+
+    func test_settingTheKeyId_recordsItOnTheKey() {
+        XCTAssertTrue(APNsKeyStore.set(Data("not a real key".utf8)))
+        XCTAssertNil(APNsKeyStore.keyIdLabel(), "imported before the kid rode along")
+        APNsMetadataStore.keyId = "JF568RHU89"
+        XCTAssertEqual(APNsKeyStore.keyIdLabel(), "JF568RHU89")
+        APNsMetadataStore.keyId = "M4XGA5PPAN"
+        XCTAssertEqual(APNsKeyStore.keyIdLabel(), "M4XGA5PPAN", "a re-entered kid replaces the old label")
+    }
+
+    func test_noKey_noLabel() {
+        XCTAssertFalse(APNsKeyStore.setKeyIdLabel("ABCDE12345"))
+        XCTAssertNil(APNsKeyStore.keyIdLabel())
+        XCTAssertEqual(APNsMetadataStore.keyId, "")
+    }
+
+    func test_missingAPNsSetup_namesEveryGapInSettingsWords() {
+        XCTAssertEqual(PushNotificationService.missingAPNsSetup(hasKey: false, keyId: "", teamId: "", bundleId: ""),
+                       ["auth key", "Key ID", "Team ID", "Bundle ID"])
+        XCTAssertEqual(PushNotificationService.missingAPNsSetup(hasKey: true, keyId: "", teamId: "", bundleId: "com.quip.QuipiOS"),
+                       ["Key ID", "Team ID"], "the owner's 2026-10-08 state: key stored, ids gone")
+        XCTAssertEqual(PushNotificationService.missingAPNsSetup(hasKey: true, keyId: "K", teamId: "T", bundleId: "B"), [])
+    }
+}
+
 /// `APNsKeyStore` under XCTest: the .p8 lives in an in-memory backing, so no
 /// test can read, replace or delete the owner's real key.
 final class APNsKeyStoreTestBackingTests: XCTestCase {
