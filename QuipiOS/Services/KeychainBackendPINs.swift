@@ -13,6 +13,14 @@ import Security
 enum KeychainBackendPINs {
     private static let service = "com.quip.QuipiOS.backend-pin"
 
+    /// Under XCTest the store is a dictionary, as APNsKeyStore does on the
+    /// Mac. CI builds the test host unsigned (CODE_SIGNING_ALLOWED=NO), and
+    /// an unsigned host has no Keychain entitlement: every SecItem call
+    /// answers -34018 and the carry-over tests read nil. What those tests
+    /// check is the carry-over logic, not SecItem.
+    private static var testBacking: [String: String] = [:]
+    private static var useTestBacking: Bool { TestHostGuard.isRunningTests }
+
     /// `read` runs on every connect attempt, per backend (up to 4):
     /// `BackendConnectionManager.connect()`, `onAuthRequired`, and
     /// `primePINIfPresent` all re-enter it after every reconnect. Its failure
@@ -49,6 +57,7 @@ enum KeychainBackendPINs {
     }
 
     static func read(backendID: String, log: (String) -> Void = { print($0) }) -> String? {
+        if useTestBacking { return testBacking[backendID] }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -68,6 +77,7 @@ enum KeychainBackendPINs {
     }
 
     static func write(backendID: String, pin: String) {
+        if useTestBacking { testBacking[backendID] = pin; return }
         let attrs: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -80,6 +90,7 @@ enum KeychainBackendPINs {
     }
 
     static func delete(backendID: String) {
+        if useTestBacking { testBacking[backendID] = nil; return }
         let attrs: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

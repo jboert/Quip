@@ -22,7 +22,18 @@ enum KeychainDeviceID {
     /// reconnect, and re-armed when the status changes or the read recovers.
     static let readLatch = LogLatch()
 
+    /// Under XCTest the id lives in memory: the unsigned test host CI builds
+    /// has no Keychain entitlement (-34018), and without this every `get()`
+    /// minted a new id, so a restore addressed to "this device" never matched.
+    private static var testBacking: String?
+
     static func get() -> String {
+        if TestHostGuard.isRunningTests {
+            if let id = testBacking { return id }
+            let id = UUID().uuidString
+            testBacking = id
+            return id
+        }
         if let existing = read() { return existing }
         let new = UUID().uuidString
         write(new)

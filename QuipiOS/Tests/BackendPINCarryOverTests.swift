@@ -2,9 +2,10 @@ import XCTest
 @testable import Quip
 
 /// PRD 2026-10-07, US-005: a PIN survives every path where two rows for the
-/// same Mac collapse into one. Runs against the simulator test host's real
-/// Keychain under throwaway UUID ids, and puts the real pairing keys back
-/// after each test, so a run leaves no rows or PINs behind.
+/// same Mac collapse into one. The PIN store is in memory under XCTest
+/// (`KeychainBackendPINs` test backing; the unsigned CI test host has no
+/// Keychain), used under throwaway UUID ids; the real pairing keys are put
+/// back after each test, so a run leaves no rows behind.
 @MainActor
 final class BackendPINCarryOverTests: XCTestCase {
 
