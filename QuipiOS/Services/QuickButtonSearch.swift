@@ -12,6 +12,7 @@ extension QuickButton: QuipSearchable {
         switch action {
         case .sendText(let text, _): fields.append(QuipSearchField(.body, text))
         case .quickAction(let name): fields.append(QuipSearchField(.body, name))
+        case .openBroadcast: fields.append(QuipSearchField(.description, "Send one prompt to several terminals"))
         }
         return fields
     }

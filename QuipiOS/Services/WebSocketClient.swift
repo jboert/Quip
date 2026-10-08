@@ -338,6 +338,10 @@ final class WebSocketClient {
     var onImageUploadAck: ((String) -> Void)?
     /// Mac rejects an image upload; argument is a human-readable reason.
     var onImageUploadError: ((String) -> Void)?
+    /// Mac confirmed a `send_text` (and, from US-115 on, a `paste_prompt`);
+    /// argument is the message's id. Fires for every ack, including ids the
+    /// latency tracker has evicted, so a broadcast can count each target.
+    var onSendTextAck: ((UUID) -> Void)?
     /// Latest Whisper model lifecycle state from the Mac. Starts as .preparing
     /// until the Mac broadcasts its status. SpeechService reads this at PTT-start
     /// to decide between remote (Whisper) and local (SFSpeech) paths.
@@ -920,6 +924,7 @@ final class WebSocketClient {
     }
 
     private func handleSendTextAck(_ msg: SendTextAckMessage) {
+        onSendTextAck?(msg.messageId)
         guard let sentAt = pendingSendTexts.removeValue(forKey: msg.messageId) else {
             NSLog("[WebSocketClient] send_text_ack with unknown messageId %@", msg.messageId.uuidString)
             return

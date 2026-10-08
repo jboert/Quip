@@ -100,6 +100,8 @@ final class BackendConnectionManager {
     var onMacPermissions: ((BackendSession, MacPermissionsMessage) -> Void)?
     var onImageUploadAck: ((BackendSession, String) -> Void)?
     var onImageUploadError: ((BackendSession, String) -> Void)?
+    /// A `send_text_ack`'s message id, for broadcast delivery (US-111).
+    var onSendTextAck: ((BackendSession, UUID) -> Void)?
     var onTranscriptResult: ((BackendSession, UUID, String, String?) -> Void)?
     /// Fired when the Mac drops a QA pair for a backend (window closed,
     /// off-screen >5s, or post-reconnect ID mismatch). Hosts use this to
@@ -1817,6 +1819,10 @@ final class BackendConnectionManager {
         c.onImageUploadAck = { [weak self, weak session] savedPath in
             guard let self, let session else { return }
             self.onImageUploadAck?(session, savedPath)
+        }
+        c.onSendTextAck = { [weak self, weak session] messageID in
+            guard let self, let session else { return }
+            self.onSendTextAck?(session, messageID)
         }
         c.onImageUploadError = { [weak self, weak session] reason in
             guard let self, let session else { return }

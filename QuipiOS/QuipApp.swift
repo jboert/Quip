@@ -382,6 +382,13 @@ struct QuipApp: App {
                 //   quip://perms            — pop the SettingsSheet open (Mac
                 //                             perms section is at the top)
                 guard url.scheme == "quip" else { return }
+                // US-114 — quip://broadcast?text=…|prompt=… opens the Broadcast
+                // sheet and never sends. Checked first: the legacy quip://<id>
+                // form would read "broadcast" as a window id.
+                if let link = BroadcastLink.parse(url) {
+                    NotificationCenter.default.post(name: .quipOpenBroadcast, object: link)
+                    return
+                }
                 // Classify once (pure); the side effects stay here. A malformed
                 // link classifies as `.none` and is a no-op — it never changes
                 // selectedWindowId or opens the text input.
@@ -1446,7 +1453,15 @@ struct MainiOSView: View {
     @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
     @State private var showPromptsPickerSheet = false
     @State private var showSlashSearch = false
-    @State private var showBroadcastPromptSheet = false
+    /// The open Broadcast sheet, nil when closed. Carries the draft, the
+    /// prompt it came from and the starting selection (US-107/108/111/114).
+    @State private var broadcastRequest: BroadcastSheetRequest?
+    /// The last broadcast's delivery, one line in the toast area until it is
+    /// tapped or times out (US-111). A new broadcast replaces it.
+    @State private var broadcastDelivery: BroadcastDelivery?
+    /// Full-width Broadcast bar above the main row (US-109). Off hides it;
+    /// Broadcast can still be a Quick Button.
+    @AppStorage("mainRow.broadcastBar") private var mainRowBroadcastBar: Bool = true
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -1706,18 +1721,21 @@ struct MainiOSView: View {
         .allowsHitTesting(true)
         .overlay { HiddenVolumeView().frame(width: 1, height: 1) }
         .overlay(alignment: .top) {
-            if let toast = errorToast {
-                Text(toast)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.red.opacity(0.85))
-                    .clipShape(Capsule())
-                    .padding(.top, 50)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.3), value: errorToast)
+            VStack(spacing: 6) {
+                if let toast = errorToast {
+                    Text(toast)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.red.opacity(0.85))
+                        .clipShape(Capsule())
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(.easeInOut(duration: 0.3), value: errorToast)
+                }
+                broadcastResultLine
             }
+            .padding(.top, 50)
         }
         .environment(\.quipColors, colors)
     }
@@ -1872,6 +1890,10 @@ struct MainiOSView: View {
                 guard session.backendID == manager.activeBackendID else { return }
                 DispatchQueue.main.async { pendingImage?.markError(reason) }
             }
+            manager.onSendTextAck = { session, messageID in
+                guard session.backendID == manager.activeBackendID else { return }
+                DispatchQueue.main.async { confirmBroadcastTarget(messageID) }
+            }
         }
         .onChange(of: client.isConnected) { _, connected in
             withAnimation(.easeInOut(duration: 0.5)) {
@@ -1916,6 +1938,11 @@ struct MainiOSView: View {
             // scanner uses — `doConnect()` and `urlText` live on this view.
             guard let payload = note.object as? PairingPayload else { return }
             applyPairingPayload(payload)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quipOpenBroadcast)) { note in
+            // The Prompts hub's "Broadcast…" (US-108) and quip://broadcast (US-114).
+            guard let link = note.object as? BroadcastLink.Request else { return }
+            openBroadcast(link)
         }
         .onChange(of: client.isAuthenticated) { _, authenticated in
             withAnimation(.easeInOut(duration: 0.5)) {
@@ -2020,14 +2047,13 @@ struct MainiOSView: View {
                 }
             }
         }
-        .sheet(isPresented: $showBroadcastPromptSheet) {
+        .sheet(item: $broadcastRequest) { request in
             BroadcastPromptSheet(
                 windows: windows,
-                // Several targets, so no single agent context.
-                prompts: rankedPrompts(context: nil),
+                library: client.promptLibrary,
                 isConnected: client.isConnected,
-                initialDraft: textInputValue,
-                onSend: queueBroadcastPrompt
+                request: request,
+                onSend: queueBroadcast
             )
             .presentationDetents([.medium, .large])
         }
@@ -2938,7 +2964,9 @@ struct MainiOSView: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            broadcastPromptButton
+            if mainRowBroadcastBar {
+                broadcastPromptButton
+            }
 
             // Cluster gating — small gap (10pt) appears between adjacent
             // clusters when both have visible buttons. PTT mic is always
@@ -3244,9 +3272,12 @@ struct MainiOSView: View {
             isConnected: client.isConnected
         )
         return Button {
-            showBroadcastPromptSheet = true
+            openBroadcast(draft: textInputValue)
         } label: {
-            Label("Broadcast Prompt", systemImage: "dot.radiowaves.left.and.right")
+            // US-113 — the bar shows only while connected with windows, so the
+            // one way it is disabled is that none of them is a terminal.
+            Label(canOpen ? "Broadcast Prompt" : "Broadcast — no terminals open",
+                  systemImage: "dot.radiowaves.left.and.right")
                 .font(.system(size: isPortrait ? 16 : 13, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: isPortrait ? 50 : 36)
@@ -3556,16 +3587,186 @@ struct MainiOSView: View {
     /// Returning the queued IDs lets the sheet keep only failed targets selected
     /// for retry, avoiding duplicate prompts after a partial queue. Each message
     /// keeps its own dedupe token.
-    private func queueBroadcastPrompt(_ text: String, targetIDs: [String]) -> Set<String> {
-        guard !text.isEmpty, !targetIDs.isEmpty else { return [] }
-        let queuedIDs = Set(targetIDs.filter { windowID in
-            client.send(SendTextMessage(windowId: windowID, text: text, pressReturn: true))
-        })
-        if queuedIDs.count == targetIDs.count {
+    /// Queue one broadcast, one message per target: `paste_prompt` for an
+    /// unmodified library prompt, so the Mac fills its placeholders for each
+    /// window (US-107), and `send_text` otherwise. Returns the targets that
+    /// were queued; the sheet keeps the rest selected for a retry.
+    private func queueBroadcast(_ send: BroadcastSend) -> Set<String> {
+        guard !send.text.isEmpty, !send.targetIDs.isEmpty else { return [] }
+        var queued: [(windowID: String, name: String, messageID: UUID)] = []
+        for windowID in send.targetIDs {
+            let messageID = UUID()
+            let sent: Bool
+            switch send.route {
+            case .pastePrompt(let promptID):
+                sent = client.send(PastePromptMessage(id: promptID, windowId: windowID,
+                                                      pressReturn: send.pressReturn, messageId: messageID))
+            case .sendText(let text):
+                sent = client.send(SendTextMessage(windowId: windowID, text: text,
+                                                   pressReturn: send.pressReturn, messageId: messageID))
+            }
+            if sent { queued.append((windowID, broadcastTargetName(windowID), messageID)) }
+        }
+        guard !queued.isEmpty else { return [] }
+        // The bar opens the sheet with the input line's text. Clear the line
+        // only when that text is what reached every target.
+        if queued.count == send.targetIDs.count,
+           send.text == BroadcastPromptPlan.normalizedText(textInputValue) {
             textInputValue = ""
             lineEcho = nil
         }
-        return queuedIDs
+        var expectsAck = true
+        if case .pastePrompt(let promptID) = send.route {
+            // US-112 — once per agent among the targets, not once per window.
+            promptUsageJSON = PromptRanker.encode(BroadcastUsage.recording(
+                promptID, contexts: queued.map { promptContext(forWindow: $0.windowID) },
+                at: Date(), in: promptUsageStore()))
+            if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
+            // The Mac does not ack `paste_prompt` until US-115 ships.
+            expectsAck = false
+        }
+        trackBroadcast(BroadcastDelivery(text: send.text, source: send.source, targets: queued,
+                                         expectsAck: expectsAck, startedAt: Date()))
+        return Set(queued.map(\.windowID))
+    }
+
+    /// The name a broadcast result line uses for a window: its folder, as the
+    /// sheet lists it, else its title.
+    private func broadcastTargetName(_ windowID: String) -> String {
+        guard let window = windows.first(where: { $0.id == windowID }) else { return windowID }
+        if let folder = window.folder, !folder.isEmpty { return folder }
+        return window.name
+    }
+
+    /// Why Broadcast cannot open right now, or nil when it can (US-113).
+    private var broadcastUnavailableReason: String? {
+        if !client.isConnected { return "Broadcast — not connected" }
+        if BroadcastPromptPlan.eligibleWindows(windows).isEmpty { return "Broadcast — no terminals open" }
+        return nil
+    }
+
+    /// Open the Broadcast sheet. Nothing is sent until the user taps Send.
+    private func openBroadcast(draft: String, source: BroadcastSource? = nil, selection: Set<String>? = nil) {
+        broadcastRequest = BroadcastSheetRequest(draft: draft, source: source, selection: selection)
+    }
+
+    /// A request from the Prompts hub (US-108) or a `quip://broadcast` link
+    /// (US-114). Sheets in the way close first; one cannot present while
+    /// another is still animating away.
+    private func openBroadcast(_ link: BroadcastLink.Request) {
+        let blocking = showSettings || showPromptsPickerSheet || showSlashSearch || broadcastRequest != nil
+        showSettings = false
+        showPromptsPickerSheet = false
+        showSlashSearch = false
+        broadcastRequest = nil
+        let open = {
+            guard let promptID = link.promptID else {
+                openBroadcast(draft: link.text ?? "")
+                return
+            }
+            guard let entry = client.promptLibrary.first(where: { $0.id == promptID }) else {
+                showBroadcastToast("No prompt “\(promptID)” on this Mac")
+                openBroadcast(draft: "")
+                return
+            }
+            openBroadcast(draft: entry.body, source: BroadcastSource(promptID: entry.id, body: entry.body))
+        }
+        if blocking {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: open)
+        } else {
+            open()
+        }
+    }
+
+    /// The Broadcast Quick Button (US-109). When the sheet cannot open, it
+    /// says why instead of doing nothing (US-113).
+    private func fireBroadcastKey() {
+        if let reason = broadcastUnavailableReason {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            showBroadcastToast(reason)
+            return
+        }
+        openBroadcast(draft: textInputValue)
+    }
+
+    private func showBroadcastToast(_ message: String) {
+        errorToast = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if errorToast == message { errorToast = nil }
+        }
+    }
+
+    /// Show `delivery` in the toast area, replacing any earlier one, and mark
+    /// targets that have not answered by the deadline (US-111).
+    private func trackBroadcast(_ delivery: BroadcastDelivery) {
+        broadcastDelivery = delivery
+        let startedAt = delivery.startedAt
+        guard !delivery.isSettled else {
+            hideBroadcastResult(startedAt, after: 4)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + BroadcastDelivery.deadline + 0.05) {
+            guard broadcastDelivery?.startedAt == startedAt else { return }
+            broadcastDelivery?.expire(at: Date())
+            let hasRetry = broadcastDelivery?.retryWindowIDs.isEmpty == false
+            hideBroadcastResult(startedAt, after: hasRetry ? 15 : 4)
+        }
+    }
+
+    /// A `send_text_ack` arrived; count it if it belongs to the last broadcast.
+    private func confirmBroadcastTarget(_ messageID: UUID) {
+        guard var delivery = broadcastDelivery else { return }
+        guard delivery.confirm(messageID: messageID) else { return }
+        broadcastDelivery = delivery
+        if delivery.isSettled && delivery.retryWindowIDs.isEmpty {
+            hideBroadcastResult(delivery.startedAt, after: 4)
+        }
+    }
+
+    private func hideBroadcastResult(_ startedAt: Date, after seconds: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            guard broadcastDelivery?.startedAt == startedAt else { return }
+            withAnimation(.easeInOut(duration: 0.3)) { broadcastDelivery = nil }
+        }
+    }
+
+    /// US-111 — the last broadcast's result, one line under the error toast.
+    /// A tap reopens the sheet with only the terminals that did not confirm,
+    /// or dismisses the line when every target answered.
+    @ViewBuilder
+    private var broadcastResultLine: some View {
+        if let delivery = broadcastDelivery {
+            let retryIDs = delivery.retryWindowIDs
+            Button {
+                broadcastDelivery = nil
+                if !retryIDs.isEmpty {
+                    openBroadcast(draft: delivery.text, source: delivery.source, selection: Set(retryIDs))
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: !retryIDs.isEmpty ? "exclamationmark.triangle.fill"
+                          : delivery.isSettled ? "checkmark.circle.fill" : "dot.radiowaves.left.and.right")
+                    Text(delivery.summary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !retryIDs.isEmpty {
+                        Text("Retry").fontWeight(.semibold)
+                    }
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background((retryIDs.isEmpty ? Color.black : Color.orange).opacity(0.8))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .accessibilityHint(retryIDs.isEmpty
+                               ? "Dismisses this message"
+                               : "Opens Broadcast with only the terminals that did not confirm selected")
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
     }
 
     /// True when there's something for the up-arrow / Return button to
@@ -5131,6 +5332,11 @@ struct MainiOSView: View {
     /// so the slash-letter Menu items (which trigger from a Menu, not a Button
     /// label) can share the same image-flush + send semantics.
     private func fireQuickButton(_ button: QuickButton) {
+        // Needs no selected window: it opens a sheet with its own targets.
+        if case .openBroadcast = button.action {
+            fireBroadcastKey()
+            return
+        }
         guard let wid = selectedWindowId else { return }
         switch button.action {
         case .sendText(let text, let pressReturn):
@@ -5152,6 +5358,8 @@ struct MainiOSView: View {
             } else {
                 client.send(QuickActionMessage(windowId: wid, action: action))
             }
+        case .openBroadcast:
+            break
         }
     }
 
@@ -5515,22 +5723,14 @@ struct MainiOSView: View {
         // pill isn't placed in the Quick Buttons row.
     }
 
-    /// The catalog in frecency order for the given agent context (a
-    /// `CLIKind` raw value; nil ranks on global usage alone). Hidden prompts
-    /// never reach the picker. See `PromptRanker` for the ordering rules.
-    private func rankedPrompts(context: String?) -> [PromptEntry] {
-        PromptRanker.ranked(
-            PromptHideState.visible(client.promptLibrary, hiddenJSON: hiddenPromptIDsJSON),
-            store: promptUsageStore(),
-            context: context,
-            at: Date()
-        )
-    }
-
     /// The agent running in the selected window, as a ranking context.
     private var selectedPromptContext: String? {
-        guard let wid = selectedWindowId,
-              let window = windows.first(where: { $0.id == wid }) else { return nil }
+        selectedWindowId.flatMap(promptContext(forWindow:))
+    }
+
+    /// The agent running in a window, as a ranking context.
+    private func promptContext(forWindow windowID: String) -> String? {
+        guard let window = windows.first(where: { $0.id == windowID }) else { return nil }
         return (window.cliKind ?? .shell).rawValue
     }
 
@@ -5619,6 +5819,10 @@ struct MainiOSView: View {
 
     @ViewBuilder
     private func quickActionButton(_ button: QuickButton, tint: String? = nil) -> some View {
+        // Broadcast needs no selected window, and stays tappable while it
+        // cannot open so a tap can say why (US-113).
+        let isBroadcast = button == .broadcast
+        let isEnabled = isBroadcast ? broadcastUnavailableReason == nil : selectedWindowId != nil
         Button {
             fireQuickButton(button)
         } label: {
@@ -5644,16 +5848,17 @@ struct MainiOSView: View {
                         .minimumScaleFactor(0.55)
                 }
             }
-            .foregroundStyle(KeyTint.text(tint, default: colors.chipText).opacity(selectedWindowId != nil ? 1.0 : 0.4))
+            .foregroundStyle(KeyTint.text(tint, default: colors.chipText).opacity(isEnabled ? 1.0 : 0.4))
             .padding(.horizontal, 4)
             .padding(.vertical, 5)
             .frame(minWidth: 20)
-            .background(KeyTint.fill(tint, default: colors.chipFill).opacity(selectedWindowId != nil || tint == nil ? 1.0 : 0.4))
+            .background(KeyTint.fill(tint, default: colors.chipFill).opacity(isEnabled || tint == nil ? 1.0 : 0.4))
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
-        .disabled(selectedWindowId == nil)
-        .accessibilityLabel(button.displayName)
-        .accessibilityHint(selectedWindowId == nil ? "No window selected" : "Quick action")
+        .disabled(!isBroadcast && selectedWindowId == nil)
+        .accessibilityLabel(isBroadcast ? (broadcastUnavailableReason ?? button.displayName) : button.displayName)
+        .accessibilityHint(isBroadcast ? "Choose terminal windows and send the same prompt to each one"
+                           : selectedWindowId == nil ? "No window selected" : "Quick action")
         .accessibilityAddTraits(.isButton)
     }
 }
@@ -6769,6 +6974,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
     // Accepts shell/agent inline autocomplete. The legacy wire action remains
     // `press_right`; the Mac re-scrapes and chooses Tab or Right-arrow.
     case acceptAutocomplete
+    // Opens the Broadcast sheet on the phone; sends nothing by itself (US-109).
+    case broadcast
 
     var id: String { rawValue }
 
@@ -6796,6 +7003,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .clearInput: return "Clear input"
         case .shiftTab: return "Shift+Tab"
         case .acceptAutocomplete: return "Accept autocomplete"
+        case .broadcast: return "Broadcast"
         }
     }
 
@@ -6829,6 +7037,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .clearInput: return ""
         case .shiftTab: return ""
         case .acceptAutocomplete: return ""
+        case .broadcast: return ""
         }
     }
 
@@ -6842,6 +7051,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .clearInput: return "delete.left.fill"
         case .shiftTab: return "arrow.left.to.line"
         case .acceptAutocomplete: return "text.append"
+        // The Broadcast bar's icon, so the two entry points look alike.
+        case .broadcast: return "dot.radiowaves.left.and.right"
         default: return nil
         }
     }
@@ -6849,6 +7060,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
     enum Action {
         case sendText(String, pressReturn: Bool)
         case quickAction(String)
+        /// Handled on the phone: opens the Broadcast sheet.
+        case openBroadcast
     }
 
     var isSlashCommand: Bool {
@@ -6858,14 +7071,15 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     /// Logical grouping used by the on-screen quick-button row to position
     /// each cluster: slash commands left, answers centered (under the mic),
-    /// keystrokes right.
-    enum Category { case slash, answer, keystroke }
+    /// keystrokes right. `app` keys open something on the phone.
+    enum Category { case slash, answer, keystroke, app }
 
     var category: Category {
         switch self {
         case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview: return .slash
         case .yes, .no, .one, .two, .three: return .answer
         case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab, .acceptAutocomplete: return .keystroke
+        case .broadcast: return .app
         }
     }
 
@@ -6904,6 +7118,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .shiftTab: return .quickAction("press_shift_tab")
         // Accepts the live inline suggestion; Mac chooses Tab or Right-arrow.
         case .acceptAutocomplete: return .quickAction("press_right")
+        case .broadcast: return .openBroadcast
         }
     }
 
@@ -7127,8 +7342,20 @@ enum QuickSlotStore {
             return []
         }
         do {
-            let slots = try JSONDecoder().decode([QuickSlot].self, from: data)
-            latch.noteSuccess()
+            // Slot by slot: one this build does not know (a button or kind a
+            // newer build added, met in a restored backup) is skipped instead
+            // of costing the whole row (US-109). Builds before this one still
+            // drop the whole row on such a slot.
+            let decoded = try JSONDecoder().decode([LossyQuickSlot].self, from: data)
+            let slots = decoded.compactMap(\.slot)
+            if slots.count < decoded.count {
+                let v = latch.verdict(for: "skip:\(raw)")
+                if v.shouldLog {
+                    log("[Quip][Store] quickSlots skipped \(decoded.count - slots.count) of \(decoded.count) slot(s) this build does not know — kept the rest" + v.suffix)
+                }
+            } else {
+                latch.noteSuccess()
+            }
             return slots
         } catch {
             let v = latch.verdict(for: "json:\(raw)")
@@ -7136,6 +7363,15 @@ enum QuickSlotStore {
                 log("[Quip][Store] quickSlots decode FAILED bytes=\(data.count) err=\(error) — saved button row lost, resetting to defaults" + v.suffix)
             }
             return []
+        }
+    }
+
+    /// One element of the saved row; `slot` is nil when this build cannot
+    /// decode it.
+    private struct LossyQuickSlot: Decodable {
+        let slot: QuickSlot?
+        init(from decoder: Decoder) throws {
+            slot = try? QuickSlot(from: decoder)
         }
     }
 
@@ -7952,6 +8188,7 @@ struct MainRowButtonsSheet: View {
     @AppStorage("mainRow.prompts") private var prompts: Bool = false
     @AppStorage("mainRow.keyboard") private var keyboard: Bool = true
     @AppStorage("mainRow.return") private var pressReturn: Bool = true
+    @AppStorage("mainRow.broadcastBar") private var broadcastBar: Bool = true
 
     var body: some View {
         List {
@@ -7964,8 +8201,9 @@ struct MainRowButtonsSheet: View {
                 Toggle(isOn: $prompts) { Label("Prompts", systemImage: "doc.text.magnifyingglass") }
                 Toggle(isOn: $keyboard) { Label("Keyboard Toggle", systemImage: "keyboard") }
                 Toggle(isOn: $pressReturn) { Label("Press Return", systemImage: "return") }
+                Toggle(isOn: $broadcastBar) { Label("Broadcast Bar", systemImage: "dot.radiowaves.left.and.right") }
             } footer: {
-                Text("PTT mic always shows. Hide buttons you don't use to keep the row uncluttered. Long-press the Arrange button to realign auto-layout.")
+                Text("PTT mic always shows. Hide buttons you don't use to keep the row uncluttered. Long-press the Arrange button to realign auto-layout. With the Broadcast bar hidden, add Broadcast to Quick Buttons to keep it a tap away.")
             }
         }
         .listStyle(.insetGrouped)
@@ -8687,7 +8925,14 @@ struct QuickButtonsSheet: View {
                         ForEach(keystrokeMatches) { btn in addSheetRow(btn) }
                     }
                 }
-                if topItems.isEmpty && slashMatches.isEmpty && answerMatches.isEmpty && keystrokeMatches.isEmpty {
+                let appMatches = filteredBuiltins(category: .app)
+                if !appMatches.isEmpty {
+                    Section("Quip") {
+                        ForEach(appMatches) { btn in addSheetRow(btn) }
+                    }
+                }
+                if topItems.isEmpty && slashMatches.isEmpty && answerMatches.isEmpty && keystrokeMatches.isEmpty
+                    && appMatches.isEmpty {
                     Section {
                         Text("No buttons match \"\(addSheetQuery)\".")
                             .font(.system(size: 13))
@@ -10124,6 +10369,12 @@ struct PromptLibrarySheet: View {
         }
         .contextMenu {
             Button {
+                broadcast(entry)
+            } label: {
+                Label("Broadcast…", systemImage: "dot.radiowaves.left.and.right")
+            }
+            .disabled(!client.isConnected)
+            Button {
                 editing = entry
             } label: {
                 Label("Edit", systemImage: "pencil")
@@ -10161,7 +10412,23 @@ struct PromptLibrarySheet: View {
                 Label("Edit", systemImage: "pencil")
             }
             .tint(.blue)
+            Button {
+                broadcast(entry)
+            } label: {
+                Label("Broadcast", systemImage: "dot.radiowaves.left.and.right")
+            }
+            .tint(.indigo)
+            .disabled(!client.isConnected)
         }
+    }
+
+    /// US-108 — open the main screen's Broadcast sheet with this prompt. This
+    /// hub can sit inside Settings, so it closes and the main screen opens
+    /// the sheet once nothing is in the way.
+    private func broadcast(_ entry: PromptEntry) {
+        dismiss()
+        NotificationCenter.default.post(name: .quipOpenBroadcast,
+                                        object: BroadcastLink.Request(text: nil, promptID: entry.id))
     }
 
     private var hubSections: PromptHub.Sections {
@@ -10194,7 +10461,14 @@ struct PromptLibrarySheet: View {
             return
         }
         guard let wid = windowIdProvider(), !wid.isEmpty else { return }
-        client.send(PastePromptMessage(id: entry.id, windowId: wid, pressReturn: pressReturn))
+        if client.send(PastePromptMessage(id: entry.id, windowId: wid, pressReturn: pressReturn)) {
+            // US-112 — a fire from Settings → Prompts counts like one from the
+            // main screen.
+            promptUsageJSON = PromptRanker.encode(PromptRanker.recording(
+                entry.id, context: promptContextProvider(), at: Date(),
+                in: PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON)))
+            if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
+        }
         lastFiredId = entry.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             if lastFiredId == entry.id { lastFiredId = nil }
