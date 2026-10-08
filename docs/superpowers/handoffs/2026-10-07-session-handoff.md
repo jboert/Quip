@@ -13,7 +13,7 @@ the owner is off the phone.
 
 ## Branch state
 
-- eb-branch, 30 commits ahead of `origin/eb-branch`, **not pushed** (owner
+- eb-branch, 33 commits ahead of `origin/eb-branch`, **not pushed** (owner
   confirms every push).
 - CI replay 2026-10-08 (both Apple jobs with CI's exact flags and xcodegen
   2.44.1): Mac 1086 green; iOS failed 14 Keychain-backed tests on the unsigned
@@ -77,7 +77,11 @@ Both peers now carry today's code (installed 2026-10-08 08:28); the hardware che
 - **Push** (board Q-55): both peers on `c8aaafb` since 08:56. Team ID now
   defaults to the signing team; the owner enters Key ID `M4XGA5PPAN` once in
   Settings → Notifications and push is back. The phone now shows a red "Push
-  on Mac" row until then.
+  on Mac" row until then. DONE 16:00Z by hand (`security add-generic-password
+  -T /Applications/Quip.app` for keyId and teamId); push.log shows "push sent"
+  at 16:04:18Z.
+- SwiftUI review (`/swiftui-pro`) of the branch's views applied in `55f7d86`;
+  tray Close is now the pill's long-press; phone rebuilt from it.
 - **Quick-button backup restore** still owed on the owner's "restore buttons"
   (recipe in addendum 3).
 - **Q-50 key styles, Q-51 long-press discoverability**: PRDs/spec pending owner
