@@ -9603,6 +9603,8 @@ struct PromptLibrarySheet: View {
     var onPick: ((PromptEntry, _ pressReturn: Bool) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    /// Keeps the search index between keystrokes (US-102).
+    @State private var searchCache = PromptSearchCache()
     @State private var confirmingDelete: PromptEntry?
     @State private var showHiddenPrompts = false
     @State private var lastFiredId: String?
@@ -9649,17 +9651,19 @@ struct PromptLibrarySheet: View {
                 }
                 if !hub.visible.isEmpty {
                     Section {
-                        ForEach(hub.visible) { entry in hubRow(entry) }
+                        ForEach(hub.visible) { entry in hubRow(entry, note: hub.notes[entry.id]) }
                     } header: {
                         HStack {
-                            Text("Most used first")
+                            Text(query.isEmpty ? "Most used first" : "Best match first")
                             Spacer()
                             if let syncResult {
                                 Text(syncResult)
                                     .font(.caption)
                                     .foregroundStyle(syncResult.contains("synced") ? .green : .orange)
                             }
-                            Text("\(client.promptLibrary.count)")
+                            Text(query.isEmpty
+                                 ? "\(client.promptLibrary.count)"
+                                 : "\(hub.visible.count + hub.hidden.count) of \(client.promptLibrary.count)")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         }
@@ -9670,7 +9674,7 @@ struct PromptLibrarySheet: View {
                 if !hub.hidden.isEmpty {
                     Section {
                         if showHiddenPrompts || !query.isEmpty {
-                            ForEach(hub.hidden) { entry in hubRow(entry) }
+                            ForEach(hub.hidden) { entry in hubRow(entry, note: hub.notes[entry.id]) }
                         }
                     } header: {
                         Button {
@@ -9886,9 +9890,13 @@ struct PromptLibrarySheet: View {
         }
     }
 
+    /// `note` says why a search matched (US-102): the body text around a
+    /// match that is not in the name replaces the usual first line, and a
+    /// match that needed a typo says so.
     @ViewBuilder
-    private func promptRow(_ entry: PromptEntry) -> some View {
+    private func promptRow(_ entry: PromptEntry, note: PromptHub.MatchNote? = nil) -> some View {
         let hidden = PromptHideState.isHidden(entry.id, in: hiddenPromptIDsJSON)
+        let preview = note?.excerpt ?? entry.bodyPreview
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(entry.label)
@@ -9900,10 +9908,16 @@ struct PromptLibrarySheet: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
-            Text(entry.bodyPreview)
+            Text(preview)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            if let closeMatch = note?.closeMatch {
+                Text(closeMatch)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tint)
+                    .lineLimit(1)
+            }
             // Q-34c — what the Mac will fill in at paste.
             // Absent (no extra height) when there is nothing.
             if let hint = PromptVariables.hint(for: entry.body) {
@@ -9931,7 +9945,7 @@ struct PromptLibrarySheet: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(entry.label)
-        .accessibilityValue([hidden ? "Hidden" : entry.bodyPreview, PromptVariables.hint(for: entry.body)]
+        .accessibilityValue([hidden ? "Hidden" : preview, note?.closeMatch, PromptVariables.hint(for: entry.body)]
             .compactMap { $0 }
             .joined(separator: ". "))
         .accessibilityHint("Pastes this prompt into the active terminal")
@@ -9942,10 +9956,10 @@ struct PromptLibrarySheet: View {
     /// sends, and Edit / Hide / Delete on long-press. Swipes stay as
     /// shortcuts for the same actions.
     @ViewBuilder
-    private func hubRow(_ entry: PromptEntry) -> some View {
+    private func hubRow(_ entry: PromptEntry, note: PromptHub.MatchNote? = nil) -> some View {
         let hidden = PromptHideState.isHidden(entry.id, in: hiddenPromptIDsJSON)
         HStack(spacing: 10) {
-            promptRow(entry)
+            promptRow(entry, note: note)
             Button {
                 fire(entry, pressReturn: true)
             } label: {
@@ -10006,7 +10020,8 @@ struct PromptLibrarySheet: View {
             store: PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON),
             context: promptContextProvider(),
             query: query,
-            at: Date()
+            at: Date(),
+            cache: searchCache
         )
     }
 
