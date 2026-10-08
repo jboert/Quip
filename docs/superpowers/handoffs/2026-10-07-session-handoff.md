@@ -13,9 +13,9 @@ the owner is off the phone.
 
 ## Branch state
 
-- eb-branch, 14 commits ahead of `origin/eb-branch`, **not pushed** (owner
+- eb-branch, 20 commits ahead of `origin/eb-branch`, **not pushed** (owner
   confirms every push). `origin/main` has nothing new.
-- Gate at the last commit: harness 62, QuipMac 1079, QuipiOS 1128, all green
+- Gate at the last commit: harness 62, QuipMac 1082, QuipiOS 1128, all green
   (`QUIP_QA_SIM_UDID=D8C5154B-7030-40BA-8443-F4F9EB27C725 tools/check.sh`).
 - Untracked junk from the ruflo plugin, left alone: `ruvector.db`,
   `agentdb.rvf`, `agentdb.rvf.lock`, `QuipiOS/ruvector.db`.
@@ -24,6 +24,12 @@ the owner is off the phone.
 
 | Hash | Why |
 | --- | --- |
+| `90617b8` | Protocol doc: the iTerm2 Cmd+V route (Codex/Grok, multi-line) is not quiet and cannot be; fake Mac answers unknown prompt ids with the Mac's attributed error under `--ack-paste`; board review notes. |
+| `07237db` | Phone review fixes: Broadcast… from the main-screen hub never opened (dismiss before post); the 4 s hide cut Retry's 15 s short; a refused target read "did not answer"; paste acks logged "unknown messageId"; `QUIP://` never routed; sheet decoded the usage store twice per keystroke. |
+| `c159a85` | Mac review fixes: `{{clipboard}}` in a broadcast read an earlier target's pasted body (now the burst snapshot via `KeystrokeInjector.userClipboardString`); quiet Terminal.app requests with a window id skip the Accessibility raise (the script raises on the serial queue); minimize toast names the real cause. |
+| `14a870d` | Board and handoff: simulator pass results, Q-54 dictation model question. |
+| `dd78283` | Select All in the Broadcast sheet never took (two Buttons in one Form row). |
+| `b1bbf9e` | This handoff. |
 | `d1e8d4a` | Board: Q-53 built, hardware check owed. |
 | `8e767f3` | Q-53 / GH #39: minimize a window from the phone (`minimize_window`, `WindowState.isMinimized`, `WindowManager.minimizeWindow` through the AX match that `focusWindow` now shares as `resolvedAXWindow`), a tray above the grid while anything is minimized, Minimize/Restore in the card menu, fake Mac support. |
 | `e5b493b` | Board: Q-53 filed from the owner's dictated idea, with GH #39. |
@@ -72,9 +78,12 @@ Nothing from today has run on hardware.
 - **Security review note** on `BroadcastLink.swift` (deep link to text in a
   terminal): by design, the link only fills the sheet; nothing sends without
   a Send tap. No action.
-- **Minor**: every single-window paste now gets an ack the phone's latency
-  tracker never registered, so one `send_text_ack with unknown messageId`
-  NSLog per paste. Harmless; quiet it if it annoys.
+- **Review pass 2026-10-08** (local code-review, high effort, 13 findings):
+  10 fixed in `c159a85` / `07237db` / `90617b8`. Left by design: `isMinimized`
+  infers a restore from the snapshot (board Q-53 note); the iTerm2 Cmd+V route
+  still activates iTerm2 per target (docs/protocol.md). `/code-review ultra`
+  refused the branch as too large (240 files); run it against a closer base
+  if wanted.
 
 ## Owner calls open
 
