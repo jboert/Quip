@@ -44,3 +44,15 @@ Started: Thu Oct  8 11:15:35 MST 2026
 - Unverified: panes not driven in a running app (second Quip would fight the live app for :8765); compile + review only
 - Leftover: MainWindow's `@State localWSURL = MainWindow.computeLocalWSURL()` still walks interfaces in a @State initialiser (not in this story's criteria)
 - Next: US-005 (VoiceOver labels, keyboard-reachable row actions, Reduce Motion)
+
+## 2026-10-08 — US-005 VoiceOver labels, keyboard-reachable row actions, Reduce Motion — PASS
+- Files: QuipMac/Views/MotionPolicy.swift (new), QuipMac/Views/WindowRowMenu.swift (new),
+  QuipMac/Views/WindowListSidebar.swift, QuipMac/Views/LayoutPresetTabs.swift, QuipMac/Views/LayoutPreview.swift,
+  QuipMac/Views/MainWindow.swift, QuipMac/Views/SettingsView.swift, QuipMac/Tests/WindowRowMenuTests.swift (new)
+- Gate: `tools/check.sh` exit 0 — QuipMac 1145 tests / 0 failures (+4 vs 1141); swiftc harness SKIPPED, QuipiOS SKIPPED (out of scope for the diff)
+- Mutation 1 (MotionPolicy ignores reduceMotion): test_reduceMotion_dropsTheAnimation FAILED -> reverted -> passes
+- Mutation 2 (Move Up appended regardless of canMoveUp): test_pinnedRowWithNoNeighbours_offersOnlyUnpin FAILED -> reverted -> passes
+- WindowRow.onTogglePin is now required (the only caller always passed it), so the pin button and the menu's pin item always exist
+- Context menu dispatches on WindowRowMenu's title constants (the criterion fixes the helper's return type as [String])
+- Unverified: VoiceOver / Reduce Motion not driven in a running app (second Quip would fight the live app for :8765); compile + unit + review only
+- Next: US-006 (concurrency, binding and modern-API cleanups)

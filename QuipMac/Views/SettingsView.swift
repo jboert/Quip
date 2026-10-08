@@ -172,6 +172,7 @@ private struct CopyButton: View {
         }
         .buttonStyle(.borderless)
         .help(copied ? "Copied" : help)
+        .accessibilityLabel(copied ? "Copied" : help)
     }
 }
 
@@ -603,12 +604,11 @@ private struct ProjectsTab: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Button(role: .destructive) {
+                        Button("Remove \(dir)", systemImage: "xmark.circle", role: .destructive) {
                             directories.removeAll { $0 == dir }
                             saveDirectories()
-                        } label: {
-                            Image(systemName: "xmark.circle")
                         }
+                        .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                     }
                 }
@@ -696,11 +696,10 @@ private struct ProjectsTab: View {
                                 .truncationMode(.middle)
                         }
                         Spacer()
-                        Button(role: .destructive) {
+                        Button("Remove \(root)", systemImage: "xmark.circle", role: .destructive) {
                             swrm.remove(path: root)
-                        } label: {
-                            Image(systemName: "xmark.circle")
                         }
+                        .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                     }
                 }
@@ -2117,17 +2116,15 @@ private struct PromptRow: View {
             // conditional inclusion so layout stays stable when the cursor
             // crosses row boundaries (no row-height jitter).
             HStack(spacing: 4) {
-                Button(action: onEdit) {
-                    Image(systemName: "pencil")
-                }
-                .buttonStyle(.borderless)
-                .help("Edit")
+                Button("Edit", systemImage: "pencil", action: onEdit)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Edit")
 
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .help("Delete")
+                Button("Delete", systemImage: "trash", action: onDelete)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Delete")
             }
             .opacity(hovering ? 1 : 0)
 

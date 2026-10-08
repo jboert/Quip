@@ -7,6 +7,7 @@ struct WindowListSidebar: View {
     @Environment(WindowManager.self) private var windowManager
     @Environment(TerminalStateDetector.self) private var stateDetector
     @Environment(OutputActivityTracker.self) private var outputActivity
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var selectedWindowId: String?
 
     /// Which window kinds the wand switches on, and which orders it rotates
@@ -299,7 +300,7 @@ struct WindowListSidebar: View {
             kinds: WandTargetKinds.fromStored(wandTargetKindsRaw),
             onScreenOnly: wandOnScreenOnly)
 
-        withAnimation(.easeOut(duration: 0.22)) {
+        withAnimation(MotionPolicy.animation(.easeOut(duration: 0.22), reduceMotion: reduceMotion)) {
             windowManager.setOrder(sorted)
             for id in change.disable { windowManager.toggleWindow(id, enabled: false) }
             for id in change.enable { windowManager.toggleWindow(id, enabled: true) }
@@ -311,7 +312,7 @@ struct WindowListSidebar: View {
     /// useful half of the old toggle without making it the thing a second
     /// ordinary click does.
     private func disableAllTargets() {
-        withAnimation(.easeOut(duration: 0.22)) {
+        withAnimation(MotionPolicy.animation(.easeOut(duration: 0.22), reduceMotion: reduceMotion)) {
             for target in wandTargets() where target.isEnabled {
                 windowManager.toggleWindow(target.id, enabled: false)
             }
@@ -352,7 +353,7 @@ struct WindowListSidebar: View {
     private func dragReorder(from source: IndexSet, to destination: Int) {
         var rendered = orderedWindows().map(\.id)
         rendered.move(fromOffsets: source, toOffset: destination)
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(MotionPolicy.animation(.easeOut(duration: 0.18), reduceMotion: reduceMotion)) {
             windowManager.setOrder(rendered)
         }
     }
@@ -538,9 +539,9 @@ private struct WindowRow: View {
     var onMoveUp: (() -> Void)?
     var onMoveDown: (() -> Void)?
     /// Pinned windows sit at the top of the list and stay there through every
-    /// re-sort. Defaults keep previews and any other caller compiling.
-    var isPinned: Bool = false
-    var onTogglePin: (() -> Void)? = nil
+    /// re-sort.
+    let isPinned: Bool
+    let onTogglePin: () -> Void
 
     @State private var isHovering = false
 
@@ -565,19 +566,20 @@ private struct WindowRow: View {
             .toggleStyle(.checkbox)
             // The pin itself is the affordance: filled when pinned, and shown
             // on hover otherwise so an unpinned row costs no permanent ink in
-            // a list this dense.
-            if isPinned || isHovering, let onTogglePin {
-                Button(action: onTogglePin) {
-                    Image(systemName: isPinned ? "pin.fill" : "pin")
-                        .font(.caption)
-                        .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(isPinned ? "Unpin window" : "Pin window to top")
-                .help(isPinned
-                      ? "Pinned to the top. Unpin to let it sort with the rest."
-                      : "Pin to the top — it stays there through a re-sort, a drag or a wand tap.")
+            // a list this dense. Hidden by opacity, not left out of the tree,
+            // so VoiceOver and keyboard focus still reach it and the row does
+            // not reflow as the pointer crosses it.
+            Button(action: onTogglePin) {
+                Image(systemName: isPinned ? "pin.fill" : "pin")
+                    .font(.caption)
+                    .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
             }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(isPinned ? "Unpin window" : "Pin window to top")
+            .help(isPinned
+                  ? "Pinned to the top. Unpin to let it sort with the rest."
+                  : "Pin to the top — it stays there through a re-sort, a drag or a wand tap.")
+            .opacity(isHovering || isPinned ? 1 : 0)
 
             Text(slot.map { "\($0)." } ?? "–")
                 .font(.caption.monospacedDigit())
@@ -616,26 +618,25 @@ private struct WindowRow: View {
 
             Spacer()
 
-            if isHovering {
-                HStack(spacing: 2) {
-                    if let onMoveUp {
-                        Button { onMoveUp() } label: {
-                            Image(systemName: "chevron.up")
-                                .font(.caption2)
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Move \(window.name) up")
+            HStack(spacing: 2) {
+                if let onMoveUp {
+                    Button { onMoveUp() } label: {
+                        Image(systemName: "chevron.up")
+                            .font(.caption2)
                     }
-                    if let onMoveDown {
-                        Button { onMoveDown() } label: {
-                            Image(systemName: "chevron.down")
-                                .font(.caption2)
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Move \(window.name) down")
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Move \(window.name) up")
+                }
+                if let onMoveDown {
+                    Button { onMoveDown() } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
                     }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Move \(window.name) down")
                 }
             }
+            .opacity(isHovering ? 1 : 0)
         }
         .opacity(window.isEnabled ? 1.0 : 0.5)
         .contentShape(Rectangle())
@@ -646,9 +647,21 @@ private struct WindowRow: View {
         // only exists while the pointer is over the row reads as absent to
         // anyone who has not already found it.
         .contextMenu {
-            if let onTogglePin {
-                Button(isPinned ? "Unpin from top" : "Pin to top", action: onTogglePin)
+            ForEach(WindowRowMenu.actions(isPinned: isPinned,
+                                          canMoveUp: onMoveUp != nil,
+                                          canMoveDown: onMoveDown != nil),
+                    id: \.self) { title in
+                Button(title) { performMenuAction(title) }
             }
+        }
+    }
+
+    private func performMenuAction(_ title: String) {
+        switch title {
+        case WindowRowMenu.pin, WindowRowMenu.unpin: onTogglePin()
+        case WindowRowMenu.moveUp: onMoveUp?()
+        case WindowRowMenu.moveDown: onMoveDown?()
+        default: break
         }
     }
 }

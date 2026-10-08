@@ -85,8 +85,8 @@
         "tools/check.sh passes (exit 0)."
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "tools/check.sh exit 0 — QuipMac 1145 tests / 0 failures (+4 WindowRowMenuTests); swiftc harness + QuipiOS SKIPPED (no Shared/QuipiOS change). Mutation (required): MotionPolicy.animation returns base ignoring reduceMotion -> test_reduceMotion_dropsTheAnimation FAILED (XCTAssertNil got BezierAnimation) -> reverted -> passes. Mutation 2: WindowRowMenu appends Move Up regardless of canMoveUp -> test_pinnedRowWithNoNeighbours_offersOnlyUnpin FAILED ([Unpin from top, Move Up]) -> reverted -> passes. SettingsView: CopyButton gets .accessibilityLabel; both xmark.circle removes and PromptRow pencil/trash are Button(title, systemImage:) + .labelStyle(.iconOnly); LayoutsTab already converted by US-002. Sidebar row: pin always present (onTogglePin now required; the only caller always passed it) with .opacity(isHovering || isPinned ? 1 : 0); chevrons in an HStack with .opacity(isHovering ? 1 : 0); context menu built from WindowRowMenu.actions. `grep -rln accessibilityReduceMotion QuipMac/Views` lists MotionPolicy, LayoutPreview, WindowListSidebar, MainWindow, LayoutPresetTabs. Unverified: VoiceOver / Reduce Motion not driven in a running app (a second Quip would fight the live app for :8765); compile + unit + review only."
     },
     {
       "id": "US-006",

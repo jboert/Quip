@@ -11,6 +11,7 @@ struct LayoutPreview: View {
     @Binding var customFrames: [String: NormalizedRect]
     var onReorder: ((_ fromIndex: Int, _ toIndex: Int) -> Void)?
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dragState: DragState?
     @State private var resizeState: ResizeState?
 
@@ -73,7 +74,8 @@ struct LayoutPreview: View {
                         .position(x: rect.midX, y: rect.midY)
                         .opacity(isDragging ? 0.4 : 1.0)
                         .scaleEffect(isTarget ? 1.06 : 1.0)
-                        .animation(.spring(duration: 0.15), value: isTarget)
+                        .animation(MotionPolicy.animation(.spring(duration: 0.15), reduceMotion: reduceMotion),
+                                   value: isTarget)
 
                         if isDragToResizeEnabled {
                             resizeHandles(for: window, at: index, rect: rect, color: color, previewBounds: pb)

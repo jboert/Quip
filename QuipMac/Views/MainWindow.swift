@@ -10,6 +10,13 @@ struct MainWindow: View {
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(CloudflareTunnel.self) private var tunnel
     @Environment(TailscaleService.self) private var tailscale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The preview's spring on a layout or window-count change; none under
+    /// Reduce Motion.
+    private var layoutAnimation: Animation? {
+        MotionPolicy.animation(.spring(duration: 0.4), reduceMotion: reduceMotion)
+    }
 
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
@@ -163,8 +170,8 @@ struct MainWindow: View {
                     reorderWindows(from: fromIndex, to: toIndex)
                 }
             )
-            .animation(.spring(duration: 0.4), value: layoutMode)
-            .animation(.spring(duration: 0.4), value: snapshot.enabledWindowCount)
+            .animation(layoutAnimation, value: layoutMode)
+            .animation(layoutAnimation, value: snapshot.enabledWindowCount)
 
             Divider()
 
