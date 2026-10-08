@@ -119,8 +119,8 @@
         "tools/check.sh passes (exit 0) with the same QuipMac test count as before the move (record the count before and after in the notes)."
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Done by the coordinator after the loop exhausted its budget (US-006 had blocked it). QuipMac/Views/Settings/ holds 14 files, one type each except SettingsChrome.swift (SettingsIconTile, CopyButton, SettingsIdentityHeader, StatusDot); SettingsView.swift keeps SettingsTab + SettingsView at 126 lines. Only change beyond the move: the 17 moved top-level `private struct` declarations became internal `struct` so SettingsView and the panes can see each other across files (no name collides elsewhere in QuipMac). No project.yml change: the `path: .` source glob picks the directory up. Gate: tools/check.sh --files on the new files, QuipMac 1148 tests / 0 failures, the same count as before the move (1148 at the US-006 commit)."
     }
   ]
 }

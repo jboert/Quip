@@ -113,3 +113,7 @@ Started: Thu Oct  8 11:15:35 MST 2026
 - Criteria 1, 3 and 6 corrected to what the worker verified (see US-006 notes); nothing else changed.
 - Coordinator re-ran the mutation: CrashRecoveryToggle.resolve returning (requested, nil) on throw -> `xcodebuild test -only-testing:QuipMacTests/CrashRecoveryToggleTests` ** TEST FAILED **; reverted -> 3/3 pass.
 - Stray probe QuipMac/Tests/ZZStateProbeTests.swift deleted. Gate re-run by the pre-commit hook at commit time (output in the commit's gate log).
+
+## 2026-10-08 — US-007 Split SettingsView.swift — PASSING (coordinator)
+- SettingsView.swift 2259 -> 126 lines; 14 files under QuipMac/Views/Settings/. `private struct` -> `struct` on the 17 moved types, nothing else.
+- Gate: tools/check.sh --files <new files> exit 0 — QuipMac 1148 tests / 0 failures (same count as before the move). Remaining: 0.
