@@ -20,7 +20,12 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-MAC_SIM_UDID_DEFAULT="9A204976-5E83-4909-B88C-7C06D3FD69B2"  # "Quip QA — iPhone 17 Pro Max"
+# This Mac's Quip-only QA simulator ("Quip-only QA (iPhone 17 Pro Max)"). It must
+# hold nothing but Quip and never be paired with the Mac: the suite launches the
+# app as its test host, and a paired host once authenticated against the live
+# Mac and overwrote the owner's phone settings (2026-10-07). The old "Quip QA"
+# simulator is shared with another project's UI tests.
+MAC_SIM_UDID_DEFAULT="D8C5154B-7030-40BA-8443-F4F9EB27C725"
 IOS_SIM_UDID="${QUIP_QA_SIM_UDID:-$MAC_SIM_UDID_DEFAULT}"
 
 mode="auto"
