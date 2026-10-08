@@ -852,14 +852,21 @@ struct QuipApp: App {
         }
 
         manager.onAuthResult = { session, success, error in
+            // Read the PIN now, not after the hop below: a device_identity
+            // merge can disconnect this session's client first, which
+            // clears it.
+            let validatedPIN = success ? session.client.sessionPIN : nil
             DispatchQueue.main.async {
+                // Persist the just-validated PIN so the next launch (and
+                // background reconnects) can auto-auth without prompting,
+                // under the row that survives for this session: by now
+                // device_identity may have rekeyed or merged it, which used
+                // to skip this write or aim it at a deleted row (US-005).
+                if let validatedPIN {
+                    manager.persistValidatedPIN(validatedPIN, for: session)
+                }
                 guard session.backendID == manager.activeBackendID else { return }
                 if success {
-                    // Persist the just-validated PIN so the next launch (and
-                    // background reconnects) can auto-auth without prompting.
-                    if let pin = session.client.sessionPIN {
-                        KeychainBackendPINs.write(backendID: session.backendID, pin: pin)
-                    }
                     showPINEntry = false
                     pinText = ""
                     // Prompt for notification permission (if needed) and hand

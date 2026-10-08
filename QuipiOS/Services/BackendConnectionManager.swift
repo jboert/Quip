@@ -179,6 +179,74 @@ final class BackendConnectionManager {
         KeychainBackendPINs.write(backendID: activeBackendID, pin: pin)
     }
 
+    /// Where each row went when it was rekeyed, merged or reaped: old id →
+    /// the id of the row that absorbed it. In memory only; it lets an event
+    /// that arrives after the rename (see `persistValidatedPIN`) find the row
+    /// that survives.
+    private var survivorOf: [String: String] = [:]
+
+    private func noteSurvivor(of oldID: String, is keeperID: String) {
+        guard oldID != keeperID else { return }
+        survivorOf[oldID] = keeperID
+    }
+
+    /// The paired row that stands for `id` now: `id` itself while it is
+    /// paired, else the row it was rekeyed, merged or reaped into (followed
+    /// through chains). nil when the row is gone for good (forgotten).
+    func survivingBackendID(for id: String) -> String? {
+        var current = id
+        for _ in 0...survivorOf.count {
+            if paired.contains(where: { $0.id == current }) { return current }
+            guard let next = survivorOf[current] else { return nil }
+            current = next
+        }
+        return nil
+    }
+
+    /// Save the PIN `session` just authenticated with, under the row that
+    /// survives for it. The host hears about auth success one main-queue hop
+    /// late, and the Mac's `device_identity` (sent right after auth) can
+    /// rekey or merge the row in between. Writing under the session's own id
+    /// then wrote a row that no longer exists, or was skipped altogether, and
+    /// the PIN the user had just typed was gone on the next launch
+    /// (PRD 2026-10-07, US-005).
+    func persistValidatedPIN(_ pin: String, for session: BackendSession) {
+        guard let id = survivingBackendID(for: session.backendID) else {
+            print("[Quip][Keychain] validated PIN not saved: backend \(session.backendID) is no longer paired")
+            return
+        }
+        KeychainBackendPINs.write(backendID: id, pin: pin)
+    }
+
+    /// For each row of `before` whose id is gone from `after`, the id of the
+    /// `after` row that absorbed it: the one whose URL list holds every URL
+    /// of the dropped row (`mergeRows` unions URLs, so the absorbing row
+    /// always does). Lets a load-time or restore-time dedup hand a dropped
+    /// row's PIN to its survivor instead of leaving it orphaned under an id
+    /// nothing reads any more. Pure / unit-testable.
+    static func survivors(ofRowsDroppedFrom before: [PairedBackend],
+                          into after: [PairedBackend]) -> [String: String] {
+        let kept = Set(after.map(\.id))
+        var out: [String: String] = [:]
+        for row in before where !kept.contains(row.id) && out[row.id] == nil {
+            let urls = Set(row.urlsInOrder)
+            if let survivor = after.first(where: { urls.isSubset(of: Set($0.urlsInOrder)) }) {
+                out[row.id] = survivor.id
+            }
+        }
+        return out
+    }
+
+    /// Hand the PIN of each row a dedup dropped to the row that absorbed it,
+    /// when that row has none. `preferOld: false`: these merges carry no
+    /// evidence of which PIN is newer, so a survivor's own PIN always stands.
+    private func carryPINsOfDroppedRows(before: [PairedBackend], after: [PairedBackend]) {
+        for (dropped, survivor) in Self.survivors(ofRowsDroppedFrom: before, into: after) {
+            KeychainBackendPINs.carryOver(from: dropped, to: survivor, preferOld: false)
+            noteSurvivor(of: dropped, is: survivor)
+        }
+    }
+
     /// Pre-populate the active client's `sessionPIN` from Keychain so the
     /// connect-time auto-replay at `WebSocketClient.swift:428` skips the PIN
     /// entry sheet. Safe to call anytime.
@@ -215,11 +283,14 @@ final class BackendConnectionManager {
                 paired[existingIdx].fallbackURLs = Array(allURLs.dropFirst())
                 paired[existingIdx].lastUsed = Date()
                 paired[existingIdx].enabled = paired[existingIdx].enabled || paired[i].enabled
-                // Drop the freshly-paired row + its session.
+                // Drop the freshly-paired row + its session. Its PIN moves
+                // to the existing row and replaces any PIN there: it is the
+                // one the user just typed for this pairing.
                 paired.remove(at: paired.firstIndex(where: { $0.id == oldID })!)
                 sessions[oldID]?.client.disconnect()
                 sessions.removeValue(forKey: oldID)
-                KeychainBackendPINs.delete(backendID: oldID)
+                KeychainBackendPINs.carryOver(from: oldID, to: identity.deviceID, preferOld: true)
+                noteSurvivor(of: oldID, is: identity.deviceID)
                 activeBackendID = identity.deviceID
                 // Reconnect the surviving session with the merged URL
                 // list so it picks up the freshly-paired URL as a
@@ -234,6 +305,7 @@ final class BackendConnectionManager {
                 return
             }
             KeychainBackendPINs.rekey(from: oldID, to: identity.deviceID)
+            noteSurvivor(of: oldID, is: identity.deviceID)
             paired[i].id = identity.deviceID
             activeBackendID = identity.deviceID
         }
@@ -695,7 +767,9 @@ final class BackendConnectionManager {
             // Force-run for any device that completed V1 since the
             // overlap case wasn't caught by the earlier pass.
             if !defaults.bool(forKey: "pairedMultiURLMigrationV2Done") {
+                let beforeV2 = paired
                 paired = Self.mergeSameIDRows(paired)
+                carryPINsOfDroppedRows(before: beforeV2, after: paired)
                 defaults.set(true, forKey: "pairedMultiURLMigrationV2Done")
                 savePaired()
             }
@@ -707,8 +781,10 @@ final class BackendConnectionManager {
             // The V2 one-shot above stays for the migration log line; this
             // unconditional pass is the actual safety net.
             let beforeCount = paired.count
+            let beforeDedup = paired
             paired = Self.mergeSameIDRows(paired)
             if paired.count != beforeCount {
+                carryPINsOfDroppedRows(before: beforeDedup, after: paired)
                 NSLog("[Quip][Backends] Deduped on load: %d → %d rows", beforeCount, paired.count)
                 if !paired.contains(where: { $0.id == activeBackendID }) {
                     activeBackendID = paired.first?.id ?? ""
@@ -723,9 +799,11 @@ final class BackendConnectionManager {
             // Macs never merge. One-shot so a false positive can't recur.
             if !defaults.bool(forKey: "pairedDupMonitorMigrationV3Done") {
                 let beforeMon = paired.count
+                let beforeMonRows = paired
                 paired = Self.consolidateByMonitorName(paired)
                 defaults.set(true, forKey: "pairedDupMonitorMigrationV3Done")
                 if paired.count != beforeMon {
+                    carryPINsOfDroppedRows(before: beforeMonRows, after: paired)
                     NSLog("[Quip][Backends] Monitor-name dedup: %d → %d rows", beforeMon, paired.count)
                     if !paired.contains(where: { $0.id == activeBackendID }) {
                         activeBackendID = paired.first?.id ?? ""
@@ -783,6 +861,9 @@ final class BackendConnectionManager {
         guard !restored.isEmpty else { return }
         let before = paired
         paired = Self.mergeSameIDRows(paired + restored)
+        // A restored row folded into a live one hands over its PIN if the
+        // Keychain kept one for it, but never replaces the live row's PIN.
+        carryPINsOfDroppedRows(before: before + restored, after: paired)
         // Nothing genuinely new after dedup → don't churn sessions/persistence.
         if paired == before { return }
         savePaired()
@@ -1145,9 +1226,14 @@ final class BackendConnectionManager {
 
     /// Apply `reapDuplicates` for a backend whose session just received a
     /// `device_identity`: fold same-Mac duplicate rows into `canonicalID` and
-    /// tear down their now-orphaned sessions + Keychain PINs. No-op when there
-    /// are no duplicates. Ends the LAN↔Tailscale dual-socket flap.
-    private func reapDuplicateSameMac(canonicalID: String, knownLocalURLs: [String]) {
+    /// tear down their now-orphaned sessions. No-op when there are no
+    /// duplicates. Ends the LAN↔Tailscale dual-socket flap.
+    ///
+    /// A reaped row's PIN only fills a canonical row that has none: the
+    /// canonical session is the one that just authenticated, so its own PIN
+    /// is the working one and a stale duplicate must never replace it.
+    /// Internal, not private, so tests can drive it.
+    func reapDuplicateSameMac(canonicalID: String, knownLocalURLs: [String]) {
         let (newRows, reaped) = Self.reapDuplicates(
             rows: paired, canonicalID: canonicalID, knownURLs: knownLocalURLs)
         guard !reaped.isEmpty else { return }
@@ -1155,7 +1241,8 @@ final class BackendConnectionManager {
         for id in reaped {
             sessions[id]?.client.disconnect()
             sessions.removeValue(forKey: id)
-            KeychainBackendPINs.delete(backendID: id)
+            KeychainBackendPINs.carryOver(from: id, to: canonicalID, preferOld: false)
+            noteSurvivor(of: id, is: canonicalID)
             if activeBackendID == id { activeBackendID = canonicalID }
         }
         NSLog("[Quip][LAN] reaped %d duplicate same-Mac row(s) into %@", reaped.count, canonicalID)
@@ -1446,7 +1533,12 @@ final class BackendConnectionManager {
                 self.paired.remove(at: dupIdx)
                 c.disconnect()
                 self.sessions.removeValue(forKey: oldID)
-                KeychainBackendPINs.delete(backendID: oldID)
+                // This path just authenticated, so its PIN is the newest one
+                // for this Mac: it moves to the keeper and replaces any PIN
+                // there (US-005). It used to be deleted, losing a just-typed
+                // PIN whenever the keeper had none.
+                KeychainBackendPINs.carryOver(from: oldID, to: identity.deviceID, preferOld: true)
+                self.noteSurvivor(of: oldID, is: identity.deviceID)
                 if self.activeBackendID == oldID { self.activeBackendID = identity.deviceID }
                 self.savePaired()
                 // The keeper (id == deviceID) is now canonical — fold any other
@@ -1459,6 +1551,7 @@ final class BackendConnectionManager {
             // Rekey: rename this session's row from the synthetic legacy id
             // to the daemon's real UUID (first/only path to this Mac).
             KeychainBackendPINs.rekey(from: oldID, to: identity.deviceID)
+            self.noteSurvivor(of: oldID, is: identity.deviceID)
             self.sessions.removeValue(forKey: oldID)
             // BackendSession.backendID is `let`; rebuild the session under the
             // real id. The client and accumulated state are reused.

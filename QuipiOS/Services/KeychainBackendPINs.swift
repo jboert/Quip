@@ -96,4 +96,34 @@ enum KeychainBackendPINs {
         write(backendID: newID, pin: pin)
         delete(backendID: oldID)
     }
+
+    /// Move the PIN of a row that is being merged away onto the row that
+    /// survives the merge (`keeperID`), then drop the old entry. The merge
+    /// and reap paths in `BackendConnectionManager` used to delete the old
+    /// row's PIN outright, so when the survivor had none (or an old one) the
+    /// PIN the user had just typed was lost and the next launch asked for it
+    /// again (PRD 2026-10-07, US-005).
+    ///
+    /// `preferOld: true` — the old row's PIN replaces the keeper's: a merge
+    /// triggered by a fresh pairing, where the old row holds the PIN that was
+    /// just typed. `preferOld: false` — the keeper's PIN stands and the old
+    /// one only fills a gap: a reaped stale duplicate must never overwrite a
+    /// working PIN.
+    ///
+    /// The old entry is removed only after the keeper verifiably holds a PIN,
+    /// so a Keychain that cannot be read or written at that moment (locked
+    /// before first unlock, -25308) leaves both entries alone instead of
+    /// turning this into a plain delete. Returns true when the keeper now
+    /// holds the old row's PIN.
+    @discardableResult
+    static func carryOver(from oldID: String, to keeperID: String, preferOld: Bool) -> Bool {
+        guard oldID != keeperID, let pin = read(backendID: oldID) else { return false }
+        let moved = preferOld || read(backendID: keeperID) == nil
+        if moved {
+            write(backendID: keeperID, pin: pin)
+        }
+        guard read(backendID: keeperID) != nil else { return false }
+        delete(backendID: oldID)
+        return moved
+    }
 }
