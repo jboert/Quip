@@ -1388,7 +1388,6 @@ private struct ConnectionTab: View {
     @Environment(CloudflareTunnel.self) private var tunnel
     @Environment(ConnectionLog.self) private var connectionLog
 
-    @AppStorage("wsPort") private var port: Int = 8765
     @AppStorage("bonjourServiceName") private var serviceName: String = "Quip"
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
     @AppStorage("tailscaleHostnameOverride") private var tailscaleOverride: String = ""
@@ -1458,8 +1457,11 @@ private struct ConnectionTab: View {
             }
 
             Section("Server") {
-                TextField("Port", value: $port, format: .number)
-                    .frame(width: 100)
+                LabeledContent("Port") {
+                    Text(verbatim: String(WebSocketServer.listenPort))
+                        .monospacedDigit()
+                        .textSelection(.enabled)
+                }
                 TextField("Bonjour service name", text: $serviceName)
                 LabeledContent("Bonjour discovery") {
                     StatusDot(kind: bonjourAdvertiser.isAdvertising ? .ok : .bad,
@@ -1576,7 +1578,7 @@ private struct ConnectionTab: View {
                 // copy. Debugging "nothing's loading on the phone" used to
                 // mean guessing which URL it had saved; now it's literally
                 // "copy this into the app's URL field."
-                urlRow(label: "LAN", url: Self.lanWSURL(port: port))
+                urlRow(label: "LAN", url: Self.lanWSURL())
                 if let tsURL = tailscaleWSURL {
                     urlRow(label: "Tailscale", url: tsURL)
                 }
@@ -1669,7 +1671,7 @@ private struct ConnectionTab: View {
     /// The LAN URL helper in `MainWindow.swift` uses the same getifaddrs loop —
     /// we duplicate it here rather than reach across views for a private field.
     /// Cheap enough; runs only on Settings render.
-    private static func lanWSURL(port: Int) -> String {
+    private static func lanWSURL() -> String {
         var address = "localhost"
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         if getifaddrs(&ifaddr) == 0 {
@@ -1691,7 +1693,7 @@ private struct ConnectionTab: View {
             }
             freeifaddrs(ifaddr)
         }
-        return "ws://\(address):\(port)"
+        return "ws://\(address):\(WebSocketServer.listenPort)"
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1987,7 +1989,7 @@ private struct SecurityTab: View {
     /// sources surfaced in ConnectionTab's "Diagnostics — Connection URLs" rows:
     ///   .tailscale        → TailscaleService.webSocketURL (ts.net / 100.x)
     ///   .cloudflareTunnel → tunnel.webSocketURL (works on cellular too)
-    ///   .localOnly        → LAN ws://<host>.local:port
+    ///   .localOnly        → LAN ws://<host>.local:<listenPort>
     /// Empty when the chosen mode has no URL yet (server stopped, or
     /// tunnel/Tailscale not resolved) — the QR block shows a "start the server"
     /// hint in that case.
@@ -2000,7 +2002,7 @@ private struct SecurityTab: View {
         case .localOnly:
             guard webSocketServer.isRunning else { return "" }
             let host = Host.current().localizedName ?? "localhost"
-            return "ws://\(host).local:8765"
+            return "ws://\(host).local:\(WebSocketServer.listenPort)"
         }
     }
 

@@ -1,0 +1,126 @@
+{
+  "project": "Quip",
+  "branchName": "ralph/mac-swiftui-review",
+  "description": "Apply the 2026-10-08 SwiftUI review of the macOS app (QuipMac/Views + the App scene): three product bugs (dead Port setting, dead Layouts pane, silent Arrange failure), heavy work in view bodies, accessibility gaps, concurrency and idiom fixes, and splitting SettingsView.swift. Mac only; QuipiOS, Shared, QuipLinux and QuipAndroid are out of scope. Gate: tools/check.sh (run from the repo root; QUIP_QA_SIM_UDID is exported by the runner). Swift 6 strict concurrency: only xcodebuild (which tools/check.sh runs) is the compile oracle. Never touch /Applications/Quip.app, the Keychain, the paired phone or the simulator.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Make the WebSocket port a single constant and stop pretending it is a setting",
+      "description": "As a Mac user pairing a phone, I want the Connection pane and every generated URL to use the port the server really listens on so that a pairing link or QR never points at a port nothing listens on.",
+      "acceptanceCriteria": [
+        "QuipMac/Services/WebSocketServer.swift declares `nonisolated static let listenPort: UInt16 = 8765` on WebSocketServer and uses it in the `requiredLocalEndpoint` bind (today a bare 8765 at the line containing `NWEndpoint.hostPort(host: .ipv4(.any), port: 8765)`) and as the default of `localWebSocketURLs(port:)`.",
+        "QuipMac/Services/TailscaleService.swift no longer reads `UserDefaults.standard.integer(forKey: \"wsPort\")` anywhere (grep -n wsPort QuipMac/Services/TailscaleService.swift prints nothing); `defaultPort` is removed and both `publish(...)` calls pass `Int(WebSocketServer.listenPort)`.",
+        "QuipMac/Views/SettingsView.swift ConnectionTab drops `@AppStorage(\"wsPort\")` and the editable `TextField(\"Port\", value: $port, format: .number)`; the Server section shows `LabeledContent(\"Port\") { Text(verbatim: String(WebSocketServer.listenPort)).monospacedDigit().textSelection(.enabled) }`, and `lanWSURL` / `pairingURL()` build their URLs from `WebSocketServer.listenPort`. `grep -n wsPort QuipMac/Views/SettingsView.swift` prints nothing.",
+        "QuipMac/Views/MainWindow.swift `computeLocalWSURL()` uses `WebSocketServer.listenPort` instead of the literal `let port = 8765`.",
+        "New pure helper `nonisolated static func webSocketURL(host: String) -> String` on TailscaleService returns `ws://<host>:<WebSocketServer.listenPort>` and is what `publish` uses to build the URL.",
+        "New test file QuipMac/Tests/ListenPortTests.swift: (1) sets `UserDefaults.standard.set(9000, forKey: \"wsPort\")` in setUp (and removes it in tearDown) and asserts `TailscaleService.webSocketURL(host: \"mac.tail.ts.net\") == \"ws://mac.tail.ts.net:8765\"`; (2) asserts every string from `WebSocketServer.localWebSocketURLs()` has suffix `\":8765\"`; (3) asserts `WebSocketServer.listenPort == 8765`.",
+        "Mutation documented in the story notes: temporarily make `webSocketURL(host:)` read `UserDefaults.standard.integer(forKey: \"wsPort\")` when non-zero; test (1) must fail; revert and it passes. The notes record both commands and results.",
+        "tools/check.sh passes (exit 0) from the repo root of the ralph/mac-swiftui-review checkout."
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Verified 2026-10-08. WebSocketServer.listenPort (UInt16 8765) drives the requiredLocalEndpoint bind and localWebSocketURLs(port:) default; TailscaleService has no wsPort/defaultPort, publish() calls pass Int(WebSocketServer.listenPort) and publish builds the URL via the new nonisolated static webSocketURL(host:) (publish's `port` argument is now unused — kept only because the criterion names it; a later cleanup can drop it). ConnectionTab: @AppStorage(\"wsPort\") + Port TextField replaced by read-only LabeledContent(\"Port\"); lanWSURL()/pairingURL() and MainWindow.computeLocalWSURL() use listenPort. grep -n wsPort on TailscaleService.swift and SettingsView.swift prints nothing. Tests: QuipMac/Tests/ListenPortTests.swift (3 tests). Mutation 1 (criterion): webSocketURL(host:) made to return UserDefaults wsPort when non-zero; `xcodebuild -project QuipMac/QuipMac.xcodeproj -scheme QuipMac -configuration Debug test -only-testing:QuipMacTests/ListenPortTests` -> TEST FAILED, test_tailscaleURL_ignoresStaleWsPortDefault: (\"ws://mac.tail.ts.net:9000\") is not equal to (\"ws://mac.tail.ts.net:8765\"); other 2 passed. Reverted. Mutation 2: localWebSocketURLs default port 9000 -> test_localWebSocketURLs_allUseListenPort failed (ws://192.168.4.26:9000 does not use the listen port), test (1) passed (confirms mutation 1 revert). Reverted. Clean control: `tools/check.sh` exit 0 — QuipMac suite 1125 tests, 0 failures; harness and QuipiOS skipped (no Shared/, tools/ or QuipiOS/ change)."
+    },
+    {
+      "id": "US-002",
+      "title": "Let the user save, apply, rename and delete layout presets so the Layouts pane is no longer empty forever",
+      "description": "As a Mac user who arranges terminal windows, I want to save the current arrangement as a named preset from the main window and apply it later from Settings → Layouts so that the Layouts pane, which today can never show anything because nothing in the app creates a SavedLayoutPreset, does what its empty state promises.",
+      "acceptanceCriteria": [
+        "New file QuipMac/Models/LayoutPresetStore.swift with a `struct LayoutPresetStore` of pure functions over the existing `@AppStorage(\"savedPresets\")` blob: `static func decode(_ data: Data) throws -> [SavedLayoutPreset]` (empty Data → []), `static func encode(_ presets: [SavedLayoutPreset]) throws -> Data`, `static func adding(_ preset: SavedLayoutPreset, to: [SavedLayoutPreset]) -> [SavedLayoutPreset]` (appends; a preset whose name already exists, compared case-insensitively after trimming, replaces that entry in place, keeping its id), `static func renaming(_ id: UUID, to name: String, in: [SavedLayoutPreset]) -> [SavedLayoutPreset]`, `static func removing(_ id: UUID, from: [SavedLayoutPreset]) -> [SavedLayoutPreset]`.",
+        "QuipMac/Views/MainWindow.swift toolbar gains a `Button(\"Save Layout…\", systemImage: \"square.and.arrow.down\")` that opens a sheet with a name TextField (Save disabled while the trimmed name is empty); Save writes `SavedLayoutPreset(name:mode:customFrames:windowOrder:)` built from the current `layoutMode`, `customFrames` (nil unless `layoutMode == .custom`) and the enabled windows' ids in sidebar order, through `LayoutPresetStore.adding` + `encode` into `@AppStorage(\"savedPresets\")`.",
+        "LayoutsTab in Settings reads presets through `LayoutPresetStore.decode`, keeps the existing loud error on an undecodable blob, and each row gains an `Apply` button that posts `NotificationCenter.default.post(name: .quipApplyLayoutPreset, object: preset)`; `MainWindow` observes `.quipApplyLayoutPreset` with `.onReceive`, sets `layoutMode` and (for `.custom`) `customFrames` from the preset, then runs the same arrange action the toolbar Arrange button runs. `Notification.Name.quipApplyLayoutPreset` is declared once, in QuipMac/Models/LayoutPresetStore.swift.",
+        "Rename and delete in LayoutsTab go through `LayoutPresetStore.renaming` / `removing`; the pane's pencil and trash buttons become `Button(\"Rename\", systemImage: \"pencil\")` / `Button(\"Delete\", systemImage: \"trash\", role: .destructive)` with `.labelStyle(.iconOnly)` so VoiceOver reads them.",
+        "New test file QuipMac/Tests/LayoutPresetStoreTests.swift: round-trip (encode then decode returns equal name, mode, customFrames, windowOrder and id); `adding` with a duplicate name replaces in place and keeps the original id; `renaming` changes only the named preset; `removing` drops only the given id; `decode(Data())` returns []; `decode` of the fixture bytes of the string `{\"not\":\"an array\"}` throws (the deliberately broken fixture); the custom-mode preset keeps a non-nil `customFrames` through the round trip.",
+        "Mutation documented in the story notes: make `encode` drop `customFrames` (encode a copy with `customFrames = nil`); the custom-mode round-trip test must fail; revert and it passes.",
+        "tools/check.sh passes (exit 0)."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Menu-bar Arrange reports why it did nothing",
+      "description": "As a Mac user who clicks Arrange Windows in the menu-bar panel, I want to be told when the arrange could not run (Accessibility revoked, no enabled windows, no display) so that the button never silently does nothing, matching what the main window already does.",
+      "acceptanceCriteria": [
+        "New file QuipMac/Services/ArrangeOutcome.swift: `enum ArrangeOutcome: Equatable { case arranged, noWindows, noDisplay, accessibilityDenied }` with `static func evaluate(enabledCount: Int, hasDisplay: Bool, arranged: () -> Bool) -> ArrangeOutcome` (returns `.noWindows` when enabledCount == 0 without calling `arranged`, `.noDisplay` when hasDisplay is false without calling `arranged`, else `.accessibilityDenied` when `arranged()` is false, else `.arranged`) and `var message: String?` (nil for `.arranged`; the Accessibility message is the one MainWindow uses today: \"Quip needs Accessibility access to move windows. Grant it in System Settings → Privacy & Security → Accessibility.\").",
+        "QuipMac/Views/MenuBarView.swift `arrangeWindows()` uses `ArrangeOutcome.evaluate` and stores a non-nil `message` in `@State private var arrangeError: String?`; the panel renders it under the Arrange button as a red `.caption` `Label(message, systemImage: \"exclamationmark.triangle.fill\")` with, for `.accessibilityDenied`, a `Button(\"Open Accessibility Settings\")` that opens `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`. The error clears on the next successful arrange.",
+        "QuipMac/Views/MainWindow.swift `arrange()` uses the same `ArrangeOutcome.evaluate` for its existing alert instead of its own if/else chain, and the two `print(\"[MainWindow] …\")` lines in it are removed (or routed through the project's log writer if one is already used in that file).",
+        "New test file QuipMac/Tests/ArrangeOutcomeTests.swift: each of the four outcomes; `arranged` is not invoked for `.noWindows` and `.noDisplay` (count the calls with a closure); `message` is nil only for `.arranged`.",
+        "Mutation documented in the story notes: make `evaluate` return `.arranged` when `arranged()` is false; the accessibilityDenied test must fail; revert and it passes.",
+        "tools/check.sh passes (exit 0)."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Keep disk, Keychain, network-interface and CIFilter work out of view bodies",
+      "description": "As a Mac user typing a PIN or watching the Connection pane update, I want Settings and the main window to stay responsive so that each keystroke or client tick does not regenerate a QR image, stat the binary, walk network interfaces or hit the Keychain on the main actor.",
+      "acceptanceCriteria": [
+        "QR: QuipMac/Views/SettingsView.swift `pairingQRBlock` and QuipMac/Views/MainWindow.swift `tunnelQRPopover` no longer call the QR generator inside the view builder. Each keeps `@State private var qrImage: NSImage?` filled by `.task(id: <the encoded URL string>) { qrImage = await Task.detached { PairingQR.image(for: encoded) }.value }` where `PairingQR.image(for:)` is a new `nonisolated static func` in QuipMac/Services/PairingQR.swift holding the CIFilter code that today lives in `SettingsView.qrImage(for:)` and `MainWindow.generateQR(from:)`; both old functions are deleted.",
+        "Identity header: `SettingsIdentityHeader` in SettingsView.swift drops `buildTime` (the `FileManager.attributesOfItem` + `DateFormatter` computed property) and `versionLabel`'s `Bundle.main.infoDictionary` reads; it shows `BuildInfo.display(BuildInfo.current)` and the `Text(...) + Text(...)` concatenation is replaced by interpolation of two styled `Text` values (`Text(\"\\(a)  ·  \\(b)\")`). The PromptsTab header's `Text + Text` at the `Prompt Library (` line is replaced the same way. `grep -n ' + Text(' QuipMac/Views/SettingsView.swift` prints nothing.",
+        "Keychain: `NotificationsTab`'s `@State private var keyId/teamId/bundleId/hasKey` are initialised to `\"\"` / `false` and seeded once in `.task` guarded by `@State private var seeded = false`; `grep -n '= APNsMetadataStore\\.\\|= APNsKeyStore\\.hasKey' QuipMac/Views/SettingsView.swift` matches no `@State` declaration line.",
+        "Interfaces: `ConnectionTab` keeps `@State private var lanURL: String = \"\"` filled in `.task` (and `.onChange(of: webSocketServer.isRunning)`), and `urlRow(label: \"LAN\", url: lanURL)` reads that state; `lanWSURL` is no longer called from `body` or any `@ViewBuilder` property.",
+        "New test file QuipMac/Tests/PairingQRTests.swift: `PairingQR.image(for: \"quip://pair?url=abc&pin=11112222\")` returns a non-nil image whose `size.width >= 21`; `PairingQR.image(for: \"\")` returns nil.",
+        "Mutation documented in the story notes: make `PairingQR.image(for:)` return nil for every input; the non-nil test must fail; revert and it passes.",
+        "tools/check.sh passes (exit 0)."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Make every control reachable: VoiceOver labels, keyboard-reachable row actions, Reduce Motion",
+      "description": "As a Mac user relying on VoiceOver, the keyboard or Reduce Motion, I want every icon-only button to have a name, the sidebar row's pin and move actions to exist without a pointer, and layout animations to respect Reduce Motion so that the Mac app is usable without a mouse and without motion.",
+      "acceptanceCriteria": [
+        "Every icon-only Button in QuipMac/Views/SettingsView.swift (today: `CopyButton`, the two `xmark.circle` remove buttons in ProjectsTab's spawn-directories and swrm sections, `PromptRow`'s pencil and trash, and LayoutsTab's pencil and trash if US-002 has not already converted them) is a `Button(\"<Name>\", systemImage: \"<symbol>\")` with `.labelStyle(.iconOnly)` or carries `.accessibilityLabel(\"<Name>\")`. Reviewer check: for each `Button {` / `Button(action:` / `Button(role:` whose label closure contains only `Image(systemName:` in that file, the same expression has a text title or an `.accessibilityLabel`.",
+        "QuipMac/Views/WindowListSidebar.swift row: the pin button and the move up/down chevrons are always in the view tree and hidden with `.opacity(isHovering || isPinned ? 1 : 0)` (pin) / `.opacity(isHovering ? 1 : 0)` (chevrons) instead of `if isHovering {` conditional inclusion; the row's `.contextMenu` offers `Move Up` and `Move Down` (each present only when its callback is non-nil) in addition to Pin/Unpin.",
+        "New pure helper `enum WindowRowMenu { static func actions(isPinned: Bool, canMoveUp: Bool, canMoveDown: Bool) -> [String] }` in QuipMac/Views/WindowRowMenu.swift returns the context-menu titles in order (`\"Pin to top\"`/`\"Unpin from top\"`, then `\"Move Up\"`, `\"Move Down\"` when allowed) and the sidebar's `.contextMenu` is built from it.",
+        "New `enum MotionPolicy { static func animation(_ base: Animation, reduceMotion: Bool) -> Animation? }` in QuipMac/Views/MotionPolicy.swift returning nil when reduceMotion is true, else `base`; used with `@Environment(\\.accessibilityReduceMotion)` at the four motion sites: QuipMac/Views/LayoutPresetTabs.swift (the `.move(edge: .top)` transition becomes `.opacity` when reduced), QuipMac/Views/LayoutPreview.swift (the `scaleEffect` spring), QuipMac/Views/MainWindow.swift (the spring on layout changes), QuipMac/Views/WindowListSidebar.swift (the `withAnimation(.easeOut)` reorders). `grep -rln accessibilityReduceMotion QuipMac/Views` lists at least those four files.",
+        "New test file QuipMac/Tests/WindowRowMenuTests.swift: `actions(isPinned: false, canMoveUp: true, canMoveDown: true) == [\"Pin to top\", \"Move Up\", \"Move Down\"]`; `actions(isPinned: true, canMoveUp: false, canMoveDown: false) == [\"Unpin from top\"]`; `MotionPolicy.animation(.easeOut, reduceMotion: true) == nil` and `MotionPolicy.animation(.easeOut, reduceMotion: false) != nil`.",
+        "Mutation documented in the story notes: make `MotionPolicy.animation` ignore `reduceMotion`; the nil test must fail; revert and it passes.",
+        "tools/check.sh passes (exit 0)."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Concurrency, binding and modern-API cleanups across the Mac views",
+      "description": "As a maintainer of the Swift 6 Mac target, I want the views to use structured concurrency, plain SwiftUI state and current APIs so that the code reads the way the rest of the project does and the one-shot launch hook is not re-registered on every scene evaluation.",
+      "acceptanceCriteria": [
+        "QuipMac/QuipMacApp.swift: `QuipAppDelegate.launchHook.register { ... }` moves out of `var body: some Scene` into `init()` of `QuipMacApp`, and the closure runs `Task { @MainActor in startServicesOnce() }` instead of `DispatchQueue.main.async`; `grep -n 'launchHook.register' QuipMac/QuipMacApp.swift` shows exactly one line and it is not inside `body`. The mis-indented `.environment(outputActivity)` line in the WindowGroup modifier chain is aligned with its neighbours.",
+        "QuipMac/Views/SettingsView.swift `bundleAndShare()` uses a single `Task { ... }` that awaits `Task.detached { try DiagnosticsBundle.makeZip() }.value` and assigns state directly (no `MainActor.run`); `lastError` shows `error.localizedDescription`. `AnchorCapture.makeNSView` uses `Task { @MainActor in anchor = v }` instead of `DispatchQueue.main.async`. `grep -n 'DispatchQueue.main.async\\|MainActor.run' QuipMac/Views/SettingsView.swift` prints nothing.",
+        "`Binding(get:set:)` is removed from: SettingsView's sidebar `selection` (replaced by `@State private var selection: SettingsTab?` seeded from `selectionRaw` in `.onAppear`/init and written back in `.onChange(of: selection)`), the crash-recovery toggle (`Toggle(\"Auto-restart on crash\", isOn: $crashRecoveryEnabled)` + `.onChange(of: crashRecoveryEnabled) { old, new in ... }` using the new pure `CrashRecoveryToggle.resolve`), and MainWindow's arrange alert (`.alert(\"Couldn't arrange windows\", isPresented: $showArrangeError, presenting: arrangeError)` with `@State private var showArrangeError = false`). The four validating/pass-through bindings `kindToggle`, `modeBinding`, `enabledBinding` and `serverRunningBinding` stay. Reviewer check: `grep -c 'Binding(' QuipMac/Views/SettingsView.swift` is 2 and `grep -c 'Binding(' QuipMac/Views/MainWindow.swift` is 0.",
+        "New `enum CrashRecoveryToggle { static func resolve(requested: Bool, apply: (Bool) throws -> Void) -> (enabled: Bool, error: String?) }` in QuipMac/Services/CrashRecoveryToggle.swift: calls `apply(requested)`; on success returns `(requested, nil)`, on throw returns `(!requested, \"Could not <install|remove> crash-recovery agent: <localizedDescription>\")`. The toggle's `.onChange` reverts the stored value to `enabled` and shows `error`.",
+        "Deprecated and old-style modifiers: no `.cornerRadius(` remains in QuipMac/Views (use `.clipShape(.rect(cornerRadius:))`); the `.overlay(Capsule().stroke(...))`, `.overlay(RoundedRectangle(cornerRadius: 4).stroke(...))` and LayoutPreview's `.overlay(Circle().strokeBorder(...))` use the trailing-closure `.overlay { }` form; the VibeCut pill background uses `.background(.purple.opacity(0.15), in: .capsule)`. `grep -rn 'cornerRadius(' QuipMac/Views` prints nothing.",
+        "Idioms: the three hand-rolled plurals (`device\\(n == 1 ? \"\" : \"s\")`, `phone\\(n == 1 ? ...`, `client\\(... == 1 ? ...`) use `^[\\(n) device](inflect: true)` style; `LayoutPreview.swift`'s two `ForEach(Array(... .enumerated())` become `ForEach(... .enumerated(), id:)` and the handles loop iterates `LayoutResize.Handle.allCases` with `id: \\.self` (index unused); `filter(...).count` → `count(where:)` in MenuBarView and SettingsView; `Date()` → `Date.now` at the relative-time call sites; ConnectionTab's `Self.timeFormatter.string(from:)` → `Text(event.timestamp, format: .dateTime.hour().minute().second())`; MenuBarView's `replacingOccurrences(of:with:)` → `replacing(_:with:)`.",
+        "New test file QuipMac/Tests/CrashRecoveryToggleTests.swift: with a throwing `apply`, `resolve(requested: true, ...)` returns `enabled == false` and an error containing \"install\"; `resolve(requested: false, ...)` with a throwing apply returns `enabled == true` and an error containing \"remove\"; with a non-throwing apply the result is `(requested, nil)` and `apply` was called exactly once with `requested`.",
+        "Mutation documented in the story notes: make `resolve` return `(requested, nil)` even when `apply` throws; the two throwing tests must fail; revert and they pass.",
+        "tools/check.sh passes (exit 0)."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Split SettingsView.swift into one file per pane",
+      "description": "As a maintainer, I want each Settings pane in its own file under QuipMac/Views/Settings so that a 2200-line file holding nineteen types stops being the place every Settings change collides.",
+      "acceptanceCriteria": [
+        "New directory QuipMac/Views/Settings/ holds one file per moved type, named after the type: NotificationsTab.swift, ProjectsTab.swift, PromptsTab.swift (with PromptRow and PromptEditorSheet in PromptRow.swift / PromptEditorSheet.swift), GeneralTab.swift (with WandSection.swift and TerminalColorsSection.swift), LayoutsTab.swift (with RenamePresetSheet.swift), ConnectionTab.swift, SecurityTab.swift (with AnchoredButton.swift), and SettingsChrome.swift for SettingsIconTile, CopyButton, SettingsIdentityHeader and StatusDot. Access levels change from `private` to internal only where a type must be seen across files; nothing else in the bodies changes.",
+        "QuipMac/Views/SettingsView.swift keeps only `SettingsTab` and `SettingsView` and is at most 300 lines (`wc -l QuipMac/Views/SettingsView.swift`).",
+        "`git diff --stat` for the story shows the moved bodies as deletions from SettingsView.swift and additions in the new files with no other source files touched except access-level edits; the story notes list any `private` → internal change made.",
+        "xcodegen picks the new files up through the existing source globs in QuipMac/project.yml (no project.yml change needed; if one is needed, it is the only non-move change and is named in the notes).",
+        "tools/check.sh passes (exit 0) with the same QuipMac test count as before the move (record the count before and after in the notes)."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

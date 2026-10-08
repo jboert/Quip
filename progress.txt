@@ -1,0 +1,13 @@
+# Ralph Progress Log
+Started: Thu Oct  8 11:15:35 MST 2026
+---
+
+## 2026-10-08 — US-001 Make the WebSocket port a single constant — PASS
+- Files: QuipMac/Services/WebSocketServer.swift, QuipMac/Services/TailscaleService.swift,
+  QuipMac/Views/SettingsView.swift, QuipMac/Views/MainWindow.swift, QuipMac/Tests/ListenPortTests.swift (new)
+- Gate: `tools/check.sh` exit 0 — QuipMac 1125 tests / 0 failures; swiftc harness SKIPPED, QuipiOS SKIPPED (out of scope for the diff)
+- Mutation 1 (wsPort read in webSocketURL): ListenPortTests test (1) FAILED (:9000 vs :8765) -> reverted -> passes
+- Mutation 2 (localWebSocketURLs default 9000): test (2) FAILED (ws://192.168.4.26:9000) -> reverted -> passes
+- Note: test (2) is vacuous on a host with no private-IPv4 en* interface (some CI runners)
+- Leftover: TailscaleService.publish(port:) argument is now unused (criterion requires the calls to pass it)
+- Next: US-002 (layout presets in the Layouts pane)

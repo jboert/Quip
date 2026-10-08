@@ -18,7 +18,7 @@ struct MainWindow: View {
     }
 
     private static func computeLocalWSURL() -> String {
-        let port = 8765
+        let port = WebSocketServer.listenPort
         var address = "localhost"
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         if getifaddrs(&ifaddr) == 0 {

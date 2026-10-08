@@ -1,10 +1,11 @@
 // TailscaleService.swift
 // QuipMac — Detects the Mac's Tailscale hostname by shelling out to the
 // `tailscale status --json` CLI. Exposes an observable `webSocketURL` built
-// from the MagicDNS name (or the 100.x IP as a fallback) and the configured
-// WebSocket port. One-shot detection — refresh() is called on app launch,
-// on network-mode change, on app activation, and from a manual "Re-detect"
-// button in the Connection settings tab.
+// from the MagicDNS name (or the 100.x IP as a fallback) and the port the
+// WebSocket server listens on (`WebSocketServer.listenPort`). One-shot
+// detection — refresh() is called on app launch, on network-mode change, on
+// app activation, and from a manual "Re-detect" button in the Connection
+// settings tab.
 
 import Foundation
 import Observation
@@ -32,10 +33,6 @@ final class TailscaleService {
         "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
     ]
 
-    /// Default WebSocket port — matches the @AppStorage("wsPort") default used
-    /// elsewhere in the app. Read fresh on each refresh().
-    nonisolated private static let defaultPort: Int = 8765
-
     /// Small error type so `detectViaCLI` can return a typed `Result`.
     /// Just wraps a human-readable message; consumers read `.message` directly.
     struct DetectionError: Error {
@@ -50,10 +47,9 @@ final class TailscaleService {
         let override = UserDefaults.standard.string(forKey: "tailscaleHostnameOverride") ?? ""
         let trimmedOverride = override.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedOverride.isEmpty {
-            let port = UserDefaults.standard.integer(forKey: "wsPort")
             publish(
                 hostname: trimmedOverride,
-                port: port > 0 ? port : Self.defaultPort,
+                port: Int(WebSocketServer.listenPort),
                 error: nil,
                 generation: myGen
             )
@@ -75,10 +71,9 @@ final class TailscaleService {
         guard self.generation == myGen else { return }
         switch result {
         case .success(let detectedHost):
-            let port = UserDefaults.standard.integer(forKey: "wsPort")
             self.publish(
                 hostname: detectedHost,
-                port: port > 0 ? port : Self.defaultPort,
+                port: Int(WebSocketServer.listenPort),
                 error: nil,
                 generation: myGen
             )
@@ -98,12 +93,18 @@ final class TailscaleService {
         lastError = nil
     }
 
+    /// The URL the phone dials for `host`. Always the port the listener
+    /// really binds — there is no port setting to drift from it.
+    nonisolated static func webSocketURL(host: String) -> String {
+        "ws://\(host):\(WebSocketServer.listenPort)"
+    }
+
     // MARK: - Private
 
     private func publish(hostname: String, port: Int, error: String?, generation myGen: Int) {
         guard self.generation == myGen else { return }
         self.hostname = hostname
-        self.webSocketURL = "ws://\(hostname):\(port)"
+        self.webSocketURL = Self.webSocketURL(host: hostname)
         self.isAvailable = true
         self.lastError = error
     }
