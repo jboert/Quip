@@ -13,14 +13,14 @@ the owner is off the phone.
 
 ## Branch state
 
-- eb-branch, 27 commits ahead of `origin/eb-branch`, **not pushed** (owner
+- eb-branch, 30 commits ahead of `origin/eb-branch`, **not pushed** (owner
   confirms every push).
 - CI replay 2026-10-08 (both Apple jobs with CI's exact flags and xcodegen
   2.44.1): Mac 1086 green; iOS failed 14 Keychain-backed tests on the unsigned
   host (-34018), fixed in `daea581` (in-memory backing under XCTest), then
   1132 green. The signed local gate cannot see this class; replay before the
   PR (memory `reference_ci_replay_unsigned_host.md`). `origin/main` has nothing new.
-- Gate at the last commit: harness 62, QuipMac 1086, QuipiOS 1132, all green
+- Gate at the last commit: harness 62, QuipMac 1096, QuipiOS 1134, all green
   (`QUIP_QA_SIM_UDID=D8C5154B-7030-40BA-8443-F4F9EB27C725 tools/check.sh`).
 - Untracked junk from the ruflo plugin, left alone: `ruvector.db`,
   `agentdb.rvf`, `agentdb.rvf.lock`, `QuipiOS/ruvector.db`.
@@ -49,8 +49,8 @@ Everything from `5ffd8f2` back is addendum 3's.
 
 | Peer | Installed | Code it is missing |
 | --- | --- | --- |
-| Mac `/Applications/Quip.app` | eb-branch `c825a59`, 1.5.7 Release, Developer ID, installed 2026-10-08 08:28 (fresh pid 37401, port 8765 listening). Menu panel shows `v1.5.7 c825a59`. | Nothing. Phone had not reconnected at handoff time (relaunch Quip on the phone); check the Mac Status row for Accessibility / Screen Recording after reconnect, re-grant if red. |
-| iPhone (owner's primary) | eb-branch `c825a59`, 1.5.7, Debug, installed over the air 2026-10-08 08:28 (devicectl, localNetwork transport). Settings shows `1.5.7 (c825a59, 2026-10-08 08:28)` | Nothing. Force-quit and relaunch after the install. |
+| Mac `/Applications/Quip.app` | eb-branch `c8aaafb`, 1.5.7 Release, Developer ID, installed 2026-10-08 08:56 (fresh pid 4035, port 8765 listening). Menu panel shows `v1.5.7 c825a59`. | Nothing. Phone had not reconnected at handoff time (relaunch Quip on the phone); check the Mac Status row for Accessibility / Screen Recording after reconnect, re-grant if red. |
+| iPhone (owner's primary) | eb-branch `c8aaafb`, 1.5.7, Debug, installed over the air 2026-10-08 08:55 (devicectl, localNetwork transport). Settings shows `1.5.7 (c8aaafb, 2026-10-08 08:55)` | Nothing. Force-quit and relaunch after the install. |
 | QA simulator D8C5154B | Nothing installed; must never pair with the real Mac | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check. |
 
 One phone socket was ESTABLISHED on port 8765 at handoff time.
@@ -74,8 +74,10 @@ Both peers now carry today's code (installed 2026-10-08 08:28); the hardware che
   catalog file; the QA simulator's fake Mac serves 12 invented prompts. Owner
   must say which surface showed the gap and whether Proceed should inherit.
   Memory: `project_vibecut_sync_gaps.md`.
-- **Push**: the Mac install (`c825a59`, includes `118c58d`) landed 2026-10-08;
-  the owner re-enters Team ID + .p8 in Settings once, then push is back (board Q-48).
+- **Push** (board Q-55): both peers on `c8aaafb` since 08:56. Team ID now
+  defaults to the signing team; the owner enters Key ID `M4XGA5PPAN` once in
+  Settings → Notifications and push is back. The phone now shows a red "Push
+  on Mac" row until then.
 - **Quick-button backup restore** still owed on the owner's "restore buttons"
   (recipe in addendum 3).
 - **Q-50 key styles, Q-51 long-press discoverability**: PRDs/spec pending owner
