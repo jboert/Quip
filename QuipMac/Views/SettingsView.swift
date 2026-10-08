@@ -1268,18 +1268,21 @@ private struct LayoutsTab: View {
 
                             Spacer()
 
-                            Button {
-                                editingPreset = preset
-                            } label: {
-                                Image(systemName: "pencil")
+                            Button("Apply") {
+                                NotificationCenter.default.post(name: .quipApplyLayoutPreset, object: preset)
                             }
+                            .help("Lay out the main window's enabled windows with this preset")
+
+                            Button("Rename", systemImage: "pencil") {
+                                editingPreset = preset
+                            }
+                            .labelStyle(.iconOnly)
                             .buttonStyle(.borderless)
 
-                            Button(role: .destructive) {
+                            Button("Delete", systemImage: "trash", role: .destructive) {
                                 deletePreset(preset)
-                            } label: {
-                                Image(systemName: "trash")
                             }
+                            .labelStyle(.iconOnly)
                             .buttonStyle(.borderless)
                         }
                         .padding(.vertical, 4)
@@ -1288,6 +1291,9 @@ private struct LayoutsTab: View {
             }
         }
         .onAppear { loadPresets() }
+        // The main window's Save Layout… writes the same blob while this pane
+        // may already be open.
+        .onChange(of: savedPresetsData) { _, _ in loadPresets() }
         .sheet(item: $editingPreset) { preset in
             RenamePresetSheet(preset: preset) { newName in
                 renamePreset(preset, to: newName)
@@ -1299,8 +1305,7 @@ private struct LayoutsTab: View {
         // Empty blob = no presets saved yet (the @AppStorage default) — silent.
         // Non-empty and undecodable = the user's saved layouts just vanished.
         do {
-            guard !savedPresetsData.isEmpty else { return }
-            presets = try JSONDecoder().decode([SavedLayoutPreset].self, from: savedPresetsData)
+            presets = try LayoutPresetStore.decode(savedPresetsData)
         } catch {
             QuipLog.write(
                 severity: .error, subsystem: "settings",
@@ -1313,7 +1318,7 @@ private struct LayoutsTab: View {
 
     private func savePresets() {
         do {
-            savedPresetsData = try JSONEncoder().encode(presets)
+            savedPresetsData = try LayoutPresetStore.encode(presets)
         } catch {
             QuipLog.write(
                 severity: .error, subsystem: "settings",
@@ -1325,15 +1330,13 @@ private struct LayoutsTab: View {
     }
 
     private func deletePreset(_ preset: SavedLayoutPreset) {
-        presets.removeAll { $0.id == preset.id }
+        presets = LayoutPresetStore.removing(preset.id, from: presets)
         savePresets()
     }
 
     private func renamePreset(_ preset: SavedLayoutPreset, to name: String) {
-        if let index = presets.firstIndex(where: { $0.id == preset.id }) {
-            presets[index].name = name
-            savePresets()
-        }
+        presets = LayoutPresetStore.renaming(preset.id, to: name, in: presets)
+        savePresets()
     }
 }
 

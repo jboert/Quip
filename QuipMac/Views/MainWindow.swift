@@ -56,6 +56,14 @@ struct MainWindow: View {
     /// permission, no enabled windows, no display.
     @State private var arrangeError: String?
 
+    @AppStorage("savedPresets") private var savedPresetsData: Data = Data()
+    @State private var showSaveLayoutSheet = false
+    @State private var presetName = ""
+    @State private var savePresetError: String?
+    /// Set when applying a preset changes `layoutMode`, so the mode's
+    /// `onChange` keeps the preset's frames instead of resetting them.
+    @State private var presetModeBeingApplied: LayoutMode?
+
     var body: some View {
         NavigationSplitView {
             WindowListSidebar(
@@ -81,6 +89,13 @@ struct MainWindow: View {
             Button("OK", role: .cancel) { arrangeError = nil }
         } message: {
             Text(arrangeError ?? "")
+        }
+        .sheet(isPresented: $showSaveLayoutSheet) {
+            saveLayoutSheet
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quipApplyLayoutPreset)) { note in
+            guard let preset = note.object as? SavedLayoutPreset else { return }
+            applyPreset(preset)
         }
         .onAppear {
             windowManager.refreshDisplays()
@@ -109,7 +124,13 @@ struct MainWindow: View {
                 )
                 // Picking a preset means "lay them out like this" — keeping the
                 // hand-dragged rects would make the preset look broken.
-                .onChange(of: layoutMode) { _, _ in customFrames.removeAll() }
+                .onChange(of: layoutMode) { _, newMode in
+                    if presetModeBeingApplied == newMode {
+                        presetModeBeingApplied = nil
+                        return
+                    }
+                    customFrames.removeAll()
+                }
                 .onChange(of: customTemplate) { _, _ in customFrames.removeAll() }
 
                 if !customFrames.isEmpty {
@@ -193,6 +214,50 @@ struct MainWindow: View {
             .disabled(enabledWindowCount == 0)
             .help("Arrange enabled windows using the selected layout")
         }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button("Save Layout…", systemImage: "square.and.arrow.down") {
+                presetName = ""
+                savePresetError = nil
+                showSaveLayoutSheet = true
+            }
+            .help("Save the current layout as a preset you can apply from Settings → Layouts")
+        }
+    }
+
+    // MARK: - Save Layout Sheet
+
+    private var saveLayoutSheet: some View {
+        VStack(spacing: 16) {
+            Text("Save Layout")
+                .font(.headline)
+
+            TextField("Layout name", text: $presetName)
+                .textFieldStyle(.roundedBorder)
+
+            if let savePresetError {
+                Label(savePresetError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Button("Cancel") { showSaveLayoutSheet = false }
+                    .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("Save") {
+                    if saveCurrentLayout(named: presetName) {
+                        showSaveLayoutSheet = false
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 300)
     }
 
     // MARK: - QR Popover
@@ -463,6 +528,41 @@ struct MainWindow: View {
     }
 
     // MARK: - Actions
+
+    /// Returns false (and says why in the sheet) when the blob could not be
+    /// read or written — overwriting an unreadable blob would destroy the
+    /// presets it still holds.
+    private func saveCurrentLayout(named name: String) -> Bool {
+        let preset = SavedLayoutPreset(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            mode: layoutMode,
+            customFrames: layoutMode == .custom ? customFrames : nil,
+            windowOrder: enabledWindows.map(\.id)
+        )
+        do {
+            let existing = try LayoutPresetStore.decode(savedPresetsData)
+            savedPresetsData = try LayoutPresetStore.encode(LayoutPresetStore.adding(preset, to: existing))
+            return true
+        } catch {
+            savePresetError = "Couldn't save the layout: \(error.localizedDescription)"
+            QuipLog.write(
+                severity: .error, subsystem: "settings",
+                message: "could not save layout preset (\(savedPresetsData.count) bytes stored) "
+                       + "— existing presets left untouched: \(error)",
+                to: LogPaths.webSocketPath
+            )
+            return false
+        }
+    }
+
+    private func applyPreset(_ preset: SavedLayoutPreset) {
+        if preset.mode != layoutMode {
+            presetModeBeingApplied = preset.mode
+            layoutMode = preset.mode
+        }
+        customFrames = preset.mode == .custom ? (preset.customFrames ?? [:]) : [:]
+        arrangeWindows()
+    }
 
     private func reorderWindows(from fromIndex: Int, to toIndex: Int) {
         let enabled = enabledWindows

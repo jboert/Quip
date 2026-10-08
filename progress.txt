@@ -11,3 +11,14 @@ Started: Thu Oct  8 11:15:35 MST 2026
 - Note: test (2) is vacuous on a host with no private-IPv4 en* interface (some CI runners)
 - Leftover: TailscaleService.publish(port:) argument is now unused (criterion requires the calls to pass it)
 - Next: US-002 (layout presets in the Layouts pane)
+
+## 2026-10-08 — US-002 Save / apply / rename / delete layout presets — PASS
+- Files: QuipMac/Models/LayoutPresetStore.swift (new), QuipMac/Views/MainWindow.swift,
+  QuipMac/Views/SettingsView.swift, QuipMac/Tests/LayoutPresetStoreTests.swift (new)
+- Gate: `tools/check.sh` exit 0 — QuipMac 1133 tests / 0 failures (+8 vs 1125); swiftc harness SKIPPED, QuipiOS SKIPPED (out of scope for the diff)
+- Mutation 1 (encode drops customFrames): both round-trip tests FAILED -> reverted -> pass
+- Mutation 2 (adding loses the original id): duplicate-name test FAILED -> reverted -> 8/8 pass
+- Broken fixture: decode of {"not":"an array"} throws (test_decode_nonArrayBlobThrows)
+- Unverified: sheet/Apply not driven in a running app (a second Quip would fight the live app for :8765); compile + review only
+- Leftovers: Apply is a no-op with no main window open; windowOrder is saved but not restored on Apply
+- Next: US-003 (menu-bar Arrange reports why it did nothing)
