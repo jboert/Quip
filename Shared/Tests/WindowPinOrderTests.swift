@@ -21,6 +21,19 @@ final class WindowPinOrderTests: XCTestCase {
                        ["b", "d", "a", "c"])
     }
 
+    /// A new pin lands after the pins already there, like a browser tab:
+    /// first pinned stays first, the newest pin is the last of the group.
+    func testANewPinGoesToTheEndOfThePinnedGroup() {
+        XCTAssertEqual(WindowPinOrder.placingNewPin("d", in: ["a", "b", "c", "d"], pinned: []),
+                       ["d", "a", "b", "c"], "no pins yet: straight to the front")
+        XCTAssertEqual(WindowPinOrder.placingNewPin("a", in: ["c", "a", "b", "d"], pinned: ["c"]),
+                       ["c", "a", "b", "d"], "already right after the pin: unchanged")
+        XCTAssertEqual(WindowPinOrder.placingNewPin("a", in: ["a", "c", "b", "d"], pinned: ["c"]),
+                       ["c", "a", "b", "d"], "a window above an existing pin lines up after it")
+        XCTAssertEqual(WindowPinOrder.placingNewPin("x", in: ["a", "b"], pinned: ["a"]),
+                       ["a", "b"], "an id that is not in the list changes nothing")
+    }
+
     func testUnpinnedWindowsKeepTheirRelativeOrder() {
         XCTAssertEqual(WindowPinOrder.apply(["a", "b", "c", "d"], pinned: ["b"]),
                        ["b", "a", "c", "d"])

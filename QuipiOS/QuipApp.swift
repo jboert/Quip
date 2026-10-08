@@ -1594,19 +1594,7 @@ struct MainiOSView: View {
     /// safe to read from `body`. Reconciling the saved order to the live id set
     /// happens in `.onChange(of: windows)` via `reconcileWindowOrder`.
     private var displayWindows: [WindowState] {
-        guard !phoneWindowOrder.isEmpty else { return windows }
-        let rank = Dictionary(
-            phoneWindowOrder.enumerated().map { ($0.element, $0.offset) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        // Stable: known ids sort by saved position; unknown ids fall to the end
-        // (rank .max) keeping their incoming relative order via the offset tiebreak.
-        return windows.enumerated().sorted { a, b in
-            let ra = rank[a.element.id] ?? Int.max
-            let rb = rank[b.element.id] ?? Int.max
-            if ra != rb { return ra < rb }
-            return a.offset < b.offset
-        }.map(\.element)
+        PhoneWindowOrder.display(windows, savedOrder: phoneWindowOrder)
     }
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.

@@ -25,6 +25,20 @@ enum WindowPinOrder {
         return front + rest
     }
 
+    /// Where a window goes the moment it is pinned: the end of the pinned
+    /// group, like a new browser pinned tab, so the first pin is first and
+    /// each later pin lines up after it. `pinned` is the set BEFORE `id` was
+    /// added. The relative order of everything else is untouched. `ids`
+    /// without `id` come back unchanged.
+    static func placingNewPin(_ id: String, in ids: [String], pinned: Set<String>) -> [String] {
+        guard let from = ids.firstIndex(of: id) else { return ids }
+        var rest = ids
+        rest.remove(at: from)
+        let afterLastPin = rest.lastIndex(where: { pinned.contains($0) }).map { $0 + 1 } ?? 0
+        rest.insert(id, at: afterLastPin)
+        return rest
+    }
+
     /// Pins for windows that are not on screen right now are KEPT, not dropped.
     /// A terminal you closed for an hour should still be pinned when it comes
     /// back — but its id carries the CoreGraphics window number, so "comes

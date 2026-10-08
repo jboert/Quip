@@ -191,7 +191,18 @@ final class WindowManager {
     static let pinnedKey = "pinnedWindowIDs"
 
     func togglePin(_ id: String) {
-        if pinnedWindowIDs.contains(id) { pinnedWindowIDs.remove(id) } else { pinnedWindowIDs.insert(id) }
+        if pinnedWindowIDs.contains(id) {
+            pinnedWindowIDs.remove(id)
+        } else {
+            // A new pin lines up after the pins already there, like a browser
+            // tab, so the first pin is first and the newest is last of the
+            // group (Q-58). Placed before the float so `apply` keeps it there.
+            let placed = WindowPinOrder.placingNewPin(id, in: windows.map(\.id), pinned: pinnedWindowIDs)
+            var byID: [String: ManagedWindow] = [:]
+            for window in windows { byID[window.id] = window }
+            windows = placed.compactMap { byID[$0] }
+            pinnedWindowIDs.insert(id)
+        }
         defaults.set(Array(pinnedWindowIDs), forKey: Self.pinnedKey)
         applyPinsToCurrentOrder()
     }
