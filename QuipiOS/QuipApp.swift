@@ -7988,6 +7988,14 @@ struct QuickButtonsSheet: View {
     /// query, drag-to-reorder is off: moving rows of a filtered list is
     /// ambiguous.
     @State private var editorQuery: String = ""
+    // The Add Prompt picker ranks, hides and searches like the Prompts hub
+    // (US-104), from the same stores.
+    @State private var promptPickerQuery: String = ""
+    @State private var showHiddenInPromptPicker: Bool = false
+    @State private var promptPickerCache = PromptSearchCache()
+    @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
+    @AppStorage("promptUsageJSON") private var promptUsageJSON: String = "{}"
+    @AppStorage("promptUsageMRUJSON") private var promptUsageMRUJSON: String = "{}"
     @AppStorage(LabsFlags.promptPackSharing) private var labsPromptPacks = false
     @State private var shareItem: PackShareItem?
     @State private var exportError: String?
@@ -8235,9 +8243,11 @@ struct QuickButtonsSheet: View {
         }
     }
 
-    /// Lists every prompt currently in the Mac catalog. Tap = add as a
-    /// .prompt slot at the end of the row. Already-placed prompts are
-    /// disabled so the user can't accidentally double-add. (§B3)
+    /// Lists the Mac's prompts the way the Prompts hub does (US-104): most
+    /// used first, hidden prompts in a collapsed section, and the same
+    /// search. Tap = add as a .prompt slot at the end of the row.
+    /// Already-placed prompts are disabled so the user can't accidentally
+    /// double-add. (§B3)
     private var promptPickerSheet: some View {
         NavigationStack {
             List {
@@ -8246,32 +8256,50 @@ struct QuickButtonsSheet: View {
                         if case .prompt(let pid) = slot { return pid }
                         return nil
                     })
-                    ForEach(cl.promptLibrary) { entry in
-                        Button {
-                            addPromptSlot(entry.id)
-                            showPromptPicker = false
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.label)
-                                        .foregroundStyle(.primary)
-                                    Text(entry.bodyPreview)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                if placed.contains(entry.id) {
-                                    Text("Added")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
+                    let hub = PromptHub.sections(
+                        cl.promptLibrary,
+                        hiddenJSON: hiddenPromptIDsJSON,
+                        store: PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON),
+                        context: nil,
+                        query: promptPickerQuery,
+                        at: Date(),
+                        cache: promptPickerCache
+                    )
+                    if hub.visible.isEmpty && hub.hidden.isEmpty && !cl.promptLibrary.isEmpty {
+                        Text("No prompts match \"\(promptPickerQuery)\".")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                    if !hub.visible.isEmpty {
+                        Section(promptPickerQuery.isEmpty ? "Most used first" : "Best match first") {
+                            ForEach(hub.visible) { entry in
+                                promptPickerRow(entry, placed: placed.contains(entry.id), note: hub.notes[entry.id])
                             }
                         }
-                        .disabled(placed.contains(entry.id))
+                    }
+                    if !hub.hidden.isEmpty {
+                        let expanded = showHiddenInPromptPicker || !promptPickerQuery.isEmpty
+                        Section {
+                            if expanded {
+                                ForEach(hub.hidden) { entry in
+                                    promptPickerRow(entry, placed: placed.contains(entry.id), note: hub.notes[entry.id])
+                                }
+                            }
+                        } header: {
+                            Button {
+                                showHiddenInPromptPicker.toggle()
+                            } label: {
+                                Label("Hidden (\(hub.hidden.count))",
+                                      systemImage: expanded ? "chevron.down" : "chevron.right")
+                            }
+                            .font(.caption)
+                        }
                     }
                 }
             }
+            .searchable(text: $promptPickerQuery, placement: .navigationBarDrawer(displayMode: .always))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
             .navigationTitle("Add Prompt")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -8280,6 +8308,37 @@ struct QuickButtonsSheet: View {
                 }
             }
         }
+    }
+
+    private func promptPickerRow(_ entry: PromptEntry, placed: Bool, note: PromptHub.MatchNote?) -> some View {
+        Button {
+            addPromptSlot(entry.id)
+            showPromptPicker = false
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.label)
+                        .foregroundStyle(.primary)
+                    Text(note?.excerpt ?? entry.bodyPreview)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let closeMatch = note?.closeMatch {
+                        Text(closeMatch)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tint)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if placed {
+                    Text("Added")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .disabled(placed)
     }
 
     private func addPromptSlot(_ promptID: String) {
@@ -8669,6 +8728,7 @@ struct QuickButtonsSheet: View {
         case .onePrompt:
             Button {
                 showAddSheet = false
+                promptPickerQuery = ""
                 showPromptPicker = true
             } label: {
                 Label("One prompt as its own button…", systemImage: "doc.text")
