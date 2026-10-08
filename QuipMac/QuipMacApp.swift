@@ -2585,18 +2585,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         Task.detached {
             let descriptors = WindowManager.fetchAllITermWindows()
             await MainActor.run {
-                let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
                 // Prune attached-session UUIDs that iTerm no longer knows
                 // about. Only do this when iTerm returned at least one window
                 // so a transient "iTerm not running" state doesn't wipe
                 // persistence.
                 let liveSessionIds = Set(descriptors.map(\.sessionId))
                 self.windowManager.reconcileAttachedSessions(withLiveSessionIds: liveSessionIds)
-                let trackedSessionIds: Set<String> = Set(
-                    self.windowManager.windows
-                        .filter { $0.bundleId == iterm2BundleId && $0.isEnabled }
-                        .compactMap(\.iterm2SessionId)
-                )
+                // After the prune, so a closed session cannot read as tracked.
+                let trackedSessionIds = WindowManager.trackedITermSessionIds(
+                    windows: self.windowManager.windows,
+                    attached: self.windowManager.attachedSessionIds)
                 let infos: [ITermWindowInfo] = descriptors.map { d in
                     ITermWindowInfo(
                         windowNumber: Int(d.windowNumber),

@@ -1611,6 +1611,22 @@ final class WindowManager {
         print("[WindowManager] reconciled attached sessions: dropped \(stale.count) stale UUID(s): \(stale)")
     }
 
+    /// iTerm2 session ids the phone's Attach Existing list shows as already
+    /// tracked: enabled iTerm2 windows with a mapped session id, plus every
+    /// session the user attached. The attached set covers the lag between an
+    /// attach and the session-map pass that would map and enable its window;
+    /// without it, a scan right after an attach (or after the phone relaunches)
+    /// offered the window again. Pass `attached` after
+    /// `reconcileAttachedSessions` has pruned sessions iTerm2 no longer has.
+    nonisolated static func trackedITermSessionIds(windows: [ManagedWindow],
+                                                   attached: Set<String>) -> Set<String> {
+        let iterm2BundleId = TerminalApp.iterm2.bundleIdentifier
+        let enabledMapped = windows
+            .filter { $0.bundleId == iterm2BundleId && $0.isEnabled }
+            .compactMap(\.iterm2SessionId)
+        return attached.union(enabledMapped)
+    }
+
     /// After iterm2SessionIds are applied, make sure every window whose
     /// session the user previously attached is flagged enabled. Without
     /// this, attached windows wouldn't come back enabled after a Quip
