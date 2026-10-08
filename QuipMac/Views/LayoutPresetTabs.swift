@@ -7,6 +7,7 @@ struct LayoutPresetTabs: View {
     @Binding var selectedMode: LayoutMode
     @Binding var selectedTemplate: CustomLayoutTemplate
     @Binding var isDragToResizeEnabled: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -41,9 +42,10 @@ struct LayoutPresetTabs: View {
                     .toggleStyle(.checkbox)
                 }
                 .padding(.horizontal, 2)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.spring(duration: 0.3), value: selectedMode)
+        .animation(MotionPolicy.animation(.spring(duration: 0.3), reduceMotion: reduceMotion),
+                   value: selectedMode)
     }
 }

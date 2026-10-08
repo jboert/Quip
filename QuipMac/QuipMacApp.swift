@@ -321,9 +321,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     var body: some Scene {
         // Start services at launch whether or not a window opens (see
         // LaunchHook). Deferred a turn so the state it writes is never written
-        // while SwiftUI is evaluating this body.
+        // while SwiftUI is evaluating this body. Registered here, not in init():
+        // a copy of `self` captured in init holds @State that SwiftUI never
+        // installed, so every write through it is dropped — including the
+        // `servicesStarted` guard and the state the service handlers update.
         let _ = QuipAppDelegate.launchHook.register {
-            DispatchQueue.main.async { startServicesOnce() }
+            Task { @MainActor in startServicesOnce() }
         }
         WindowGroup {
             MainWindow()
@@ -331,7 +334,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(webSocketServer)
                 .environment(bonjourAdvertiser)
                 .environment(terminalStateDetector)
-        .environment(outputActivity)
+                .environment(outputActivity)
                 .environment(terminalColorManager)
                 .environment(keystrokeInjector)
                 .environment(tunnel)

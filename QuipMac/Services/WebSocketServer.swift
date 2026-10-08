@@ -127,6 +127,10 @@ final class WebSocketServer {
     /// another process). Without this the server would give up silently and the
     /// phone would talk to whatever is on 8765 and report "bad response from server".
     nonisolated private static let bindRetryInterval: TimeInterval = 5
+    /// The one port the listener binds. Not a setting: every URL the Mac
+    /// hands out (Connection pane, pairing QR, Tailscale, `localURLs`) is
+    /// built from this, so none of them can point at a port nothing listens on.
+    nonisolated static let listenPort: UInt16 = 8765
     private var bindRetryWorkItem: DispatchWorkItem?
 
     /// Tracks a WebSocket connection, its authentication state, and rate limiting.
@@ -296,7 +300,7 @@ final class WebSocketServer {
         tcpOptions.keepaliveCount = 3
 
         let parameters = NWParameters(tls: nil, tcp: tcpOptions)
-        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: 8765)
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(rawValue: Self.listenPort)!)
         parameters.allowLocalEndpointReuse = true
 
         let wsOptions = NWProtocolWebSocket.Options()
@@ -923,10 +927,10 @@ final class WebSocketServer {
     /// private-IPv4 address on a PRIMARY (`en*`) interface that's up and
     /// non-loopback. Sent in `DeviceIdentityMessage.localURLs` so the phone can
     /// learn the LAN path even when it only ever paired over Tailscale. The WS
-    /// listener binds a fixed `0.0.0.0:8765`, so the port is constant. Bridge /
+    /// listener binds a fixed `0.0.0.0:listenPort`, so the port is constant. Bridge /
     /// VM / tunnel interfaces are excluded (see `isPrimaryLANInterface`) — their
     /// private IPs are not reachable from the phone.
-    nonisolated static func localWebSocketURLs(port: UInt16 = 8765) -> [String] {
+    nonisolated static func localWebSocketURLs(port: UInt16 = listenPort) -> [String] {
         var urls: [String] = []
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrPtr) == 0 else { return [] }

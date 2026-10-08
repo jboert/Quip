@@ -10,6 +10,13 @@ struct MainWindow: View {
     @Environment(BonjourAdvertiser.self) private var bonjourAdvertiser
     @Environment(CloudflareTunnel.self) private var tunnel
     @Environment(TailscaleService.self) private var tailscale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The preview's spring on a layout or window-count change; none under
+    /// Reduce Motion.
+    private var layoutAnimation: Animation? {
+        MotionPolicy.animation(.spring(duration: 0.4), reduceMotion: reduceMotion)
+    }
 
     @AppStorage("networkMode") private var networkModeRaw: String = NetworkMode.cloudflareTunnel.rawValue
 
@@ -18,7 +25,7 @@ struct MainWindow: View {
     }
 
     private static func computeLocalWSURL() -> String {
-        let port = 8765
+        let port = WebSocketServer.listenPort
         var address = "localhost"
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         if getifaddrs(&ifaddr) == 0 {
@@ -52,9 +59,20 @@ struct MainWindow: View {
     @State private var isDragToResizeEnabled = false
     @State private var customFrames: [String: NormalizedRect] = [:]
     @State private var showQRPopover = false
+    /// Rendered off the main actor whenever the popover's URL changes.
+    @State private var qrImage: NSImage?
     /// Non-nil while an Arrange attempt has something to say — missing
     /// permission, no enabled windows, no display.
     @State private var arrangeError: String?
+    @State private var showArrangeError = false
+
+    @AppStorage("savedPresets") private var savedPresetsData: Data = Data()
+    @State private var showSaveLayoutSheet = false
+    @State private var presetName = ""
+    @State private var savePresetError: String?
+    /// Set when applying a preset changes `layoutMode`, so the mode's
+    /// `onChange` keeps the preset's frames instead of resetting them.
+    @State private var presetModeBeingApplied: LayoutMode?
 
     var body: some View {
         NavigationSplitView {
@@ -68,19 +86,20 @@ struct MainWindow: View {
         .toolbar {
             toolbarContent
         }
-        .alert("Couldn't arrange windows", isPresented: Binding(
-            get: { arrangeError != nil },
-            set: { if !$0 { arrangeError = nil } }
-        )) {
+        .alert("Couldn't arrange windows", isPresented: $showArrangeError, presenting: arrangeError) { _ in
             Button("Open Accessibility Settings") {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
-                arrangeError = nil
+                NSWorkspace.shared.open(ArrangeOutcome.accessibilitySettingsURL)
             }
-            Button("OK", role: .cancel) { arrangeError = nil }
-        } message: {
-            Text(arrangeError ?? "")
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
+        .sheet(isPresented: $showSaveLayoutSheet) {
+            saveLayoutSheet
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quipApplyLayoutPreset)) { note in
+            guard let preset = note.object as? SavedLayoutPreset else { return }
+            applyPreset(preset)
         }
         .onAppear {
             windowManager.refreshDisplays()
@@ -109,7 +128,13 @@ struct MainWindow: View {
                 )
                 // Picking a preset means "lay them out like this" — keeping the
                 // hand-dragged rects would make the preset look broken.
-                .onChange(of: layoutMode) { _, _ in customFrames.removeAll() }
+                .onChange(of: layoutMode) { _, newMode in
+                    if presetModeBeingApplied == newMode {
+                        presetModeBeingApplied = nil
+                        return
+                    }
+                    customFrames.removeAll()
+                }
                 .onChange(of: customTemplate) { _, _ in customFrames.removeAll() }
 
                 if !customFrames.isEmpty {
@@ -142,8 +167,8 @@ struct MainWindow: View {
                     reorderWindows(from: fromIndex, to: toIndex)
                 }
             )
-            .animation(.spring(duration: 0.4), value: layoutMode)
-            .animation(.spring(duration: 0.4), value: snapshot.enabledWindowCount)
+            .animation(layoutAnimation, value: layoutMode)
+            .animation(layoutAnimation, value: snapshot.enabledWindowCount)
 
             Divider()
 
@@ -193,6 +218,50 @@ struct MainWindow: View {
             .disabled(enabledWindowCount == 0)
             .help("Arrange enabled windows using the selected layout")
         }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button("Save Layout…", systemImage: "square.and.arrow.down") {
+                presetName = ""
+                savePresetError = nil
+                showSaveLayoutSheet = true
+            }
+            .help("Save the current layout as a preset you can apply from Settings → Layouts")
+        }
+    }
+
+    // MARK: - Save Layout Sheet
+
+    private var saveLayoutSheet: some View {
+        VStack(spacing: 16) {
+            Text("Save Layout")
+                .font(.headline)
+
+            TextField("Layout name", text: $presetName)
+                .textFieldStyle(.roundedBorder)
+
+            if let savePresetError {
+                Label(savePresetError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Button("Cancel") { showSaveLayoutSheet = false }
+                    .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("Save") {
+                    if saveCurrentLayout(named: presetName) {
+                        showSaveLayoutSheet = false
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 300)
     }
 
     // MARK: - QR Popover
@@ -230,7 +299,7 @@ struct MainWindow: View {
                 Text("Scan with iPhone")
                     .font(.headline)
 
-                if let qrImage = generateQR(from: qrURL) {
+                if let qrImage {
                     Image(nsImage: qrImage)
                         .interpolation(.none)
                         .resizable()
@@ -257,19 +326,9 @@ struct MainWindow: View {
         }
         .padding(20)
         .frame(width: 280)
-    }
-
-    private func generateQR(from string: String) -> NSImage? {
-        guard let data = string.data(using: .utf8),
-              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
-        filter.setValue(data, forKey: "inputMessage")
-        filter.setValue("M", forKey: "inputCorrectionLevel")
-        guard let ciImage = filter.outputImage else { return nil }
-        let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        let rep = NSCIImageRep(ciImage: scaled)
-        let img = NSImage(size: rep.size)
-        img.addRepresentation(rep)
-        return img
+        .task(id: qrURL) {
+            qrImage = await Task.detached { PairingQR.image(for: qrURL) }.value
+        }
     }
 
     // MARK: - Tunnel Status
@@ -376,7 +435,7 @@ struct MainWindow: View {
                 .frame(width: 8, height: 8)
 
             if webSocketServer.connectedClientCount > 0 {
-                Text("\(webSocketServer.connectedClientCount) client\(webSocketServer.connectedClientCount == 1 ? "" : "s")")
+                Text("^[\(webSocketServer.connectedClientCount) client](inflect: true)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if webSocketServer.isRunning {
@@ -405,7 +464,7 @@ struct MainWindow: View {
         // them differently, or a resized tile would move on arrange.
         return LayoutSnapshot(
             displayWindows: displayWindows,
-            enabledWindowCount: displayWindows.lazy.filter(\.isEnabled).count,
+            enabledWindowCount: displayWindows.count(where: \.isEnabled),
             currentFrames: currentFrames
         )
     }
@@ -464,6 +523,41 @@ struct MainWindow: View {
 
     // MARK: - Actions
 
+    /// Returns false (and says why in the sheet) when the blob could not be
+    /// read or written — overwriting an unreadable blob would destroy the
+    /// presets it still holds.
+    private func saveCurrentLayout(named name: String) -> Bool {
+        let preset = SavedLayoutPreset(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            mode: layoutMode,
+            customFrames: layoutMode == .custom ? customFrames : nil,
+            windowOrder: enabledWindows.map(\.id)
+        )
+        do {
+            let existing = try LayoutPresetStore.decode(savedPresetsData)
+            savedPresetsData = try LayoutPresetStore.encode(LayoutPresetStore.adding(preset, to: existing))
+            return true
+        } catch {
+            savePresetError = "Couldn't save the layout: \(error.localizedDescription)"
+            QuipLog.write(
+                severity: .error, subsystem: "settings",
+                message: "could not save layout preset (\(savedPresetsData.count) bytes stored) "
+                       + "— existing presets left untouched: \(error)",
+                to: LogPaths.webSocketPath
+            )
+            return false
+        }
+    }
+
+    private func applyPreset(_ preset: SavedLayoutPreset) {
+        if preset.mode != layoutMode {
+            presetModeBeingApplied = preset.mode
+            layoutMode = preset.mode
+        }
+        customFrames = preset.mode == .custom ? (preset.customFrames ?? [:]) : [:]
+        arrangeWindows()
+    }
+
     private func reorderWindows(from fromIndex: Int, to toIndex: Int) {
         let enabled = enabledWindows
         guard fromIndex >= 0, fromIndex < enabled.count,
@@ -481,35 +575,24 @@ struct MainWindow: View {
         // `NSScreen.main` — which is the *focused* screen, not the primary —
         // and pin it at (0,0), so arranging while Quip sat on a secondary
         // display threw every window onto the primary at the wrong size.
-        guard let display = selectedDisplay else {
-            arrangeError = "No display available to arrange on."
-            return
-        }
-        let screenFrame = windowManager.cgFrame(for: display)
-
+        // `currentFrames` is empty only when `enabledWindows` is, so the
+        // enabled count covers both.
         let enabled = enabledWindows
         let frames = currentFrames
-
-        guard !enabled.isEmpty, !frames.isEmpty else {
-            arrangeError = enabled.isEmpty
-                ? "No windows are enabled — tick one in the sidebar first."
-                : "The selected layout produced no frames."
-            return
-        }
-
-        print("[MainWindow] Arranging \(enabled.count) windows on \(display.name) \(screenFrame)")
-
-        var targetFrames: [String: CGRect] = [:]
-        for (index, window) in enabled.enumerated() where index < frames.count {
-            let targetRect = frames[index].toCGRect(in: screenFrame)
-            targetFrames[window.id] = targetRect
-            print("[MainWindow]   \(window.name) -> \(targetRect)")
-        }
+        let display = selectedDisplay
 
         // Arrange silently doing nothing is almost always a revoked
         // Accessibility grant. Say so, and offer the one click that fixes it.
-        if !windowManager.arrangeWindows(frames: targetFrames) {
-            arrangeError = "Quip needs Accessibility access to move windows. Grant it in System Settings → Privacy & Security → Accessibility."
+        let outcome = ArrangeOutcome.evaluate(enabledCount: enabled.count, hasDisplay: display != nil) {
+            guard let display else { return false }
+            let screenFrame = windowManager.cgFrame(for: display)
+            var targetFrames: [String: CGRect] = [:]
+            for (index, window) in enabled.enumerated() where index < frames.count {
+                targetFrames[window.id] = frames[index].toCGRect(in: screenFrame)
+            }
+            return windowManager.arrangeWindows(frames: targetFrames)
         }
+        arrangeError = outcome.message
+        showArrangeError = outcome.message != nil
     }
 }
