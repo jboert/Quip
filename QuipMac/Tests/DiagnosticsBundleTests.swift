@@ -67,9 +67,9 @@ final class DiagnosticsBundleTests: XCTestCase {
 
     /// stableHostHash must be deterministic per-input + handle empty input.
     func test_stableHostHash_deterministic() {
-        XCTAssertEqual(DiagnosticsBundle.stableHostHash("erick-mbp"),
-                       DiagnosticsBundle.stableHostHash("erick-mbp"))
-        XCTAssertNotEqual(DiagnosticsBundle.stableHostHash("erick-mbp"),
+        XCTAssertEqual(DiagnosticsBundle.stableHostHash("test-mbp"),
+                       DiagnosticsBundle.stableHostHash("test-mbp"))
+        XCTAssertNotEqual(DiagnosticsBundle.stableHostHash("test-mbp"),
                           DiagnosticsBundle.stableHostHash("other-mac"))
         XCTAssertEqual(DiagnosticsBundle.stableHostHash(""), "anon")
     }

@@ -6,15 +6,15 @@ final class LogRedactorTests: XCTestCase {
     // MARK: - IPv4
 
     func test_redactIPv4_lanAddress_masksLastTwoOctets() {
-        let input = "Connection state: failed for 192.168.4.34:52001"
+        let input = "Connection state: failed for 192.168.1.134:52001"
         XCTAssertEqual(LogRedactor.redactIPv4(input),
                        "Connection state: failed for 192.168.x.x:52001")
     }
 
     func test_redactIPv4_tailscaleCgnat_masksLastTwoOctets() {
-        let input = "peer endpoint 100.96.27.4 reachable"
+        let input = "peer endpoint 100.101.102.105 reachable"
         XCTAssertEqual(LogRedactor.redactIPv4(input),
-                       "peer endpoint 100.96.x.x reachable")
+                       "peer endpoint 100.101.x.x reachable")
     }
 
     func test_redactIPv4_publicAddress_masksLastTwoOctets() {
@@ -49,8 +49,8 @@ final class LogRedactorTests: XCTestCase {
     // MARK: - Hostname
 
     func test_redactHostname_replacesCaseInsensitive() {
-        let input = "Host: erick-mbp generated this report on Erick-MBP"
-        XCTAssertEqual(LogRedactor.redactHostname(input, hostname: "erick-mbp"),
+        let input = "Host: test-mbp generated this report on Test-MBP"
+        XCTAssertEqual(LogRedactor.redactHostname(input, hostname: "test-mbp"),
                        "Host: <host> generated this report on <host>")
     }
 
@@ -68,8 +68,8 @@ final class LogRedactorTests: XCTestCase {
     // MARK: - Combined
 
     func test_redactAll_runsBothPasses() {
-        let input = "erick-mbp connected from 192.168.4.34"
-        XCTAssertEqual(LogRedactor.redactAll(input, hostname: "erick-mbp"),
+        let input = "test-mbp connected from 192.168.1.134"
+        XCTAssertEqual(LogRedactor.redactAll(input, hostname: "test-mbp"),
                        "<host> connected from 192.168.x.x")
     }
 }

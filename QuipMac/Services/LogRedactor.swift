@@ -3,7 +3,7 @@ import Foundation
 /// Redacts sensitive identifiers from log content before it leaves the user's
 /// machine via `DiagnosticsBundle`. Two passes:
 ///
-/// - IPv4 dotted quads → mask last two octets ("192.168.4.34" → "192.168.x.x").
+/// - IPv4 dotted quads → mask last two octets ("192.168.1.134" → "192.168.x.x").
 ///   Catches LAN ranges (10/8, 172.16/12, 192.168/16) and Tailscale CGNAT
 ///   (100.64/10) without an allow-list — every IP gets the same treatment.
 ///   Cheap defense-in-depth: ports stay attached so connection-pair
