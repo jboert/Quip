@@ -51,7 +51,7 @@ Everything from `5ffd8f2` back is addendum 3's.
 | --- | --- | --- |
 | Mac `/Applications/Quip.app` | eb-branch `4e8aacf`, 1.5.7 Release, Developer ID, installed 2026-10-08 12:22 (fresh pid 50116, port 8765 listening). Menu panel shows `v1.5.7 4e8aacf`. | Nothing. Phone had not reconnected at handoff time (relaunch Quip on the phone); check the Mac Status row for Accessibility / Screen Recording after reconnect, re-grant if red. |
 | iPhone (owner's primary) | eb-branch `cea03cb`, 1.5.7, Debug, installed over the air 2026-10-08 11:00. A `4e8aacf` build (pin fix, Q-58) is built at the scratchpad `dd-ios` but the install failed four times with CoreDevice error 4016 (phone `unavailable`); retry `xcrun devicectl device install app` when the phone is unlocked on the LAN. Settings should then show `1.5.7 (4e8aacf, 2026-10-08 12:20)` | Nothing. Force-quit and relaunch after the install. |
-| QA simulator D8C5154B | Nothing installed; must never pair with the real Mac | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check. |
+| QA simulator D8C5154B | eb-branch `b65c734` (`com.fintechadventures.quip`), paired to the fake Mac on 127.0.0.1:8799, notifications allowed (2026-10-08 14:13). A stray `com.quip.QuipiOS` test host was uninstalled; it had been catching the `quip://` pair link. Must never pair with the real Mac. | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check; `xcrun simctl push` with `aps.category=waiting.yn` exercises the alert actions. |
 
 One phone socket was ESTABLISHED on port 8765 at handoff time.
 
@@ -93,6 +93,7 @@ Both peers now carry today's code (installed 2026-10-08 08:28); the hardware che
   `~/Library/Logs/Quip/phone.log` for `push_answer sent|unreachable|dropped` was
   running at handoff. `cea03cb` stops the ruflo-rewritten `QuipiOS/ruvector.db`
   from marking builds `-dirty`.
+- **Q-57 and Q-58 simulator pass 2026-10-08 14:00–14:16** (board rows have the detail): pinned card first live and after relaunch; lock-screen Yes, Reply and the unreachable alert all verified against the fake Mac with the app killed.
 - **Q-58 pin order** landed `1295d31` (phone honours pins over its drag order; a new Mac pin lines up after existing pins). Mac installed; phone install pending (see table).
 - **Q-59 Mac SwiftUI review via Ralph PRD** merged `b65c734` (7 stories, all verified by the coordinator, see board). Worktree and branch removed. prd.json/progress.txt re-untracked in `4e8aacf`.
 - **Quick-button backup restore** still owed on the owner's "restore buttons"
