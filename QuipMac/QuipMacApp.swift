@@ -1619,7 +1619,6 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // is synchronous, so this is the actual "text landed" instant.
                 let tRecv = Date()
                 ensureITermSessionResolved(for: msg.windowId) { window in
-                    if msg.pressReturn { self.thinkingWindows.insert(msg.windowId) }
                     let termApp = self.terminalAppForWindow(window)
                     self.windowManager.focusWindow(msg.windowId)
                     let name = window.name
@@ -1669,8 +1668,23 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         path: .sendText, terminalApp: termApp,
                         iterm2SessionId: window.iterm2SessionId
                     )
-                    let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
                     let isGenericApp = !self.isFirstClassHost(window)
+                    // US-008 — multi-line text into a terminal never runs line by
+                    // line: a shell gets one pasted block and no Return, and an
+                    // agent CLI in Terminal.app a paste with Return only at the
+                    // end. A generic app keeps today's routing; the policy speaks
+                    // for terminals only (and `.pasteText` would target Terminal).
+                    let decision = isGenericApp
+                        ? (route: TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp),
+                           pressReturn: msg.pressReturn)
+                        : MultiLineSendPolicy.decide(text: msg.text, cliKind: cliKind,
+                                                     terminalApp: termApp, pressReturn: msg.pressReturn)
+                    let route = decision.route
+                    let sendBody = isGenericApp ? msg.text : MultiLineSendPolicy.normalizedText(msg.text)
+                    let sendReturn = decision.pressReturn
+                    let multilineGuard = MultiLineSendPolicy.latencySuffix(
+                        requestedReturn: msg.pressReturn, decidedReturn: sendReturn, text: msg.text)
+                    if sendReturn { self.thinkingWindows.insert(msg.windowId) }
                     // `let`, not a mutated `var`: this string is captured by the
                     // @Sendable latency-logging closure below, and Swift 6 rejects
                     // sending a mutable local into it.
@@ -1686,27 +1700,27 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         NSLog("[Quip] send_text routing: genericApp (app=%@, pid=%d, window=%@)",
                               appName, pid, msg.windowId)
                         inject = {
-                            await self.keystrokeInjector.sendTextToApp(msg.text,
+                            await self.keystrokeInjector.sendTextToApp(sendBody,
                                                                       to: msg.windowId,
-                                                                      pressReturn: msg.pressReturn,
+                                                                      pressReturn: sendReturn,
                                                                       pid: pid,
                                                                       appName: appName)
                         }
                     } else if route == .pasteText {
-                        NSLog("[Quip] send_text routing: pasteText (cliKind=%@, term=iterm2, window=%@)", cliKind.rawValue, msg.windowId)
+                        NSLog("[Quip] send_text routing: pasteText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
                         inject = {
-                            await self.keystrokeInjector.pasteText(msg.text,
+                            await self.keystrokeInjector.pasteText(sendBody,
                                                                    to: msg.windowId,
-                                                                   pressReturn: msg.pressReturn,
+                                                                   pressReturn: sendReturn,
                                                                    terminalApp: termApp,
                                                                    iterm2SessionId: window.iterm2SessionId)
                         }
                     } else {
                         NSLog("[Quip] send_text routing: sendText (cliKind=%@, term=%@, window=%@)", cliKind.rawValue, termApp.rawValue, msg.windowId)
                         inject = {
-                            await self.keystrokeInjector.sendText(msg.text,
+                            await self.keystrokeInjector.sendText(sendBody,
                                                                   to: msg.windowId,
-                                                                  pressReturn: msg.pressReturn,
+                                                                  pressReturn: sendReturn,
                                                                   terminalApp: termApp,
                                                                   windowName: name,
                                                                   cgWindowNumber: wn,
@@ -1724,9 +1738,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         // line-660 readContent precedent) does self-heal / log /
                         // broadcast against main-actor state.
                         let ksi = self.keystrokeInjector
-                        let text = msg.text
+                        let text = sendBody
                         let wid = msg.windowId
-                        let pr = msg.pressReturn
+                        let pr = sendReturn
+                        let requestedReturn = msg.pressReturn
                         let sid = window.iterm2SessionId
                         let mid = msg.messageId
                         let textLen = msg.text.count
@@ -1752,7 +1767,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                     let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
                                     let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
                                     let rid = mid?.uuidString.prefix(8) ?? "nil"
-                                    appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(textLen) press_return=\(pr ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
+                                    appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(textLen) press_return=\(requestedReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
                                     if !result.success {
                                         self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(result.error ?? "unknown injection failure")"))
                                     }
@@ -1782,13 +1797,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                    let newId = refreshed.iterm2SessionId, newId != window.iterm2SessionId {
                                     NSLog("[Quip] send_text self-heal: refreshed iTerm2 session id for %@", msg.windowId)
                                     selfHealed = true
-                                    result = await self.keystrokeInjector.sendText(msg.text, to: msg.windowId, pressReturn: msg.pressReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: newId)
+                                    result = await self.keystrokeInjector.sendText(sendBody, to: msg.windowId, pressReturn: sendReturn, terminalApp: termApp, windowName: name, cgWindowNumber: wn, iterm2SessionId: newId)
                                 }
                             }
                             let injectMs = Int(Date().timeIntervalSince(tStart) * 1000)
                             let totalMs = Int(Date().timeIntervalSince(tRecv) * 1000)
                             let rid = msg.messageId?.uuidString.prefix(8) ?? "nil"
-                            appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)")
+                            appendLatency("send_text rid=\(rid) path=\(routingPath) cli=\(cliKind.rawValue) cached_cli=\(cachedCliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) text_len=\(msg.text.count) press_return=\(msg.pressReturn ? 1 : 0) inject_ms=\(injectMs) total_ms=\(totalMs) tracked_pid=\(trackedPid) tty=\(trackedTty) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
                             if !result.success {
                                 self.webSocketServer.broadcast(ErrorMessage(reason: "Text send failed: \(result.error ?? "unknown injection failure")"))
                             }
@@ -2618,7 +2633,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// Phone tapped a prompt — look up the body and inject it into the
     /// requested window via the existing keystrokeInjector path. Mirrors the
     /// Agent-aware `send_text` branch: Codex/Grok in iTerm2 need a real paste
-    /// event while Claude/shell sessions still use the direct sendText path.
+    /// event while Claude/shell sessions still use the direct sendText path,
+    /// and multi-line text follows `MultiLineSendPolicy` (US-008).
     /// pressReturn defaults to false so the user can review before submitting.
     /// (wishlist §57)
     @MainActor
@@ -2642,15 +2658,24 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 appendLatency("paste_prompt unresolved_vars=\(unresolved.joined(separator: ",")) prompt_id=\(msg.id)")
             }
             self.windowManager.focusWindow(msg.windowId)
-            let route = TextInjectionRoute.choose(cliKind: cliKind, terminalApp: termApp)
+            // US-008 — a multi-line prompt (a {{clipboard}} of several lines,
+            // say) never runs line by line in a shell, and never submits after
+            // its first line in Terminal.app. The clipboard was read above,
+            // before a paste route borrows it.
+            let decision = MultiLineSendPolicy.decide(text: body, cliKind: cliKind,
+                                                      terminalApp: termApp, pressReturn: msg.pressReturn)
+            let route = decision.route
+            let pasteBody = MultiLineSendPolicy.normalizedText(body)
+            let multilineGuard = MultiLineSendPolicy.latencySuffix(
+                requestedReturn: msg.pressReturn, decidedReturn: decision.pressReturn, text: body)
             let doInject: @MainActor (String?) async -> KeystrokeInjector.InjectionResult = { sessionId in
                 if route == .pasteText {
                     return await self.keystrokeInjector.pasteText(
-                        body, to: msg.windowId, pressReturn: msg.pressReturn,
+                        pasteBody, to: msg.windowId, pressReturn: decision.pressReturn,
                         terminalApp: termApp, iterm2SessionId: sessionId)
                 } else {
                     return await self.keystrokeInjector.sendText(
-                        body, to: msg.windowId, pressReturn: msg.pressReturn,
+                        pasteBody, to: msg.windowId, pressReturn: decision.pressReturn,
                         terminalApp: termApp, windowName: window.name,
                         cgWindowNumber: window.windowNumber, iterm2SessionId: sessionId)
                 }
@@ -2671,7 +2696,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         result = await doInject(newId)
                     }
                 }
-                appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)")
+                appendLatency("paste_prompt path=\(route.rawValue) cli=\(cliKind.rawValue) term=\(termApp.rawValue) success=\(result.success ? 1 : 0) prompt_id=\(msg.id) self_heal=\(selfHealed ? 1 : 0)\(multilineGuard)")
                 if !result.success {
                     let reason = result.error ?? "unknown"
                     print("[Quip] paste_prompt FAILED: \(reason)")

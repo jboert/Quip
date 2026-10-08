@@ -526,6 +526,9 @@ final class KeystrokeInjector {
     /// "send and keep composer open" variant; we use plain Enter to match
     /// the existing `pressReturn` semantics in `sendText`.
     ///
+    /// Terminal.app takes this path for multi-line text (US-008,
+    /// `MultiLineSendPolicy`): activate Terminal, Cmd+V, Return only if asked.
+    ///
     /// Synchronous, and therefore OFF-MAIN ONLY — its caller is
     /// `pasteInjectQueue`. A @MainActor caller takes the `async` overload below,
     /// which is the same work with the wait moved off main.
@@ -556,10 +559,14 @@ final class KeystrokeInjector {
                                       terminalApp: terminalApp)
 
         case .terminal:
-            // Terminal.app accepts both keystroke chars AND clipboard paste;
-            // sendText already handles it via the keystroke path. Don't
-            // shadow that — fall back signal so caller can use sendText.
-            return InjectionResult(success: false, error: "Terminal.app uses sendText keystroke path")
+            // Multi-line text (US-008, MultiLineSendPolicy). Typed as keystrokes
+            // it would press Return between lines; pasted, Terminal.app delivers
+            // it as one block (bracketed when the shell asks), so a shell keeps it
+            // on the command line and Claude Code gets one message. The target
+            // window was raised by `focusWindow` before this call.
+            let script = Self.terminalPasteTextScript(pressReturn: pressReturn)
+            return executeAppleScript(script, op: "pasteText", windowId: windowId,
+                                      terminalApp: terminalApp)
 
         case .claudeDesktop:
             // Claude Desktop's sendText already routes through NSPasteboard
@@ -618,6 +625,23 @@ final class KeystrokeInjector {
         delay 0.1
         tell application "System Events"
             tell process "iTerm2"
+                keystroke "v" using command down\(returnCmd)
+            end tell
+        end tell
+        """
+    }
+
+    /// Pure script builder for `pasteText` into Terminal.app, locked by tests the
+    /// same way as `pasteTextScript`. The text is never in the script: it rides
+    /// the clipboard, so nothing in it can be read as AppleScript or keystrokes.
+    /// Return is pressed once, after the paste, and only when asked.
+    nonisolated static func terminalPasteTextScript(pressReturn: Bool) -> String {
+        let returnCmd = pressReturn ? "\n        key code 36" : ""
+        return """
+        tell application "Terminal" to activate
+        delay 0.1
+        tell application "System Events"
+            tell process "Terminal"
                 keystroke "v" using command down\(returnCmd)
             end tell
         end tell
