@@ -19,10 +19,39 @@ final class WindowRaisePolicyTests: XCTestCase {
     func test_aQuietRequestSkipsTheRaiseOnlyForITerm2() {
         XCTAssertFalse(WindowRaisePolicy.shouldRaise(requested: false, terminalApp: .iterm2, isGenericApp: false))
         XCTAssertTrue(WindowRaisePolicy.shouldRaise(requested: false, terminalApp: .terminal, isGenericApp: false),
-                      "Terminal.app keystrokes go to the frontmost window")
+                      "without a window number the script cannot raise the window itself")
+        XCTAssertFalse(WindowRaisePolicy.shouldRaise(requested: false, terminalApp: .terminal, isGenericApp: false,
+                                                     cgWindowNumber: 4242),
+                       "the Terminal.app script raises and verifies window 4242 on the serial queue")
+        XCTAssertTrue(WindowRaisePolicy.shouldRaise(requested: nil, terminalApp: .terminal, isGenericApp: false,
+                                                    cgWindowNumber: 4242),
+                      "a single tap keeps the Accessibility raise as belt and braces")
         XCTAssertTrue(WindowRaisePolicy.shouldRaise(requested: false, terminalApp: .claudeDesktop, isGenericApp: false))
         XCTAssertTrue(WindowRaisePolicy.shouldRaise(requested: false, terminalApp: .iterm2, isGenericApp: true),
                       "a generic app is pasted into as the active app, whatever terminalAppForWindow guessed")
+    }
+}
+
+/// A prompt's `{{clipboard}}` in a broadcast reads the user's text, never an
+/// earlier target's pasted body.
+final class ClipboardForTemplateTests: XCTestCase {
+
+    func test_liveClipboardWhenNoPasteIsInFlight() {
+        XCTAssertEqual(KeystrokeInjector.clipboardForTemplate(outstanding: 0, original: "stale") { "live" }, "live")
+    }
+
+    func test_burstSnapshotWhileAPasteHoldsThePasteboard() {
+        var liveReads = 0
+        let value = KeystrokeInjector.clipboardForTemplate(outstanding: 2, original: "the user's text") {
+            liveReads += 1
+            return "Review this: the user's text"
+        }
+        XCTAssertEqual(value, "the user's text")
+        XCTAssertEqual(liveReads, 0, "the pasteboard is not read while it holds an injected body")
+    }
+
+    func test_anEmptySnapshotStaysEmpty() {
+        XCTAssertNil(KeystrokeInjector.clipboardForTemplate(outstanding: 1, original: nil) { "injected" })
     }
 }
 

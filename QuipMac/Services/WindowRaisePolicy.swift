@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Whether an injection raises its window first (PRD broadcast-and-search,
@@ -7,16 +8,25 @@ import Foundation
 /// every `send_text` called `focusWindow` before injecting. iTerm2 writes
 /// are addressed to a session id and land without focus, so a request that
 /// says `raiseWindow: false` skips the raise there. Terminal.app keystrokes
-/// go to the frontmost window, Claude Desktop and generic apps take a paste
-/// into the active app, so those are always raised whatever the request
-/// says. No request (an older phone) keeps today's behaviour: raise.
+/// go to the frontmost window, but the script raises and verifies its own
+/// window by id (`KeystrokeInjector.terminalWindowGuard`) on the one serial
+/// AppleScript queue, so a quiet request with a window number skips the
+/// Accessibility raise too: that raise runs on the main actor outside the
+/// queue, and in a broadcast a later target's raise could re-front its
+/// window while an earlier target's script was still typing. Without a
+/// window number the script only activates Terminal, so the raise stays.
+/// Claude Desktop and generic apps take a paste into the active app, so
+/// those are always raised whatever the request says. No request (an older
+/// phone) keeps today's behaviour: raise.
 enum WindowRaisePolicy {
-    static func shouldRaise(requested: Bool?, terminalApp: TerminalApp, isGenericApp: Bool) -> Bool {
+    static func shouldRaise(requested: Bool?, terminalApp: TerminalApp, isGenericApp: Bool,
+                            cgWindowNumber: CGWindowID = 0) -> Bool {
         guard requested == false else { return true }
         if isGenericApp { return true }
         switch terminalApp {
         case .iterm2: return false
-        case .terminal, .claudeDesktop: return true
+        case .terminal: return cgWindowNumber == 0
+        case .claudeDesktop: return true
         }
     }
 }

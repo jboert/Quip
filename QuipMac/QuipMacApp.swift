@@ -1674,7 +1674,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     // every iTerm2 window; Terminal.app, Claude Desktop and
                     // generic apps still need the raise.
                     if WindowRaisePolicy.shouldRaise(requested: msg.raiseWindow, terminalApp: termApp,
-                                                     isGenericApp: isGenericApp) {
+                                                     isGenericApp: isGenericApp,
+                                                     cgWindowNumber: window.windowNumber) {
                         self.windowManager.focusWindow(msg.windowId)
                     }
                     // US-008 — multi-line text into a terminal never runs line by
@@ -2194,16 +2195,15 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     break
                 }
                 print("[Quip] minimize_window: windowId=\(msg.windowId)")
-                guard let window = windowManager.windows.first(where: { $0.id == msg.windowId }) else {
-                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists", messageId: msg.messageId))
-                    break
-                }
-                if windowManager.minimizeWindow(msg.windowId) {
+                switch windowManager.minimizeWindow(msg.windowId) {
+                case .minimized:
                     // The phone's tray lists it from this layout on.
                     broadcastLayout()
-                } else {
+                case .windowGone:
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists", messageId: msg.messageId))
+                case let .failed(name, detail):
                     webSocketServer.broadcast(ErrorMessage(
-                        reason: "Could not minimize \(window.name) — no Accessibility match (see websocket.log)",
+                        reason: "Could not minimize \(name) — \(detail) (see websocket.log)",
                         messageId: msg.messageId))
                 }
             }
@@ -2685,19 +2685,22 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // stale `.shell` for a Claude window in iTerm2 made the multi-line
             // policy paste a prompt with no Return where it used to submit.
             let (cachedCliKind, cliKind) = self.routingCLIKind(for: msg.windowId)
-            // Q-34b — fill {{name}} placeholders from this window. Read the
-            // pasteboard here, before the paste route borrows it, and only when
+            // Q-34b — fill {{name}} placeholders from this window, only when
             // the prompt asks for {{clipboard}}. An unfilled name stays literal.
+            // The clipboard comes through the injector: in a broadcast an
+            // earlier target's paste may already hold the pasteboard, and the
+            // user's text is then the burst's snapshot, not what is live.
             let values = PromptVariables.values(
                 for: template, folder: window.subtitle, windowName: window.name,
                 agent: cliKind.rawValue, cwd: window.cwdPath, now: Date(),
-                clipboard: { NSPasteboard.general.string(forType: .string) })
+                clipboard: { KeystrokeInjector.userClipboardString() })
             let (body, unresolved) = PromptTemplate.expand(template, values: values)
             if !unresolved.isEmpty {
                 appendLatency("paste_prompt unresolved_vars=\(unresolved.joined(separator: ",")) prompt_id=\(msg.id)")
             }
             // US-116 — see send_text: a broadcast does not raise iTerm2 windows.
-            if WindowRaisePolicy.shouldRaise(requested: msg.raiseWindow, terminalApp: termApp, isGenericApp: false) {
+            if WindowRaisePolicy.shouldRaise(requested: msg.raiseWindow, terminalApp: termApp, isGenericApp: false,
+                                             cgWindowNumber: window.windowNumber) {
                 self.windowManager.focusWindow(msg.windowId)
             }
             // US-008 — a multi-line prompt (a {{clipboard}} of several lines,

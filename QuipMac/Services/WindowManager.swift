@@ -1245,22 +1245,33 @@ final class WindowManager {
     /// the same way (position, size, title), so the same refusals apply:
     /// no AX access, no match, or two identical windows. Remembered in
     /// `minimizedByQuip` so the next layout can report `isMinimized`.
-    /// Returns false when nothing was minimized; the caller tells the phone.
+    /// The outcome names the cause when nothing was minimized, so the phone's
+    /// toast can tell a lost Accessibility grant from an app that refused.
     @discardableResult
-    func minimizeWindow(_ windowId: String) -> Bool {
-        guard let window = windows.first(where: { $0.id == windowId }) else { return false }
-        guard let chosen = resolvedAXWindow(for: window) else { return false }
+    func minimizeWindow(_ windowId: String) -> MinimizeOutcome {
+        guard let window = windows.first(where: { $0.id == windowId }) else { return .windowGone }
+        guard let chosen = resolvedAXWindow(for: window) else {
+            return .failed(name: window.name, detail: "no Accessibility match")
+        }
         let err = AXUIElementSetAttributeValue(chosen, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
         guard err == .success else {
             QuipLog.write(severity: .error, subsystem: "window",
                           message: "minimizeWindow: AX refused to minimize window \(windowId) (AXError \(err.rawValue))",
                           to: LogPaths.webSocketPath)
-            return false
+            return .failed(name: window.name, detail: "the app refused (AXError \(err.rawValue))")
         }
         let live = Set(windows.map(\.id))
         minimizedByQuip = minimizedByQuip.filter { live.contains($0.key) }
         minimizedByQuip[windowId] = Date()
-        return true
+        return .minimized
+    }
+
+    /// What `minimizeWindow` did. `failed` carries the window's name for the
+    /// phone's toast and a short cause; the AXError itself is in websocket.log.
+    enum MinimizeOutcome: Equatable {
+        case minimized
+        case windowGone
+        case failed(name: String, detail: String)
     }
 
     /// Windows minimized through `minimizeWindow`, by the time it happened.

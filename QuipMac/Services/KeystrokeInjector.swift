@@ -218,6 +218,27 @@ final class KeystrokeInjector {
         return clipboardOriginal
     }
 
+    /// The user's clipboard as a prompt's `{{clipboard}}` should see it: the
+    /// live pasteboard, unless a paste injection has borrowed it, in which
+    /// case the string the burst snapshotted. A broadcast of such a prompt
+    /// reads this once per target while earlier targets' pastes are still
+    /// in flight; the live pasteboard would hand later targets an earlier
+    /// target's expanded body. Safe from any thread.
+    nonisolated static func userClipboardString() -> String? {
+        clipboardLock.lock()
+        defer { clipboardLock.unlock() }
+        return clipboardForTemplate(outstanding: clipboardOutstanding, original: clipboardOriginal) {
+            NSPasteboard.general.string(forType: .string)
+        }
+    }
+
+    /// Pure half of `userClipboardString`: the snapshot while a burst is
+    /// outstanding, the live pasteboard otherwise.
+    nonisolated static func clipboardForTemplate(outstanding: Int, original: String?,
+                                                 live: () -> String?) -> String? {
+        outstanding > 0 ? original : live()
+    }
+
     /// Restore the burst's original clipboard after `delay`s, but only when
     /// this is the LAST outstanding injection — so a burst restores once to
     /// the real original, never an intermediate injected value. The restore
