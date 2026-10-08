@@ -214,6 +214,10 @@ struct BroadcastPromptSheet: View {
                     Spacer()
                     Button("Select None", action: selectNone)
                 }
+                // Two buttons in one Form row: without a borderless style a
+                // tap anywhere in the row fires BOTH, All then None, so Select
+                // All could never take (found in the simulator pass).
+                .buttonStyle(.borderless)
 
                 ForEach(eligibleWindows) { window in
                     Button {
