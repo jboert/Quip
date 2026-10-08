@@ -1445,6 +1445,7 @@ struct MainiOSView: View {
     /// the settings editor via the same @AppStorage key; drives the picker filter.
     @AppStorage("hiddenPromptIDsJSON") private var hiddenPromptIDsJSON: String = "[]"
     @State private var showPromptsPickerSheet = false
+    @State private var showSlashSearch = false
     @State private var showBroadcastPromptSheet = false
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
@@ -2009,6 +2010,15 @@ struct MainiOSView: View {
                 )
             }
             .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showSlashSearch) {
+            // US-105 — "Search…" in the long-press slash palette.
+            SlashSearchSheet(members: allSlashMembers()) { member in
+                switch member {
+                case .builtin(let b): fireQuickButton(b)
+                case .custom(let c): fireCustomButton(c)
+                }
+            }
         }
         .sheet(isPresented: $showBroadcastPromptSheet) {
             BroadcastPromptSheet(
@@ -5368,9 +5378,18 @@ struct MainiOSView: View {
     /// must NOT get this — the long-press meaning is slash-only.
     @ViewBuilder
     private func slashPalette<Content: View>(_ content: Content) -> some View {
+        let members = allSlashMembers()
         content
             .contextMenu {
-                ForEach(allSlashMembers()) { member in
+                if SlashSearchSheet.offersSearch(memberCount: members.count) {
+                    Button {
+                        showSlashSearch = true
+                    } label: {
+                        Label("Search…", systemImage: "magnifyingglass")
+                    }
+                    Divider()
+                }
+                ForEach(members) { member in
                     Button {
                         switch member {
                         case .builtin(let b): fireQuickButton(b)
