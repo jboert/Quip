@@ -22,3 +22,13 @@ Started: Thu Oct  8 11:15:35 MST 2026
 - Unverified: sheet/Apply not driven in a running app (a second Quip would fight the live app for :8765); compile + review only
 - Leftovers: Apply is a no-op with no main window open; windowOrder is saved but not restored on Apply
 - Next: US-003 (menu-bar Arrange reports why it did nothing)
+
+## 2026-10-08 — US-003 Menu-bar Arrange reports why it did nothing — PASS
+- Files: QuipMac/Services/ArrangeOutcome.swift (new), QuipMac/Views/MenuBarView.swift,
+  QuipMac/Views/MainWindow.swift, QuipMac/Tests/ArrangeOutcomeTests.swift (new)
+- Gate: `tools/check.sh` exit 0 — QuipMac 1139 tests / 0 failures (+6 vs 1133); swiftc harness SKIPPED, QuipiOS SKIPPED (out of scope for the diff)
+- Mutation 1 (evaluate returns .arranged on a refused move): test_refusedMove_isAccessibilityDenied FAILED -> reverted -> 6/6 pass
+- Mutation 2 (arranged() called before the guards): noWindows + noDisplay "not called" tests FAILED -> reverted
+- Dropped MainWindow's unreachable "layout produced no frames" branch (frames are empty only when no window is enabled)
+- Unverified: menu-bar panel not driven in a running app (second Quip would fight the live app for :8765); compile + review only
+- Next: US-004 (keep disk/Keychain/interface/CIFilter work out of view bodies)

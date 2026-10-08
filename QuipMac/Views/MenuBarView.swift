@@ -12,6 +12,8 @@ struct MenuBarView: View {
     @Environment(MacPermissionsStore.self) private var permissionsStore
     @Environment(PushNotificationService.self) private var pushService
 
+    @State private var arrangeError: String?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
@@ -387,6 +389,10 @@ struct MenuBarView: View {
             .padding(.vertical, 6)
             .contentShape(Rectangle())
 
+            if let arrangeError {
+                arrangeErrorView(arrangeError)
+            }
+
             Button {
                 windowManager.refreshWindowList()
             } label: {
@@ -468,18 +474,38 @@ struct MenuBarView: View {
     private func arrangeWindows() {
         let enabled = windowManager.windows.filter(\.isEnabled)
         let frames = LayoutCalculator.calculate(mode: .columns, windowCount: enabled.count)
+        let display = windowManager.displays.first(where: { $0.isPrimary }) ?? windowManager.displays.first
 
-        guard let display = windowManager.displays.first(where: { $0.isPrimary }) ?? windowManager.displays.first else {
-            return
+        let outcome = ArrangeOutcome.evaluate(enabledCount: enabled.count, hasDisplay: display != nil) {
+            guard let display else { return false }
+            // Top-left origin space for the AX calls — see WindowManager.cgFrame.
+            let screenFrame = windowManager.cgFrame(for: display)
+            var targetFrames: [String: CGRect] = [:]
+            for (index, window) in enabled.enumerated() where index < frames.count {
+                targetFrames[window.id] = frames[index].toCGRect(in: screenFrame)
+            }
+            return windowManager.arrangeWindows(frames: targetFrames)
         }
+        arrangeError = outcome.message
+    }
 
-        // Top-left origin space for the AX calls — see WindowManager.cgFrame.
-        let screenFrame = windowManager.cgFrame(for: display)
-        var targetFrames: [String: CGRect] = [:]
-        for (index, window) in enabled.enumerated() where index < frames.count {
-            targetFrames[window.id] = frames[index].toCGRect(in: screenFrame)
+    /// Shown under Arrange Windows until the next arrange succeeds — the
+    /// button used to silently do nothing.
+    private func arrangeErrorView(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+            if message == ArrangeOutcome.accessibilityDenied.message {
+                Button("Open Accessibility Settings") {
+                    NSWorkspace.shared.open(ArrangeOutcome.accessibilitySettingsURL)
+                }
+                .font(.caption)
+            }
         }
-
-        windowManager.arrangeWindows(frames: targetFrames)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
     }
 }

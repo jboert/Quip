@@ -81,9 +81,7 @@ struct MainWindow: View {
             set: { if !$0 { arrangeError = nil } }
         )) {
             Button("Open Accessibility Settings") {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
+                NSWorkspace.shared.open(ArrangeOutcome.accessibilitySettingsURL)
                 arrangeError = nil
             }
             Button("OK", role: .cancel) { arrangeError = nil }
@@ -581,35 +579,23 @@ struct MainWindow: View {
         // `NSScreen.main` — which is the *focused* screen, not the primary —
         // and pin it at (0,0), so arranging while Quip sat on a secondary
         // display threw every window onto the primary at the wrong size.
-        guard let display = selectedDisplay else {
-            arrangeError = "No display available to arrange on."
-            return
-        }
-        let screenFrame = windowManager.cgFrame(for: display)
-
+        // `currentFrames` is empty only when `enabledWindows` is, so the
+        // enabled count covers both.
         let enabled = enabledWindows
         let frames = currentFrames
-
-        guard !enabled.isEmpty, !frames.isEmpty else {
-            arrangeError = enabled.isEmpty
-                ? "No windows are enabled — tick one in the sidebar first."
-                : "The selected layout produced no frames."
-            return
-        }
-
-        print("[MainWindow] Arranging \(enabled.count) windows on \(display.name) \(screenFrame)")
-
-        var targetFrames: [String: CGRect] = [:]
-        for (index, window) in enabled.enumerated() where index < frames.count {
-            let targetRect = frames[index].toCGRect(in: screenFrame)
-            targetFrames[window.id] = targetRect
-            print("[MainWindow]   \(window.name) -> \(targetRect)")
-        }
+        let display = selectedDisplay
 
         // Arrange silently doing nothing is almost always a revoked
         // Accessibility grant. Say so, and offer the one click that fixes it.
-        if !windowManager.arrangeWindows(frames: targetFrames) {
-            arrangeError = "Quip needs Accessibility access to move windows. Grant it in System Settings → Privacy & Security → Accessibility."
+        let outcome = ArrangeOutcome.evaluate(enabledCount: enabled.count, hasDisplay: display != nil) {
+            guard let display else { return false }
+            let screenFrame = windowManager.cgFrame(for: display)
+            var targetFrames: [String: CGRect] = [:]
+            for (index, window) in enabled.enumerated() where index < frames.count {
+                targetFrames[window.id] = frames[index].toCGRect(in: screenFrame)
+            }
+            return windowManager.arrangeWindows(frames: targetFrames)
         }
+        arrangeError = outcome.message
     }
 }
