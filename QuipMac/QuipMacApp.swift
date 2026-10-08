@@ -753,9 +753,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             let fingerprint = NumberedPromptDetector.fingerprint(in: content)
                             // Q-56 — the question line, shown only to phones
                             // that opted into prompt text.
-                            let preview = PromptPreview.line(in: content)
-                            // Q-57 — what each numbered button means.
-                            let labels = NumberedPromptDetector.optionLabels(in: content)
+                            let preview = PromptPreview.line(in: content).map(SecretRedactor.redact)
+                            // Q-57 — what each numbered button means. Both
+                            // lines leave the Mac through APNs, so they pass
+                            // the same redaction as terminal content.
+                            let labels = NumberedPromptDetector.optionLabels(in: content)?
+                                .mapValues(SecretRedactor.redact)
                             DispatchQueue.main.async {
                                 self.lastWaitingScrapeAt[windowId] = Date()
                                 self.cachedWaitingScrape[windowId] = (options, isYesNo, fingerprint, preview, labels)

@@ -37,6 +37,9 @@ final class WaitingActionResponseTests: XCTestCase {
         XCTAssertTrue(hasReply("waiting.123"))
         XCTAssertTrue(hasReply("waiting.text"))
         XCTAssertFalse(hasReply("waiting.1234"), "four numbered buttons fill the cap")
+        let reply = byId["waiting.text"]?.actions.first
+        XCTAssertTrue(reply?.options.contains(.authenticationRequired) ?? false,
+                      "free text into a terminal needs the phone unlocked")
         XCTAssertEqual(byId["waiting.many"]?.actions.count, 0, "a bundle has no single answer")
     }
 

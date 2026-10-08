@@ -8226,7 +8226,7 @@ struct NotificationsSettingsSheet: View {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Long-press an alert").font(.subheadline.weight(.medium))
-                            Text("Yes / No or 1–4 answer the prompt; the alert lists what each number means. Reply types an answer. Works on the lock screen and Apple Watch.")
+                            Text("Yes / No or 1–4 answer the prompt; the alert lists what each number means. Reply types an answer after Face ID. Alerts can quote option text from the terminal.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

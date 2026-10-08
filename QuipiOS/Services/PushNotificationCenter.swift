@@ -219,9 +219,13 @@ enum WaitingNotificationCategory {
         UNNotificationAction(identifier: r.rawIdentifier, title: title, options: [])
     }
 
-    /// Typed answer from the lock screen, sent as `send_text` + Return.
+    /// Typed answer, sent as `send_text` + Return. Free text runs in a
+    /// terminal, so unlike the fixed buttons it requires the phone to be
+    /// unlocked first (`.authenticationRequired`): Face ID from the lock
+    /// screen, nothing extra when the phone is already open.
     private static var reply: UNNotificationAction {
-        UNTextInputNotificationAction(identifier: replyActionIdentifier, title: "Reply", options: [],
+        UNTextInputNotificationAction(identifier: replyActionIdentifier, title: "Reply",
+                                      options: [.authenticationRequired],
                                       textInputButtonTitle: "Send", textInputPlaceholder: "Type an answer")
     }
 
