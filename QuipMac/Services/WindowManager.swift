@@ -203,9 +203,11 @@ final class WindowManager {
     private(set) var colorOverrides: [String: String] = [:]
     static let colorOverridesKey = "windowColorOverrides"
 
-    /// Set the color `id` is drawn in, or clear the user's choice with nil,
-    /// which gives the window an automatic color no other window is using
-    /// (US-009). A value that is not a hex color is ignored.
+    /// Set the color `id` is drawn in, or clear the user's choice with nil.
+    /// Clearing gives the window back its remembered automatic color
+    /// (`autoColors`, US-010) unless a window it must stay distinct from now
+    /// shows it, else a color no other window is using (US-009). A value that
+    /// is not a hex color is ignored.
     func setColor(_ id: String, hex: String?) {
         if let hex {
             guard let color = WindowColor.normalized(hex) else { return }
@@ -214,26 +216,60 @@ final class WindowManager {
             colorOverrides.removeValue(forKey: id)
         }
         defaults.set(colorOverrides, forKey: Self.colorOverridesKey)
-        guard let index = windows.firstIndex(where: { $0.id == id }) else { return }
+        let index = windows.firstIndex(where: { $0.id == id })
+        // A window inside its vanish grace takes the change too, or it would
+        // come back in the color it left with.
+        guard index != nil || vanished[id] != nil else { return }
+        let color: String
         if let picked = colorOverrides[id] {
-            windows[index].assignedColor = picked
+            color = picked
         } else {
             let inUse = colorsInUse(excluding: id)
-            windows[index].assignedColor = assignColor(
-                avoiding: Self.colorsToAvoid(all: inUse.all, shown: inUse.shown))
+            let avoid = Self.colorsToAvoid(all: inUse.all, shown: inUse.shown)
+            if let remembered = autoColors[id], !avoid.contains(remembered) {
+                color = remembered
+            } else {
+                color = assignColor(avoiding: avoid)
+                rememberAutoColor(color, for: id, at: clock())
+            }
+            persistAutoColors()
+        }
+        if let index {
+            windows[index].assignedColor = color
+        } else {
+            vanished[id]?.window.assignedColor = color
         }
     }
 
     /// Re-float the pins over whatever order the list is in now. Called on a
     /// pin change so the row moves under the click, and after every snapshot so
     /// a re-sort cannot bury a pinned window.
-    private func applyPinsToCurrentOrder() {
+    ///
+    /// `previous` is the order to take held windows' slots from (US-010): a
+    /// window inside its vanish grace is not in `windows`, but keeps its id in
+    /// `customOrder` at the index it had, so it comes back to the same place.
+    private func applyPinsToCurrentOrder(keepingHeldSlotsFrom previous: [String]? = nil) {
+        let before = previous ?? customOrder
         let order = WindowPinOrder.apply(windows.map(\.id), pinned: pinnedWindowIDs)
         var byID: [String: ManagedWindow] = [:]
         byID.reserveCapacity(windows.count)
         for window in windows { byID[window.id] = window }
         windows = order.compactMap { byID[$0] }
-        customOrder = order
+        customOrder = Self.reinserting(Set(vanished.keys), from: before, into: order)
+    }
+
+    /// `order` with each id of `held` put back at the index it had in
+    /// `previous`, lowest index first, so a held window keeps its slot. An id
+    /// `previous` never listed is not added.
+    nonisolated static func reinserting(_ held: Set<String>, from previous: [String],
+                                        into order: [String]) -> [String] {
+        guard !held.isEmpty else { return order }
+        let present = Set(order)
+        var result = order
+        for (index, id) in previous.enumerated() where held.contains(id) && !present.contains(id) {
+            result.insert(id, at: min(index, result.count))
+        }
+        return result
     }
 
     /// Reading-order rank: terminals first, then anything else the phone can
@@ -291,11 +327,61 @@ final class WindowManager {
     // Next color index for assignment
     private var colorIndex: Int = 0
 
+    // MARK: - Vanished windows and remembered colors (US-010)
+
+    /// A tracked window that went missing from a snapshot, held so that a
+    /// one-tick absence has no lasting effect.
+    struct VanishedWindow {
+        /// The window as it was last seen: color, enabled flag, iTerm2 session,
+        /// subtitle and cwd come back from here if it returns.
+        var window: ManagedWindow
+        /// When it first went missing.
+        let since: Date
+        /// How many snapshots it has been missing from.
+        var absentSnapshots: Int
+    }
+
+    /// Windows missing from recent snapshots, by id. `windows` holds live
+    /// windows only, so the phone never shows a window that is gone; a held
+    /// window keeps its id in `customOrder`. Observed live on 2026-10-07: one
+    /// iTerm2 window dropped out of a single snapshot while the owner closed
+    /// others, and came back as a new window at the end of the list, disabled,
+    /// with another window's color.
+    @ObservationIgnored private(set) var vanished: [String: VanishedWindow] = [:]
+
+    /// How long a missing window is held: five 2 s snapshots.
+    static let vanishGrace: TimeInterval = 10
+
+    /// Every window's automatic color, by window id, so it survives a Mac
+    /// restart and a reset to automatic. Persisted beside `colorOverrides`.
+    @ObservationIgnored private(set) var autoColors: [String: String] = [:]
+    /// When each `autoColors` id was last in a snapshot.
+    @ObservationIgnored private var autoColorLastSeen: [String: Date] = [:]
+    @ObservationIgnored private var autoColorsDirty = false
+    @ObservationIgnored private var autoColorsPersistedAt: Date?
+    static let autoColorsKey = "windowAutoColors"
+    static let autoColorsLastSeenKey = "windowAutoColorsLastSeen"
+    /// An id unseen this long is forgotten; a missing snapshot never is.
+    nonisolated static let autoColorMaxAge: TimeInterval = 24 * 60 * 60
+    /// At most this many ids are remembered, least recently seen dropped first.
+    nonisolated static let autoColorMaxCount = 200
+    /// Last-seen times alone are written at most this often; a new or changed
+    /// color is written at once.
+    static let autoColorSeenPersistInterval: TimeInterval = 5 * 60
+
+    /// `window_returned` lines are written at most this often.
+    static let windowReturnedLogInterval: TimeInterval = 30
+    @ObservationIgnored private var windowReturnedLoggedAt: Date?
+    @ObservationIgnored private var windowReturnedSuppressed = 0
+
     // MARK: - Init / Attached Session Persistence
 
-    /// Where the user's window choices persist: manual order, pins, picked
-    /// colors and attached iTerm2 sessions.
+    /// Where the user's window choices persist: manual order, pins, picked and
+    /// automatic colors, and attached iTerm2 sessions.
     private let defaults: UserDefaults
+
+    /// The time source for the vanish grace and the color memory.
+    private let clock: () -> Date
 
     /// `.standard` in the app. Under XCTest a throwaway suite: the Mac suite is
     /// app-hosted with the real bundle id, so `.standard` there IS the owner's
@@ -304,11 +390,70 @@ final class WindowManager {
     /// clear it again; color tests removed and rewrote `windowColorOverrides`.
     nonisolated static var defaultStore: UserDefaults { TestSafeDefaults.store("windows") }
 
-    init(defaults: UserDefaults = WindowManager.defaultStore) {
+    init(defaults: UserDefaults = WindowManager.defaultStore, clock: @escaping () -> Date = Date.init) {
         self.defaults = defaults
+        self.clock = clock
         pinnedWindowIDs = Set(defaults.stringArray(forKey: Self.pinnedKey) ?? [])
         colorOverrides = defaults.dictionary(forKey: Self.colorOverridesKey) as? [String: String] ?? [:]
+        loadAutoColors()
         loadAttachedSessionIds()
+    }
+
+    private func loadAutoColors() {
+        autoColors = defaults.dictionary(forKey: Self.autoColorsKey) as? [String: String] ?? [:]
+        let seen = defaults.dictionary(forKey: Self.autoColorsLastSeenKey) as? [String: Double] ?? [:]
+        let now = clock()
+        // An id with no recorded time counts as seen now: kept, not dropped.
+        autoColorLastSeen = autoColors.keys.reduce(into: [:]) { result, id in
+            result[id] = seen[id].map(Date.init(timeIntervalSince1970:)) ?? now
+        }
+    }
+
+    private func rememberAutoColor(_ color: String, for id: String, at now: Date) {
+        if autoColors[id] != color {
+            autoColors[id] = color
+            autoColorsDirty = true
+        }
+        autoColorLastSeen[id] = now
+    }
+
+    /// Prune, then write the color memory: at once when a color changed,
+    /// otherwise at most every `autoColorSeenPersistInterval`.
+    private func persistAutoColors(force: Bool = true) {
+        let now = clock()
+        if !force, !autoColorsDirty,
+           let last = autoColorsPersistedAt, now.timeIntervalSince(last) < Self.autoColorSeenPersistInterval {
+            return
+        }
+        let pruned = Self.prunedAutoColors(autoColors, lastSeen: autoColorLastSeen, now: now)
+        autoColors = pruned.colors
+        autoColorLastSeen = pruned.lastSeen
+        defaults.set(autoColors, forKey: Self.autoColorsKey)
+        defaults.set(autoColorLastSeen.mapValues(\.timeIntervalSince1970), forKey: Self.autoColorsLastSeenKey)
+        autoColorsDirty = false
+        autoColorsPersistedAt = now
+    }
+
+    /// The color memory without ids unseen for `maxAge`, and then without the
+    /// least recently seen beyond `maxCount` (ties broken by id, so the result
+    /// is deterministic). Absence from one snapshot never removes an id: only
+    /// time and the cap do.
+    nonisolated static func prunedAutoColors(_ colors: [String: String], lastSeen: [String: Date], now: Date,
+                                             maxAge: TimeInterval = autoColorMaxAge,
+                                             maxCount: Int = autoColorMaxCount)
+        -> (colors: [String: String], lastSeen: [String: Date]) {
+        var kept = colors.filter { id, _ in
+            guard let seen = lastSeen[id] else { return true }
+            return now.timeIntervalSince(seen) <= maxAge
+        }
+        if kept.count > maxCount {
+            let oldestFirst = kept.keys.sorted {
+                let a = lastSeen[$0] ?? now, b = lastSeen[$1] ?? now
+                return a != b ? a < b : $0 < $1
+            }
+            for id in oldestFirst.prefix(kept.count - maxCount) { kept.removeValue(forKey: id) }
+        }
+        return (kept, lastSeen.filter { kept[$0.key] != nil })
     }
 
     /// Load the persisted attached-session UUID list from UserDefaults.
@@ -597,25 +742,85 @@ final class WindowManager {
         // double that cost on every poll tick, on the main actor.
         spaces = Self.SpaceCatalog.desktops(inSnapshot: raw)
         let displayRects = cgDisplayRects()
+        let now = clock()
+        let previousOrder = customOrder
+        let snapshotIDs = Set(raw.map(\.id))
 
-        // US-009 — a new window's automatic color is one no other window is
-        // using. Collect every color this snapshot keeps (a tracked window keeps
-        // its own; a new one may carry the user's pick) BEFORE the loop, so a new
-        // window cannot take the color of a window further down the list.
+        // US-010 — a tracked window missing from this snapshot is held, not
+        // dropped: `windows` is rebuilt from the snapshot alone, so before this a
+        // single missed tick lost the window's color, enabled flag, iTerm2
+        // session and list slot for good.
+        for window in windows where !snapshotIDs.contains(window.id) {
+            vanished[window.id] = VanishedWindow(window: window, since: now, absentSnapshots: 0)
+        }
         var existingByID: [String: ManagedWindow] = [:]
         existingByID.reserveCapacity(windows.count)
         for window in windows { existingByID[window.id] = window }
+        // A held window back inside its grace is rebuilt from what it was;
+        // one back after it is a new window.
+        var returned: [(id: String, absentSnapshots: Int)] = []
+        for info in raw where existingByID[info.id] == nil {
+            guard let held = vanished.removeValue(forKey: info.id) else { continue }
+            if now.timeIntervalSince(held.since) <= Self.vanishGrace {
+                existingByID[info.id] = held.window
+                returned.append((id: info.id, absentSnapshots: held.absentSnapshots))
+            }
+        }
+        // Still missing: forget a window whose grace ran out (its id leaves
+        // `customOrder` with it), count the rest as absent once more.
+        for id in Array(vanished.keys) {
+            guard let held = vanished[id] else { continue }
+            if now.timeIntervalSince(held.since) > Self.vanishGrace {
+                vanished.removeValue(forKey: id)
+            } else {
+                vanished[id]?.absentSnapshots = held.absentSnapshots + 1
+            }
+        }
+
+        // US-009 — a new window's automatic color is one no other window is
+        // using. Collect every color this snapshot keeps (a tracked or returning
+        // window keeps its own; a held window is expected back; a new one may
+        // carry the user's pick) BEFORE deciding any new color, so a new window
+        // cannot take the color of a window further down the list.
         var colorsOnScreen = Set<String>()
         var colorsShown = Set<String>()
-        for info in raw {
-            if let existing = existingByID[info.id] {
-                colorsOnScreen.insert(existing.assignedColor)
-                if existing.isEnabled { colorsShown.insert(existing.assignedColor) }
-            } else if let picked = colorOverrides[info.id] {
+        func take(_ window: ManagedWindow) {
+            colorsOnScreen.insert(window.assignedColor)
+            if window.isEnabled { colorsShown.insert(window.assignedColor) }
+        }
+        let newIDs = raw.map(\.id).filter { existingByID[$0] == nil }
+        for info in raw { if let existing = existingByID[info.id] { take(existing) } }
+        for held in vanished.values { take(held.window) }
+        var colorForNew: [String: String] = [:]
+        for id in newIDs {
+            if let picked = colorOverrides[id] {
+                colorForNew[id] = picked
                 colorsOnScreen.insert(picked)
             }
         }
+        // US-010 — then remembered automatic colors, so a window keeps its color
+        // across a restart and a fresh pick cannot take a color a window
+        // remembers. A remembered color is given up only to a window it must
+        // stay distinct from (`colorsToAvoid`).
+        for id in newIDs where colorForNew[id] == nil {
+            guard let remembered = autoColors[id],
+                  !Self.colorsToAvoid(all: colorsOnScreen, shown: colorsShown).contains(remembered)
+            else { continue }
+            colorForNew[id] = remembered
+            colorsOnScreen.insert(remembered)
+        }
+        // Then fresh ones, remembered for next time. Colors handed out earlier in
+        // this loop count as shown too: two windows that appear together must
+        // not share one.
         var colorsHandedOut = Set<String>()
+        for id in newIDs where colorForNew[id] == nil {
+            let color = assignColor(avoiding: Self.colorsToAvoid(
+                all: colorsOnScreen, shown: colorsShown.union(colorsHandedOut)))
+            colorForNew[id] = color
+            colorsOnScreen.insert(color)
+            colorsHandedOut.insert(color)
+            rememberAutoColor(color, for: id, at: now)
+        }
 
         var refreshed: [ManagedWindow] = []
         for info in raw {
@@ -649,22 +854,11 @@ final class WindowManager {
                     spaceID: info.spaceID
                 ))
             } else {
-                let color: String
-                if let picked = colorOverrides[info.id] {
-                    color = picked
-                } else {
-                    // Colors handed out earlier in this loop count as shown too:
-                    // two windows that appear together must not share one.
-                    color = assignColor(avoiding: Self.colorsToAvoid(
-                        all: colorsOnScreen, shown: colorsShown.union(colorsHandedOut)))
-                    colorsHandedOut.insert(color)
-                }
-                colorsOnScreen.insert(color)
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
                     subtitle: "", cwdPath: nil,
                     bundleId: info.bundleId, icon: icon,
-                    isEnabled: false, assignedColor: color,
+                    isEnabled: false, assignedColor: colorForNew[info.id] ?? assignColor(avoiding: colorsOnScreen),
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
                     iterm2Tty: nil,
@@ -676,16 +870,22 @@ final class WindowManager {
         }
 
         if usesManualOrder, !customOrder.isEmpty {
+            var refreshedByID: [String: ManagedWindow] = [:]
+            refreshedByID.reserveCapacity(refreshed.count)
+            for window in refreshed { refreshedByID[window.id] = window }
             var ordered: [ManagedWindow] = []
             for id in customOrder {
-                if let w = refreshed.first(where: { $0.id == id }) { ordered.append(w) }
+                if let w = refreshedByID[id] { ordered.append(w) }
             }
-            for w in refreshed where !customOrder.contains(w.id) {
+            var listed = Set(customOrder)
+            for w in refreshed where !listed.contains(w.id) {
                 ordered.append(w)
                 customOrder.append(w.id)
+                listed.insert(w.id)
             }
-            let activeIds = Set(refreshed.map(\.id))
-            customOrder.removeAll { !activeIds.contains($0) }
+            // A held window keeps its slot; only a window gone for good leaves.
+            let keptIds = snapshotIDs.union(vanished.keys)
+            customOrder.removeAll { !keptIds.contains($0) }
             windows = ordered
         } else {
             // A pinned order that did not survive the relaunch is not a pin:
@@ -703,7 +903,45 @@ final class WindowManager {
             windows = order.compactMap { byID[$0] }
             customOrder = order
         }
-        applyPinsToCurrentOrder()
+        applyPinsToCurrentOrder(keepingHeldSlotsFrom: previousOrder)
+
+        for window in windows where autoColors[window.id] != nil {
+            autoColorLastSeen[window.id] = now
+        }
+        persistAutoColors(force: false)
+        logReturnedWindows(returned, at: now)
+    }
+
+    /// One `websocket.log` line when held windows came back inside their grace,
+    /// at most every `windowReturnedLogInterval`; returns in between are
+    /// counted into the next line. Ids only, never window titles.
+    private func logReturnedWindows(_ returned: [(id: String, absentSnapshots: Int)], at now: Date) {
+        guard !returned.isEmpty else { return }
+        if let last = windowReturnedLoggedAt, now.timeIntervalSince(last) < Self.windowReturnedLogInterval {
+            windowReturnedSuppressed += returned.count
+            return
+        }
+        QuipLog.write(severity: .info, subsystem: "windows",
+                      message: Self.windowReturnedLogLine(returned, suppressed: windowReturnedSuppressed),
+                      to: LogPaths.webSocketPath)
+        windowReturnedLoggedAt = now
+        windowReturnedSuppressed = 0
+    }
+
+    /// Pure formatter for the `window_returned` line.
+    nonisolated static func windowReturnedLogLine(_ returned: [(id: String, absentSnapshots: Int)],
+                                                  suppressed: Int) -> String {
+        let absent = returned.map(\.absentSnapshots).max() ?? 0
+        var line: String
+        if returned.count == 1 {
+            line = "window_returned id=\(returned[0].id) absent_snapshots=\(absent)"
+        } else {
+            let shown = returned.prefix(5).map(\.id).joined(separator: ",")
+            let more = returned.count > 5 ? ",+\(returned.count - 5)" : ""
+            line = "window_returned count=\(returned.count) absent_snapshots=\(absent) ids=\(shown)\(more)"
+        }
+        if suppressed > 0 { line += " suppressed=\(suppressed)" }
+        return line
     }
 
     /// Convenience: fetch + apply in one call (runs CG query on main — use the
@@ -731,6 +969,7 @@ final class WindowManager {
         // the one place that has to record "the user chose this" and stop the
         // screen-order re-sort from overwriting it on the next snapshot.
         usesManualOrder = true
+        let previous = customOrder
         let known = Set(windows.map(\.id))
         var next = ids.filter { known.contains($0) }
         var seen = Set(next)
@@ -744,7 +983,7 @@ final class WindowManager {
         byID.reserveCapacity(windows.count)
         for window in windows { byID[window.id] = window }
         windows = next.compactMap { byID[$0] }
-        applyPinsToCurrentOrder()
+        applyPinsToCurrentOrder(keepingHeldSlotsFrom: previous)
     }
 
     /// Hand the order back to the desk: forget the user's placement and
@@ -752,13 +991,14 @@ final class WindowManager {
     /// visibly answers the click.
     func resetToScreenOrder() {
         usesManualOrder = false
+        let previous = customOrder
         let order = Self.screenOrder(windows, displays: cgDisplayRects())
         var byID: [String: ManagedWindow] = [:]
         byID.reserveCapacity(windows.count)
         for window in windows { byID[window.id] = window }
         windows = order.compactMap { byID[$0] }
         customOrder = order
-        applyPinsToCurrentOrder()
+        applyPinsToCurrentOrder(keepingHeldSlotsFrom: previous)
     }
 
     /// Move one window to sit where another currently sits, preserving the rest
@@ -1234,11 +1474,12 @@ final class WindowManager {
         firstUnusedPaletteColor(avoiding: all) != nil ? all : shown
     }
 
-    /// Colors of every window other than `id`, and of the enabled ones among them.
+    /// Colors of every window other than `id`, held ones included (they are
+    /// expected back), and of the enabled ones among them.
     private func colorsInUse(excluding id: String) -> (all: Set<String>, shown: Set<String>) {
         var all = Set<String>()
         var shown = Set<String>()
-        for window in windows where window.id != id {
+        for window in windows + vanished.values.map(\.window) where window.id != id {
             all.insert(window.assignedColor)
             if window.isEnabled { shown.insert(window.assignedColor) }
         }
