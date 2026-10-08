@@ -30,7 +30,7 @@ final class DiagnosticsSnapshotFormatterTests: XCTestCase {
             isAuthenticated: true,
             lastError: nil,
             lastDisconnectReason: reason,
-            serverURL: "ws://192.168.4.34:8765",
+            serverURL: "ws://192.168.1.134:8765",
             pairedCount: 2,
             activeBackendName: "Quip Mac Studio23",
             connectionEvents: events,

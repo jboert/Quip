@@ -13,8 +13,8 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
     // Buckets renumbered on purpose in US-012 (2026-10-07): link-local got
     // bucket 2, which moved Tailscale to 3 and everything else to 4.
     private let bonjour = "ws://quip-mac.local:8765"     // urlPriority 0
-    private let lan     = "ws://192.168.4.26:8765"       // urlPriority 1
-    private let ts      = "ws://100.120.141.122:8765"    // urlPriority 3 (Tailscale CGNAT)
+    private let lan     = "ws://192.168.1.126:8765"       // urlPriority 1
+    private let ts      = "ws://100.101.102.103:8765"    // urlPriority 3 (Tailscale CGNAT)
     private let tsDNS   = "wss://mac.tail1234.ts.net"    // urlPriority 3 (Tailscale MagicDNS)
     private let other   = "wss://abc.trycloudflare.com"  // urlPriority 4
 
@@ -47,18 +47,18 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
     /// drift and silently hide the "Use Local Network" tile.
     func testSharedNetworkClassifierDrivesLANBucket() {
         // Accepts every RFC1918 range.
-        XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("192.168.4.26"))
+        XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("192.168.1.126"))
         XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("10.0.0.5"))
         XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("172.16.0.1"))
         XCTAssertTrue(NetworkClassifier.isRFC1918IPv4("172.31.255.1"))
         // Rejects Tailscale CGNAT, loopback/link-local, out-of-range, malformed.
-        XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("100.120.141.122"))
+        XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("100.101.102.103"))
         XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("172.32.0.1"))
         XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("8.8.8.8"))
         XCTAssertFalse(NetworkClassifier.isRFC1918IPv4("quip-mac.local"))
         // urlPriority == 1 iff the host is RFC1918 per the shared classifier.
-        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://192.168.4.26:8765"), 1)
-        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://100.120.141.122:8765"), 3)
+        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://192.168.1.126:8765"), 1)
+        XCTAssertEqual(BackendConnectionManager.urlPriority("ws://100.101.102.103:8765"), 3)
     }
 
     // MARK: - mergedURLOrder (Tailscale-first contract)
@@ -182,7 +182,7 @@ final class BackendConnectionManagerURLMergeTests: XCTestCase {
 
     // MARK: - urlsByRefreshingLocal (LAN URL refresh from device_identity)
 
-    private let lan45 = "ws://192.168.4.45:8765"   // urlPriority 1 (Mac's new DHCP IP)
+    private let lan45 = "ws://192.168.1.145:8765"   // urlPriority 1 (Mac's new DHCP IP)
 
     func testRefreshLandsLANAsFallbackKeepingTailscalePrimary() {
         // Phone paired only over Tailscale; Mac's identity now reports its LAN

@@ -69,7 +69,7 @@ window fell back to CPU alone. That is the **fail-open path, not a pass**.
 Investigated at length; **not reproduced**, and two hypotheses were falsified.
 Ruled out, with evidence:
 
-- Connection/auth — `client live: 100.72.13.19:61613 (auth=pin)`
+- Connection/auth — `client live: <phone-tailscale-ip>:61613 (auth=pin)`
 - Taps never reaching the Mac — both sends are in `audit.log`
 - Misclassification — logged `cli=codex`, `path=pasteText`
 - Codex refusing input at an `Action Required` prompt — **falsified**, that exact

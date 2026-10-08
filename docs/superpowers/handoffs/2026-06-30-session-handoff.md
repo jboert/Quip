@@ -70,10 +70,10 @@ Durable fix (design, not yet built):
    relay). Safe now that fresh-install single-row + C1 URL-refresh + reap prevent the flap that
    originally justified disabling it. Mac rebuild (TCC reset) required.
 
-Chicken-and-egg confirmed live: phone connects over Tailscale relay (100.72.13.19), socket
+Chicken-and-egg confirmed live: phone connects over Tailscale relay (<phone-tailscale-ip>), socket
 ESTABLISHED but auth never completes (57 ENOTCONN mid-auth-roundtrip over LAX relay) → Mac
 shows "None connected" → device_identity/localURLs never delivered → LAN never learned →
-"Use Local Network" tile has nothing to switch to. Direct LAN pair (ws://192.168.4.26:8765)
+"Use Local Network" tile has nothing to switch to. Direct LAN pair (ws://<lan-ip>:8765)
 sidesteps it. Root: localURLs delivered post-auth can't rescue a phone that can't auth.
 
 ## Also requested: clean up Mac Settings page

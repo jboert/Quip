@@ -80,7 +80,7 @@ runs the pasteText route on a background queue, hops to main only for self-heal/
   no `.sb-` orphan. The save LANDED; the createFile + @Sendable-watcher fixes (997a196, 03ab20d) hold in
   production. The red error was a **transient connection flap**, not a pipeline failure.
 - **Flap root-caused (NEW evidence).** `netstat -an | grep 8765` showed **TWO** ESTABLISHED sockets to one
-  Mac — LAN `192.168.4.34` + Tailscale `100.72.13.19` — flapping independently. `connect(toURLs:)` is
+  Mac — LAN `<lan-ip>` + Tailscale `<phone-tailscale-ip>` — flapping independently. `connect(toURLs:)` is
   sequential (one task), so two live sockets ⇒ Mac paired as **two backends** / BCM spawns two clients. Each
   cycles `ready (pending auth)` → POSIX 57 ENOTCONN ~7s later. `!isConnecting` guard (950c3fd) dampens, does
   not eliminate. `onSave` returns false when `send()` fires mid-flap → the scary error. Saved to memory

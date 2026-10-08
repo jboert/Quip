@@ -40,7 +40,7 @@ Nothing from today has been confirmed by a human looking at a screen.
 - **Which surface is flapping.** `626968e` fixes the Mac sidebar. The phone's default broadcast filter (`isEnabled || (isTarget && isOnVisibleScreen)`, `mirrorDesktop = 0` on this machine) already excluded XPC windows, so if the *phone grid* is what comes and goes, that is a separate cause and needs its own measurement with the phone connected. The user was asked and has not answered.
 - **Phone relaunch.** Force-quit Quip on the iPhone and relaunch before testing anything from `e369c2c`.
 - **Board `ready` items still needing a human**: Q-17a, Q-19b, Q-16, Q-18a (manual smoke, all need the phone), Q-22 (needs the owner's call on `_AXUIElementGetWindow`, a private API, vs public-only matching), Q-27 (needs a screenshot of a real duplicate prompt), Q-25 (grid acceptance).
-- **Phone was reachable again** at 19:0x over Tailscale (`100.72.13.19` → `100.120.141.122:8765`), first connection since 2026-09-13, which unblocks the smoke items whenever there is a human to run them.
+- **Phone was reachable again** at 19:0x over Tailscale (`<phone-tailscale-ip>` → `<mac-tailscale-ip>:8765`), first connection since 2026-09-13, which unblocks the smoke items whenever there is a human to run them.
 - **Build gotcha worth remembering**: the committed `project.pbxproj` does not enumerate every source file — a raw `xcodebuild` failed on `WandSort.swift` and `OutputActivityTracker` before `xcodegen generate`. `tools/check.sh` regenerates internally, so green tests do not prove a raw build links. Recorded in memory.
 - **Not pushed.** Per the standing rule, every push needs its own confirmation; `main` is protected and would need a PR.
 

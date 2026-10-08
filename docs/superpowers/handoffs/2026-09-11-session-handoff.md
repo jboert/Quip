@@ -118,7 +118,7 @@ with timing. Six sites wired: the five iTerm2 session guards plus
 |---|---|
 | Desktop chips render with real counts | **Owner-confirmed on hardware** — This Desktop 10 / Other Desktops 2 / All Desktops 12. |
 | The unmapping fix works end to end | **Confirmed on hardware.** `send_text` to window 808 at 17:17:25Z landed with no toast and no `injection.log` entry — same window, same path that failed before. |
-| Phone authenticates over LAN | **Observed at last.** `client live: 192.168.4.42:54980 (auth=pin)` at 16:33:08Z. The 2026-09-10 handoff had this as never-seen. |
+| Phone authenticates over LAN | **Observed at last.** `client live: <lan-ip>:54980 (auth=pin)` at 16:33:08Z. The 2026-09-10 handoff had this as never-seen. |
 | `Iterm2SessionFetch` semantics | **Test-verified, proven non-vacuous.** Reverting the guard fails with `nil is not equal to Optional("UUID-808")` — the reported symptom exactly. |
 | `ContentSettleOutcome` three-way split | **Test-verified.** 5 cases, including that `.empty` and `.unreadable` never compare equal. |
 | `injection.log` line format | **Test-verified.** 6 cases via a pure static builder, including that a quote or newline in an AppleScript error is escaped rather than forging a second log line. |

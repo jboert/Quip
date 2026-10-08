@@ -41,7 +41,7 @@ explained the entire multi-select complaint.
 | --- | --- | --- |
 | Phone-driven multi-select | ✅ verified | `audit.log` `select_multi:1,2` at `20:40:45Z`; picks returned correct. First successful one on this machine. |
 | Pre-handshake reaper | ✅ verified | `reaping … within 10s` at INFO against the phone's own probe; zero `broke during handshake` since; no leaked sockets. |
-| LAN routing swap | ✅ verified | `client live: 192.168.4.42` at `21:57:02Z`; `netstat` showed `192.168.4.26.8765 ← 192.168.4.42`. Relay out of the path. |
+| LAN routing swap | ✅ verified | `client live: <lan-ip>` at `21:57:02Z`; `netstat` showed `<lan-ip>.8765 ← <lan-ip>`. Relay out of the path. |
 | §58 Iteration 3 guards | ⚠️ tests only | 694 Mac tests green. Not installed, so the manual smoke (close tracked iTerm windows mid-poll) has not run. |
 
 ## Open threads

@@ -7,7 +7,7 @@ Branch: `eb-branch` (local, ahead of `origin/eb-branch`; not pushed this session
 | Hash | Why |
 |------|-----|
 | `a6b1a04` | Q-35: the prompt generator opens on the selected window's agent and the user's most-used style, and lists up to 3 most-fired prompts to seed a draft. |
-| `1eeff71` | Wishlist: first observed LAN auth (`192.168.4.50`, `auth=pin`) after the Q-35 install. One data point; the "phone never auths over LAN" item stays open. |
+| `1eeff71` | Wishlist: first observed LAN auth (`<mac-lan-ip>`, `auth=pin`) after the Q-35 install. One data point; the "phone never auths over LAN" item stays open. |
 | `45cd707` | Q-38: with the Mac unreachable, the phone dictates with iOS 26 SpeechAnalyzer instead of SFSpeech, which dropped the words before every pause. It also drives remote-path captions. SFSpeech stays as the fallback (iOS < 26, unsupported locale, model not downloaded, Labs "Older iPhone speech recognizer"). |
 | `c34cf88` | Q-39: Mac Whisper moves from `small.en` to `openai_whisper-large-v3-v20240930_626MB` (large-v3 turbo) via `WhisperModelLadder`, keeping small.en as fallback. Decoding forces English. |
 | `eae1c4a` | Board: Q-38 / Q-39 done, hardware checks Q-38a / Q-39a filed. |

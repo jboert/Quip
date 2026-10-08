@@ -364,7 +364,7 @@ path can finally see them.
 | `Iterm2SessionFetch` semantics | **Test-verified, proven non-vacuous.** Reverting the guard fails with `nil is not equal to Optional("UUID-808")` — the reported symptom exactly. |
 | `injection.log` line format | **Test-verified.** 6 cases via a pure static builder, including that a quote or newline in an AppleScript error is escaped rather than forging a second log line. |
 | Full gate | **Green.** harness 62 checks, QuipMac 808 tests, QuipiOS 800 tests. |
-| Phone authenticates over LAN | **Observed at last.** `client live: 192.168.4.42:54980 (auth=pin)` at 16:33:08Z. The 2026-09-10 handoff had this as never-seen. |
+| Phone authenticates over LAN | **Observed at last.** `client live: <lan-ip>:54980 (auth=pin)` at 16:33:08Z. The 2026-09-10 handoff had this as never-seen. |
 | `injection.log` actually writes | **NOT verified.** The format is unit-tested; the append path has never run, because nothing has failed since install. It is created on first failure. |
 
 ### Open threads
@@ -652,7 +652,7 @@ connects, never LAN?") had two independent answers, and both had to be fixed
 `21:54:49Z`; both URLs probed in the same second each cycle (the signature of the fix —
 previously only the LAN line appeared); third probe round completed ~`21:56:5x`; swap
 landed at **`21:57:02Z`**, inside the window the thresholds predict. `netstat` confirmed
-the live socket as `192.168.4.26.8765 ← 192.168.4.42` — LAN to LAN, relay out of the
+the live socket as `<lan-ip>.8765 ← <lan-ip>` — LAN to LAN, relay out of the
 path. QuipiOS suite: 756 tests, 0 failures.
 
 ### Verified end to end this session
@@ -660,7 +660,7 @@ path. QuipiOS suite: 756 tests, 0 failures.
 | --- | --- |
 | Phone-driven multi-select | `audit.log` `select_multi:1,2` at `20:40:45Z` → correct picks returned |
 | Pre-handshake reaper | `reaping … within 10s` at INFO; zero `broke during handshake` since; no leaked sockets |
-| LAN routing | `client live: 192.168.4.42` at `21:57:02Z`, first LAN auth on record |
+| LAN routing | `client live: <lan-ip>` at `21:57:02Z`, first LAN auth on record |
 
 ---
 
@@ -824,9 +824,9 @@ saving prompts") + "PTT and mobile quip not working with grok and codex".
 
 ### ⚠️ Open — WebSocket connection instability (pre-existing, NOT from this work)
 websocket.log: 5486 resets vs 1743 ready. Pattern:
-- **WiFi** (192.168.4.34) reaches ready→authenticated and holds 3+ min when phone is foreground (carried
+- **WiFi** (<lan-ip>) reaches ready→authenticated and holds 3+ min when phone is foreground (carried
   the 17:09 grok presses). Works.
-- **Tailscale** (100.72.13.19) opens a fresh connection every ~60s that goes `preparing` → **never
+- **Tailscale** (<phone-tailscale-ip>) opens a fresh connection every ~60s that goes `preparing` → **never
   `ready`** → reset. Redundant path failing to handshake — wasted churn, not the carrier.
 - Since 17:10 the phone held no connection (backgrounded/locked/off-wifi). Immediate remedy: foreground +
   reconnect/relaunch the phone app on the same wifi (per check-socket-first).
@@ -2492,7 +2492,7 @@ reaped before handshake. Same symptom recorded against the persist-connections
 work. Not chased this session.
 
 2026-10-07 data point: after the Q-35 iOS install the phone authenticated over
-LAN (`192.168.4.50`, `auth=pin`, `client live` at 00:55:28Z) and held it. The
+LAN (`<mac-lan-ip>`, `auth=pin`, `client live` at 00:55:28Z) and held it. The
 per-minute dials that followed (one Tailscale, one LAN) were reaped before
 handshake, which is the 1dbd64b probe reaper working. One success does not
 close this; watch whether LAN holds across a Mac restart.

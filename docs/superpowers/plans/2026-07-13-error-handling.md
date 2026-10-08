@@ -166,7 +166,7 @@ final class ConnectionOutcomeTests: XCTestCase {
         let outcome = ConnectionOutcome.classify(reachedReady: false, error: "reset by peer")
         XCTAssertEqual(outcome, .abortedHandshake)
         XCTAssertEqual(outcome.severity, .info)
-        XCTAssertFalse(outcome.describe(endpoint: "192.168.4.34:56767").uppercased().contains("FAILED"))
+        XCTAssertFalse(outcome.describe(endpoint: "<lan-ip>:56767").uppercased().contains("FAILED"))
     }
 
     /// A socket that DID complete the handshake and then broke is a real error.
@@ -174,7 +174,7 @@ final class ConnectionOutcomeTests: XCTestCase {
         let outcome = ConnectionOutcome.classify(reachedReady: true, error: "reset by peer")
         XCTAssertEqual(outcome, .failed)
         XCTAssertEqual(outcome.severity, .error)
-        XCTAssertTrue(outcome.describe(endpoint: "100.72.13.19:56736").contains("reset by peer"))
+        XCTAssertTrue(outcome.describe(endpoint: "<phone-tailscale-ip>:56736").contains("reset by peer"))
     }
 
     /// A clean close of an established socket is normal, not an error.

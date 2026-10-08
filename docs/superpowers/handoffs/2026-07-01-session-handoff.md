@@ -34,7 +34,7 @@ the pbxproj — `git restore --source=HEAD -- <proj>.xcodeproj/project.pbxproj` 
 
 ## Deferred: Phase 1 hardware verify (BLOCKED by transport flap, not code)
 On-device seed+restore couldn't run: the phone can't hold an authed socket right now —
-every connect (LAN 192.168.4.34→.26 AND Tailscale 100.72.13.19) resets ~40s in with
+every connect (LAN <lan-ip>→.26 AND Tailscale <phone-tailscale-ip>) resets ~40s in with
 POSIXError 54 (reset by peer) BEFORE auth completes, so no snapshot uploads and no
 restore fires. Same transport instability as prior handoffs (relay via LAX, DHCP bounce).
 Earlier in the session LAN held fine for minutes (16:22), so LAN CAN work — the drops
@@ -42,7 +42,7 @@ correlate with the app leaving foreground.
 
 Verify recipe when the network cooperates:
 1. New build already installed (`com.quip.QuipiOS`, iPhone 17 Pro Max FA951BBB…).
-2. Connect over LAN `ws://192.168.4.26:8765`, PIN, KEEP QUIP IN FOREGROUND ~10s.
+2. Connect over LAN `ws://<lan-ip>:8765`, PIN, KEEP QUIP IN FOREGROUND ~10s.
 3. Confirm upload: the Mac stores it —
    `defaults export com.quip.mac -` → any `phonePrefs.<id>` blob now contains
    `pairedBackendsJSON` (watcher script at `/tmp/quip-watch-backup.sh`).

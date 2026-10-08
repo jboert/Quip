@@ -20,8 +20,8 @@ import XCTest
 /// noise; it does not guard a unit mismatch.
 final class LatencySwapComparabilityTests: XCTestCase {
 
-    private let lan = URL(string: "ws://192.168.4.26:8765")!
-    private let ts  = URL(string: "ws://100.120.141.122:8765")!
+    private let lan = URL(string: "ws://192.168.1.126:8765")!
+    private let ts  = URL(string: "ws://100.101.102.103:8765")!
 
     private func sample(host: String, netRtt: Int, path: String) -> WebSocketClient.LatencySample {
         WebSocketClient.LatencySample(
@@ -37,8 +37,8 @@ final class LatencySwapComparabilityTests: XCTestCase {
     /// candidate's raw numbers far lower, this must NOT trigger a swap — the
     /// numbers are not comparable, so the policy has no evidence either way.
     func test_liveRoundTripsAreNeverComparedAgainstTcpProbes() {
-        let s = [90, 95, 92, 88].map { sample(host: "100.120.141.122", netRtt: $0, path: "sendText") }
-              + [3, 2, 3, 2].map { sample(host: "192.168.4.26", netRtt: $0, path: "probe") }
+        let s = [90, 95, 92, 88].map { sample(host: "100.101.102.103", netRtt: $0, path: "sendText") }
+              + [3, 2, 3, 2].map { sample(host: "192.168.1.126", netRtt: $0, path: "probe") }
         XCTAssertNil(
             URLSwapPolicy.decide(currentURL: ts, candidates: [ts, lan], samples: s, lastSwapAt: nil),
             "a TCP connect is cheaper than a full app round trip by construction — "
@@ -49,8 +49,8 @@ final class LatencySwapComparabilityTests: XCTestCase {
     /// swap fires. This is what the fix makes possible: probe the current URL
     /// too, and every bucket is TCP-connect ms.
     func test_probeVersusProbe_swapsToTheFasterPath() {
-        let s = [60, 58, 62, 59].map { sample(host: "100.120.141.122", netRtt: $0, path: "probe") }
-              + [3, 2, 3, 2].map { sample(host: "192.168.4.26", netRtt: $0, path: "probe") }
+        let s = [60, 58, 62, 59].map { sample(host: "100.101.102.103", netRtt: $0, path: "probe") }
+              + [3, 2, 3, 2].map { sample(host: "192.168.1.126", netRtt: $0, path: "probe") }
         XCTAssertEqual(
             URLSwapPolicy.decide(currentURL: ts, candidates: [ts, lan], samples: s, lastSwapAt: nil),
             lan)
@@ -60,8 +60,8 @@ final class LatencySwapComparabilityTests: XCTestCase {
     /// that is genuinely worse than the relay must not win just because its
     /// numbers come from a cheaper kind of measurement.
     func test_slowerCandidateDoesNotWinOnMeasurementKindAlone() {
-        let s = [20, 21, 19, 20].map { sample(host: "100.120.141.122", netRtt: $0, path: "sendText") }
-              + [40, 41, 39, 40].map { sample(host: "192.168.4.26", netRtt: $0, path: "probe") }
+        let s = [20, 21, 19, 20].map { sample(host: "100.101.102.103", netRtt: $0, path: "sendText") }
+              + [40, 41, 39, 40].map { sample(host: "192.168.1.126", netRtt: $0, path: "probe") }
         XCTAssertNil(
             URLSwapPolicy.decide(currentURL: ts, candidates: [ts, lan], samples: s, lastSwapAt: nil))
     }
@@ -70,9 +70,9 @@ final class LatencySwapComparabilityTests: XCTestCase {
     /// the bucketing helper must filter them out rather than the buffer never
     /// containing them.
     func test_bucketKeepsProbesAndDropsLiveSamplesForTheSameHost() {
-        let s = [1, 2, 3].map { sample(host: "192.168.4.26", netRtt: $0, path: "probe") }
-              + [50, 51].map { sample(host: "192.168.4.26", netRtt: $0, path: "sendText") }
-        let bucket = URLSwapPolicy.samplesForHost("192.168.4.26", samples: s)
+        let s = [1, 2, 3].map { sample(host: "192.168.1.126", netRtt: $0, path: "probe") }
+              + [50, 51].map { sample(host: "192.168.1.126", netRtt: $0, path: "sendText") }
+        let bucket = URLSwapPolicy.samplesForHost("192.168.1.126", samples: s)
         XCTAssertEqual(bucket.count, 3)
         XCTAssertTrue(bucket.allSatisfy { $0.path == "probe" })
     }
