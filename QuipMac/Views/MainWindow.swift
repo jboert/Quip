@@ -52,6 +52,8 @@ struct MainWindow: View {
     @State private var isDragToResizeEnabled = false
     @State private var customFrames: [String: NormalizedRect] = [:]
     @State private var showQRPopover = false
+    /// Rendered off the main actor whenever the popover's URL changes.
+    @State private var qrImage: NSImage?
     /// Non-nil while an Arrange attempt has something to say — missing
     /// permission, no enabled windows, no display.
     @State private var arrangeError: String?
@@ -293,7 +295,7 @@ struct MainWindow: View {
                 Text("Scan with iPhone")
                     .font(.headline)
 
-                if let qrImage = generateQR(from: qrURL) {
+                if let qrImage {
                     Image(nsImage: qrImage)
                         .interpolation(.none)
                         .resizable()
@@ -320,19 +322,9 @@ struct MainWindow: View {
         }
         .padding(20)
         .frame(width: 280)
-    }
-
-    private func generateQR(from string: String) -> NSImage? {
-        guard let data = string.data(using: .utf8),
-              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
-        filter.setValue(data, forKey: "inputMessage")
-        filter.setValue("M", forKey: "inputCorrectionLevel")
-        guard let ciImage = filter.outputImage else { return nil }
-        let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        let rep = NSCIImageRep(ciImage: scaled)
-        let img = NSImage(size: rep.size)
-        img.addRepresentation(rep)
-        return img
+        .task(id: qrURL) {
+            qrImage = await Task.detached { PairingQR.image(for: qrURL) }.value
+        }
     }
 
     // MARK: - Tunnel Status

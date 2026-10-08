@@ -68,8 +68,8 @@
         "tools/check.sh passes (exit 0)."
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Gate: tools/check.sh exit 0, QuipMac 1141 tests / 0 failures (+2 vs 1139); swiftc harness + QuipiOS SKIPPED (no Shared/ or QuipiOS/ change). Mutation 1: PairingQR.image(for:) returns nil for every input -> test_pairLink_rendersAtLeastAVersion1Code FAILED (XCTUnwrap nil) -> reverted -> passes. Mutation 2: drop the !content.isEmpty guard -> test_emptyContent_rendersNothing FAILED (CIQRCodeGenerator renders a 23x23 code for empty input, so the guard is load-bearing) -> reverted -> passes. Greps: ' + Text(' in SettingsView.swift prints nothing; '= APNsMetadataStore\\.|= APNsKeyStore\\.hasKey' matches only the .task seeding line, no @State declaration; lanWSURL is called only from .task and .onChange(of: webSocketServer.isRunning). Keychain seeding: a `stored` snapshot makes .onChange skip the seed, because the getters resolve defaults (signing team, the key's kid, default bundle) and writing them back would pin defaults into the Keychain. Identity header shows a single Text(BuildInfo.display(BuildInfo.current)): with buildTime dropped there is no second value left to interpolate (display() already carries the commit and build date); the two-Text interpolation form is used in the PromptsTab header. Unverified: the panes were not driven in a running app (a second Quip would fight the live app for :8765); compile + unit tests + review only."
     },
     {
       "id": "US-005",

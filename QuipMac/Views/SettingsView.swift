@@ -3,7 +3,6 @@
 
 import SwiftUI
 import Darwin
-import CoreImage
 import AppKit
 
 /// The six Settings panes. Single source of truth for the customizable
@@ -183,24 +182,6 @@ private struct CopyButton: View {
 // line relocates the "did my reinstall land" diagnostic out of a buried
 // General → About row into the chrome where it's always visible.
 private struct SettingsIdentityHeader: View {
-    private var versionLabel: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(short) (\(build))"
-    }
-
-    /// Mtime of the compiled binary — bumps every rebuild without a version
-    /// bump, so "is the running app my latest install?" reads at a glance.
-    private var buildTime: String {
-        guard let path = Bundle.main.executablePath,
-              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let date = attrs[.modificationDate] as? Date else { return "?" }
-        let f = DateFormatter()
-        f.dateFormat = "MMM d, HH:mm"
-        return f.string(from: date)
-    }
-
     var body: some View {
         HStack(spacing: 11) {
             Image(nsImage: NSApp.applicationIconImage)
@@ -215,12 +196,11 @@ private struct SettingsIdentityHeader: View {
                 Text("Quip")
                     .font(.title3.weight(.semibold))
 
-                // Two opacity tiers in one line: the human version reads
-                // stronger (secondary) than the build timestamp (tertiary),
-                // which is a "did my reinstall land" diagnostic — present but
-                // quiet. Weight/opacity carry the hierarchy, not a second row.
-                (Text(versionLabel).foregroundStyle(.secondary)
-                 + Text("  ·  \(buildTime)").foregroundStyle(.tertiary))
+                // Version, commit and build time from the stamp read once per
+                // launch — the "did my reinstall land" diagnostic, without a
+                // stat of the binary on every render.
+                Text(BuildInfo.display(BuildInfo.current))
+                    .foregroundStyle(.secondary)
                     .font(.caption2)
                     .monospacedDigit()
                     .textSelection(.enabled)
@@ -293,16 +273,24 @@ private struct NotificationsTab: View {
 
     // GH #22 — moved from @AppStorage("apnsKeyId" / "apnsTeamId" / "apnsBundleId")
     // to APNsMetadataStore (Keychain). View holds @State copies for SwiftUI's
-    // two-way TextField binding; each is seeded once at init from the store
-    // below (the first read performs the one-shot migration from UserDefaults
-    // if needed), and .onChange writes back. importKey() also writes the store
-    // directly when it auto-syncs the Key ID. The bundleId default flows
-    // through the store (com.quip.QuipiOS).
-    @State private var keyId: String = APNsMetadataStore.keyId
-    @State private var teamId: String = APNsMetadataStore.teamId
-    @State private var bundleId: String = APNsMetadataStore.bundleId
+    // two-way TextField binding; each is seeded once from the store in .task
+    // (the first read performs the one-shot migration from UserDefaults if
+    // needed), and .onChange writes back. A @State initial value is evaluated
+    // on every init of this struct, so seeding there hit the Keychain each
+    // time the parent re-rendered. importKey() also writes the store directly
+    // when it auto-syncs the Key ID. The bundleId default flows through the
+    // store (com.quip.QuipiOS).
+    @State private var keyId: String = ""
+    @State private var teamId: String = ""
+    @State private var bundleId: String = ""
+    /// What the store holds for each field, as last seeded or written. The
+    /// getters resolve defaults (signing team, the key's own kid, the default
+    /// bundle), so .onChange must not write a seeded value back — that would
+    /// pin a default into the Keychain the user never typed.
+    @State private var stored = (keyId: "", teamId: "", bundleId: "")
+    @State private var seeded = false
 
-    @State private var hasKey: Bool = APNsKeyStore.hasKey
+    @State private var hasKey: Bool = false
     @State private var importStatus: String?
     @State private var testStatus: [String] = []
     @State private var isSending: Bool = false
@@ -379,11 +367,23 @@ private struct NotificationsTab: View {
                         .foregroundStyle(importStatus.hasPrefix("Error") ? .red : .secondary)
                 }
                 TextField("Key ID", text: $keyId)
-                    .onChange(of: keyId) { _, new in APNsMetadataStore.keyId = new }
+                    .onChange(of: keyId) { _, new in
+                        guard new != stored.keyId else { return }
+                        APNsMetadataStore.keyId = new
+                        stored.keyId = new
+                    }
                 TextField("Team ID", text: $teamId)
-                    .onChange(of: teamId) { _, new in APNsMetadataStore.teamId = new }
+                    .onChange(of: teamId) { _, new in
+                        guard new != stored.teamId else { return }
+                        APNsMetadataStore.teamId = new
+                        stored.teamId = new
+                    }
                 TextField("Bundle ID", text: $bundleId)
-                    .onChange(of: bundleId) { _, new in APNsMetadataStore.bundleId = new }
+                    .onChange(of: bundleId) { _, new in
+                        guard new != stored.bundleId else { return }
+                        APNsMetadataStore.bundleId = new
+                        stored.bundleId = new
+                    }
             }
 
             Section("Registered Devices (\(pushService.devices.count))") {
@@ -442,6 +442,15 @@ private struct NotificationsTab: View {
             }
         }
         .formStyle(.grouped)
+        .task {
+            guard !seeded else { return }
+            seeded = true
+            stored = (APNsMetadataStore.keyId, APNsMetadataStore.teamId, APNsMetadataStore.bundleId)
+            keyId = stored.keyId
+            teamId = stored.teamId
+            bundleId = stored.bundleId
+            hasKey = APNsKeyStore.hasKey
+        }
     }
 
     private func importKey() {
@@ -475,6 +484,7 @@ private struct NotificationsTab: View {
                             // must not hinge on the Key ID TextField's deferred
                             // .onChange firing on a later SwiftUI render.
                             APNsMetadataStore.keyId = fileKeyId
+                            stored.keyId = fileKeyId
                             keyId = fileKeyId
                             status += old.isEmpty
                                 ? " · Key ID set to \(fileKeyId)"
@@ -778,9 +788,10 @@ private struct PromptsTab: View {
                 }
             } header: {
                 if inheritedCount > 0 {
-                    Text("Prompt Library (\(library.entries.count))")
-                    + Text("  ·  \(library.entries.count - inheritedCount) yours · \(inheritedCount) from VibeCut")
+                    let title = Text("Prompt Library (\(library.entries.count))")
+                    let split = Text("\(library.entries.count - inheritedCount) yours · \(inheritedCount) from VibeCut")
                         .foregroundStyle(.secondary)
+                    Text("\(title)  ·  \(split)")
                 } else {
                     Text("Prompt Library (\(library.entries.count))")
                 }
@@ -1398,6 +1409,9 @@ private struct ConnectionTab: View {
     // key requires PIN; only this toggle's explicit opt-out stores false.
     @AppStorage("requirePINForLocal") private var requirePINForLocal = true
     @AppStorage("spawnCommand") private var spawnCommand: String = "claude"
+    /// Filled in .task and on server start/stop — walking the interfaces from
+    /// `body` ran getifaddrs on every client tick.
+    @State private var lanURL: String = ""
 
     private var networkMode: NetworkMode {
         NetworkMode(rawValue: networkModeRaw) ?? .cloudflareTunnel
@@ -1581,7 +1595,7 @@ private struct ConnectionTab: View {
                 // copy. Debugging "nothing's loading on the phone" used to
                 // mean guessing which URL it had saved; now it's literally
                 // "copy this into the app's URL field."
-                urlRow(label: "LAN", url: Self.lanWSURL())
+                urlRow(label: "LAN", url: lanURL)
                 if let tsURL = tailscaleWSURL {
                     urlRow(label: "Tailscale", url: tsURL)
                 }
@@ -1618,6 +1632,8 @@ private struct ConnectionTab: View {
             }
         }
         .formStyle(.grouped)
+        .task { lanURL = Self.lanWSURL() }
+        .onChange(of: webSocketServer.isRunning) { lanURL = Self.lanWSURL() }
     }
 
     @ViewBuilder
@@ -1673,7 +1689,8 @@ private struct ConnectionTab: View {
 
     /// The LAN URL helper in `MainWindow.swift` uses the same getifaddrs loop —
     /// we duplicate it here rather than reach across views for a private field.
-    /// Cheap enough; runs only on Settings render.
+    /// Runs when the pane opens and when the server starts or stops, never
+    /// from `body` (which re-runs on every client tick).
     private static func lanWSURL() -> String {
         var address = "localhost"
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
@@ -1768,6 +1785,8 @@ private struct SecurityTab: View {
     // Separate anchor for the "Send to iPhone" pairing-link share picker so it
     // pins to its own button, not the diagnostics "Bundle and share…" one.
     @State private var pairingAnchorView: NSView?
+    /// Rendered off the main actor whenever the pairing link changes.
+    @State private var qrImage: NSImage?
 
     var body: some View {
         Form {
@@ -1941,15 +1960,14 @@ private struct SecurityTab: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            let payload = PairingPayload(url: currentURL, pin: pinManager.pin)
+            let encoded = PairingPayload(url: currentURL, pin: pinManager.pin).encodedURL()
             VStack(alignment: .leading, spacing: 8) {
                 Text("Scan in the Quip app — the Camera app can’t open it")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
                 HStack(alignment: .top, spacing: 16) {
-                    if let encoded = payload.encodedURL(),
-                       let qr = Self.qrImage(for: encoded) {
+                    if let qr = qrImage {
                         Image(nsImage: qr)
                             .interpolation(.none)
                             .resizable()
@@ -1983,6 +2001,10 @@ private struct SecurityTab: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .task(id: encoded) {
+                guard let encoded else { qrImage = nil; return }
+                qrImage = await Task.detached { PairingQR.image(for: encoded) }.value
+            }
         }
     }
 
@@ -2007,22 +2029,6 @@ private struct SecurityTab: View {
             let host = Host.current().localizedName ?? "localhost"
             return "ws://\(host).local:\(WebSocketServer.listenPort)"
         }
-    }
-
-    /// Render the payload string into an NSImage via CIFilter (no third-
-    /// party QR library). errorCorrection=M balances density vs. resilience
-    /// to phone-camera blur. Output is upscaled with nearest-neighbor in
-    /// the SwiftUI Image to keep edges crisp at display size.
-    private static func qrImage(for content: String) -> NSImage? {
-        guard let data = content.data(using: .utf8) else { return nil }
-        let filter = CIFilter(name: "CIQRCodeGenerator")
-        filter?.setValue(data, forKey: "inputMessage")
-        filter?.setValue("M", forKey: "inputCorrectionLevel")
-        guard let ciImage = filter?.outputImage else { return nil }
-        let rep = NSCIImageRep(ciImage: ciImage)
-        let nsImage = NSImage(size: rep.size)
-        nsImage.addRepresentation(rep)
-        return nsImage
     }
 }
 
