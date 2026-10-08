@@ -204,8 +204,8 @@ final class WindowManager {
     static let colorOverridesKey = "windowColorOverrides"
 
     /// Set the color `id` is drawn in, or clear the user's choice with nil,
-    /// which gives the window the next palette color. A value that is not a
-    /// hex color is ignored.
+    /// which gives the window an automatic color no other window is using
+    /// (US-009). A value that is not a hex color is ignored.
     func setColor(_ id: String, hex: String?) {
         if let hex {
             guard let color = WindowColor.normalized(hex) else { return }
@@ -214,8 +214,13 @@ final class WindowManager {
             colorOverrides.removeValue(forKey: id)
         }
         defaults.set(colorOverrides, forKey: Self.colorOverridesKey)
-        if let index = windows.firstIndex(where: { $0.id == id }) {
-            windows[index].assignedColor = colorOverrides[id] ?? assignColor()
+        guard let index = windows.firstIndex(where: { $0.id == id }) else { return }
+        if let picked = colorOverrides[id] {
+            windows[index].assignedColor = picked
+        } else {
+            let inUse = colorsInUse(excluding: id)
+            windows[index].assignedColor = assignColor(
+                avoiding: Self.colorsToAvoid(all: inUse.all, shown: inUse.shown))
         }
     }
 
@@ -593,6 +598,25 @@ final class WindowManager {
         spaces = Self.SpaceCatalog.desktops(inSnapshot: raw)
         let displayRects = cgDisplayRects()
 
+        // US-009 — a new window's automatic color is one no other window is
+        // using. Collect every color this snapshot keeps (a tracked window keeps
+        // its own; a new one may carry the user's pick) BEFORE the loop, so a new
+        // window cannot take the color of a window further down the list.
+        var existingByID: [String: ManagedWindow] = [:]
+        existingByID.reserveCapacity(windows.count)
+        for window in windows { existingByID[window.id] = window }
+        var colorsOnScreen = Set<String>()
+        var colorsShown = Set<String>()
+        for info in raw {
+            if let existing = existingByID[info.id] {
+                colorsOnScreen.insert(existing.assignedColor)
+                if existing.isEnabled { colorsShown.insert(existing.assignedColor) }
+            } else if let picked = colorOverrides[info.id] {
+                colorsOnScreen.insert(picked)
+            }
+        }
+        var colorsHandedOut = Set<String>()
+
         var refreshed: [ManagedWindow] = []
         for info in raw {
             // Both rects are CG space (top-left origin) — `cgDisplayRects`
@@ -611,7 +635,7 @@ final class WindowManager {
             let displayID = DisplayGeometry.displayID(forWindow: windowRect, displays: displayRects)
 
             let icon = NSRunningApplication(processIdentifier: info.pid)?.icon
-            if let existing = windows.first(where: { $0.id == info.id }) {
+            if let existing = existingByID[info.id] {
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
                     subtitle: existing.subtitle, cwdPath: existing.cwdPath,
@@ -625,11 +649,22 @@ final class WindowManager {
                     spaceID: info.spaceID
                 ))
             } else {
+                let color: String
+                if let picked = colorOverrides[info.id] {
+                    color = picked
+                } else {
+                    // Colors handed out earlier in this loop count as shown too:
+                    // two windows that appear together must not share one.
+                    color = assignColor(avoiding: Self.colorsToAvoid(
+                        all: colorsOnScreen, shown: colorsShown.union(colorsHandedOut)))
+                    colorsHandedOut.insert(color)
+                }
+                colorsOnScreen.insert(color)
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
                     subtitle: "", cwdPath: nil,
                     bundleId: info.bundleId, icon: icon,
-                    isEnabled: false, assignedColor: colorOverrides[info.id] ?? assignColor(),
+                    isEnabled: false, assignedColor: color,
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
                     iterm2Tty: nil,
@@ -1172,10 +1207,42 @@ final class WindowManager {
 
     // MARK: - Color Assignment
 
-    private func assignColor() -> String {
+    /// An automatic color: the first `WindowColor.palette` color not in `used`.
+    /// Only when all ten are in `used` does it fall back to the old rotation,
+    /// so a window still gets a color when the palette runs out (US-009).
+    private func assignColor(avoiding used: Set<String>) -> String {
+        if let free = Self.firstUnusedPaletteColor(avoiding: used) { return free }
         let color = Self.colorPalette[colorIndex % Self.colorPalette.count]
         colorIndex += 1
         return color
+    }
+
+    /// Pure half of `assignColor(avoiding:)`: nil when every palette color is taken.
+    nonisolated static func firstUnusedPaletteColor(avoiding used: Set<String>) -> String? {
+        WindowColor.palette.first { !used.contains($0) }
+    }
+
+    /// The colors an automatic color must avoid. Every color on screen (`all`,
+    /// user-picked ones included) while a palette color is still free. Once all
+    /// ten are taken, which is the normal case on a desk with dozens of
+    /// windows, only the enabled windows' colors (`shown`): those are the
+    /// windows the phone grid and the layout preview draw, so theirs are the
+    /// colors that must stay distinct. Avoiding all of them there would leave
+    /// only the rotation, which is how a reset came back as another enabled
+    /// window's color.
+    nonisolated static func colorsToAvoid(all: Set<String>, shown: Set<String>) -> Set<String> {
+        firstUnusedPaletteColor(avoiding: all) != nil ? all : shown
+    }
+
+    /// Colors of every window other than `id`, and of the enabled ones among them.
+    private func colorsInUse(excluding id: String) -> (all: Set<String>, shown: Set<String>) {
+        var all = Set<String>()
+        var shown = Set<String>()
+        for window in windows where window.id != id {
+            all.insert(window.assignedColor)
+            if window.isEnabled { shown.insert(window.assignedColor) }
+        }
+        return (all, shown)
     }
 
     // MARK: - Terminal Subtitles
