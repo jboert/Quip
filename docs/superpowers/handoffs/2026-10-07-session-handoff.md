@@ -38,7 +38,7 @@ Everything from `5ffd8f2` back is addendum 3's.
 
 | Peer | Installed | Code it is missing |
 | --- | --- | --- |
-| Mac `/Applications/Quip.app` | 1.5.6, built Sep 22 03:39 | Every Mac commit since Sep 22: the whole QA-fix Mac batch (US-008 to US-011, US-014 Mac half, APNs test backing), US-115/116, Q-53. The owner must be off the phone for the install (TCC re-grant drops the link); recipe in `reference_quip_install_recipe.md`. |
+| Mac `/Applications/Quip.app` | 1.5.6, binary built Oct 7 11:10 (the .app directory says Sep 22 because ditto keeps its mtime; trust the binary). Carries Q-39's WhisperModelLadder, not WindowRaisePolicy. | Every Mac commit after Oct 7 11:10: the QA-fix Mac batch (US-008 to US-011, US-014 Mac half, APNs test backing), US-115/116, Q-53. The owner must be off the phone for the install (TCC re-grant drops the link); recipe in `reference_quip_install_recipe.md`. |
 | iPhone (owner's primary) | Unknown build; owner was voice-testing and said to wait for "install" | US-101 to US-114, Q-53 phone half, the QA-fix phone batch. |
 | QA simulator D8C5154B | Nothing installed; must never pair with the real Mac | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check. |
 
