@@ -1,26 +1,115 @@
 import AVFoundation
 import Speech
 
+/// Which check `AnalyzerAssets.readiness(for:)` stopped at, and the readiness
+/// that follows from it. Every launch used to log only
+/// `analyzer readiness=unsupported locale=none`, which could not say which
+/// check failed. Pure, so it is unit-tested without the Speech framework:
+/// the simulator reports `SpeechTranscriber.isAvailable == false` and never
+/// reaches the later checks.
+enum AnalyzerProbeStop: Equatable {
+    /// `SpeechTranscriber.isAvailable` is false, or no supported locale is
+    /// equivalent to the device's. Apple documents both as device capability
+    /// (supportedLocales is empty on a device without the transcriber).
+    case unsupported
+    /// The model asset for the resolved locale is not installed.
+    case assetNotInstalled
+    /// The asset reports installed but `bestAvailableAudioFormat` returned
+    /// nil, which Apple documents as happening "if the specified modules
+    /// require you to install additional assets". That is a download to do,
+    /// not an unsupported device; it used to be reported as unsupported, so
+    /// the install was never attempted.
+    case formatMissing
+    case ready
+
+    var readiness: AnalyzerReadiness {
+        switch self {
+        case .unsupported: return .unsupported
+        case .assetNotInstalled, .formatMissing: return .needsDownload
+        case .ready: return .ready
+        }
+    }
+}
+
+/// The phone-log lines for `AnalyzerAssets.readiness(for:)`. No transcript
+/// text, only device and model facts. Pure / unit-testable.
+enum AnalyzerDiagnostics {
+    static var isSimulator: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// `ProcessInfo.operatingSystemVersionString` holds spaces ("Version
+    /// 27.0.1 (Build …)"), so it is quoted to keep the line's fields apart.
+    static func unsupportedLine(simulator: Bool, os: String, deviceLocale: String, isAvailable: Bool,
+                                speechSupported: Int, speechInstalled: Int, dictationSupported: Int) -> String {
+        "analyzer unsupported: sim=\(simulator ? 1 : 0) os=\"\(os)\" device_locale=\(deviceLocale) "
+            + "isAvailable=\(isAvailable) speech_supported=\(speechSupported) "
+            + "speech_installed=\(speechInstalled) dictation_supported=\(dictationSupported)"
+    }
+
+    static func assetLine(status: String, locale: String) -> String {
+        "analyzer asset status=\(status) locale=\(locale)"
+    }
+
+    static func formatMissingLine(locale: String, simulator: Bool, os: String) -> String {
+        "analyzer format=nil with status=installed locale=\(locale) sim=\(simulator ? 1 : 0) os=\"\(os)\""
+    }
+}
+
 @available(iOS 26, *)
 enum AnalyzerAssets {
     private static func transcriber(_ locale: Locale) -> SpeechTranscriber {
         SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
     }
 
+    /// Every PTT press re-probes while the analyzer is not ready, so each
+    /// diagnostic line is latched: the unsupported facts once per launch (its
+    /// counts are only gathered then), the other two once per distinct line.
+    private static let unsupportedLatch = LogLatch()
+    private static let assetLatch = LogLatch()
+    private static let formatLatch = LogLatch()
+
     /// Readiness plus, when ready, the resolved locale and the audio format
     /// the analyzer wants. The format is fetched once here so a PTT press can
-    /// build its session synchronously.
+    /// build its session synchronously. The checks run one at a time, and
+    /// the one that stops the probe says so in the phone log.
     static func readiness(for locale: Locale) async -> (AnalyzerReadiness, Locale?, AVAudioFormat?) {
-        guard SpeechTranscriber.isAvailable,
-              let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
-            return (.unsupported, nil, nil)
+        let available = SpeechTranscriber.isAvailable
+        let resolved = available ? await SpeechTranscriber.supportedLocale(equivalentTo: locale) : nil
+        guard let resolved else {
+            if unsupportedLatch.verdict(for: "unsupported").shouldLog {
+                let speechSupported = await SpeechTranscriber.supportedLocales.count
+                let speechInstalled = await SpeechTranscriber.installedLocales.count
+                let dictationSupported = await DictationTranscriber.supportedLocales.count
+                PhoneLog.log(AnalyzerDiagnostics.unsupportedLine(
+                    simulator: AnalyzerDiagnostics.isSimulator,
+                    os: ProcessInfo.processInfo.operatingSystemVersionString,
+                    deviceLocale: locale.identifier, isAvailable: available,
+                    speechSupported: speechSupported, speechInstalled: speechInstalled,
+                    dictationSupported: dictationSupported))
+            }
+            return (AnalyzerProbeStop.unsupported.readiness, nil, nil)
         }
         let module = transcriber(resolved)
-        guard await AssetInventory.status(forModules: [module]) == .installed else {
-            return (.needsDownload, resolved, nil)
+        let status = await AssetInventory.status(forModules: [module])
+        guard status == .installed else {
+            let line = AnalyzerDiagnostics.assetLine(status: String(describing: status),
+                                                     locale: resolved.identifier)
+            if assetLatch.verdict(for: line).shouldLog { PhoneLog.log(line) }
+            return (AnalyzerProbeStop.assetNotInstalled.readiness, resolved, nil)
         }
-        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module])
-        return format == nil ? (.unsupported, nil, nil) : (.ready, resolved, format)
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
+            let line = AnalyzerDiagnostics.formatMissingLine(
+                locale: resolved.identifier, simulator: AnalyzerDiagnostics.isSimulator,
+                os: ProcessInfo.processInfo.operatingSystemVersionString)
+            if formatLatch.verdict(for: line).shouldLog { PhoneLog.log(line) }
+            return (AnalyzerProbeStop.formatMissing.readiness, resolved, nil)
+        }
+        return (AnalyzerProbeStop.ready.readiness, resolved, format)
     }
 
     /// Downloads the model for `locale` if needed. Best-effort: a failure
