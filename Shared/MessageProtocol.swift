@@ -117,6 +117,11 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     /// ignores this field still gets the right ORDER — the flag is what lets it
     /// draw the pin and offer to toggle it. Optional: older Mac builds omit it.
     let isPinned: Bool
+    /// True while the Mac minimized this window at the phone's request and it
+    /// has not come back on screen (Q-53). A window minimized from the Mac's
+    /// own Dock is not known here; it reads as off screen only. Optional:
+    /// older Mac builds omit it.
+    let isMinimized: Bool
 
     // Synthesized Equatable compares ALL fields including frame
 
@@ -124,7 +129,8 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     init(id: String, name: String, app: String, folder: String? = nil, enabled: Bool,
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
          claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil,
-         displayID: String? = nil, spaceID: String? = nil, isPinned: Bool = false) {
+         displayID: String? = nil, spaceID: String? = nil, isPinned: Bool = false,
+         isMinimized: Bool = false) {
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
@@ -135,6 +141,7 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         self.displayID = displayID
         self.spaceID = spaceID
         self.isPinned = isPinned
+        self.isMinimized = isMinimized
     }
 
     init(from decoder: Decoder) throws {
@@ -154,11 +161,12 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         displayID = try? c.decode(String.self, forKey: .displayID)
         spaceID = try? c.decode(String.self, forKey: .spaceID)
         isPinned = (try? c.decode(Bool.self, forKey: .isPinned)) ?? false
+        isMinimized = (try? c.decode(Bool.self, forKey: .isMinimized)) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind, targetKind
-        case displayID, spaceID, isPinned
+        case displayID, spaceID, isPinned, isMinimized
     }
 }
 
@@ -530,6 +538,22 @@ struct CloseWindowMessage: Codable, Sendable {
 
     init(windowId: String, messageId: UUID? = UUID()) {
         self.type = "close_window"
+        self.windowId = windowId
+        self.messageId = messageId
+    }
+}
+
+/// iPhone → Mac. Minimize a window to the Dock (Q-53). The Mac sets the
+/// window's AX minimized attribute and reports it on the next layout as
+/// `WindowState.isMinimized`; `select_window` restores it (Q-23). Fails with
+/// an `error` carrying `messageId` when the window is gone or AX refuses.
+struct MinimizeWindowMessage: Codable, Sendable {
+    let type: String
+    let windowId: String
+    let messageId: UUID?
+
+    init(windowId: String, messageId: UUID? = UUID()) {
+        self.type = "minimize_window"
         self.windowId = windowId
         self.messageId = messageId
     }

@@ -60,8 +60,8 @@ xcrun swift tools/fake-mac/fake-mac.swift --port 8799 --pin 11112222 \
 | `--pin PIN` | `11112222` | PIN the phone must send. |
 | `--fixture PATH` | `fixture.json` beside the script | Windows and prompts to serve. |
 | `--log PATH` | `$TMPDIR/quip-fake-mac.log` | Every log line also goes here (appended). |
-| `--ack-paste` | off | Ack `paste_prompt` with a `send_text_ack`, as the Mac will once US-115 ships. |
-| `--error-ids` | off | Put the request's `messageId` on `error` replies, also planned in US-115. |
+| `--ack-paste` | off | Ack `paste_prompt` with a `send_text_ack`, as the Mac does since US-115 (eb-branch `cc9ac83`). Off reproduces an installed Mac from before it. |
+| `--error-ids` | off | Put the request's `messageId` on `error` replies, as the Mac does since US-115. |
 
 Compiling once is fine too: `xcrun swiftc -O tools/fake-mac/fake-mac.swift -o /tmp/fake-mac`.
 Do not commit the binary. A binary run from outside the repository root needs
@@ -140,6 +140,7 @@ the handlers in `QuipMac/QuipMacApp.swift`.
 | `preferences_snapshot` | Key names logged; nothing stored. |
 | `put_prompt` / `delete_prompt` | Applied in memory only (the fixture file is never written), then `prompt_library` and the ack. |
 | `close_window` | Same as the `close` command. |
+| `minimize_window` | The window stays in the layout with `isMinimized: true` until a `select_window` restores it (Q-53); unknown ids get `Window no longer exists`. `reload` forgets every minimized window. |
 | `image_upload` | `image_upload_error`, so the phone's spinner stops. |
 | `heartbeat_ack`, `device_identity`, `phone_log`, `select_window`, push registration, anything else | Logged. |
 

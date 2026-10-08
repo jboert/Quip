@@ -81,7 +81,7 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
 
     /// Convert to shared WindowState for protocol messages.
     /// Frame is normalized to 0-1 relative to the given screen bounds.
-    func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false, claudeMode: String? = nil, cliKind: CLIKind? = nil, isPinned: Bool = false) -> WindowState {
+    func toWindowState(state: String = "neutral", screenBounds: CGRect? = nil, isThinking: Bool = false, claudeMode: String? = nil, cliKind: CLIKind? = nil, isPinned: Bool = false, isMinimized: Bool = false) -> WindowState {
         let frame: WindowFrame
         if let screen = screenBounds, screen.width > 0, screen.height > 0 {
             frame = WindowFrame(
@@ -113,7 +113,8 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             targetKind: targetKind,
             displayID: displayID,
             spaceID: spaceID,
-            isPinned: isPinned
+            isPinned: isPinned,
+            isMinimized: isMinimized
         )
     }
 }
@@ -1224,7 +1225,71 @@ final class WindowManager {
         // then selects the exact window once that Space is active.
         app?.activate(options: [.activateAllWindows])
 
-        // Also raise the specific window via AX
+        guard let chosen = resolvedAXWindow(for: window) else { return }
+        // A minimized window cannot be raised: `kAXRaiseAction` does nothing
+        // while it sits in the Dock, so a correct match still produced no
+        // visible result. Restore it first. This is the other half of reporting
+        // a minimized window honestly as "Hidden" rather than as living on
+        // another desktop — the card is now visible on the phone, so tapping it
+        // has to work.
+        AXUIElementSetAttributeValue(chosen, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        AXUIElementSetAttributeValue(chosen, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(chosen, kAXRaiseAction as CFString)
+        // Restored on request: the phone's tray drops it on the next layout
+        // instead of waiting for the snapshot to see it composited (Q-53).
+        minimizedByQuip[windowId] = nil
+    }
+
+    /// Minimize a window to the Dock at the phone's request (Q-53): the
+    /// inverse of the restore `focusWindow` performs. The window is matched
+    /// the same way (position, size, title), so the same refusals apply:
+    /// no AX access, no match, or two identical windows. Remembered in
+    /// `minimizedByQuip` so the next layout can report `isMinimized`.
+    /// Returns false when nothing was minimized; the caller tells the phone.
+    @discardableResult
+    func minimizeWindow(_ windowId: String) -> Bool {
+        guard let window = windows.first(where: { $0.id == windowId }) else { return false }
+        guard let chosen = resolvedAXWindow(for: window) else { return false }
+        let err = AXUIElementSetAttributeValue(chosen, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+        guard err == .success else {
+            QuipLog.write(severity: .error, subsystem: "window",
+                          message: "minimizeWindow: AX refused to minimize window \(windowId) (AXError \(err.rawValue))",
+                          to: LogPaths.webSocketPath)
+            return false
+        }
+        let live = Set(windows.map(\.id))
+        minimizedByQuip = minimizedByQuip.filter { live.contains($0.key) }
+        minimizedByQuip[windowId] = Date()
+        return true
+    }
+
+    /// Windows minimized through `minimizeWindow`, by the time it happened.
+    /// The Dock is not asked: a window the user minimized on the Mac is not
+    /// here, and one the user restored from the Dock leaves on its own, see
+    /// `isMinimized(_:)`.
+    private var minimizedByQuip: [String: Date] = [:]
+
+    /// How long a just-minimized window may still read as composited before
+    /// the snapshot catches up; within it the request is trusted.
+    private static let minimizeSettleSeconds: TimeInterval = 3
+
+    /// Whether `window` should be reported as minimized (Q-53): minimized
+    /// through Quip and not composited again since. A window back on the
+    /// current Space after the settle window was restored on the Mac, so it
+    /// is forgotten here and reads as not minimized.
+    func isMinimized(_ window: ManagedWindow) -> Bool {
+        guard let since = minimizedByQuip[window.id] else { return false }
+        if window.spaceID == SpaceCatalog.currentSpaceID,
+           Date().timeIntervalSince(since) > Self.minimizeSettleSeconds {
+            minimizedByQuip[window.id] = nil
+            return false
+        }
+        return true
+    }
+
+    /// The AX element for `window`, matched on its live position, size and
+    /// title, or nil (with a throttled log) when the match is refused.
+    private func resolvedAXWindow(for window: ManagedWindow) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(window.pid)
         var windowsRef: CFTypeRef?
         let attrResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
@@ -1250,7 +1315,7 @@ final class WindowManager {
                     to: LogPaths.webSocketPath
                 )
             }
-            return
+            return nil
         }
         if Self.axFocusGate.evaluate(window.pid, cause: nil) == .reportRecovery {
             QuipLog.write(severity: .info, subsystem: "window",
@@ -1313,7 +1378,7 @@ final class WindowManager {
                 cause: "ax-match-ambiguous(\(indexes.count))",
                 detail: "\(indexes.count) AX windows match on position, size and title — "
                       + "refusing to guess, so the window will NOT come forward")
-            return
+            return nil
 
         case .none:
             Self.reportFocusMatchFailure(
@@ -1321,18 +1386,9 @@ final class WindowManager {
                 cause: "ax-match-none",
                 detail: "no AX window matches the window's live position, or its title and "
                       + "size, so it will NOT come forward")
-            return
+            return nil
         }
-
-        // A minimized window cannot be raised: `kAXRaiseAction` does nothing
-        // while it sits in the Dock, so a correct match still produced no
-        // visible result. Restore it first. This is the other half of reporting
-        // a minimized window honestly as "Hidden" rather than as living on
-        // another desktop — the card is now visible on the phone, so tapping it
-        // has to work.
-        AXUIElementSetAttributeValue(chosen, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-        AXUIElementSetAttributeValue(chosen, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementPerformAction(chosen, kAXRaiseAction as CFString)
+        return chosen
     }
 
     // MARK: - Arrange Windows

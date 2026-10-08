@@ -1479,7 +1479,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 isThinking: thinkingWindows.contains(window.id),
                 claudeMode: claudeModeDetector.windowModes[window.id]?.rawValue,
                 cliKind: terminalStateDetector.windowCLIKind[window.id],
-                isPinned: windowManager.isPinned(window.id)
+                isPinned: windowManager.isPinned(window.id),
+                isMinimized: windowManager.isMinimized(window)
             )
         }
     }
@@ -2183,6 +2184,27 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     let known = windowManager.windows.map { $0.id }
                     print("[Quip] duplicate_window DROPPED: unknown source windowId=\(msg.sourceWindowId). Known: \(known)")
                     webSocketServer.broadcast(ErrorMessage(reason: "Source window no longer exists"))
+                }
+            }
+
+        case "minimize_window":
+            if let msg = MessageCoder.decode(MinimizeWindowMessage.self, from: data) {
+                if messageDedupe.checkAndRecord(msg.messageId) {
+                    print("[Quip] minimize_window DEDUPED messageId=\(msg.messageId?.uuidString ?? "nil")")
+                    break
+                }
+                print("[Quip] minimize_window: windowId=\(msg.windowId)")
+                guard let window = windowManager.windows.first(where: { $0.id == msg.windowId }) else {
+                    webSocketServer.broadcast(ErrorMessage(reason: "Window no longer exists", messageId: msg.messageId))
+                    break
+                }
+                if windowManager.minimizeWindow(msg.windowId) {
+                    // The phone's tray lists it from this layout on.
+                    broadcastLayout()
+                } else {
+                    webSocketServer.broadcast(ErrorMessage(
+                        reason: "Could not minimize \(window.name) — no Accessibility match (see websocket.log)",
+                        messageId: msg.messageId))
                 }
             }
 

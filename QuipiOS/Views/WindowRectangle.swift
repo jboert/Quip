@@ -134,6 +134,16 @@ struct WindowRectangle: View {
                         .accessibilityLabel("Pinned")
                 }
 
+                // Minimized is likewise a state the card must show (Q-53):
+                // the window sits in the Mac's Dock, and a tap restores it.
+                if window.isMinimized {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(windowColor.opacity(0.9))
+                        .fixedSize()
+                        .accessibilityLabel("Minimized")
+                }
+
                 if window.isThinking && window.enabled {
                     Text("✽")
                         .font(.system(size: 20, weight: .bold))
@@ -210,6 +220,15 @@ struct WindowRectangle: View {
                 triggerAction(.chooseColor)
             } label: {
                 Label("Color\u{2026}", systemImage: "paintpalette")
+            }
+
+            // Q-53 — park the window in the Mac's Dock, or bring it back.
+            Button {
+                triggerAction(window.isMinimized ? .restore : .minimize)
+            } label: {
+                Label(window.isMinimized ? "Restore" : "Minimize",
+                      systemImage: window.isMinimized ? "arrow.up.left.and.arrow.down.right"
+                                                      : "arrow.down.right.and.arrow.up.left")
             }
 
             if window.isTarget || window.isTerminal {
@@ -308,6 +327,12 @@ enum WindowAction {
     /// Open the color sheet. The Mac owns window colors, so the sheet sends
     /// `set_color` and the card changes on the next layout broadcast.
     case chooseColor
+    /// Minimize to the Mac's Dock (`minimize_window`, Q-53). The Mac reports
+    /// `isMinimized` on the next layout and the tray lists the window.
+    case minimize
+    /// Bring a minimized window back: `select_window`, which un-minimizes
+    /// before it raises (Q-23).
+    case restore
 }
 
 #Preview {

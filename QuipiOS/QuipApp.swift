@@ -4217,8 +4217,80 @@ struct MainiOSView: View {
         // every layout — portrait, landscape, expanded — gets them for free.
         VStack(spacing: 0) {
             filterChips
+            minimizedTray
             windowCanvas
         }
+    }
+
+    /// A window the tray is about to close; drives the confirmation alert.
+    @State private var trayCloseCandidate: MinimizedTray.Entry?
+
+    /// Q-53 — the dock-like tray: one pill per window the Mac minimized for
+    /// the phone. Tapping a pill restores and raises it; the small x asks,
+    /// then closes the terminal. Absent when nothing is minimized, so the
+    /// grid pays no height for it; the cards stay in the grid too, marked.
+    @ViewBuilder
+    private var minimizedTray: some View {
+        let entries = MinimizedTray.entries(windows)
+        if !entries.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    Image(systemName: "dock.rectangle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(colors.textFaint)
+                        .accessibilityLabel("Minimized windows")
+                    ForEach(entries) { entry in
+                        HStack(spacing: 5) {
+                            Button {
+                                restoreMinimizedWindow(entry.id)
+                            } label: {
+                                Label(entry.title, systemImage: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .lineLimit(1)
+                                    .foregroundStyle(Color(hex: entry.color))
+                            }
+                            .accessibilityHint("Restores and raises the window on the Mac")
+                            Button {
+                                trayCloseCandidate = entry
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(colors.textFaint)
+                                    .frame(width: 18, height: 18)
+                            }
+                            .accessibilityLabel("Close \(entry.title)")
+                        }
+                        .padding(.leading, 8)
+                        .padding(.trailing, 4)
+                        .padding(.vertical, 3)
+                        .background(Color(hex: entry.color).opacity(0.14))
+                        .clipShape(Capsule())
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
+            }
+            .alert("Close \(trayCloseCandidate?.title ?? "window")?",
+                   isPresented: Binding(get: { trayCloseCandidate != nil },
+                                        set: { if !$0 { trayCloseCandidate = nil } }),
+                   presenting: trayCloseCandidate) { entry in
+                Button("Cancel", role: .cancel) {}
+                Button("Close Terminal", role: .destructive) {
+                    client.send(CloseWindowMessage(windowId: entry.id))
+                }
+            } message: { _ in
+                Text("Kills any running command in that terminal. This can't be undone.")
+            }
+        }
+    }
+
+    /// Bring a minimized window back (Q-53): select it here and ask the Mac
+    /// to focus it, which un-minimizes before raising (Q-23). Same side
+    /// effects as tapping its card.
+    private func restoreMinimizedWindow(_ windowId: String) {
+        withAnimation(.spring(duration: 0.2)) { selectedWindowId = windowId }
+        if followFrontmost { followFrontmost = false }
+        client.send(SelectWindowMessage(windowId: windowId))
     }
 
     /// Visibility and display filters on ONE 26pt row. Labs-gated, off by
@@ -5291,6 +5363,14 @@ struct MainiOSView: View {
             client.send(CloseWindowMessage(windowId: windowId))
             return
         }
+        if action == .minimize {
+            client.send(MinimizeWindowMessage(windowId: windowId))
+            return
+        }
+        if action == .restore {
+            restoreMinimizedWindow(windowId)
+            return
+        }
         if action == .togglePin {
             // Ask for the opposite of what the last broadcast said. The Mac
             // answers with a fresh layout, so the card moves when the Mac has
@@ -5309,6 +5389,7 @@ struct MainiOSView: View {
         case .viewOutput: return // handled above
         case .duplicate: return  // handled above
         case .closeWindow: return // handled above
+        case .minimize, .restore: return // handled above
         case .togglePin: return   // handled above
         case .chooseColor:
             colorSheetWindowId = windowId

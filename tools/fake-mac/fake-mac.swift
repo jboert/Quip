@@ -283,12 +283,15 @@ struct WireWindow: Encodable {
     let isThinking: Bool
     let claudeMode, cliKind, targetKind, displayID, spaceID: String?
     let isPinned: Bool
+    /// Minimized through `minimize_window` and not restored since (Q-53).
+    let isMinimized: Bool
 
-    init(_ w: FixtureWindow) {
+    init(_ w: FixtureWindow, isMinimized: Bool = false) {
         id = w.id; name = w.name; app = w.app; folder = w.folder; enabled = w.enabled
         frame = w.frame; state = w.state; color = w.color; isThinking = w.isThinking ?? false
         claudeMode = w.claudeMode; cliKind = w.cliKind; targetKind = w.targetKind
         displayID = w.displayID; spaceID = w.spaceID; isPinned = w.isPinned ?? false
+        self.isMinimized = isMinimized
     }
 }
 
@@ -366,7 +369,8 @@ struct SendTextAckMsg: Encodable {
 struct ErrorMsg: Encodable {
     let type = "error"
     let reason: String
-    /// Only with --error-ids (US-115 plans this field; today's Mac omits it).
+    /// Only with --error-ids (US-115 added this field on eb-branch; an installed
+    /// Mac from before it omits it).
     let messageId: String?
 }
 
@@ -479,6 +483,9 @@ final class FakeMac: @unchecked Sendable {
     private var fixture: Fixture
     private var windows: [FixtureWindow]
     private var dead: Set<String>
+    /// Windows minimized through `minimize_window` (Q-53); `select_window`
+    /// restores, `close_window` and `reload` forget.
+    private var minimized: Set<String> = []
     private var prompts: [PromptEntry]
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: Client] = [:]
@@ -770,6 +777,13 @@ final class FakeMac: @unchecked Sendable {
         case "select_window":
             let id = m["windowId"] as? String ?? ""
             log.line(head + " window=\(id)" + (windows.contains { $0.id == id } ? "" : " (not in the layout)"))
+            // The Mac un-minimizes before it raises (Q-23), and the next layout
+            // no longer reports the window minimized (Q-53).
+            if minimized.remove(id) != nil {
+                let n = broadcast(layoutMessage())
+                log.line(head + " -> restored \(id) from the Dock, layout_update to \(n) phone(s)")
+            }
+        case "minimize_window": handleMinimizeWindow(m, head)
         case "close_window": handleCloseWindow(m, head)
         case "put_prompt": handlePutPrompt(m, head)
         case "delete_prompt": handleDeletePrompt(m, head)
@@ -855,7 +869,8 @@ final class FakeMac: @unchecked Sendable {
         // The Mac floats pinned windows to the front of the list.
         let ordered = windows.filter { $0.isPinned == true } + windows.filter { $0.isPinned != true }
         return LayoutUpdateMsg(monitor: fixture.monitor, screenAspect: fixture.screenAspect,
-                               windows: ordered.map(WireWindow.init), displays: fixture.displays,
+                               windows: ordered.map { WireWindow($0, isMinimized: minimized.contains($0.id)) },
+                               displays: fixture.displays,
                                spanAspect: fixture.spanAspect, spaces: fixture.spaces)
     }
 
@@ -1033,6 +1048,27 @@ final class FakeMac: @unchecked Sendable {
         return found.filter { seen.insert($0).inserted }
     }
 
+    /// Q-53: the window stays in the layout, reported `isMinimized`, until
+    /// `select_window` restores it. Unknown windows get the attributed error
+    /// the Mac sends.
+    private func handleMinimizeWindow(_ m: [String: Any], _ head: String) {
+        let windowId = m["windowId"] as? String ?? ""
+        let messageId = m["messageId"] as? String
+        let line = head + " window=\(windowId) messageId=\(Self.short(messageId))"
+        if isDuplicate(messageId) {
+            log.line(line + " -> DEDUPED (as the real Mac)")
+            return
+        }
+        guard windows.contains(where: { $0.id == windowId }) else {
+            log.line(line + " -> no such window: error \"Window no longer exists\"")
+            broadcast(ErrorMsg(reason: "Window no longer exists", messageId: options.errorIDs ? messageId : nil))
+            return
+        }
+        minimized.insert(windowId)
+        let n = broadcast(layoutMessage())
+        log.line(line + " -> minimized, layout_update to \(n) phone(s) (\(minimized.count) minimized)")
+    }
+
     private func handleCloseWindow(_ m: [String: Any], _ head: String) {
         let windowId = m["windowId"] as? String ?? ""
         let messageId = m["messageId"] as? String
@@ -1047,6 +1083,7 @@ final class FakeMac: @unchecked Sendable {
             return
         }
         windows.removeAll { $0.id == windowId }
+        minimized.remove(windowId)
         let n = broadcast(layoutMessage())
         log.line(line + " -> closed; layout_update (\(windows.count) windows) to \(n) phone(s)")
     }
@@ -1123,7 +1160,8 @@ final class FakeMac: @unchecked Sendable {
                 + (phones.isEmpty ? "none" : phones.map { "\($0.tag)\($0.authenticated ? " authenticated" : " awaiting PIN")" }
                     .joined(separator: ", ")))
             for w in windows {
-                log.line("  \(w.id)  \(w.app)  \(w.folder ?? "-")  \(dead.contains(w.id) ? "DEAD" : "acking")")
+                log.line("  \(w.id)  \(w.app)  \(w.folder ?? "-")  \(dead.contains(w.id) ? "DEAD" : "acking")"
+                    + (minimized.contains(w.id) ? "  minimized" : ""))
             }
             log.line("  \(prompts.count) prompts; paste acks \(options.ackPaste ? "on" : "off"); "
                 + "error ids \(options.errorIDs ? "on" : "off")")
@@ -1153,6 +1191,7 @@ final class FakeMac: @unchecked Sendable {
                 fixture = fresh
                 windows = fresh.windows
                 dead = Set(fresh.windows.filter { $0.dead == true }.map(\.id))
+                minimized = []
                 prompts = fresh.prompts
                 let n = broadcast(layoutMessage())
                 broadcast(PromptLibraryMsg(prompts: prompts))

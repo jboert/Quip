@@ -136,6 +136,8 @@ carrying the order it produced. Pinned windows are already floated to the front
 of `windows`, so a client that ignores `WindowState.isPinned` still renders the
 right order; the flag is what lets it draw the pin and offer to toggle it.
 
+`isMinimized` (optional, since Q-53) is true while the desktop minimized that window at a phone's request (`minimize_window`) and it has not come back on screen. The phone lists such windows in a tray with Open and Close.
+
 ### set_color
 
 Phone → Mac. Sets the color a window is drawn in, or clears the user's choice.
@@ -442,6 +444,18 @@ Destructive — close a specific iTerm2 window, killing any running command in t
 {
   "type": "close_window",
   "windowId": "Terminal.12345"
+}
+```
+
+### minimize_window
+
+Minimize a window to the Dock (Q-53). The desktop sets the window's Accessibility minimized attribute and reports it on the next `layout_update` as `isMinimized: true` on that window, so the phone can list it in its minimized tray. Restore with `select_window`, which un-minimizes before raising. A gone window or an Accessibility refusal answers with an `error` carrying this `messageId`. Only windows minimized this way are reported; one minimized from the Mac's own Dock reads as off screen only.
+
+```json
+{
+  "type": "minimize_window",
+  "windowId": "Terminal.12345",
+  "messageId": "6F9619FF-8B86-D011-B42D-00C04FC964FF"
 }
 ```
 
@@ -764,7 +778,7 @@ If we ever need explicit versioning (e.g. for a wire-incompatible change neither
 
 Side-effecting iOS→Mac messages carry an optional `messageId: UUID?` (added in §27). Mac dedupes via `MessageDedupeTable.checkAndRecord(_:)` — first arrival processes, second is silently dropped. Phones that double-tap or retry on reconnect won't double-fire.
 
-Coverage audit at commit `8fdbd66` confirmed every side-effecting Mac handler wraps the dedupe call. New handlers MUST do the same — see the canonical pattern near `case "send_text"` in `QuipMac/QuipMacApp.swift`. The list of side-effecting handlers as of 2026-06-04: `send_text`, `quick_action`, `duplicate_window`, `close_window`, `spawn_window`, `paste_prompt`, `put_prompt`, `delete_prompt`, `attach_iterm_window`, `image_upload`.
+Coverage audit at commit `8fdbd66` confirmed every side-effecting Mac handler wraps the dedupe call. New handlers MUST do the same — see the canonical pattern near `case "send_text"` in `QuipMac/QuipMacApp.swift`. The list of side-effecting handlers as of 2026-06-04: `send_text`, `quick_action`, `duplicate_window`, `close_window`, `minimize_window`, `spawn_window`, `paste_prompt`, `put_prompt`, `delete_prompt`, `attach_iterm_window`, `image_upload`.
 
 `messageId` is `Optional` for backward-compat: older iOS builds that omit it still work — they just don't get dedupe protection. Side-effecting messages from those builds are processed every arrival.
 

@@ -817,6 +817,35 @@ final class MessageProtocolTests: XCTestCase {
         XCTAssertFalse(restored.isPinned)
     }
 
+    /// Q-53: the Mac reports a window it minimized for the phone, so the tray
+    /// can list it; a Mac from before the field reads every window as not
+    /// minimized rather than failing to decode.
+    func testWindowStateMinimizedRoundTripsAndDefaultsFalse() throws {
+        let original = WindowState(id: "w1", name: "zsh", app: "iTerm2", enabled: true,
+                                   frame: WindowFrame(x: 0, y: 0, width: 1, height: 1),
+                                   state: "neutral", color: "#4A90E2", isMinimized: true)
+        let data = try XCTUnwrap(MessageCoder.encode(original))
+        XCTAssertTrue(try XCTUnwrap(MessageCoder.decode(WindowState.self, from: data)).isMinimized)
+
+        let old = """
+        {"id":"w1","name":"zsh","app":"iTerm2","enabled":true,"state":"neutral","color":"#4A90E2",
+         "frame":{"x":0,"y":0,"width":1,"height":1}}
+        """.data(using: .utf8)!
+        XCTAssertFalse(try XCTUnwrap(MessageCoder.decode(WindowState.self, from: old)).isMinimized)
+    }
+
+    func testMinimizeWindowMessageEncodesAndRoundTrips() throws {
+        let msg = MinimizeWindowMessage(windowId: "w-park")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let dict = try jsonDict(from: data)
+        XCTAssertEqual(dict["type"] as? String, "minimize_window")
+        XCTAssertEqual(dict["windowId"] as? String, "w-park")
+        XCTAssertNotNil(dict["messageId"], "carries an idempotency token like close_window")
+        let restored = try XCTUnwrap(MessageCoder.decode(MinimizeWindowMessage.self, from: data))
+        XCTAssertEqual(restored.windowId, "w-park")
+        XCTAssertEqual(restored.messageId, msg.messageId)
+    }
+
     func testSetPinMessageRoundTrips() throws {
         let data = try XCTUnwrap(MessageCoder.encode(SetPinMessage(windowId: "w1", pinned: true)))
         let restored = try XCTUnwrap(MessageCoder.decode(SetPinMessage.self, from: data))
