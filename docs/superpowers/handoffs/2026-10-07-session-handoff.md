@@ -13,8 +13,13 @@ the owner is off the phone.
 
 ## Branch state
 
-- eb-branch, 24 commits ahead of `origin/eb-branch`, **not pushed** (owner
-  confirms every push). `origin/main` has nothing new.
+- eb-branch, 27 commits ahead of `origin/eb-branch`, **not pushed** (owner
+  confirms every push).
+- CI replay 2026-10-08 (both Apple jobs with CI's exact flags and xcodegen
+  2.44.1): Mac 1086 green; iOS failed 14 Keychain-backed tests on the unsigned
+  host (-34018), fixed in `daea581` (in-memory backing under XCTest), then
+  1132 green. The signed local gate cannot see this class; replay before the
+  PR (memory `reference_ci_replay_unsigned_host.md`). `origin/main` has nothing new.
 - Gate at the last commit: harness 62, QuipMac 1086, QuipiOS 1132, all green
   (`QUIP_QA_SIM_UDID=D8C5154B-7030-40BA-8443-F4F9EB27C725 tools/check.sh`).
 - Untracked junk from the ruflo plugin, left alone: `ruvector.db`,
