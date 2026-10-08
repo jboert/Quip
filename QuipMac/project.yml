@@ -44,6 +44,17 @@ targets:
           cp -f "${SRCROOT}/Resources/cloudflared" "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared"
           chmod +x "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cloudflared"
         name: Bundle cloudflared
+      - script: |
+          # Every build names its commit and build time in Info.plist
+          # (QuipBuildCommit, QuipBuildDate), shown in the menu bar panel.
+          "${SRCROOT}/../tools/stamp-build-info.sh"
+        name: Stamp build info
+        # The processed Info.plist is an input, so the build runs the stamp
+        # after writing it; without this Xcode may process the plist later
+        # and discard the stamp.
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.quip.mac
@@ -71,7 +82,7 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Quip
-        CFBundleShortVersionString: 1.5.6
+        CFBundleShortVersionString: 1.5.7
         NSAppleEventsUsageDescription: Quip needs to control Terminal and iTerm2 to manage Claude Code sessions.
         NSAccessibilityUsageDescription: Quip needs Accessibility access to arrange and manage windows on your screen.
         NSBonjourServices:

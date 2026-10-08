@@ -441,9 +441,11 @@ struct MenuBarView: View {
         .padding(12)
     }
 
-    /// CFBundleShortVersionString from Info.plist (e.g. "1.0-eb-branch").
+    /// "1.5.7 a8f2308": the version with the commit the build was stamped
+    /// with (tools/stamp-build-info.sh), so an installed Mac app can be told
+    /// from the last one.
     private static var appVersionString: String? {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        BuildInfo.shortDisplay(BuildInfo.current)
     }
 
     // MARK: - Bindings

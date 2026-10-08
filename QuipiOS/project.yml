@@ -17,7 +17,7 @@ settings:
     # validation rejects an embedded bundle whose versions differ from the
     # app's (the watch said 1.4.0 while the app said 1.5.6). The build number
     # is overridden per upload by tools/testflight.sh.
-    MARKETING_VERSION: "1.5.6"
+    MARKETING_VERSION: "1.5.7"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_STRICT_CONCURRENCY: minimal
 targets:
@@ -45,6 +45,19 @@ targets:
     dependencies:
       - target: QuipWatch
         embed: true
+    postBuildScripts:
+      - script: |
+          # Every build names its commit and build time in Info.plist
+          # (QuipBuildCommit, QuipBuildDate), shown in Settings; the marketing
+          # version alone cannot tell an old install from a new one.
+          "${SRCROOT}/../tools/stamp-build-info.sh"
+        name: Stamp build info
+        # The processed Info.plist is an input, so the build runs the stamp
+        # after writing it; without this Xcode may process the plist later
+        # and discard the stamp.
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_NAME: Quip

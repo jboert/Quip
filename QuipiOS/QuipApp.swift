@@ -3394,8 +3394,8 @@ struct MainiOSView: View {
     private var bottomBar: some View {
         HStack(spacing: 0) {
             Spacer()
-            if let rawVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
-                Text("v\(rawVersion)")
+            if BuildInfo.current.short != "?" {
+                Text("v\(BuildInfo.shortDisplay(BuildInfo.current))")
                     .font(.system(size: 9, weight: .regular, design: .monospaced))
                     .foregroundStyle(colors.textTertiary)
                     .padding(.trailing, 8)
@@ -3831,7 +3831,9 @@ struct MainiOSView: View {
     fileprivate func buildDiagnosticsSnapshot() -> String {
         let info = Bundle.main.infoDictionary ?? [:]
         let appVersion = info["CFBundleShortVersionString"] as? String ?? "?"
-        let buildNumber = info["CFBundleVersion"] as? String ?? "?"
+        let buildNumber = BuildInfo.current.commit.map { commit in
+            "\(info["CFBundleVersion"] as? String ?? "?") \(commit) \(BuildInfo.current.date ?? "")"
+        } ?? (info["CFBundleVersion"] as? String ?? "?")
         let activeName = manager.paired.first(where: { $0.id == manager.activeBackendID })?.name
         let activeBackendID = manager.activeBackendID.isEmpty ? nil : manager.activeBackendID
         let activeReachability = reachabilityLabel(manager.sessions[manager.activeBackendID]?.reachability)
@@ -7672,14 +7674,10 @@ struct SettingsSheet: View {
     /// reverts to the version string.
     @State private var versionCopied = false
 
-    /// "1.5.4 (1)" formatted from CFBundleShortVersionString + CFBundleVersion.
-    /// Static so we read Bundle.main once per launch, not on every body redraw.
-    static let appVersionDisplay: String = {
-        let info = Bundle.main.infoDictionary ?? [:]
-        let short = info["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info["CFBundleVersion"] as? String ?? "?"
-        return short == build ? short : "\(short) (\(build))"
-    }()
+    /// "1.5.7 (a8f2308, 2026-10-08 08:30)": the version with the commit and
+    /// build time stamped by tools/stamp-build-info.sh, so an install can be
+    /// told from the last one. Read once per launch.
+    static let appVersionDisplay: String = BuildInfo.display(BuildInfo.current)
 
     var body: some View {
         NavigationStack {
