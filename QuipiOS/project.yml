@@ -45,18 +45,16 @@ targets:
     dependencies:
       - target: QuipWatch
         embed: true
-    postBuildScripts:
+    preBuildScripts:
       - script: |
           # Every build names its commit and build time in Info.plist
           # (QuipBuildCommit, QuipBuildDate), shown in Settings; the marketing
-          # version alone cannot tell an old install from a new one.
+          # version alone cannot tell an old install from a new one. Stamps
+          # the generated source plist before Xcode processes and signs it.
           "${SRCROOT}/../tools/stamp-build-info.sh"
         name: Stamp build info
-        # The processed Info.plist is an input, so the build runs the stamp
-        # after writing it; without this Xcode may process the plist later
-        # and discard the stamp.
-        inputFiles:
-          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        outputFiles:
+          - $(SRCROOT)/$(INFOPLIST_FILE)
         basedOnDependencyAnalysis: false
     settings:
       base:
