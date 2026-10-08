@@ -17,6 +17,17 @@ enum DiagnosticsBundleError: Error {
     case overSizeCap(actual: Int, cap: Int)
 }
 
+extension DiagnosticsBundleError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .zipFailed(let stderr, let exitCode):
+            return "zip exited \(exitCode): \(stderr)"
+        case .overSizeCap(let actual, let cap):
+            return "Diagnostics bundle is \(actual) bytes, over the \(cap)-byte cap"
+        }
+    }
+}
+
 enum DiagnosticsBundle {
 
     /// Build a `Quip-diagnostics-YYYYMMDD-HHMMSS.zip` in

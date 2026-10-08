@@ -56,3 +56,60 @@ Started: Thu Oct  8 11:15:35 MST 2026
 - Context menu dispatches on WindowRowMenu's title constants (the criterion fixes the helper's return type as [String])
 - Unverified: VoiceOver / Reduce Motion not driven in a running app (second Quip would fight the live app for :8765); compile + unit + review only
 - Next: US-006 (concurrency, binding and modern-API cleanups)
+
+## 2026-10-08 — US-006 Concurrency, binding and modern-API cleanups — NOT PASSING (3 criteria conflict with the code; work uncommitted)
+- Files: QuipMac/QuipMacApp.swift, QuipMac/Services/CrashRecoveryToggle.swift (new), QuipMac/Services/DiagnosticsBundle.swift,
+  QuipMac/Views/SettingsView.swift, QuipMac/Views/MainWindow.swift, QuipMac/Views/MenuBarView.swift,
+  QuipMac/Views/LayoutPreview.swift, QuipMac/Tests/CrashRecoveryToggleTests.swift (new)
+- Gate: `tools/check.sh` exit 0 — QuipMac 1148 tests / 0 failures (+3 vs 1145); swiftc harness SKIPPED, QuipiOS SKIPPED (out of scope for the diff)
+- Mutation (resolve returns (requested, nil) on throw): both throwing tests FAILED, success control passed -> reverted -> 3/3 pass
+  (`xcodebuild ... test -only-testing:QuipMacTests/CrashRecoveryToggleTests`, exit 65 mutant / gate green clean)
+- BLOCKER 1: moving `launchHook.register` into `init()` is unsafe. A hosted XCTest probe showed that a copy of a SwiftUI struct
+  captured in init has @State SwiftUI never installed: two writes read back 0, and SwiftUI logged "Accessing State<Int>'s value without being
+  installed on a View". startServicesOnce through that copy loses the servicesStarted guard (onAppear would start a 2nd server)
+  and every @State write from the handlers. Kept in body, now `Task { @MainActor in startServicesOnce() }`, with a comment saying why.
+- BLOCKER 2: `ForEach(enabled.enumerated(), id:)` requires macOS 26 (EnumeratedSequence: RandomAccessCollection); QuipMac deploys to 14.0.
+  The tile loop keeps Array(...) with a comment; the handles loop now uses `LayoutResize.Handle.allCases, id: \.self`.
+- BLOCKER 3: `grep -c 'Binding(' SettingsView.swift` prints 4, not 2. The substring also matches the `modeBinding(` call site and declaration.
+  Only the kindToggle and modeBinding constructors remain, which is what the criterion intends. Not renamed just to hit the count.
+- Crash toggle: a reverting flag swallows the revert's own onChange echo so it neither runs the opposite op nor clears the error
+- DiagnosticsBundleError gained LocalizedError so `localizedDescription` keeps the zip stderr instead of Foundation's generic text
+- Unverified: panes not driven in a running app (second Quip would fight the live app for :8765); compile + unit + review only
+- Leftover: untracked QuipMac/Tests/ZZStateProbeTests.swift is the emptied probe stub. Delete it (rm was not permitted here)
+- Next: the coordinator decides on the three criteria (drop/reword), then commit the US-006 files; then US-007
+
+## 2026-10-08 — US-006 re-check (next iteration) — STILL NOT PASSING; US-007 not started
+- No source changes this iteration. Re-gated the uncommitted US-006 tree: `tools/check.sh` exit 0 — QuipMac 1148 tests / 0 failures;
+  swiftc harness SKIPPED, QuipiOS SKIPPED (no Shared/ or QuipiOS/ change). Log: /tmp/quip-ralph-us006-gate.log
+- Re-confirmed the three blockers against the tree:
+  1. launchHook.register stays in body. QuipMacApp's state is @State (lines 177-219), and a copy of self captured in App.init holds uninstalled State.
+  2. project.yml deploys to macOS 14.0 (lines 5/11/103), but `ForEach(x.enumerated(), id:)` needs macOS 26.
+  3. `grep -n 'Binding(' SettingsView.swift` gives 938 modeBinding call, 963 kindToggle Binding(, 979 modeBinding decl, 980 Binding(, so the count is 4.
+     Only 2 are constructors. MainWindow count is 0. `cornerRadius(` in Views and DispatchQueue.main.async/MainActor.run in SettingsView: none.
+- US-007 deliberately NOT started: it moves SettingsView.swift bodies that carry the uncommitted US-006 edits.
+  Its commit would absorb US-006 work, so it is blocked on the coordinator's US-006 decision.
+- Leftover still present: untracked QuipMac/Tests/ZZStateProbeTests.swift (a single comment line, no code). rm was denied again.
+- Next (coordinator): reword or drop US-006 criteria 1, the enumerated() half of 6, and the grep count in 3. Then commit the US-006 files and run US-007.
+
+## 2026-10-08 — US-006 third check — STILL NOT PASSING; US-007 not started; no source changes
+- The US-006 criteria on disk are unchanged, so the same three blockers apply (launchHook in init, enumerated() ForEach on macOS 14, grep count 4 vs 2).
+  Re-confirmed: QuipMacApp.swift:328 register in body; project.yml macOS 14.0; SettingsView 938/963/979/980.
+- Gate not re-run: the 12:00:35 green run (/tmp/quip-ralph-us006-gate.log, QuipMac 1148/0, harness + QuipiOS SKIPPED) is later than every story-file edit (latest 11:57:15).
+- rm of the untracked QuipMac/Tests/ZZStateProbeTests.swift was denied a third time. The file is one comment line.
+- The loop is stalled. Each further iteration repeats this check until the coordinator rewords or drops the three criteria (see US-006 notes). Remaining: 2 (US-006, US-007).
+
+## 2026-10-08 — US-006 fourth check — STILL NOT PASSING; US-007 not started; no source changes
+- prd.json US-006 criteria are still unchanged. Re-confirmed: QuipMacApp.swift:328 register in body; project.yml macOS 14.0 (lines 5/11/103);
+  SettingsView 'Binding(' matches at 938/963/979/980 (4, of which 2 are constructors).
+- Gate not re-run: no file has changed since the green 12:00:35 run (QuipMac 1148/0, harness + QuipiOS SKIPPED).
+- The loop stays stalled until the coordinator changes US-006 criteria 1, 3 (the grep count) and 6 (the enumerated ForEach). Remaining: 2 (US-006, US-007).
+
+## 2026-10-08 — US-006 fifth check — STILL NOT PASSING; US-007 not started; no source changes
+- Criteria unchanged; no tracked file is newer than the 12:00:35 green gate (QuipMac 1148/0). Same three blockers: QuipMacApp.swift:328
+  register in body; project.yml macOS 14.0; SettingsView 'Binding(' at 938/963/979/980. Gate not re-run (nothing to re-verify).
+- Further iterations are wasted until the coordinator edits US-006 criteria 1, 3 and 6. Remaining: 2.
+
+## 2026-10-08 — US-006 — PASSING (coordinator, after the loop exhausted its budget)
+- Criteria 1, 3 and 6 corrected to what the worker verified (see US-006 notes); nothing else changed.
+- Coordinator re-ran the mutation: CrashRecoveryToggle.resolve returning (requested, nil) on throw -> `xcodebuild test -only-testing:QuipMacTests/CrashRecoveryToggleTests` ** TEST FAILED **; reverted -> 3/3 pass.
+- Stray probe QuipMac/Tests/ZZStateProbeTests.swift deleted. Gate re-run by the pre-commit hook at commit time (output in the commit's gate log).

@@ -151,7 +151,7 @@ struct MenuBarView: View {
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                 Spacer()
-                                Text(Self.relativeTimeFormatter.localizedString(for: c.lastActivity, relativeTo: Date()))
+                                Text(Self.relativeTimeFormatter.localizedString(for: c.lastActivity, relativeTo: Date.now))
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                             }
@@ -199,7 +199,7 @@ struct MenuBarView: View {
                     Image(systemName: lastEventIcon(last.kind))
                         .font(.caption2)
                         .foregroundStyle(lastEventColor(last.kind))
-                    Text("\(last.kind.rawValue) · \(Self.relativeTimeFormatter.localizedString(for: last.timestamp, relativeTo: Date()))")
+                    Text("\(last.kind.rawValue) · \(Self.relativeTimeFormatter.localizedString(for: last.timestamp, relativeTo: Date.now))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -214,8 +214,8 @@ struct MenuBarView: View {
             return "Tunnel: resolving…"
         }
         let trimmed = tunnel.publicURL
-            .replacingOccurrences(of: "https://", with: "")
-            .replacingOccurrences(of: ".trycloudflare.com", with: "")
+            .replacing("https://", with: "")
+            .replacing(".trycloudflare.com", with: "")
         return "Tunnel: \(trimmed)"
     }
 
@@ -422,7 +422,7 @@ struct MenuBarView: View {
 
     private var footerSection: some View {
         HStack {
-            Text("\(windowManager.windows.filter(\.isEnabled).count) windows managed")
+            Text("\(windowManager.windows.count(where: \.isEnabled)) windows managed")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 

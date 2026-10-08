@@ -64,6 +64,7 @@ struct MainWindow: View {
     /// Non-nil while an Arrange attempt has something to say — missing
     /// permission, no enabled windows, no display.
     @State private var arrangeError: String?
+    @State private var showArrangeError = false
 
     @AppStorage("savedPresets") private var savedPresetsData: Data = Data()
     @State private var showSaveLayoutSheet = false
@@ -85,17 +86,13 @@ struct MainWindow: View {
         .toolbar {
             toolbarContent
         }
-        .alert("Couldn't arrange windows", isPresented: Binding(
-            get: { arrangeError != nil },
-            set: { if !$0 { arrangeError = nil } }
-        )) {
+        .alert("Couldn't arrange windows", isPresented: $showArrangeError, presenting: arrangeError) { _ in
             Button("Open Accessibility Settings") {
                 NSWorkspace.shared.open(ArrangeOutcome.accessibilitySettingsURL)
-                arrangeError = nil
             }
-            Button("OK", role: .cancel) { arrangeError = nil }
-        } message: {
-            Text(arrangeError ?? "")
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
         }
         .sheet(isPresented: $showSaveLayoutSheet) {
             saveLayoutSheet
@@ -438,7 +435,7 @@ struct MainWindow: View {
                 .frame(width: 8, height: 8)
 
             if webSocketServer.connectedClientCount > 0 {
-                Text("\(webSocketServer.connectedClientCount) client\(webSocketServer.connectedClientCount == 1 ? "" : "s")")
+                Text("^[\(webSocketServer.connectedClientCount) client](inflect: true)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if webSocketServer.isRunning {
@@ -467,7 +464,7 @@ struct MainWindow: View {
         // them differently, or a resized tile would move on arrange.
         return LayoutSnapshot(
             displayWindows: displayWindows,
-            enabledWindowCount: displayWindows.lazy.filter(\.isEnabled).count,
+            enabledWindowCount: displayWindows.count(where: \.isEnabled),
             currentFrames: currentFrames
         )
     }
@@ -596,5 +593,6 @@ struct MainWindow: View {
             return windowManager.arrangeWindows(frames: targetFrames)
         }
         arrangeError = outcome.message
+        showArrangeError = outcome.message != nil
     }
 }

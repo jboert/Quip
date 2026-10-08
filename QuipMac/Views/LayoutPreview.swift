@@ -41,7 +41,8 @@ struct LayoutPreview: View {
             ZStack {
                 monitorBackground(previewBounds: pb)
 
-                // Tiles
+                // Tiles. Array(...) stays: ForEach over a bare enumerated()
+                // needs macOS 26 and this target deploys to 14.
                 ForEach(Array(enabled.enumerated()), id: \.element.id) { index, window in
                     if index < frames.count {
                         let rect = tileRect(frame: effectiveFrame(for: window, at: index), in: pb)
@@ -158,11 +159,11 @@ struct LayoutPreview: View {
                                rect: CGRect,
                                color: Color,
                                previewBounds pb: CGRect) -> some View {
-        ForEach(Array(LayoutResize.Handle.allCases.enumerated()), id: \.offset) { _, handle in
+        ForEach(LayoutResize.Handle.allCases, id: \.self) { handle in
             let point = handlePoint(handle, in: rect)
             Circle()
                 .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay(Circle().strokeBorder(color, lineWidth: 2))
+                .overlay { Circle().strokeBorder(color, lineWidth: 2) }
                 .frame(width: Self.handleSide, height: Self.handleSide)
                 .position(x: point.x, y: point.y)
                 .contentShape(Circle())

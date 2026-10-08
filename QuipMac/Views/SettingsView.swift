@@ -63,14 +63,10 @@ struct SettingsView: View {
 
     private var current: SettingsTab { SettingsTab(rawValue: selectionRaw) ?? .general }
 
-    /// List(selection:) wants an optional binding; bridge it to the persisted
-    /// raw string. Ignores nil (clicking empty space) so a pane is always shown.
-    private var selection: Binding<SettingsTab?> {
-        Binding(
-            get: { current },
-            set: { if let new = $0 { selectionRaw = new.id } }
-        )
-    }
+    /// List(selection:) wants an optional; seeded from the persisted raw string
+    /// on appear and written back on change. A nil (clicking empty space) snaps
+    /// back to the current pane so a pane is always shown.
+    @State private var selection: SettingsTab?
 
     var body: some View {
         // Sidebar layout — the modern macOS System Settings idiom. A
@@ -79,7 +75,7 @@ struct SettingsView: View {
         // grows), and reads as a native Apple app. Every .environment injected
         // on this scene in QuipMacApp reaches each pane unchanged.
         NavigationSplitView {
-            List(SettingsTab.allCases, selection: selection) { tab in
+            List(SettingsTab.allCases, selection: $selection) { tab in
                 Label {
                     Text(tab.title)
                 } icon: {
@@ -109,6 +105,10 @@ struct SettingsView: View {
         // default that still resizes freely (the original vertical-resize fix).
         .frame(minWidth: 720, idealWidth: 780, maxWidth: .infinity,
                minHeight: 480, idealHeight: 600, maxHeight: .infinity)
+        .onAppear { selection = current }
+        .onChange(of: selection) { _, new in
+            if let new { selectionRaw = new.id } else { selection = current }
+        }
     }
 
     @ViewBuilder
@@ -304,16 +304,16 @@ private struct NotificationsTab: View {
         hasKey && !keyId.isEmpty && !teamId.isEmpty && !bundleId.isEmpty
     }
 
-    private var readinessSubline: String {
+    private var readinessSubline: AttributedString {
         if isConfigured {
             let n = pushService.devices.count
             return n == 0
-                ? "Ready · no iPhones registered yet"
-                : "Ready · \(n) device\(n == 1 ? "" : "s") registered"
+                ? AttributedString("Ready · no iPhones registered yet")
+                : AttributedString(localized: "Ready · ^[\(n) device](inflect: true) registered")
         }
         let missing = PushNotificationService.missingAPNsSetup(hasKey: hasKey, keyId: keyId,
                                                                teamId: teamId, bundleId: bundleId)
-        return "Missing " + missing.joined(separator: ", ")
+        return AttributedString("Missing " + missing.joined(separator: ", "))
     }
 
     /// Focal point of the Notifications pane — the one thing it answers: will
@@ -753,7 +753,7 @@ private struct PromptsTab: View {
     @State private var creatingPrompt = false
 
     private var inheritedCount: Int {
-        library.entries.filter(\.isInherited).count
+        library.entries.count(where: \.isInherited)
     }
 
     var body: some View {
@@ -1017,6 +1017,7 @@ private struct GeneralTab: View {
     @AppStorage("mirrorAllApps") private var mirrorAllApps = false
     @AppStorage("crashRecoveryEnabled") private var crashRecoveryEnabled = false
     @State private var crashRecoveryError: String?
+    @State private var crashRecoveryReverting = false
 
     var body: some View {
         // Ordered by why you open General: permissions first (the actionable
@@ -1082,10 +1083,10 @@ private struct GeneralTab: View {
             }
 
             Section("Reliability") {
-                Toggle("Auto-restart on crash", isOn: Binding(
-                    get: { crashRecoveryEnabled },
-                    set: { applyCrashRecoveryToggle($0) }
-                ))
+                Toggle("Auto-restart on crash", isOn: $crashRecoveryEnabled)
+                    .onChange(of: crashRecoveryEnabled) { _, new in
+                        applyCrashRecoveryToggle(new)
+                    }
                 Text("If Quip crashes, macOS launchd relaunches it after 30s. Cmd+Q and normal quits do not trigger relaunch. Installs ~/Library/LaunchAgents/\(CrashRecoveryAgent.label).plist.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1100,22 +1101,26 @@ private struct GeneralTab: View {
         .formStyle(.grouped)
     }
 
-    /// Wires the Reliability toggle: write AppStorage + invoke install/uninstall.
-    /// Failures revert the toggle and surface the error inline so the user sees
-    /// why launchd refused (typically: SIP-protected path, missing LaunchAgents
-    /// directory permissions, or a malformed plist payload).
-    private func applyCrashRecoveryToggle(_ newValue: Bool) {
-        crashRecoveryError = nil
-        do {
-            if newValue {
+    /// Wires the Reliability toggle to install/uninstall (see CrashRecoveryToggle).
+    /// A failure writes the old value back, which fires `.onChange` again —
+    /// `crashRecoveryReverting` swallows that echo so it neither re-runs the
+    /// opposite operation nor clears the error it just set.
+    private func applyCrashRecoveryToggle(_ requested: Bool) {
+        if crashRecoveryReverting {
+            crashRecoveryReverting = false
+            return
+        }
+        let result = CrashRecoveryToggle.resolve(requested: requested) { install in
+            if install {
                 try CrashRecoveryAgent.install()
             } else {
                 try CrashRecoveryAgent.uninstall()
             }
-            crashRecoveryEnabled = newValue
-        } catch {
-            crashRecoveryError = "Could not \(newValue ? "install" : "remove") crash-recovery agent: \(error.localizedDescription)"
-            // Leave AppStorage unchanged — toggle visually reverts.
+        }
+        crashRecoveryError = result.error
+        if result.enabled != requested {
+            crashRecoveryReverting = true
+            crashRecoveryEnabled = result.enabled
         }
     }
 
@@ -1456,14 +1461,14 @@ private struct ConnectionTab: View {
         .padding(.vertical, 6)
     }
 
-    private var statusSubline: String {
+    private var statusSubline: AttributedString {
         guard webSocketServer.isRunning else {
-            return "Start to accept connections from your iPhone"
+            return AttributedString("Start to accept connections from your iPhone")
         }
         let n = webSocketServer.connectedClientCount
         let mode = networkMode.displayName
-        if n == 0 { return "Listening · \(mode) · no phones connected yet" }
-        return "\(n) phone\(n == 1 ? "" : "s") connected · \(mode)"
+        if n == 0 { return AttributedString("Listening · \(mode) · no phones connected yet") }
+        return AttributedString(localized: "^[\(n) phone](inflect: true) connected · \(mode)")
     }
 
     var body: some View {
@@ -1517,10 +1522,10 @@ private struct ConnectionTab: View {
                                         .foregroundStyle(.tertiary)
                                 }
                                 Spacer()
-                                Text("connected \(Self.relTime.localizedString(for: c.connectedAt, relativeTo: Date()))")
+                                Text("connected \(Self.relTime.localizedString(for: c.connectedAt, relativeTo: Date.now))")
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
-                                Text("· last \(Self.relTime.localizedString(for: c.lastActivity, relativeTo: Date()))")
+                                Text("· last \(Self.relTime.localizedString(for: c.lastActivity, relativeTo: Date.now))")
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                             }
@@ -1653,10 +1658,11 @@ private struct ConnectionTab: View {
     @ViewBuilder
     private func connectionLogRow(_ event: ConnectionEvent) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(Self.timeFormatter.string(from: event.timestamp))
+            // Locale-aware, so a 12-hour locale adds "AM"/"PM" — hence 80 not 70.
+            Text(event.timestamp, format: .dateTime.hour().minute().second())
                 .font(.caption.monospaced())
                 .foregroundStyle(.tertiary)
-                .frame(width: 70, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
 
             Text(Self.eventLabel(event.kind))
                 .font(.caption.weight(.semibold))
@@ -1714,12 +1720,6 @@ private struct ConnectionTab: View {
         }
         return "ws://\(address):\(WebSocketServer.listenPort)"
     }
-
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f
-    }()
 
     private static func eventLabel(_ kind: ConnectionEvent.Kind) -> String {
         switch kind {
@@ -1904,19 +1904,15 @@ private struct SecurityTab: View {
     private func bundleAndShare() {
         bundling = true
         lastError = nil
-        Task.detached {
+        Task {
             do {
-                let zipURL = try DiagnosticsBundle.makeZip()
-                await MainActor.run {
-                    self.lastBundlePath = zipURL.path
-                    self.bundling = false
-                    DiagnosticsBundle.presentSharePicker(zipURL: zipURL, anchor: self.anchorView)
-                }
+                let zipURL = try await Task.detached { try DiagnosticsBundle.makeZip() }.value
+                lastBundlePath = zipURL.path
+                bundling = false
+                DiagnosticsBundle.presentSharePicker(zipURL: zipURL, anchor: anchorView)
             } catch {
-                await MainActor.run {
-                    self.lastError = "\(error)"
-                    self.bundling = false
-                }
+                lastError = error.localizedDescription
+                bundling = false
             }
         }
     }
@@ -1973,9 +1969,9 @@ private struct SecurityTab: View {
                             .aspectRatio(contentMode: .fit)
                             .frame(width: 160, height: 160)
                             .background(Color.white)
-                            .cornerRadius(6)
+                            .clipShape(.rect(cornerRadius: 6))
                     } else {
-                        Color.secondary.frame(width: 160, height: 160).cornerRadius(6)
+                        Color.secondary.frame(width: 160, height: 160).clipShape(.rect(cornerRadius: 6))
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
@@ -2048,7 +2044,7 @@ private struct AnchoredButton<Label: View>: View {
         @Binding var anchor: NSView?
         func makeNSView(context: Context) -> NSView {
             let v = NSView(frame: .zero)
-            DispatchQueue.main.async { anchor = v }
+            Task { @MainActor in anchor = v }
             return v
         }
         func updateNSView(_ nsView: NSView, context: Context) {}
@@ -2095,8 +2091,8 @@ private struct PromptRow: View {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1.5)
                             .foregroundStyle(Color.purple)
-                            .background(Capsule().fill(Color.purple.opacity(0.15)))
-                            .overlay(Capsule().stroke(Color.purple.opacity(0.4), lineWidth: 0.5))
+                            .background(.purple.opacity(0.15), in: .capsule)
+                            .overlay { Capsule().stroke(Color.purple.opacity(0.4), lineWidth: 0.5) }
                     }
                     if displaySlug != entry.label {
                         Text(displaySlug)
@@ -2206,10 +2202,10 @@ private struct PromptEditorSheet: View {
                 TextEditor(text: $bodyText)
                     .font(.system(size: 12, design: .monospaced))
                     .frame(minHeight: 200)
-                    .overlay(
+                    .overlay {
                         RoundedRectangle(cornerRadius: 4)
                             .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                    )
+                    }
                 Text("Sent verbatim to the active terminal when the row is tapped on the phone. No template expansion.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
