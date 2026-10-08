@@ -52,7 +52,7 @@ enum PINStore {
     /// short-circuit on the `migrationDoneKey` flag so steady-state
     /// reads don't re-probe.
     static func performMigrationIfNeeded() {
-        let d = UserDefaults.standard
+        let d = migrationDefaults
         guard !d.bool(forKey: migrationDoneKey) else { return }
 
         let legacy = d.string(forKey: legacyDefaultKey) ?? ""
@@ -70,17 +70,22 @@ enum PINStore {
     // MARK: - Test hooks
 
     /// Reset the migration flag — for tests only. Production code never
-    /// re-runs migration in the same process lifetime.
+    /// re-runs migration in the same process lifetime. Does nothing outside
+    /// XCTest.
     static func resetMigrationFlagForTests() {
-        UserDefaults.standard.removeObject(forKey: migrationDoneKey)
+        guard useTestBacking else { return }
+        migrationDefaults.removeObject(forKey: migrationDoneKey)
     }
 
-    /// Wipe both the Keychain entry and the legacy UserDefaults key —
-    /// for tests that need a clean slate.
+    /// Empty the in-memory backing and remove the legacy key and the migration
+    /// flag from the test suite — for tests that need a clean slate. Does
+    /// nothing outside XCTest, so it can never reach the real Keychain or the
+    /// owner's defaults.
     static func wipeForTests() {
-        delete()
-        UserDefaults.standard.removeObject(forKey: legacyDefaultKey)
-        UserDefaults.standard.removeObject(forKey: migrationDoneKey)
+        guard useTestBacking else { return }
+        testBacking = nil
+        migrationDefaults.removeObject(forKey: legacyDefaultKey)
+        migrationDefaults.removeObject(forKey: migrationDoneKey)
     }
 
     // MARK: - Test backing
@@ -89,11 +94,19 @@ enum PINStore {
     /// UNSIGNED test host querying the SIGNED app's keychain item blocks forever
     /// on securityd consent (headless — nobody clicks "Allow"); sampled hang:
     /// App.init → PINManager.init → PINStore.read → SecItemCopyMatching. The
-    /// migration logic above still runs for real against UserDefaults — only the
-    /// SecItem primitives are swapped, so PINStoreTests keep exercising the
-    /// actual migration path.
+    /// migration logic above still runs for real, against `migrationDefaults` —
+    /// only the SecItem primitives are swapped, so PINStoreTests keep exercising
+    /// the actual migration path.
     nonisolated(unsafe) private static var testBacking: String?
     private static var useTestBacking: Bool { SingleInstanceGuard.isRunningTests }
+
+    /// The defaults the legacy migration reads and clears: `.standard` in the
+    /// app, a throwaway suite under XCTest. The test host is Quip.app with the
+    /// real bundle id, so `.standard` there is the owner's com.quip.mac domain:
+    /// a run that died with a test PIN in `QuipAuthPIN` and the migration flag
+    /// cleared, or the live app launching mid-run, could have migrated that
+    /// test PIN into the owner's Keychain. Internal so tests can seed values.
+    static var migrationDefaults: UserDefaults { TestSafeDefaults.store("pin") }
 
     // MARK: - Keychain primitives
 

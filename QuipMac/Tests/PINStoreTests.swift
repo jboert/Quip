@@ -4,16 +4,21 @@ import XCTest
 /// Migration + Keychain round-trip coverage for `PINStore`.
 /// See docs/security/2026-05-06-cloudflared-process-audit.md (GH #14).
 ///
-/// These tests touch the real Keychain. Each test wipes both the
-/// service entry and the legacy UserDefaults key in setUp/tearDown so
-/// they don't depend on order or pollute the user's actual login
-/// keychain entries.
+/// These tests must never reach the owner's login Keychain or com.quip.mac
+/// defaults. Under XCTest the store reads and writes an in-memory backing, and
+/// its migration uses a throwaway suite (`migrationDefaults`). This file used
+/// to put test PINs in the owner's `QuipAuthPIN` with the migration flag
+/// cleared, which the live app could have migrated into the real Keychain.
 final class PINStoreTests: XCTestCase {
 
     private static let legacyDefaultKey = "QuipAuthPIN"
 
+    private var defaults: UserDefaults { PINStore.migrationDefaults }
+
     override func setUp() {
         super.setUp()
+        // The in-memory backing and the throwaway suite are keyed on this.
+        XCTAssertTrue(SingleInstanceGuard.isRunningTests)
         PINStore.wipeForTests()
     }
 
@@ -22,32 +27,44 @@ final class PINStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - Isolation
+
+    func test_migrationDefaults_isNotTheOwnersDomain() {
+        XCTAssertFalse(defaults === UserDefaults.standard,
+                       "under XCTest the migration must use a throwaway suite, never com.quip.mac")
+        let sentinel = "pinMigrationIsolationSentinel"
+        defaults.set("x", forKey: sentinel)
+        defer { defaults.removeObject(forKey: sentinel) }
+        XCTAssertNil(UserDefaults.standard.object(forKey: sentinel),
+                     "a write to the migration suite must not show up in the owner's defaults")
+    }
+
     // MARK: - Migration
 
     func test_migration_legacyValuePresent_movesToKeychain() {
-        UserDefaults.standard.set("123456", forKey: Self.legacyDefaultKey)
+        defaults.set("123456", forKey: Self.legacyDefaultKey)
 
         // First read triggers migration.
         let pin = PINStore.pin
         XCTAssertEqual(pin, "123456")
 
         // Legacy key purged.
-        XCTAssertNil(UserDefaults.standard.string(forKey: Self.legacyDefaultKey))
+        XCTAssertNil(defaults.string(forKey: Self.legacyDefaultKey))
     }
 
     func test_migration_legacyEmpty_doesNotPopulateKeychain() {
-        UserDefaults.standard.set("", forKey: Self.legacyDefaultKey)
+        defaults.set("", forKey: Self.legacyDefaultKey)
 
         XCTAssertNil(PINStore.pin)
     }
 
     func test_migration_isIdempotent() {
-        UserDefaults.standard.set("999000", forKey: Self.legacyDefaultKey)
+        defaults.set("999000", forKey: Self.legacyDefaultKey)
         XCTAssertEqual(PINStore.pin, "999000")
 
         // Second read goes straight to Keychain — even if a malicious
         // legacy value lands back in UserDefaults, migration is done.
-        UserDefaults.standard.set("attacker_inserted", forKey: Self.legacyDefaultKey)
+        defaults.set("attacker_inserted", forKey: Self.legacyDefaultKey)
         PINStore.performMigrationIfNeeded()
         XCTAssertEqual(PINStore.pin, "999000",
                        "Migration must run only once per install — re-running on a populated Keychain must not overwrite")
@@ -59,12 +76,12 @@ final class PINStoreTests: XCTestCase {
         // Reset the migration flag so performMigrationIfNeeded re-runs
         // (simulating an upgrade path where someone hand-set both).
         PINStore.resetMigrationFlagForTests()
-        UserDefaults.standard.set("legacyPin", forKey: Self.legacyDefaultKey)
+        defaults.set("legacyPin", forKey: Self.legacyDefaultKey)
 
         PINStore.performMigrationIfNeeded()
         XCTAssertEqual(PINStore.pin, "keychainPin",
                        "Existing Keychain value wins over a stray legacy value")
-        XCTAssertNil(UserDefaults.standard.string(forKey: Self.legacyDefaultKey),
+        XCTAssertNil(defaults.string(forKey: Self.legacyDefaultKey),
                      "Legacy key still purged on migration so it doesn't sit there as a plaintext copy")
     }
 
@@ -122,7 +139,7 @@ final class PINStoreTests: XCTestCase {
     func test_existing6DigitPIN_preservedThroughMigration() {
         // Simulate a user upgrading from the UserDefaults era. Their
         // paired iOS device knows the 6-digit PIN; we can't break that.
-        UserDefaults.standard.set("424242", forKey: Self.legacyDefaultKey)
+        defaults.set("424242", forKey: Self.legacyDefaultKey)
 
         let manager = PINManager()
         XCTAssertEqual(manager.pin, "424242",
