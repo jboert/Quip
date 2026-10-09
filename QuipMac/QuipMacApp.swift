@@ -718,6 +718,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // subtitle = directory basename (e.g. "Quip", "credit-unions")
                 // via fetchSubtitles/applySubtitles. That's the project.
                 let project = window?.subtitle
+                // Q-60: the alert's subtitle names who is asking.
+                let agentName = PushNotificationService.agentName(for: terminalStateDetector.windowCLIKind[windowId])
 
                 // (§3.2) When a push could actually fire, scrape the prompt so
                 // the notification can show the right one-tap answer actions
@@ -739,7 +741,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             attentionCount: 1, selectedWindowId: clientSelectedWindowId,
                             options: cached.options, isYesNo: cached.isYesNo,
                             promptFingerprint: cached.fingerprint, promptPreview: cached.preview,
-                            optionLabels: cached.labels
+                            optionLabels: cached.labels, agentName: agentName
                         )
                     } else {
                         let wn = window.windowNumber
@@ -769,7 +771,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                                     windowId: windowId, windowName: windowName, projectName: project,
                                     attentionCount: 1, selectedWindowId: clientSelectedWindowId,
                                     options: options, isYesNo: isYesNo, promptFingerprint: fingerprint,
-                                    promptPreview: preview, optionLabels: labels
+                                    promptPreview: preview, optionLabels: labels, agentName: agentName
                                 )
                             }
                         }
@@ -780,7 +782,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         windowName: windowName,
                         projectName: project,
                         attentionCount: 1,
-                        selectedWindowId: clientSelectedWindowId
+                        selectedWindowId: clientSelectedWindowId,
+                        agentName: agentName
                     )
                 }
 
@@ -2031,6 +2034,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         options: [1, 2, 3], promptFingerprint: "test",
                         promptPreview: "This is what a prompt's question looks like",
                         optionLabels: [1: "Yes", 2: "Yes, don't ask again", 3: "No"],
+                        agentName: "Claude",
                         immediate: true
                     )
                     break

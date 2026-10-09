@@ -90,14 +90,110 @@ final class PushPayloadShapeTests: XCTestCase {
                                      isYesNo: false, promptFingerprint: "f", promptPreview: "Apply the migration?")
         let plain = PushNotificationService.digestText([api], showPromptText: false)
         XCTAssertEqual(plain.title, "api")
-        XCTAssertEqual(plain.body, "zsh — api is waiting for your answer")
+        XCTAssertEqual(plain.subtitle, "zsh — api is asking · hold to answer", "no agent: the window name asks")
+        XCTAssertEqual(plain.body, "Waiting for your answer")
         let shown = PushNotificationService.digestText([api], showPromptText: true)
         XCTAssertEqual(shown.body, "Apply the migration?")
         let noProject = PushCoalescer.Wait(windowId: "b", windowName: "Terminal", projectName: nil, options: nil,
                                            isYesNo: false, promptFingerprint: nil, promptPreview: nil)
         let fallback = PushNotificationService.digestText([noProject], showPromptText: true)
         XCTAssertEqual(fallback.title, "Terminal")
+        XCTAssertNil(fallback.subtitle, "nothing to add to the title, nothing detected: no subtitle")
         XCTAssertEqual(fallback.body, "Waiting for your answer", "no preview: never an empty body")
+    }
+
+    // MARK: Q-60 descriptive alerts
+
+    func test_subtitle_namesTheAgentWithTheCallToAction() {
+        let w = PushCoalescer.Wait(windowId: "a", windowName: "zsh — api", projectName: "api", options: nil,
+                                   isYesNo: true, promptFingerprint: "f", promptPreview: "Apply the migration?",
+                                   agentName: "Claude")
+        let text = PushNotificationService.digestText([w], showPromptText: true)
+        XCTAssertEqual(text.title, "api")
+        XCTAssertEqual(text.subtitle, "Claude is asking · hold to answer")
+        XCTAssertEqual(text.body, "Apply the migration?")
+        let generic = PushCoalescer.Wait(windowId: "a", windowName: "zsh — api", projectName: "api", options: nil,
+                                         isYesNo: false, promptFingerprint: nil, promptPreview: nil,
+                                         agentName: "Codex")
+        XCTAssertEqual(PushNotificationService.digestText([generic], showPromptText: true).subtitle,
+                       "Codex is waiting", "nothing to answer: no call to action")
+        XCTAssertNil(PushNotificationService.digestText([w, generic], showPromptText: true).subtitle,
+                     "a bundle has no single subject")
+    }
+
+    func test_genericWait_isPassiveAndSilent() {
+        let generic = PushCoalescer.Wait(windowId: "a", windowName: "api", projectName: "api", options: nil,
+                                         isYesNo: false, promptFingerprint: nil, promptPreview: nil)
+        XCTAssertTrue(PushNotificationService.isGeneric(generic))
+        XCTAssertEqual(PushNotificationService.interruptionLevel(for: [generic]), "passive")
+        let question = PushCoalescer.Wait(windowId: "a", windowName: "api", projectName: "api", options: nil,
+                                          isYesNo: false, promptFingerprint: "f", promptPreview: "Continue?")
+        XCTAssertFalse(PushNotificationService.isGeneric(question), "a question line is answerable by Reply")
+        XCTAssertEqual(PushNotificationService.interruptionLevel(for: [question]), "active")
+        let yn = PushCoalescer.Wait(windowId: "a", windowName: "api", projectName: "api", options: nil,
+                                    isYesNo: true, promptFingerprint: "f", promptPreview: nil)
+        XCTAssertFalse(PushNotificationService.isGeneric(yn))
+        XCTAssertEqual(PushNotificationService.interruptionLevel(for: [generic, generic]), "active",
+                       "only a lone generic wait is passive; a bundle stays an alert")
+    }
+
+    func test_payload_carriesLabelsAndIsMutable_forNumberedPrompts() throws {
+        let labels = [1: "Yes", 2: "Yes, don't ask again", 3: "No", 4: "Type something"]
+        let dict = PushNotificationService.buildPayload(
+            windowId: "w", title: "api", body: "Run it?", attentionCount: 1, sound: true, isYesNo: false,
+            options: [1, 2, 3], promptFingerprint: "f", subtitle: "Claude is asking · hold to answer",
+            optionLabels: labels
+        )
+        let aps = try XCTUnwrap(dict["aps"] as? [String: Any])
+        let alert = try XCTUnwrap(aps["alert"] as? [String: Any])
+        XCTAssertEqual(alert["subtitle"] as? String, "Claude is asking · hold to answer")
+        XCTAssertEqual(aps["mutable-content"] as? Int, 1, "the phone's extension retitles the buttons")
+        XCTAssertEqual(dict["quip_option_labels"] as? [String: String],
+                       ["1": "Yes", "2": "Yes, don't ask again", "3": "No"],
+                       "only answerable options travel, keyed as JSON strings")
+    }
+
+    func test_payload_staysImmutable_withoutLabelsOrButtons() throws {
+        let plain = PushNotificationService.buildPayload(
+            windowId: "w", title: "api", body: "Run it?", attentionCount: 1, sound: true, isYesNo: false,
+            options: [1, 2, 3], promptFingerprint: "f", optionLabels: nil
+        )
+        let aps = try XCTUnwrap(plain["aps"] as? [String: Any])
+        XCTAssertNil(aps["mutable-content"])
+        XCTAssertNil(plain["quip_option_labels"])
+        XCTAssertNil((aps["alert"] as? [String: Any])?["subtitle"])
+        // Six options: Reply only, so no button to retitle even with labels.
+        let many = PushNotificationService.buildPayload(
+            windowId: "w", title: "api", body: "Pick", attentionCount: 1, sound: true, isYesNo: false,
+            options: [1, 2, 3, 4, 5, 6], promptFingerprint: "f",
+            optionLabels: [1: "a", 2: "b", 3: "c", 4: "d", 5: "e", 6: "f"]
+        )
+        let manyAps = try XCTUnwrap(many["aps"] as? [String: Any])
+        XCTAssertEqual(manyAps["category"] as? String, "waiting.text")
+        XCTAssertNil(manyAps["mutable-content"])
+        // A bundle never carries labels.
+        let bundle = PushNotificationService.buildPayload(
+            windowId: "w1", title: "2 waiting", body: "api, web", attentionCount: 2, sound: true, isYesNo: false,
+            options: [1, 2], promptFingerprint: nil, windowIds: ["w1", "w2"], optionLabels: [1: "Yes", 2: "No"]
+        )
+        XCTAssertNil(bundle["quip_option_labels"])
+    }
+
+    func test_agentName_fromCLIKind() {
+        XCTAssertEqual(PushNotificationService.agentName(for: .claude), "Claude")
+        XCTAssertEqual(PushNotificationService.agentName(for: .codex), "Codex")
+        XCTAssertEqual(PushNotificationService.agentName(for: .grok), "Grok")
+        XCTAssertEqual(PushNotificationService.agentName(for: .cursor), "Cursor")
+        XCTAssertNil(PushNotificationService.agentName(for: .shell))
+        XCTAssertNil(PushNotificationService.agentName(for: nil))
+    }
+
+    func test_showPromptText_defaultsOn_whenThePhoneOmitsIt() throws {
+        let prefs = try JSONDecoder().decode(DevicePushPreferences.self, from: Data("{}".utf8))
+        XCTAssertTrue(prefs.showPromptText, "Q-60: the question is the alert")
+        let off = try JSONDecoder().decode(DevicePushPreferences.self,
+                                           from: Data(#"{"showPromptText":false}"#.utf8))
+        XCTAssertFalse(off.showPromptText, "an explicit opt-out still wins")
     }
 
     func test_digestText_namesEachButton() {

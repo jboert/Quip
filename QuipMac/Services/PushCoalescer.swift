@@ -27,6 +27,8 @@ struct PushCoalescer {
         /// Option text by number, for the body line under the question
         /// (`1 Yes · 2 No`). nil when the prompt has no numbered options.
         var optionLabels: [Int: String]? = nil
+        /// "Claude" / "Codex" … for the alert's subtitle; nil for a shell.
+        var agentName: String? = nil
     }
 
     var dwell: TimeInterval = 10

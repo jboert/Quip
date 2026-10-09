@@ -21,9 +21,9 @@ class AppOrientationDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = PushNotificationCenterDelegate.shared
-        UNUserNotificationCenter.current().setNotificationCategories(
-            Set(WaitingNotificationCategory.makeCategories())
-        )
+        // Merges with the per-alert categories the service extension
+        // registered (Q-60); a plain set here would wipe their buttons.
+        WaitingNotificationCategory.register()
         return true
     }
 
@@ -330,9 +330,7 @@ struct QuipApp: App {
                 // Register the category set so iOS knows which actions to
                 // surface for any push whose `aps.category` matches.
                 // Idempotent; safe to call on every cold start.
-                UNUserNotificationCenter.current().setNotificationCategories(
-                    Set(WaitingNotificationCategory.makeCategories())
-                )
+                WaitingNotificationCategory.register()
             }
             .onChange(of: selectedWindowId) { _, newId in
                 // User engaged with a window — clear its attention flag so
@@ -926,7 +924,7 @@ struct QuipApp: App {
                                 bannerEnabled: ud.object(forKey: "pushBannerEnabled") as? Bool ?? true,
                                 timeZone: TimeZone.current.identifier,
                                 notifyAllWindows: ud.bool(forKey: "pushNotifyAllWindows"),
-                                showPromptText: ud.bool(forKey: "pushShowPromptText")
+                                showPromptText: (ud.object(forKey: "pushShowPromptText") as? Bool) ?? true
                             )
                             client.send(prefs)
                         }
@@ -7697,7 +7695,7 @@ struct SettingsSheet: View {
     /// window's `waiting_for_input` events push. True → every enabled
     /// window's transitions push. Synced to Mac via PushPreferencesMessage.
     @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
-    @AppStorage("pushShowPromptText") private var pushShowPromptText = false
+    @AppStorage("pushShowPromptText") private var pushShowPromptText = true
     // Device-local only — Live Activities don't flow through the Mac's
     // APNs prefs, so no sendPrefs() wiring. The main app reads this
     // @AppStorage key too and gates its liveActivity.startOrUpdate calls.
@@ -8151,7 +8149,7 @@ struct NotificationsSettingsSheet: View {
     @AppStorage("pushNotifyAllWindows") private var pushNotifyAllWindows = false
     /// Q-56 — the push body is the prompt's question instead of the window's
     /// name. Off by default: prompts can quote your own files.
-    @AppStorage("pushShowPromptText") private var pushShowPromptText = false
+    @AppStorage("pushShowPromptText") private var pushShowPromptText = true
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
     /// Lock-screen answers still waiting for a socket (Q-57).
     private var answerQueue: PushAnswerQueue { .shared }
@@ -8203,7 +8201,9 @@ struct NotificationsSettingsSheet: View {
                               ? "Pushes for any window's waiting prompt. "
                               : "Pushes only for the window you have selected. ")
                              + "A window alerts once per prompt, after it has waited 10 seconds; windows that start waiting together share one alert."
-                             + (pushShowPromptText ? " The alert shows the question the prompt asks." : ""))
+                             + (pushShowPromptText
+                                ? " The alert shows the question the prompt asks and names each answer; hold it to answer."
+                                : " Prompt text is off: the alert says only who is waiting."))
                     } else {
                         Text("Banner is off. Live Activities below will still update on the lock screen.")
                     }

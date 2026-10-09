@@ -60,9 +60,10 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
     /// `waiting_for_input`, not just the selected one. Defaults false to
     /// preserve the existing "no flood from background Claudes" behavior.
     var notifyAllWindows: Bool = false
-    /// Q-56: the push body is the question the prompt asks. Off by default:
-    /// prompt text can quote the user's own files.
-    var showPromptText: Bool = false
+    /// Q-56: the push body is the question the prompt asks. On by default
+    /// since Q-60 (an alert that only says "waiting" is not worth a glance);
+    /// the text passes `SecretRedactor` before it leaves the Mac.
+    var showPromptText: Bool = true
 
     static let defaults = DevicePushPreferences()
 
@@ -86,7 +87,7 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
         self.bannerEnabled = try c.decodeIfPresent(Bool.self, forKey: .bannerEnabled) ?? true
         self.timeZone = try c.decodeIfPresent(String.self, forKey: .timeZone)
         self.notifyAllWindows = try c.decodeIfPresent(Bool.self, forKey: .notifyAllWindows) ?? false
-        self.showPromptText = try c.decodeIfPresent(Bool.self, forKey: .showPromptText) ?? false
+        self.showPromptText = try c.decodeIfPresent(Bool.self, forKey: .showPromptText) ?? true
     }
 
     init(paused: Bool = false,
@@ -97,7 +98,7 @@ struct DevicePushPreferences: Codable, Equatable, Sendable {
          bannerEnabled: Bool = true,
          timeZone: String? = nil,
          notifyAllWindows: Bool = false,
-         showPromptText: Bool = false) {
+         showPromptText: Bool = true) {
         self.paused = paused
         self.quietHoursStart = quietHoursStart
         self.quietHoursEnd = quietHoursEnd
@@ -430,14 +431,25 @@ final class PushNotificationService {
                                          attentionCount: Int, sound: Bool, isYesNo: Bool,
                                          options: [Int]?, promptFingerprint: String?,
                                          windowIds: [String]? = nil, threadId: String? = nil,
-                                         interruptionLevel: String? = nil) -> [String: Any] {
+                                         interruptionLevel: String? = nil, subtitle: String? = nil,
+                                         optionLabels: [Int: String]? = nil) -> [String: Any] {
         let bundled = (windowIds?.count ?? 1) > 1
+        var alert: [String: Any] = ["title": title, "body": body]
+        if let subtitle, !subtitle.isEmpty { alert["subtitle"] = subtitle }
+        let category = bundled ? bundleCategory : waitingCategory(options: options, isYesNo: isYesNo)
         var aps: [String: Any] = [
-            "alert": ["title": title, "body": body],
+            "alert": alert,
             "badge": attentionCount,
-            "category": bundled ? bundleCategory : waitingCategory(options: options, isYesNo: isYesNo)
+            "category": category
         ]
         if sound { aps["sound"] = "default" }
+        // Q-60: the phone's service extension turns the labels into button
+        // titles (a static category can only say "1" / "2"), so the alert
+        // must be mutable. Only numbered categories have buttons to retitle.
+        let labels = labelledOptions(options: options, labels: optionLabels)
+        if !bundled, !labels.isEmpty, category.hasPrefix("waiting.1") {
+            aps["mutable-content"] = 1
+        }
         // Q-56: one thread per Mac so the phone stacks these as a group;
         // Yes/No prompts are time-sensitive.
         if let threadId { aps["thread-id"] = threadId }
@@ -448,11 +460,33 @@ final class PushNotificationService {
             "quip_event": "waiting_for_input"
         ]
         if let options { payload["quip_options"] = options }
+        if !bundled, !labels.isEmpty { payload["quip_option_labels"] = labels }
         if let promptFingerprint { payload["quip_prompt_fingerprint"] = promptFingerprint }
         // Every window the bundle covers; `quip_window_id` stays the first for
         // phones that predate the field.
         if let windowIds, windowIds.count > 1 { payload["quip_window_ids"] = windowIds }
         return payload
+    }
+
+    /// `quip_option_labels` as JSON wants it: option number (as a string) to
+    /// its text, only for options that have one. Empty when nothing is labelled.
+    nonisolated static func labelledOptions(options: [Int]?, labels: [Int: String]?) -> [String: String] {
+        guard let options, let labels else { return [:] }
+        var out: [String: String] = [:]
+        for n in options { if let l = labels[n], !l.isEmpty { out[String(n)] = l } }
+        return out
+    }
+
+    /// The agent the alert names, from the window's CLI classification. nil
+    /// for a plain shell or an unknown TUI: the window name stands in.
+    nonisolated static func agentName(for kind: CLIKind?) -> String? {
+        switch kind {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .grok: return "Grok"
+        case .cursor: return "Cursor"
+        case .shell, nil: return nil
+        }
     }
 
     /// Build the APNs payload for a swrm "story started" event (US-005).
@@ -561,13 +595,14 @@ final class PushNotificationService {
                                attentionCount: Int, selectedWindowId: String?,
                                options: [Int]? = nil, isYesNo: Bool = false,
                                promptFingerprint: String? = nil, promptPreview: String? = nil,
-                               optionLabels: [Int: String]? = nil, immediate: Bool = false) {
+                               optionLabels: [Int: String]? = nil, agentName: String? = nil,
+                               immediate: Bool = false) {
         guard !devices.isEmpty else { return }
         lastSelectedWindowId = selectedWindowId
         let wait = PushCoalescer.Wait(windowId: windowId, windowName: windowName, projectName: projectName,
                                       options: options, isYesNo: isYesNo,
                                       promptFingerprint: promptFingerprint, promptPreview: promptPreview,
-                                      optionLabels: optionLabels)
+                                      optionLabels: optionLabels, agentName: agentName)
         if immediate {
             sendDigest([wait], selectedWindowId: selectedWindowId, now: Date())
             return
@@ -631,29 +666,39 @@ final class PushNotificationService {
     /// wording. With `showPromptText` the single-window body is the question
     /// the prompt asks; otherwise it names the window and says nothing of
     /// the prompt's content.
-    nonisolated static func digestText(_ waits: [PushCoalescer.Wait], showPromptText: Bool) -> (title: String, body: String) {
+    nonisolated static func digestText(_ waits: [PushCoalescer.Wait], showPromptText: Bool)
+        -> (title: String, subtitle: String?, body: String) {
         func label(_ w: PushCoalescer.Wait) -> String {
             if let project = w.projectName, !project.isEmpty { return project }
             return w.windowName
         }
-        guard let first = waits.first else { return ("Quip", "Waiting for your answer") }
+        guard let first = waits.first else { return ("Quip", nil, "Waiting for your answer") }
         if waits.count == 1 {
             let title = label(first)
+            // Who is asking: the agent when the window is classified, else the
+            // window name when it adds something to the title.
+            let subject: String? = first.agentName
+                ?? ((first.windowName != title && !first.windowName.isEmpty) ? first.windowName : nil)
+            let subtitle: String?
+            if isGeneric(first) {
+                subtitle = subject.map { "\($0) is waiting" }
+            } else {
+                subtitle = subject.map { "\($0) is asking · hold to answer" } ?? "Hold to answer"
+            }
             var body: String
             if showPromptText, let preview = first.promptPreview, !preview.isEmpty {
                 body = preview
-            } else if first.windowName != title, !first.windowName.isEmpty {
-                body = "\(first.windowName) is waiting for your answer"
             } else {
                 body = "Waiting for your answer"
             }
-            // The lock-screen buttons can only say "1" / "2"; this line says
-            // what they mean. Always shown: it is the answer set, not the
+            // The lock-screen buttons can only say "1" / "2" unless the
+            // phone's extension retitles them; this line says what they mean
+            // either way. Always shown: it is the answer set, not the
             // question (Q-57).
             if let line = optionsLine(options: first.options, labels: first.optionLabels) {
                 body += "\n" + line
             }
-            return (title, body)
+            return (title, subtitle, body)
         }
         var names: [String] = []
         for w in waits {
@@ -662,7 +707,16 @@ final class PushNotificationService {
         }
         let shown = names.prefix(3).joined(separator: ", ")
         let more = names.count > 3 ? " +\(names.count - 3) more" : ""
-        return ("\(waits.count) waiting", shown + more)
+        return ("\(waits.count) waiting", nil, shown + more)
+    }
+
+    /// A wait with nothing to answer: no question line, no options, not a
+    /// y/n. It is still true (the agent is idle at a prompt), but it is not
+    /// worth a sound or a lit screen (Q-60), so it goes out passive.
+    nonisolated static func isGeneric(_ w: PushCoalescer.Wait) -> Bool {
+        let hasPreview = !(w.promptPreview ?? "").isEmpty
+        let hasOptions = !(w.options ?? []).isEmpty
+        return !hasPreview && !hasOptions && !w.isYesNo
     }
 
     /// `1 Yes · 2 No · 3 Cancel` for the answerable options that have a label,
@@ -680,7 +734,8 @@ final class PushNotificationService {
     /// entitled; APNs delivers it as active otherwise); everything else is an
     /// ordinary alert.
     nonisolated static func interruptionLevel(for waits: [PushCoalescer.Wait]) -> String {
-        waits.contains(where: \.isYesNo) ? "time-sensitive" : "active"
+        if waits.count == 1, let only = waits.first, isGeneric(only) { return "passive" }
+        return waits.contains(where: \.isYesNo) ? "time-sensitive" : "active"
     }
 
     /// Send one push per device for `waits`, each device seeing only the
@@ -748,13 +803,16 @@ final class PushNotificationService {
 
             let text = Self.digestText(mine, showPromptText: prefs.showPromptText)
             let single = mine.count == 1 ? mine[0] : nil
+            // Q-60: a wait with nothing to answer is delivered silently.
+            let generic = single.map(Self.isGeneric) ?? false
             let payload = Self.buildPayload(
                 windowId: mine[0].windowId, title: text.title, body: text.body,
-                attentionCount: mine.count, sound: prefs.sound,
+                attentionCount: mine.count, sound: prefs.sound && !generic,
                 isYesNo: single?.isYesNo ?? false, options: single?.options,
                 promptFingerprint: single?.promptFingerprint,
                 windowIds: mine.map(\.windowId), threadId: threadId,
-                interruptionLevel: Self.interruptionLevel(for: mine)
+                interruptionLevel: Self.interruptionLevel(for: mine),
+                subtitle: text.subtitle, optionLabels: single?.optionLabels
             )
 
             // Encode now (on main) so the Task below captures Sendable Data

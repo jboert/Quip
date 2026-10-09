@@ -35,6 +35,7 @@ targets:
           - "build/**"
           - "QuipLiveActivity/**"
           - "QuipWatch/**"
+          - "NotificationService/**"
       - path: QuipLiveActivity/Shared
       - path: ../Shared
         excludes:
@@ -44,6 +45,9 @@ targets:
       Release: Signing.xcconfig
     dependencies:
       - target: QuipWatch
+        embed: true
+      # Q-60: retitles alert buttons with the prompt's answers.
+      - target: QuipNotificationService
         embed: true
     preBuildScripts:
       - script: |
@@ -146,6 +150,28 @@ targets:
         # Embedded in Quip.app, so never installed on its own. "NO" put a second
         # top-level .app in the archive, which made it a Generic Xcode Archive
         # that cannot be exported for TestFlight ("expected one {}").
+        SKIP_INSTALL: "YES"
+  QuipNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: NotificationService
+      # Shared with the app: category builder and action identifiers.
+      - path: Services/WaitingNotificationCategory.swift
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(QUIP_APP_BUNDLE_ID).notificationservice
+        PRODUCT_NAME: QuipNotificationService
+        INFOPLIST_FILE: NotificationService/Info.plist
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: D2PM6R797Q
+        GENERATE_INFOPLIST_FILE: "NO"
+        # Embedded in Quip.app, never installed on its own (see QuipWatch).
         SKIP_INSTALL: "YES"
   QuipWatch:
     type: application
