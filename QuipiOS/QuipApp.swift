@@ -5631,6 +5631,7 @@ struct MainiOSView: View {
             return
         }
         guard let wid = selectedWindowId else { return }
+        if button.isSlashCommand { recordSlashUsage(.builtin(button)) }
         switch button.action {
         case .sendText(let text, let pressReturn):
             // Auto-submitting text is a "submit" — flush any pending image
@@ -5854,9 +5855,10 @@ struct MainiOSView: View {
         .disabled(selectedWindowId == nil)
     }
 
-    /// Every slash command the user can reach from the long-press palette:
-    /// all built-in slash `QuickButton`s (declaration order) followed by all
-    /// custom `.slash` buttons (definition order). Deliberately INDEPENDENT of
+    /// Every slash command the user can reach from the long-press palette,
+    /// most-used first (`SlashUsage`). Commands never fired keep the base
+    /// order: all built-in slash `QuickButton`s (declaration order) followed
+    /// by all custom `.slash` buttons (definition order). Deliberately INDEPENDENT of
     /// what's pinned in the row — the palette's whole purpose is to reach the
     /// slash commands the user didn't pin (vs. the `/x…` tap-menu, which only
     /// surfaces same-first-letter pills already on the row).
@@ -5867,7 +5869,15 @@ struct MainiOSView: View {
         for c in customButtonDefs {
             if case .slash = c.payload { members.append(.custom(c)) }
         }
-        return members
+        return SlashUsage.ranked(members, id: \.id, store: promptUsageStore(), at: Date())
+    }
+
+    /// Count one fire of a slash command so it climbs the palette.
+    private func recordSlashUsage(_ member: SlashGroupMember) {
+        promptUsageJSON = PromptRanker.encode(
+            SlashUsage.recording(member.id, at: Date(), in: promptUsageStore())
+        )
+        if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
     }
 
     /// Attach the "hold for all slash commands" palette to a slash-category
@@ -6143,6 +6153,7 @@ struct MainiOSView: View {
         guard let wid = selectedWindowId else { return }
         switch btn.payload {
         case .slash(let text, let auto):
+            recordSlashUsage(.custom(btn))
             sendCustomText(text, autoSubmit: auto, windowId: wid)
         case .rawText(let text, let auto):
             sendCustomText(text, autoSubmit: auto, windowId: wid)
@@ -7356,6 +7367,10 @@ enum QuickButton: String, CaseIterable, Identifiable {
     //   Terminal keystrokes (Esc, Ctrl-C, Ctrl-D, Tab, Backspace).
     case slash, plan, btw, compact, clearContext, prd
     case commitPushPr, caveman, ultraReview
+    // Popular commands, reachable from the long-press slash palette without
+    // being pinned to the row: the Superpowers plugin workflow, then Claude
+    // Code's own pickers.
+    case brainstorm, writePlan, executePlan, resume, model, context
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
     case shiftTab
@@ -7378,6 +7393,12 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .commitPushPr: return "/commit-commands:commit-push-pr"
         case .caveman: return "/caveman:caveman"
         case .ultraReview: return "/ultrareview"
+        case .brainstorm: return "/superpowers:brainstorming"
+        case .writePlan: return "/superpowers:writing-plans"
+        case .executePlan: return "/superpowers:executing-plans"
+        case .resume: return "/resume"
+        case .model: return "/model"
+        case .context: return "/context"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -7410,6 +7431,12 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .commitPushPr: return "/ship"
         case .caveman: return "/cave"
         case .ultraReview: return "/ultra"
+        case .brainstorm: return "/brainstorm"
+        case .writePlan: return "/writeplan"
+        case .executePlan: return "/execplan"
+        case .resume: return "/resume"
+        case .model: return "/model"
+        case .context: return "/context"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -7464,7 +7491,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
 
     var category: Category {
         switch self {
-        case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview: return .slash
+        case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview,
+             .brainstorm, .writePlan, .executePlan, .resume, .model, .context: return .slash
         case .yes, .no, .one, .two, .three: return .answer
         case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab, .acceptAutocomplete: return .keystroke
         case .broadcast: return .app
@@ -7491,6 +7519,15 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .commitPushPr: return .sendText("/commit-commands:commit-push-pr", pressReturn: true)
         case .caveman: return .sendText("/caveman:caveman", pressReturn: true)
         case .ultraReview: return .sendText("/ultrareview", pressReturn: true)
+        // The Superpowers skills take what to work on, so leave the prompt
+        // open for it — same pattern as /plan.
+        case .brainstorm: return .sendText("/superpowers:brainstorming ", pressReturn: false)
+        case .writePlan: return .sendText("/superpowers:writing-plans ", pressReturn: false)
+        case .executePlan: return .sendText("/superpowers:executing-plans ", pressReturn: false)
+        // These open Claude Code's own pickers / report, so submit at once.
+        case .resume: return .sendText("/resume", pressReturn: true)
+        case .model: return .sendText("/model", pressReturn: true)
+        case .context: return .sendText("/context", pressReturn: true)
         case .yes: return .quickAction("press_y")
         case .no: return .quickAction("press_n")
         case .one: return .sendText("1", pressReturn: true)
