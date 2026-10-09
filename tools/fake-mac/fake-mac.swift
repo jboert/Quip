@@ -286,9 +286,9 @@ struct WireWindow: Encodable {
     /// Minimized through `minimize_window` and not restored since (Q-53).
     let isMinimized: Bool
 
-    init(_ w: FixtureWindow, isMinimized: Bool = false) {
+    init(_ w: FixtureWindow, isMinimized: Bool = false, color: String? = nil) {
         id = w.id; name = w.name; app = w.app; folder = w.folder; enabled = w.enabled
-        frame = w.frame; state = w.state; color = w.color; isThinking = w.isThinking ?? false
+        frame = w.frame; state = w.state; self.color = color ?? w.color; isThinking = w.isThinking ?? false
         claudeMode = w.claudeMode; cliKind = w.cliKind; targetKind = w.targetKind
         displayID = w.displayID; spaceID = w.spaceID; isPinned = w.isPinned ?? false
         self.isMinimized = isMinimized
@@ -486,6 +486,8 @@ final class FakeMac: @unchecked Sendable {
     /// Windows minimized through `minimize_window` (Q-53); `select_window`
     /// restores, `close_window` and `reload` forget.
     private var minimized: Set<String> = []
+    /// Colors set through `set_color` (Q-44); nil resets to the fixture's.
+    private var colorOverrides: [String: String] = [:]
     private var prompts: [PromptEntry]
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: Client] = [:]
@@ -784,6 +786,7 @@ final class FakeMac: @unchecked Sendable {
                 log.line(head + " -> restored \(id) from the Dock, layout_update to \(n) phone(s)")
             }
         case "minimize_window": handleMinimizeWindow(m, head)
+        case "set_color": handleSetColor(m, head)
         case "close_window": handleCloseWindow(m, head)
         case "put_prompt": handlePutPrompt(m, head)
         case "delete_prompt": handleDeletePrompt(m, head)
@@ -869,7 +872,8 @@ final class FakeMac: @unchecked Sendable {
         // The Mac floats pinned windows to the front of the list.
         let ordered = windows.filter { $0.isPinned == true } + windows.filter { $0.isPinned != true }
         return LayoutUpdateMsg(monitor: fixture.monitor, screenAspect: fixture.screenAspect,
-                               windows: ordered.map { WireWindow($0, isMinimized: minimized.contains($0.id)) },
+                               windows: ordered.map { WireWindow($0, isMinimized: minimized.contains($0.id),
+                                                                   color: colorOverrides[$0.id]) },
                                displays: fixture.displays,
                                spanAspect: fixture.spanAspect, spaces: fixture.spaces)
     }
@@ -1059,6 +1063,30 @@ final class FakeMac: @unchecked Sendable {
     /// Q-53: the window stays in the layout, reported `isMinimized`, until
     /// `select_window` restores it. Unknown windows get the attributed error
     /// the Mac sends.
+    /// `set_color` (Q-44): the real Mac validates the hex, stores an override
+    /// and rebroadcasts the layout; the card recolors on that broadcast.
+    private func handleSetColor(_ m: [String: Any], _ head: String) {
+        let windowId = m["windowId"] as? String ?? ""
+        let color = m["color"] as? String
+        let line = head + " window=\(windowId) color=\(color ?? "nil")"
+        guard windows.contains(where: { $0.id == windowId }) else {
+            log.line(line + " -> no such window: ignored (as the real Mac)")
+            return
+        }
+        if let color {
+            let hex = color.hasPrefix("#") ? String(color.dropFirst()) : color
+            guard hex.count == 6, hex.allSatisfy(\.isHexDigit) else {
+                log.line(line + " -> not #RRGGBB: ignored (as the real Mac)")
+                return
+            }
+            colorOverrides[windowId] = "#" + hex.uppercased()
+        } else {
+            colorOverrides.removeValue(forKey: windowId)
+        }
+        let n = broadcast(layoutMessage())
+        log.line(line + " -> stored, layout_update to \(n) phone(s)")
+    }
+
     private func handleMinimizeWindow(_ m: [String: Any], _ head: String) {
         let windowId = m["windowId"] as? String ?? ""
         let messageId = m["messageId"] as? String

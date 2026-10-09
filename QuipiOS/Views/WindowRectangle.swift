@@ -151,6 +151,26 @@ struct WindowRectangle: View {
                         .rotationEffect(.degrees(spinAngle))
                         .fixedSize()
                 }
+
+                // Q-61: the long press was the only way into the card menu,
+                // and nothing on the card said so. This opens the same menu
+                // with a tap. A Button inside the card wins the tap over the
+                // card's own onTapGesture, so it does not also select.
+                Menu {
+                    menuItems
+                } label: {
+                    Image(systemName: "ellipsis.circle.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(windowColor.opacity(0.9))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .offset(x: 6, y: -6)
+                .fixedSize()
+                // VoiceOver keeps the card as one button whose actions rotor
+                // carries this same menu; exposing the ⋯ too would turn the
+                // card into a pop-up and steal double-tap-to-select.
+                .accessibilityHidden(true)
             }
             .padding(10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -173,6 +193,51 @@ struct WindowRectangle: View {
             onSelect()
         }
         .contextMenu {
+            menuItems
+        }
+        .alert("Close \(window.name)?", isPresented: $showCloseConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            // "Remove from Phone" is only meaningful when the window is
+            // currently being managed — toggling an already-disabled window
+            // here would re-enable it, which is the opposite of what the
+            // user asked for. On a disabled window (visible via
+            // mirror-desktop), only the destructive Close Terminal remains.
+            if window.enabled {
+                Button("Remove from Phone") {
+                    triggerAction(.toggleEnabled)
+                }
+            }
+            Button("Close Terminal", role: .destructive) {
+                triggerAction(.closeWindow)
+            }
+        } message: {
+            Text("Remove from Phone keeps the terminal running on your Mac — you just stop driving it from here. Close Terminal kills any running command and can't be undone.")
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(WindowAccessibility.tileIdentifier(for: window))
+        .accessibilityLabel(WindowAccessibility.windowLabel(for: window))
+        .accessibilityValue(WindowAccessibility.value(isSelected: isSelected, isEnabled: window.enabled))
+        .accessibilityHint("Double-tap to select; the Window actions button or a long press opens pin, color, QA pairing and more.")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .onAppear {
+            if window.isThinking {
+                startSpin()
+            }
+        }
+        .onChange(of: window.isThinking) { _, thinking in
+            if thinking {
+                spinAngle = 0
+                startSpin()
+            } else {
+                spinAngle = 0
+            }
+        }
+    }
+
+    /// Everything the card can do, shared by the long-press context menu and
+    /// the ⋯ button (Q-61) so the two never drift apart.
+    @ViewBuilder
+    private var menuItems: some View {
             Button {
                 triggerAction(.duplicate)
             } label: {
@@ -216,10 +281,27 @@ struct WindowRectangle: View {
                       systemImage: window.isPinned ? "pin.slash" : "pin")
             }
 
-            Button {
-                triggerAction(.chooseColor)
+            // Q-61: the palette sits right in the menu, one tap from the card.
+            // Custom… keeps the full sheet (picker + reset) for anything else.
+            Menu {
+                // Named rows, not a ControlGroup strip: a menu strip holds
+                // three items and spills the rest into rows anyway.
+                ForEach(WindowColor.palette, id: \.self) { hex in
+                    swatch(hex)
+                }
+                Divider()
+                Button {
+                    triggerAction(.chooseColor)
+                } label: {
+                    Label("Custom\u{2026}", systemImage: "slider.horizontal.3")
+                }
+                Button {
+                    triggerAction(.setColor(nil))
+                } label: {
+                    Label("Reset to automatic", systemImage: "arrow.counterclockwise")
+                }
             } label: {
-                Label("Color\u{2026}", systemImage: "paintpalette")
+                Label("Color", systemImage: "paintpalette")
             }
 
             // Q-53 — park the window in the Mac's Dock, or bring it back.
@@ -255,44 +337,20 @@ struct WindowRectangle: View {
                     systemImage: window.enabled ? "eye.slash" : "eye"
                 )
             }
-        }
-        .alert("Close \(window.name)?", isPresented: $showCloseConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            // "Remove from Phone" is only meaningful when the window is
-            // currently being managed — toggling an already-disabled window
-            // here would re-enable it, which is the opposite of what the
-            // user asked for. On a disabled window (visible via
-            // mirror-desktop), only the destructive Close Terminal remains.
-            if window.enabled {
-                Button("Remove from Phone") {
-                    triggerAction(.toggleEnabled)
-                }
-            }
-            Button("Close Terminal", role: .destructive) {
-                triggerAction(.closeWindow)
-            }
-        } message: {
-            Text("Remove from Phone keeps the terminal running on your Mac — you just stop driving it from here. Close Terminal kills any running command and can't be undone.")
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(WindowAccessibility.tileIdentifier(for: window))
-        .accessibilityLabel(WindowAccessibility.windowLabel(for: window))
-        .accessibilityValue(WindowAccessibility.value(isSelected: isSelected, isEnabled: window.enabled))
-        .accessibilityHint("Double-tap to select; long-press for actions including QA pairing.")
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .onAppear {
-            if window.isThinking {
-                startSpin()
+    }
+
+    private func swatch(_ hex: String) -> some View {
+        let current = WindowColor.normalized(window.color) == hex
+        return Button {
+            triggerAction(.setColor(hex))
+        } label: {
+            Label {
+                Text(WindowColorSwatch.name(for: hex))
+            } icon: {
+                Image(uiImage: WindowColorSwatch.image(hex: hex, selected: current))
             }
         }
-        .onChange(of: window.isThinking) { _, thinking in
-            if thinking {
-                spinAngle = 0
-                startSpin()
-            } else {
-                spinAngle = 0
-            }
-        }
+        .accessibilityAddTraits(current ? .isSelected : [])
     }
 
     private func startSpin() {
@@ -311,7 +369,7 @@ struct WindowRectangle: View {
     }
 }
 
-enum WindowAction {
+enum WindowAction: Equatable {
     case pressReturn
     case cancel
     case viewOutput
@@ -327,6 +385,9 @@ enum WindowAction {
     /// Open the color sheet. The Mac owns window colors, so the sheet sends
     /// `set_color` and the card changes on the next layout broadcast.
     case chooseColor
+    /// A swatch from the menu's Color strip (Q-61): `set_color` straight
+    /// away, nil resets to the Mac's automatic color.
+    case setColor(String?)
     /// Minimize to the Mac's Dock (`minimize_window`, Q-53). The Mac reports
     /// `isMinimized` on the next layout and the tray lists the window.
     case minimize

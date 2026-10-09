@@ -1625,6 +1625,9 @@ struct MainiOSView: View {
     /// The window whose color sheet is open, from "Color…" in the card's
     /// long-press menu.
     @State private var colorSheetWindowId: String? = nil
+    /// Q-61: the one-line hint under the grid goes away once the card menu
+    /// has been used (any action from it, by tap or long press).
+    @AppStorage("cardMenuHintSeen") private var cardMenuHintSeen = false
 
     /// Colors the user gave keyboard buttons (see `KeyColors`).
     @AppStorage(KeyColors.storageKey) private var quickSlotColorsJSON: String = "{}"
@@ -4803,6 +4806,19 @@ struct MainiOSView: View {
                             .padding(6)
                     }
                 }
+                // Q-61: one line, once. Tells a new user the cards have a
+                // menu; gone after the first action from it.
+                .overlay(alignment: .bottom) {
+                    if !windows.isEmpty && !cardMenuHintSeen {
+                        Text("Tap ⋯ or hold a card for pin, color and more")
+                            .font(.caption2)
+                            .foregroundStyle(colors.textSecondary)
+                            .lineLimit(1)
+                            .offset(y: 14)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
             }
         }
     }
@@ -5389,6 +5405,11 @@ struct MainiOSView: View {
     }
 
     private func sendAction(windowId: String, action: WindowAction) {
+        cardMenuHintSeen = true
+        if case .setColor(let hex) = action {
+            client.send(SetColorMessage(windowId: windowId, color: hex))
+            return
+        }
         if action == .viewOutput {
             onRequestContent(windowId)
             return
@@ -5434,6 +5455,7 @@ struct MainiOSView: View {
         case .chooseColor:
             colorSheetWindowId = windowId
             return
+        case .setColor: return   // handled above
         case .pairForQA:
             qaPickerSourceWindow = windowId
             showQAPicker = true
