@@ -286,11 +286,11 @@ struct WireWindow: Encodable {
     /// Minimized through `minimize_window` and not restored since (Q-53).
     let isMinimized: Bool
 
-    init(_ w: FixtureWindow, isMinimized: Bool = false, color: String? = nil) {
+    init(_ w: FixtureWindow, isMinimized: Bool = false, color: String? = nil, isPinned: Bool? = nil) {
         id = w.id; name = w.name; app = w.app; folder = w.folder; enabled = w.enabled
         frame = w.frame; state = w.state; self.color = color ?? w.color; isThinking = w.isThinking ?? false
         claudeMode = w.claudeMode; cliKind = w.cliKind; targetKind = w.targetKind
-        displayID = w.displayID; spaceID = w.spaceID; isPinned = w.isPinned ?? false
+        displayID = w.displayID; spaceID = w.spaceID; self.isPinned = isPinned ?? (w.isPinned ?? false)
         self.isMinimized = isMinimized
     }
 }
@@ -491,6 +491,10 @@ final class FakeMac: @unchecked Sendable {
     /// a stale backup can be replayed against newer edits (Q-63).
     private var storedPrefs: [String: Data] = [:]
     private var prefsFrozen = false
+    /// Windows pinned through `set_pin` (Q-58); the fixture's own
+    /// `isPinned` flags seed nothing here, they stay as the base state.
+    private var pinned: Set<String> = []
+    private var unpinned: Set<String> = []
     /// Colors set through `set_color` (Q-44); nil resets to the fixture's.
     private var colorOverrides: [String: String] = [:]
     private var prompts: [PromptEntry]
@@ -817,6 +821,7 @@ final class FakeMac: @unchecked Sendable {
             }
         case "minimize_window": handleMinimizeWindow(m, head)
         case "set_color": handleSetColor(m, head)
+        case "set_pin": handleSetPin(m, head)
         case "close_window": handleCloseWindow(m, head)
         case "put_prompt": handlePutPrompt(m, head)
         case "delete_prompt": handleDeletePrompt(m, head)
@@ -899,11 +904,16 @@ final class FakeMac: @unchecked Sendable {
     }
 
     private func layoutMessage() -> LayoutUpdateMsg {
-        // The Mac floats pinned windows to the front of the list.
-        let ordered = windows.filter { $0.isPinned == true } + windows.filter { $0.isPinned != true }
+        // The Mac floats pinned windows to the front of the list; a window
+        // pinned later lines up after the ones pinned before it.
+        let basePinned = windows.filter { isPinnedNow($0) && !pinned.contains($0.id) }
+        let newlyPinned = windows.filter { pinned.contains($0.id) }
+        let rest = windows.filter { !isPinnedNow($0) }
+        let ordered = basePinned + newlyPinned + rest
         return LayoutUpdateMsg(monitor: fixture.monitor, screenAspect: fixture.screenAspect,
                                windows: ordered.map { WireWindow($0, isMinimized: minimized.contains($0.id),
-                                                                   color: colorOverrides[$0.id]) },
+                                                                   color: colorOverrides[$0.id],
+                                                                   isPinned: isPinnedNow($0)) },
                                displays: fixture.displays,
                                spanAspect: fixture.spanAspect, spaces: fixture.spaces)
     }
@@ -1116,6 +1126,29 @@ final class FakeMac: @unchecked Sendable {
         let n = broadcast(layoutMessage())
         log.line(line + " -> stored, layout_update to \(n) phone(s)")
     }
+
+    /// `set_pin` (Q-58): the real Mac flips the pin and rebroadcasts with the
+    /// pinned windows first; a new pin lines up after the existing ones.
+    private func handleSetPin(_ m: [String: Any], _ head: String) {
+        let windowId = m["windowId"] as? String ?? ""
+        let wantPinned = m["pinned"] as? Bool ?? true
+        guard windows.contains(where: { $0.id == windowId }) else {
+            log.line(head + " window=\(windowId) -> no such window: ignored (as the real Mac)")
+            return
+        }
+        if wantPinned { pinned.insert(windowId); unpinned.remove(windowId) }
+        else { pinned.remove(windowId); unpinned.insert(windowId) }
+        let n = broadcast(layoutMessage())
+        log.line(head + " window=\(windowId) pinned=\(wantPinned) -> layout_update to \(n) phone(s), pinned now [\(effectivePinned().joined(separator: ","))]")
+    }
+
+    private func isPinnedNow(_ w: FixtureWindow) -> Bool {
+        if pinned.contains(w.id) { return true }
+        if unpinned.contains(w.id) { return false }
+        return w.isPinned == true
+    }
+
+    private func effectivePinned() -> [String] { windows.filter { isPinnedNow($0) }.map(\.id) }
 
     private func handleMinimizeWindow(_ m: [String: Any], _ head: String) {
         let windowId = m["windowId"] as? String ?? ""

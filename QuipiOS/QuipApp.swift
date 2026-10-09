@@ -5458,6 +5458,18 @@ struct MainiOSView: View {
             // answers with a fresh layout, so the card moves when the Mac has
             // actually written the pin, never before.
             let pinned = windows.first(where: { $0.id == windowId })?.isPinned ?? false
+            if !pinned {
+                // A pin means "put this first". Two things used to keep the
+                // card where it was: a free-drag position saved for it (the
+                // override wins over the grid cell) and a grid with no
+                // arranged mode (cards sit where the Mac windows sit). Clear
+                // the first, force the second (Q-58 follow-up).
+                if phoneFrameOverrides.removeValue(forKey: windowId) != nil { persistOverrides() }
+                if phoneLayoutOverride == nil {
+                    phoneLayoutOverrideRaw = Self.chooseAutoLayout(count: max(windows.count, 1))
+                    manualLayoutSticky = true
+                }
+            }
             client.send(SetPinMessage(windowId: windowId, pinned: !pinned))
             return
         }
