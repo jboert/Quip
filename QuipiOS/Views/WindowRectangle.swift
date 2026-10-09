@@ -43,6 +43,10 @@ struct WindowRectangle: View {
 
     @State private var spinAngle: Double = 0
     @State private var showCloseConfirmation = false
+    /// Card width, for hiding the ⋯ on narrow cards (horizontal arrange
+    /// mode): the title is worth more than a second way into the menu, and
+    /// the long press still works there.
+    @State private var cardWidth: CGFloat = .infinity
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
@@ -158,6 +162,7 @@ struct WindowRectangle: View {
                 // and nothing on the card said so. This opens the same menu
                 // with a tap. A Button inside the card wins the tap over the
                 // card's own onTapGesture, so it does not also select.
+                if cardWidth >= 120 {
                 Menu {
                     menuItems
                 } label: {
@@ -173,6 +178,7 @@ struct WindowRectangle: View {
                 // carries this same menu; exposing the ⋯ too would turn the
                 // card into a pop-up and steal double-tap-to-select.
                 .accessibilityHidden(true)
+                }
             }
             .padding(10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -188,6 +194,11 @@ struct WindowRectangle: View {
                     }
             }
         }
+        .background(GeometryReader { geo in
+            Color.clear
+                .onAppear { cardWidth = geo.size.width }
+                .onChange(of: geo.size.width) { _, w in cardWidth = w }
+        })
         .shadow(color: glowColor, radius: glowRadius)
         .scaleEffect(isSelected ? 1.02 : 1.0)
         .animation(.spring(duration: 0.35, bounce: 0.2), value: isSelected)

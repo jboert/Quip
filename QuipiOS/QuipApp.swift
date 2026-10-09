@@ -3032,9 +3032,10 @@ struct MainiOSView: View {
                                 .frame(width: navW, height: navH)
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
-                                // The pill stays narrow; the target is 44 pt (Q-62).
-                                .frame(minWidth: 44, minHeight: 44)
-                                .contentShape(Rectangle())
+                                // The pill and the row width stay as they are; only
+                                // the tappable shape grows to 44 pt (Q-62). A wider
+                                // frame here pushed the row past the screen edge.
+                                .contentShape(Rectangle().inset(by: -10))
                         }
                         .disabled(windows.count <= 1)
                         .accessibilityLabel("Previous window")
@@ -3050,9 +3051,10 @@ struct MainiOSView: View {
                                 .frame(width: navW, height: navH)
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
-                                // The pill stays narrow; the target is 44 pt (Q-62).
-                                .frame(minWidth: 44, minHeight: 44)
-                                .contentShape(Rectangle())
+                                // The pill and the row width stay as they are; only
+                                // the tappable shape grows to 44 pt (Q-62). A wider
+                                // frame here pushed the row past the screen edge.
+                                .contentShape(Rectangle().inset(by: -10))
                         }
                         .disabled(windows.count <= 1)
                         .accessibilityLabel("Next window")
