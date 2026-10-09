@@ -50,7 +50,7 @@ Everything from `5ffd8f2` back is addendum 3's.
 | Peer | Installed | Code it is missing |
 | --- | --- | --- |
 | Mac `/Applications/Quip.app` | eb-branch `0a67664` (Q-60 push payload: subtitle, labels, mutable-content, passive generic waits), 1.5.7 Release, Developer ID, installed 2026-10-08 20:22 (fresh pid 37809, port 8765 listening). Stamp reads `0215567-dirty`: built from the Q-60 working tree a minute before it was committed as `0a67664`; same code. | Nothing. Check the Mac Status row for Accessibility / Screen Recording after the phone reconnects, re-grant if red. |
-| iPhone (owner's primary) | eb-branch `0a67664`, 1.5.7, Debug, installed over the LAN 2026-10-08 20:24, with the new `QuipNotificationService.appex` embedded. Force-quit and relaunch; Settings should show `1.5.7 (0a67664, 2026-10-08 20:22)`. | Nothing. |
+| iPhone (owner's primary) | eb-branch `383c7db`, 1.5.7, Debug, installed over the LAN 2026-10-08 22:08 (carries Q-60's `QuipNotificationService.appex` and Q-61's card menu). Force-quit and relaunch; Settings should show `1.5.7 (383c7db, 2026-10-08 22:0x)`. | Nothing. |
 | QA simulator D8C5154B | eb-branch `b65c734` (`com.fintechadventures.quip`), paired to the fake Mac on 127.0.0.1:8799, notifications allowed (2026-10-08 14:13). A stray `com.quip.QuipiOS` test host was uninstalled; it had been catching the `quip://` pair link. Must never pair with the real Mac. | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check; `xcrun simctl push` with `aps.category=waiting.yn` exercises the alert actions. |
 
 One phone socket was ESTABLISHED on port 8765 at handoff time.
@@ -94,6 +94,7 @@ Both peers now carry today's code (installed 2026-10-08 08:28); the hardware che
   running at handoff. `cea03cb` stops the ruflo-rewritten `QuipiOS/ruvector.db`
   from marking builds `-dirty`.
 - **Q-57 and Q-58 simulator pass 2026-10-08 14:00–14:16** (board rows have the detail): pinned card first live and after relaunch; lock-screen Yes, Reply and the unreachable alert all verified against the fake Mac with the app killed.
+- **Q-61 card menu discoverability** landed `383c7db` (iOS only, Mac untouched): ⋯ button on every card, Color submenu with named swatches, hint under the grid. Simulator-verified against the fake Mac (which now handles `set_color`). Phone install: see the table.
 - **Q-60 descriptive alerts + labelled buttons** landed `0a67664`, both peers installed 20:22/20:24. The simulator cannot prove the extension (`simctl push` bypasses `usernotificationsd`, so no service extension runs); the owner's Test Push (Settings → Notifications) is the first real check: subtitle `Claude is asking · hold to answer`, hold shows `Yes / Yes, don't ask again / No`. Open question if the buttons still read 1/2/3 on the phone: `getNotificationCategories`/`setNotificationCategories` from inside the extension, or the appex not launching (check `log stream --predicate 'process == "QuipNotificationService"'` over USB).
 - **Q-58 pin order** landed `1295d31` (phone honours pins over its drag order; a new Mac pin lines up after existing pins). Mac installed; phone install pending (see table).
 - **Q-59 Mac SwiftUI review via Ralph PRD** merged `b65c734` (7 stories, all verified by the coordinator, see board). Worktree and branch removed. prd.json/progress.txt re-untracked in `4e8aacf`.
