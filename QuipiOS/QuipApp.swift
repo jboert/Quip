@@ -1503,7 +1503,11 @@ struct MainiOSView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Full-width Broadcast bar above the main row (US-109). Off hides it;
     /// Broadcast can still be a Quick Button.
-    @AppStorage("mainRow.broadcastBar") private var mainRowBroadcastBar: Bool = true
+    /// Owner: "it should be on the main keyboard, not another row, next to
+    /// the microphone." The bar stays available but is off by default; the
+    /// icon tile beside the mic is the default way in.
+    @AppStorage("mainRow.broadcastBar") private var mainRowBroadcastBar: Bool = false
+    @AppStorage("mainRow.broadcast") private var mainRowBroadcast: Bool = true
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -2949,7 +2953,9 @@ struct MainiOSView: View {
         // 48pt × 6 + nav/ptt/aux + Spacers stays under 430.
         let btnH: CGFloat = isPortrait ? 56 : 40
         let btnW: CGFloat = isPortrait ? 48 : 44
-        let pttW: CGFloat = isPortrait ? 64 : 56
+        // The mic gives up 8 pt when the broadcast tile sits beside it, so the
+        // row still fits the 440 pt screen with every button on.
+        let pttW: CGFloat = isPortrait ? (mainRowBroadcast ? 56 : 64) : 56
         let navW: CGFloat = isPortrait ? 24 : 22
         let navH: CGFloat = isPortrait ? 36 : 28
         let auxW: CGFloat = isPortrait ? 36 : 32
@@ -3065,7 +3071,7 @@ struct MainiOSView: View {
                 // Visual gap between nav cluster and window-mgmt cluster.
                 // Only present when both clusters have at least one button.
                 if leftNavOn && leftMgmtOn {
-                    Spacer().frame(width: 10)
+                    Spacer().frame(width: 6)
                 }
 
                 // LEFT cluster 2: window mgmt (spawn, arrange)
@@ -3153,7 +3159,7 @@ struct MainiOSView: View {
                 } // close LEFT cluster 2 HStack
 
                 // Big flexible spacer pinning mic to geometric center.
-                Spacer(minLength: 12)
+                Spacer(minLength: 8)
 
                 // Push to talk — icon-only, and the one tinted tile in the row
                 // so the primary action wins it (Q-62): the recording amber
@@ -3179,7 +3185,29 @@ struct MainiOSView: View {
                 }
                 .accessibilityLabel(isRecording ? "Stop recording" : "Push to talk")
                 .accessibilityAddTraits(.isButton)
-                Spacer(minLength: 12)
+
+                // Broadcast, right beside the mic: the same sheet the bar
+                // opened, as one icon tile (the owner wanted no extra row).
+                if mainRowBroadcast && !isQAModeActive {
+                    let canBroadcast = BroadcastPromptPlan.canOpen(windows: windows, isConnected: client.isConnected)
+                    Button {
+                        openBroadcast(draft: textInputValue)
+                    } label: {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(canBroadcast ? colors.textPrimary : colors.textFaint)
+                            .frame(width: 30, height: auxH)
+                            .background(colors.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .padding(.leading, 4)
+                    .disabled(!canBroadcast)
+                    .accessibilityLabel("Broadcast prompt")
+                    .accessibilityInputLabels(["Broadcast", "Broadcast Prompt"])
+                    .accessibilityHint("Choose terminal windows and send the same prompt to each one")
+                    .accessibilityAddTraits(.isButton)
+                }
+                Spacer(minLength: 8)
 
                 // RIGHT cluster 1: input attach (photo, prompts)
                 HStack(spacing: 6) {
@@ -3217,7 +3245,7 @@ struct MainiOSView: View {
 
                 // Visual gap between photo and send-cluster (keyboard/return).
                 if !isQAModeActive && (mainRowPhoto || mainRowPrompts) && rightSendOn {
-                    Spacer().frame(width: 10)
+                    Spacer().frame(width: 6)
                 }
 
                 // RIGHT cluster 2: send (keyboard, return)
@@ -8442,7 +8470,8 @@ struct MainRowButtonsSheet: View {
     @AppStorage("mainRow.prompts") private var prompts: Bool = false
     @AppStorage("mainRow.keyboard") private var keyboard: Bool = true
     @AppStorage("mainRow.return") private var pressReturn: Bool = true
-    @AppStorage("mainRow.broadcastBar") private var broadcastBar: Bool = true
+    @AppStorage("mainRow.broadcast") private var broadcast: Bool = true
+    @AppStorage("mainRow.broadcastBar") private var broadcastBar: Bool = false
 
     var body: some View {
         List {
@@ -8455,9 +8484,10 @@ struct MainRowButtonsSheet: View {
                 Toggle(isOn: $prompts) { Label("Prompts", systemImage: "doc.text.magnifyingglass") }
                 Toggle(isOn: $keyboard) { Label("Keyboard Toggle", systemImage: "keyboard") }
                 Toggle(isOn: $pressReturn) { Label("Press Return", systemImage: "return") }
-                Toggle(isOn: $broadcastBar) { Label("Broadcast Bar", systemImage: "dot.radiowaves.left.and.right") }
+                Toggle(isOn: $broadcast) { Label("Broadcast (beside the mic)", systemImage: "dot.radiowaves.left.and.right") }
+                Toggle(isOn: $broadcastBar) { Label("Broadcast Bar (own row)", systemImage: "rectangle.and.text.magnifyingglass") }
             } footer: {
-                Text("PTT mic always shows. Hide buttons you don't use to keep the row uncluttered. Long-press the Arrange button to realign auto-layout. With the Broadcast bar hidden, add Broadcast to Quick Buttons to keep it a tap away.")
+                Text("PTT mic always shows. Hide buttons you don't use to keep the row uncluttered. Long-press the Arrange button to realign auto-layout. Broadcast lives beside the mic; the bar is the same action as a full-width row, off unless you want it. Broadcast can also be a Quick Button.")
             }
         }
         .listStyle(.insetGrouped)
