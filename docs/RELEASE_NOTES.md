@@ -93,6 +93,13 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   SwiftUI Buttons stay for VoiceOver. The row also measures itself and
   shrinks its tiles in proportion when every button is on, so it can no
   longer run off the screen edge.
+- **Slash palette: most-used first, more commands (Q-66).** Holding a slash
+  pill lists your most-used slash commands at the top (use decays over a
+  week, so what you use now wins); the Search sheet follows the same order.
+  The order is backed up with your prompt usage, so a reinstall keeps it.
+  New built-ins in the palette: `/superpowers:brainstorming`,
+  `/superpowers:writing-plans`, `/superpowers:executing-plans`, `/resume`,
+  `/model`, `/context`. Add any other with Quick Buttons → + → Custom Button.
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,
