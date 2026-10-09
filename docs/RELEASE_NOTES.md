@@ -129,10 +129,11 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
 
 ## Hardware checks still owed
 Labelled alert buttons over APNs; pin from the phone's card menu on the real
-Mac; Save Layout / Apply and the menu-bar Arrange message; VoiceOver and
+Mac; hold-and-drag on the real phone (the simulator cannot hold a still finger,
+UIKit recognizers were verified by log); Save Layout / Apply and the menu-bar Arrange message; VoiceOver and
 Reduce Motion passes on the Mac. Everything else above was run on the QA
 simulator against the fake Mac, with the full gate green (harness 15 checks,
-QuipMac 1155 tests, QuipiOS 1167 tests).
+QuipMac 1155 tests, QuipiOS 1171 tests).
 
 ---
 
