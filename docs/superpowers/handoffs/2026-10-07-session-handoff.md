@@ -50,7 +50,7 @@ Everything from `5ffd8f2` back is addendum 3's.
 | Peer | Installed | Code it is missing |
 | --- | --- | --- |
 | Mac `/Applications/Quip.app` | eb-branch `47968a3` (Q-63 stamped preference backups; Q-60 push payload), 1.5.7 Release, Developer ID, installed 2026-10-09 09:39 (fresh pid 63701, port 8765 listening). Stamp reads `47968a3-dirty` (docs were uncommitted at build time; same code). | Nothing. Re-grant Accessibility / Screen Recording if the Mac Status row shows red. |
-| iPhone (owner's primary) | eb-branch `b1d5d4e`-era build, see the last docs commit for the exact stamp; installed over the LAN 2026-10-09 10:1x from a clean tree (Q-58 pin hardening, Q-60 extension, Q-61 card menu, Q-62 audit fixes + clipping fix, Q-63 settings guard). One Quip icon. Force-quit and relaunch. | Nothing. |
+| iPhone (owner's primary) | eb-branch `9031192`, 1.5.7, Debug, stamp `9031192 2026-10-09 10:09` (clean), installed over the LAN 2026-10-09 10:11 (Q-58 pin hardening, Q-60 extension, Q-61 card menu, Q-62 audit fixes + clipping fix, Q-63 settings guard). One Quip icon. Force-quit and relaunch. | Nothing. |
 | QA simulator D8C5154B | eb-branch `b65c734` (`com.fintechadventures.quip`), paired to the fake Mac on 127.0.0.1:8799, notifications allowed (2026-10-08 14:13). A stray `com.quip.QuipiOS` test host was uninstalled; it had been catching the `quip://` pair link. Must never pair with the real Mac. | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check; `xcrun simctl push` with `aps.category=waiting.yn` exercises the alert actions. |
 
 One phone socket was ESTABLISHED on port 8765 at handoff time.
