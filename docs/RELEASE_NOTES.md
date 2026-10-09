@@ -80,6 +80,19 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   next to the mic (same sheet); the full-width bar is off by default and
   stays a toggle in Settings → Main Row Buttons. Search slash commands from
   the long-press palette (US-105).
+- **Hold and drag to rearrange the keyboard (Q-65).** Hold any button in
+  the main row or the quick row for 0.35 s, it lifts; drag it to a new slot
+  and the others slide aside; release and the order sticks (main row in
+  `mainRowOrderJSON`, synced in the preferences backup; quick row in the
+  existing slot list). Dragging past the mic moves a button to the other
+  side of it; the mic itself stays put. Release without moving and the
+  button's hold action runs as before: Arrange realigns, Keyboard pastes
+  the iPhone clipboard, a prompt pill pastes and submits, a slash pill opens
+  the slash palette (now a sheet, since a context menu cannot share the long
+  press). Touch handling for these rows moved to UIKit recognizers; the
+  SwiftUI Buttons stay for VoiceOver. The row also measures itself and
+  shrinks its tiles in proportion when every button is on, so it can no
+  longer run off the screen edge.
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,

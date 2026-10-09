@@ -18,7 +18,7 @@ Written at ~50% context. Owner intends to push eb-branch to origin today.
 
 | Hash | Why |
 | --- | --- |
-| (see `git log`) | Q-64 broadcast tile beside the mic, bar off by default; release notes and board updated; phone reinstalled clean. |
+| (see `git log`) | Q-65 hold-and-drag reordering of the main row and quick row (UIKit recognizers), self-fitting main row, slash palette as a sheet; Q-64 broadcast tile beside the mic, bar off by default; release notes and board updated; phone reinstalled clean. |
 | `7761b50` | Handoff: phone on `9031192`, clean stamp. |
 | `9031192` | Board/handoff: pin investigation, release notes written, why a stamp reads `-dirty`. |
 | `117525c` | Release notes "eb-branch → 2026-10-09", everything since `e5ed6ee`. |
@@ -60,6 +60,8 @@ Earlier today's-session commits (`4e8aacf` back to `ba3593e`) are in the previou
 | Q-59 Mac SwiftUI PRD (US-001..007) | green | n/a | Save Layout / Apply, Arrange message, VoiceOver, Reduce Motion unseen |
 
 ## Open threads
+
+- **Stray test loop on this Mac:** pid 52527 `bash -c while true; do TEST_RUNNER_SIMDRIVE_DIR=/tmp/simdrive-work/run xcodebuild test-without-building …` (parent launchd, started 2026-10-08 14:57, simulator `14B7E865-0586-4437-973F-0E156B1B0B79`, not the QA sim) runs tests non-stop and slows every build; not started by this session, left running for the owner to kill (`kill 52527`).
 
 - **Push** on the owner's word only (standing rule). Branch is ready: clean, gated, release notes written.
 - **Pin from the phone** (Q-58): simulator path works; `bbddd32` hardens the phone side. If it still fails on the real Mac, check `isPinned` in the layout the Mac broadcasts after `set_pin` (`QuipMacApp.swift` `case "set_pin"` → `windowManager.togglePin` → `broadcastLayout`).
