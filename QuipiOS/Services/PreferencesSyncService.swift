@@ -40,6 +40,16 @@ final class PreferencesSyncService {
     private var kvsObserver: NSObjectProtocol?
     private var debounceWorkItem: DispatchWorkItem?
 
+    /// Q-63: when the user last changed a tracked preference here, in unix
+    /// seconds. Kept in its own suite so writing it does not re-enter the
+    /// `UserDefaults.standard` change observer that drives the sync.
+    private static let metaSuite = UserDefaults(suiteName: "com.fintechadventures.quip.prefs-meta")
+    private static let localModifiedKey = "prefs.localModifiedAt"
+    var localModifiedAt: Double? {
+        get { Self.metaSuite?.object(forKey: Self.localModifiedKey) as? Double }
+        set { Self.metaSuite?.set(newValue, forKey: Self.localModifiedKey) }
+    }
+
     /// When non-nil, suppress outbound snapshots until this time. Set
     /// briefly after `applyRestore` so the UserDefaults writes from the
     /// restore don't immediately echo back to the Mac as a "new" snapshot.
@@ -128,6 +138,16 @@ final class PreferencesSyncService {
     /// pick them up automatically. Suppresses the outbound sync briefly
     /// so the writes don't ricochet straight back to the Mac.
     func applyRestore(_ snapshot: PreferencesSnapshot) {
+        // Q-63: an older (or unstamped) copy never overwrites an edit made
+        // here. Before this, the desktop's copy on every auth and iCloud's at
+        // every launch wrote straight through, so a quick row re-ordered a
+        // minute ago could come back in its old order.
+        guard PreferencesFreshness.shouldApply(snapshotSavedAt: snapshot.savedAt,
+                                               localModifiedAt: localModifiedAt) else {
+            print("[Quip][Prefs] restore skipped: backup stamp \(snapshot.savedAt.map { String(Int($0)) } ?? "none") is not newer than local edit \(localModifiedAt.map { String(Int($0)) } ?? "none")")
+            return
+        }
+        if let stamp = snapshot.savedAt { localModifiedAt = stamp }
         suppressUntil = Date().addingTimeInterval(2.0)
         let d = UserDefaults.standard
         if let v = snapshot.enabledQuickButtons { d.set(v, forKey: "enabledQuickButtons") }
@@ -169,6 +189,8 @@ final class PreferencesSyncService {
 
     private func scheduleSync() {
         guard Date() >= suppressUntil else { return }
+        // A change outside the restore window is the user's own edit.
+        localModifiedAt = Date().timeIntervalSince1970
         debounceWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             Task { @MainActor [weak self] in
@@ -236,7 +258,8 @@ final class PreferencesSyncService {
             pairedBackendsJSON: d.data(forKey: "pairedBackendsData").flatMap { String(data: $0, encoding: .utf8) },
             recentConnectionsJSON: d.data(forKey: "recentConnectionsData").flatMap { String(data: $0, encoding: .utf8) },
             activeBackendID: d.string(forKey: "activeBackendID"),
-            promptUsageJSON: d.string(forKey: "promptUsageJSON")
+            promptUsageJSON: d.string(forKey: "promptUsageJSON"),
+            savedAt: localModifiedAt ?? Date().timeIntervalSince1970
         )
     }
 }

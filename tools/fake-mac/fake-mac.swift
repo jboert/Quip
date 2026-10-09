@@ -486,6 +486,11 @@ final class FakeMac: @unchecked Sendable {
     /// Windows minimized through `minimize_window` (Q-53); `select_window`
     /// restores, `close_window` and `reload` forget.
     private var minimized: Set<String> = []
+    /// The latest `preferences_snapshot` per device, served back on
+    /// `preferences_request` as the real Mac does. `freeze` stops updates so
+    /// a stale backup can be replayed against newer edits (Q-63).
+    private var storedPrefs: [String: Data] = [:]
+    private var prefsFrozen = false
     /// Colors set through `set_color` (Q-44); nil resets to the fixture's.
     private var colorOverrides: [String: String] = [:]
     private var prompts: [PromptEntry]
@@ -584,7 +589,7 @@ final class FakeMac: @unchecked Sendable {
             + "PIN \(options.pin); log \(log.path)"
             + (options.ackPaste ? "; --ack-paste" : "") + (options.errorIDs ? "; --error-ids" : ""))
         log.line("  pair a booted simulator: xcrun simctl openurl <udid> '\(pairingLink)'")
-        log.line("  commands: help status layout library close dead alive reload quit")
+        log.line("  commands: help status layout library close dead alive freeze thaw reload quit")
         announced = true
         if stdinClosedEarly { stdinClosed() }
     }
@@ -702,9 +707,14 @@ final class FakeMac: @unchecked Sendable {
             log.line("\(client.tag) encode FAILED for \(T.self): \(error)")
             return
         }
+        sendRaw(data, kind: String(describing: T.self), to: client)
+    }
+
+    /// Already-serialized JSON, for messages whose body is passed through
+    /// untouched (a stored preferences backup).
+    private func sendRaw(_ data: Data, kind: String, to client: Client) {
         let meta = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [meta])
-        let kind = String(describing: T.self)
         client.connection.send(content: data, contentContext: context, isComplete: true,
                                completion: .contentProcessed { [weak self] error in
             if let error { self?.log.line("\(client.tag) send \(kind) failed: \(error)") }
@@ -760,13 +770,33 @@ final class FakeMac: @unchecked Sendable {
         case "quick_action": handleQuickAction(m, head)
         case "preferences_request":
             let device = m["deviceID"] as? String ?? ""
-            log.line(head + " device=\(Self.short(device)) -> preferences_restore, no backup "
-                + "(empty snapshot, to this phone only)")
-            send(PreferencesRestoreMsg(deviceID: device), to: client)
+            if let prefs = storedPrefs[device],
+               let body = try? JSONSerialization.jsonObject(with: prefs) as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: [
+                   "type": "preferences_restore", "deviceID": device, "preferences": body
+               ]) {
+                let stamp = (body["savedAt"] as? Double).map { String(Int($0)) } ?? "none"
+                log.line(head + " device=\(Self.short(device)) -> preferences_restore, stored backup "
+                    + "(\(body.count) keys, savedAt \(stamp), to this phone only)")
+                sendRaw(data, kind: "preferences_restore", to: client)
+            } else {
+                log.line(head + " device=\(Self.short(device)) -> preferences_restore, no backup "
+                    + "(empty snapshot, to this phone only)")
+                send(PreferencesRestoreMsg(deviceID: device), to: client)
+            }
         case "preferences_snapshot":
-            let keys = (m["preferences"] as? [String: Any]).map { $0.keys.sorted() } ?? []
-            log.line(head + " device=\(Self.short(m["deviceID"] as? String)) keys=[\(keys.joined(separator: ","))] "
-                + "(values not logged; nothing stored)")
+            let device = m["deviceID"] as? String ?? ""
+            let prefs = m["preferences"] as? [String: Any] ?? [:]
+            let keys = prefs.keys.sorted()
+            let stamp = (prefs["savedAt"] as? Double).map { String(Int($0)) } ?? "none"
+            if prefsFrozen {
+                log.line(head + " device=\(Self.short(device)) keys=[\(keys.joined(separator: ","))] savedAt \(stamp) "
+                    + "-> IGNORED (prefs frozen; the stored backup stays stale)")
+            } else if let data = try? JSONSerialization.data(withJSONObject: prefs) {
+                storedPrefs[device] = data
+                log.line(head + " device=\(Self.short(device)) keys=[\(keys.joined(separator: ","))] savedAt \(stamp) "
+                    + "-> stored (values not logged)")
+            }
         case "device_identity":
             log.line(head + " kind=\(m["deviceKind"] as? String ?? "?") device=\(Self.short(m["deviceID"] as? String)) "
                 + "name=\(Self.quoted(m["displayName"] as? String ?? ""))")
@@ -1204,6 +1234,12 @@ final class FakeMac: @unchecked Sendable {
         case "layout":
             let n = broadcast(layoutMessage())
             log.line("cmd layout -> layout_update (\(windows.count) windows) to \(n) phone(s)")
+        case "freeze":
+            prefsFrozen = true
+            log.line("cmd freeze -> preferences_snapshot is ignored from now on (\(storedPrefs.count) backup(s) kept as they are)")
+        case "thaw":
+            prefsFrozen = false
+            log.line("cmd thaw -> preferences_snapshot is stored again")
         case "library":
             let n = broadcast(PromptLibraryMsg(prompts: prompts))
             log.line("cmd library -> prompt_library (\(prompts.count) prompts) to \(n) phone(s)")

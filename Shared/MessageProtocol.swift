@@ -1310,6 +1310,11 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// JSON text of the phone's prompt usage (`PromptRanker.Store`), so the
     /// picker order survives a reinstall. Merged on restore, never clobbered.
     var promptUsageJSON: String?
+    /// Unix seconds of the phone edit this snapshot captures. A restore
+    /// (iCloud at launch, the desktop on every auth) is applied only when it
+    /// is newer than the phone's own last edit; an unstamped copy never
+    /// overwrites an edited phone. Optional: older copies decode as nil.
+    var savedAt: Double?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -1337,7 +1342,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         pairedBackendsJSON: String? = nil,
         recentConnectionsJSON: String? = nil,
         activeBackendID: String? = nil,
-        promptUsageJSON: String? = nil
+        promptUsageJSON: String? = nil,
+        savedAt: Double? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -1365,6 +1371,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.recentConnectionsJSON = recentConnectionsJSON
         self.activeBackendID = activeBackendID
         self.promptUsageJSON = promptUsageJSON
+        self.savedAt = savedAt
     }
 }
 

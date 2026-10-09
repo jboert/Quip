@@ -937,8 +937,13 @@ struct QuipApp: App {
                     // synced; otherwise it'll send an empty snapshot and the
                     // local UserDefaults stay as-is.
                     prefsSync.requestRestore()
+                } else {
+                    // A saved PIN the Mac no longer accepts used to leave the
+                    // bar on "Authenticating…" with nothing to type into;
+                    // the field only appeared on the next tap in the picker.
+                    pinText = ""
+                    showPINEntry = true
                 }
-                // On failure, PIN entry stays open — authError displayed in the UI
             }
         }
 
@@ -1634,7 +1639,6 @@ struct MainiOSView: View {
     @State private var colorSheetWindowId: String? = nil
     /// Q-61: the one-line hint under the grid goes away once the card menu
     /// has been used (any action from it, by tap or long press).
-    @AppStorage("cardMenuHintSeen") private var cardMenuHintSeen = false
 
     /// Colors the user gave keyboard buttons (see `KeyColors`).
     @AppStorage(KeyColors.storageKey) private var quickSlotColorsJSON: String = "{}"
@@ -3319,11 +3323,13 @@ struct MainiOSView: View {
         } label: {
             // US-113 — the bar shows only while connected with windows, so the
             // one way it is disabled is that none of them is a terminal.
+            // Owner: the bar was too large. One compact line; Settings →
+            // Main Row Buttons → Broadcast Bar hides it altogether.
             Label(canOpen ? "Broadcast Prompt" : "Broadcast — no terminals open",
                   systemImage: "dot.radiowaves.left.and.right")
-                .font(.system(size: isPortrait ? 16 : 13, weight: .semibold))
+                .font(.system(size: isPortrait ? 13 : 12, weight: .semibold))
                 .frame(maxWidth: .infinity)
-                .frame(minHeight: isPortrait ? 50 : 36)
+                .frame(minHeight: isPortrait ? 32 : 28)
         }
         .accessibilityInputLabels(["Broadcast", "Broadcast Prompt"])
         .buttonStyle(.borderedProminent)
@@ -4833,19 +4839,6 @@ struct MainiOSView: View {
                             .padding(6)
                     }
                 }
-                // Q-61: one line, once. Tells a new user the cards have a
-                // menu; gone after the first action from it.
-                .overlay(alignment: .bottom) {
-                    if !windows.isEmpty && !cardMenuHintSeen {
-                        Text("Tap ⋯ or hold a card for pin, color and more")
-                            .font(.caption2)
-                            .foregroundStyle(colors.textSecondary)
-                            .lineLimit(1)
-                            .offset(y: 14)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
             }
         }
     }
@@ -5432,7 +5425,6 @@ struct MainiOSView: View {
     }
 
     private func sendAction(windowId: String, action: WindowAction) {
-        cardMenuHintSeen = true
         if case .setColor(let hex) = action {
             client.send(SetColorMessage(windowId: windowId, color: hex))
             return
