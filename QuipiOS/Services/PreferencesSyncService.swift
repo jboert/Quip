@@ -169,6 +169,7 @@ final class PreferencesSyncService {
         if let v = snapshot.dictationAutoSend { d.set(v, forKey: "dictation.autoSend") }
         if let v = snapshot.terminalTextSize { d.set(v, forKey: "terminalTextSize") }
         if let v = snapshot.quickSlotsJSON { d.set(v, forKey: "quickSlotsJSON") }
+        if let v = snapshot.mainRowOrderJSON { d.set(v, forKey: "mainRowOrderJSON") }
         if let v = snapshot.customButtonsJSON { d.set(v, forKey: "customButtonsJSON") }
         if let v = snapshot.quickSlotColorsJSON { d.set(v, forKey: KeyColors.storageKey) }
         if let v = snapshot.followFrontmost { d.set(v, forKey: "followFrontmost") }
@@ -259,7 +260,8 @@ final class PreferencesSyncService {
             recentConnectionsJSON: d.data(forKey: "recentConnectionsData").flatMap { String(data: $0, encoding: .utf8) },
             activeBackendID: d.string(forKey: "activeBackendID"),
             promptUsageJSON: d.string(forKey: "promptUsageJSON"),
-            savedAt: localModifiedAt ?? Date().timeIntervalSince1970
+            savedAt: localModifiedAt ?? Date().timeIntervalSince1970,
+            mainRowOrderJSON: d.string(forKey: "mainRowOrderJSON")
         )
     }
 }

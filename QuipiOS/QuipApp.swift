@@ -1508,6 +1508,13 @@ struct MainiOSView: View {
     /// icon tile beside the mic is the default way in.
     @AppStorage("mainRow.broadcastBar") private var mainRowBroadcastBar: Bool = false
     @AppStorage("mainRow.broadcast") private var mainRowBroadcast: Bool = true
+    /// Q-65: the main row's user-arranged order (hold a button, drag it).
+    @AppStorage("mainRowOrderJSON") private var mainRowOrderJSON: String = ""
+    @State private var mainReorder = RowReorderState()
+    @State private var quickReorder = RowReorderState()
+    /// Q-65: the slash pills' hold palette, presented from the reorder
+    /// gesture (a context menu cannot share the long press with the drag).
+    @State private var showSlashPalette = false
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -3015,283 +3022,44 @@ struct MainiOSView: View {
                 broadcastPromptButton
             }
 
-            // Cluster gating — small gap (10pt) appears between adjacent
-            // clusters when both have visible buttons. PTT mic is always
-            // visible and stays geometrically centered via flexible
-            // Spacers on each side. Adding/removing buttons recenters
-            // automatically because the Spacers absorb the slack.
-            let leftNavOn = !isQAModeActive && (mainRowCycleLeft || mainRowCycleRight)
-            let leftMgmtOn = !isQAModeActive && (mainRowSpawn || mainRowArrange)
-            let rightSendOn = mainRowKeyboard || mainRowReturn
-
-            // Control buttons
+            // Control buttons — every button is a row item the user can hold
+            // and drag to a new slot (Q-65). The mic is the fixed middle:
+            // items before it form the left group, items after it the right
+            // group, and the flexible spacers keep the mic centred whatever
+            // the user shows or moves. Dragging past the mic changes sides.
+            let visibleOrder = mainRowOrder.filter { mainRowItemVisible($0) }
+            let micAt = visibleOrder.firstIndex(of: MainRowOrder.mic) ?? visibleOrder.count
+            let leftIDs = Array(visibleOrder[..<micAt])
+            let rightIDs = micAt < visibleOrder.count ? Array(visibleOrder[(micAt + 1)...]) : []
+            // The row measures itself and shrinks its tiles in proportion
+            // when they would not fit (Q-65), instead of clipping the edges.
+            GeometryReader { rowGeo in
+            let sizes = MainRowSizes(navW: navW, navH: navH, btnW: btnW, btnH: btnH, auxW: auxW, auxH: auxH, pttW: pttW)
+                .fitted(to: rowGeo.size.width, visible: visibleOrder)
             HStack(spacing: 0) {
-                // LEFT cluster 1: window nav (chevrons)
                 HStack(spacing: 6) {
-                    if mainRowCycleLeft && !isQAModeActive {
-                        Button {
-                            cycleWindow(direction: -1)
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                                .frame(width: navW, height: navH)
-                                .background(colors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                // The pill and the row width stay as they are; only
-                                // the tappable shape grows to 44 pt (Q-62). A wider
-                                // frame here pushed the row past the screen edge.
-                                .contentShape(Rectangle().inset(by: -10))
-                        }
-                        .disabled(windows.count <= 1)
-                        .accessibilityLabel("Previous window")
-                        .accessibilityAddTraits(.isButton)
-                    }
-                    if mainRowCycleRight && !isQAModeActive {
-                        Button {
-                            cycleWindow(direction: 1)
-                        } label: {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
-                                .frame(width: navW, height: navH)
-                                .background(colors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                // The pill and the row width stay as they are; only
-                                // the tappable shape grows to 44 pt (Q-62). A wider
-                                // frame here pushed the row past the screen edge.
-                                .contentShape(Rectangle().inset(by: -10))
-                        }
-                        .disabled(windows.count <= 1)
-                        .accessibilityLabel("Next window")
-                        .accessibilityAddTraits(.isButton)
+                    ForEach(leftIDs, id: \.self) { id in
+                        mainRowItem(id, sizes: sizes)
+                            .rowReorderItem(id, state: mainReorder, space: "mainRow", order: visibleOrder,
+                                            tap: mainRowTapAction(id), hold: mainRowHoldAction(id),
+                                            onMove: moveMainRowItem)
                     }
                 }
-
-                // Visual gap between nav cluster and window-mgmt cluster.
-                // Only present when both clusters have at least one button.
-                if leftNavOn && leftMgmtOn {
-                    Spacer().frame(width: 6)
-                }
-
-                // LEFT cluster 2: window mgmt (spawn, arrange)
-                HStack(spacing: 6) {
-                    if mainRowSpawn && !isQAModeActive {
-                        Button {
-                            showSpawnPicker = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(colors.textPrimary)
-                                .frame(width: auxW, height: auxH)
-                                .background(colors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .accessibilityLabel("New window")
-                        .accessibilityAddTraits(.isButton)
-                    }
-
-                // Arrange — phone-only display toggle. Cycles through
-                // Mac-layout (default, shows real Mac positions), columns
-                // (side-by-side on phone), rows (stacked on phone). Does
-                // NOT move windows on the Mac; just reorganizes the preview
-                // here so overlapping/off-screen windows become distinct
-                // cards when you need 'em.
-                // Single button — tap cycles horizontal/vertical, long-press
-                // realigns (clears manual drag overrides + re-fires the
-                // auto-chooser). Combined into one slot per `feedback_compact_ui`
-                // so the row doesn't overflow. nil isn't a tap-cycle step
-                // anymore; the auto-chooser owns "no override" now.
-                if mainRowArrange && !isQAModeActive {
-                    Button {
-                        // Three-mode cycle: horizontal → vertical → grid → horizontal.
-                        // Grid mode (added 2026-05-06) is the natural pick for 4+
-                        // windows where vertical strips get too narrow to read.
-                        switch phoneLayoutOverride {
-                        case "horizontal": phoneLayoutOverrideRaw = "vertical"
-                        case "vertical":   phoneLayoutOverrideRaw = "grid"
-                        default:           phoneLayoutOverrideRaw = "horizontal"
-                        }
-                        manualLayoutSticky = true
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    } label: {
-                        let icon: String = {
-                            switch phoneLayoutOverride {
-                            case "horizontal": return "rectangle.split.3x1"
-                            case "vertical":   return "rectangle.split.1x3"
-                            case "grid":       return "rectangle.grid.2x2"
-                            default:           return "rectangle.3.group"
-                            }
-                        }()
-                        // ZStack with a text fallback so the button is never
-                        // blank if the SF Symbol fails to draw — which has
-                        // happened when the icon name churns mid-redraw
-                        // (cycling between rectangle.split.3x1/1x3/group).
-                        // The text sits behind the icon, hidden when the icon
-                        // renders correctly.
-                        ZStack {
-                            Text("⊞")
-                                .font(.system(size: 14, weight: .semibold))
-                            Image(systemName: icon)
-                                .font(.system(size: 16, weight: .semibold))
-                                // Stable identity per icon name forces a clean
-                                // redraw instead of a partial swap that can
-                                // leave the symbol blank.
-                                .id("arrange-\(icon)")
-                                .accessibilityLabel("Arrange windows")
-                        }
-                        .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
-                        .frame(width: auxW, height: auxH)
-                        .background(colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .disabled(windows.filter(\.enabled).count < 2)
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.5).onEnded { _ in
-                            realignWindows()
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        }
-                    )
-                    .accessibilityLabel("Arrange windows")
-                    .accessibilityHint("Double tap to cycle layout. Long press to realign.")
-                    .accessibilityAddTraits(.isButton)
-                }
-                } // close LEFT cluster 2 HStack
 
                 // Big flexible spacer pinning mic to geometric center.
                 Spacer(minLength: 8)
 
-                // Push to talk — icon-only, and the one tinted tile in the row
-                // so the primary action wins it (Q-62): the recording amber
-                // token at low alpha, never a solid rectangle. Live adds a
-                // 2 pt stroke and a stop square. Red stays for "no mic".
-                Button {
-                    if isRecording {
-                        onStopRecording()
-                    } else {
-                        onStartRecording()
-                    }
-                } label: {
-                    Image(systemName: isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(colors.recording)
-                        .frame(width: pttW, height: btnH)
-                        .background(colors.recording.opacity(0.18))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(colors.recording, lineWidth: isRecording ? 2 : 0)
-                        )
-                }
-                .accessibilityLabel(isRecording ? "Stop recording" : "Push to talk")
-                .accessibilityAddTraits(.isButton)
+                micButton(sizes: sizes)
+                    .rowFrame(MainRowOrder.mic, space: "mainRow", state: mainReorder)
 
-                // Broadcast, right beside the mic: the same sheet the bar
-                // opened, as one icon tile (the owner wanted no extra row).
-                if mainRowBroadcast && !isQAModeActive {
-                    let canBroadcast = BroadcastPromptPlan.canOpen(windows: windows, isConnected: client.isConnected)
-                    Button {
-                        openBroadcast(draft: textInputValue)
-                    } label: {
-                        Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(canBroadcast ? colors.textPrimary : colors.textFaint)
-                            .frame(width: 30, height: auxH)
-                            .background(colors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .padding(.leading, 4)
-                    .disabled(!canBroadcast)
-                    .accessibilityLabel("Broadcast prompt")
-                    .accessibilityInputLabels(["Broadcast", "Broadcast Prompt"])
-                    .accessibilityHint("Choose terminal windows and send the same prompt to each one")
-                    .accessibilityAddTraits(.isButton)
-                }
                 Spacer(minLength: 8)
 
-                // RIGHT cluster 1: input attach (photo, prompts)
                 HStack(spacing: 6) {
-                    if mainRowPhoto && !isQAModeActive {
-                        Button {
-                            showingImageSourceSheet = true
-                        } label: {
-                            Image(systemName: pendingImage.hasPendingImage ? "photo.fill" : "photo")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(pendingImage.hasPendingImage ? colors.buttonPrimary : colors.textPrimary)
-                                .frame(width: btnW, height: btnH)
-                                .background(colors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .accessibilityLabel(pendingImage.hasPendingImage ? "Attached image, tap to change" : "Attach image")
-                        .accessibilityAddTraits(.isButton)
-                    }
-                    if mainRowPrompts && !isQAModeActive {
-                        let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
-                        Button {
-                            showPromptsPickerSheet = true
-                        } label: {
-                            Image(systemName: "doc.text.magnifyingglass")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(canFire ? colors.textPrimary : colors.textFaint)
-                                .frame(width: auxW, height: auxH)
-                                .background(colors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .disabled(!canFire)
-                        .accessibilityLabel("Prompts")
-                        .accessibilityAddTraits(.isButton)
-                    }
-                }
-
-                // Visual gap between photo and send-cluster (keyboard/return).
-                if !isQAModeActive && (mainRowPhoto || mainRowPrompts) && rightSendOn {
-                    Spacer().frame(width: 6)
-                }
-
-                // RIGHT cluster 2: send (keyboard, return)
-                HStack(spacing: 6) {
-                    if mainRowKeyboard {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showTextInput.toggle()
-                                if !showTextInput { textInputValue = "" }
-                            }
-                        } label: {
-                            Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(colors.textPrimary)
-                                .frame(width: auxW, height: auxH)
-                                .background(colors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .accessibilityLabel(showTextInput ? "Hide keyboard" : "Show keyboard")
-                        .accessibilityHint("Long-press to paste from iPhone clipboard")
-                        .accessibilityAddTraits(.isButton)
-                        .simultaneousGesture(
-                            // §35 Cross-app paste — long-press the keyboard
-                            // button to read iPhone's clipboard and ship it
-                            // straight to the selected window via send_text.
-                            // Single-tap behavior unchanged (toggle text
-                            // input). Skipped silently if no window selected
-                            // OR clipboard is empty — accessibility hint
-                            // documents the gesture so VoiceOver users find
-                            // it.
-                            LongPressGesture(minimumDuration: 0.4)
-                                .onEnded { _ in pasteClipboardToSelectedWindow() }
-                        )
-                    }
-                    if mainRowReturn {
-                        Button { submitOrPressReturn() } label: {
-                            Image(systemName: "return")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
-                                .frame(width: btnW, height: btnH)
-                                .background(colors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .disabled(selectedWindowId == nil)
-                        .accessibilityLabel("Send")
-                        .accessibilityAddTraits(.isButton)
+                    ForEach(rightIDs, id: \.self) { id in
+                        mainRowItem(id, sizes: sizes)
+                            .rowReorderItem(id, state: mainReorder, space: "mainRow", order: visibleOrder,
+                                            tap: mainRowTapAction(id), hold: mainRowHoldAction(id),
+                                            onMove: moveMainRowItem)
                     }
                 }
 
@@ -3303,10 +3071,27 @@ struct MainiOSView: View {
                     let slots = effectiveQuickSlots
                     if !slots.isEmpty {
                         Spacer().frame(width: 8)
-                        slotRowView(slots)
+                        slotRowView(slots, space: "mainRow")
                     }
                 }
             }
+            .coordinateSpace(name: "mainRow")
+            .confirmationDialog("Slash commands", isPresented: $showSlashPalette, titleVisibility: .visible) {
+                let members = allSlashMembers()
+                if SlashSearchSheet.offersSearch(memberCount: members.count) {
+                    Button("Search…") { showSlashSearch = true }
+                }
+                ForEach(members) { member in
+                    Button(member.displayName) {
+                        switch member {
+                        case .builtin(let b): fireQuickButton(b)
+                        case .custom(let c): fireCustomButton(c)
+                        }
+                    }
+                }
+            }
+            }
+            .frame(height: btnH)
 
             // Portrait-only secondary command-shortcut row. Slots render in
             // user-controlled order — they place `.spacer` slots themselves
@@ -3324,9 +3109,10 @@ struct MainiOSView: View {
                 if !slots.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 3) {
-                            slotRowView(slots)
+                            slotRowView(slots, space: "quickRow")
                         }
                         .padding(.horizontal, 6)
+                        .coordinateSpace(name: "quickRow")
                     }
                     // Pin ScrollView to parent's available width. Without
                     // this, SwiftUI can propagate the inner HStack's
@@ -3341,6 +3127,290 @@ struct MainiOSView: View {
             }
         }
         .padding(.vertical, isPortrait ? 8 : 4)
+    }
+
+    // MARK: - Main row items (Q-65)
+
+    private var mainRowOrder: [String] { MainRowOrder.decode(mainRowOrderJSON) }
+
+    private func mainRowItemVisible(_ id: String) -> Bool {
+        switch id {
+        case MainRowOrder.cycleLeft: return mainRowCycleLeft && !isQAModeActive
+        case MainRowOrder.cycleRight: return mainRowCycleRight && !isQAModeActive
+        case MainRowOrder.spawn: return mainRowSpawn && !isQAModeActive
+        case MainRowOrder.arrange: return mainRowArrange && !isQAModeActive
+        case MainRowOrder.mic: return true
+        case MainRowOrder.broadcast: return mainRowBroadcast && !isQAModeActive
+        case MainRowOrder.photo: return mainRowPhoto && !isQAModeActive
+        case MainRowOrder.prompts: return mainRowPrompts && !isQAModeActive
+        case MainRowOrder.keyboard: return mainRowKeyboard
+        case MainRowOrder.return: return mainRowReturn
+        default: return false
+        }
+    }
+
+    /// Move `id` to `index` among the VISIBLE items and persist the full
+    /// order: hidden buttons keep their relative places and follow the
+    /// visible ones, so toggling one back on does not scramble the row.
+    private func moveMainRowItem(_ id: String, to index: Int) {
+        let full = mainRowOrder
+        let visible = full.filter { mainRowItemVisible($0) }
+        let movedVisible = RowReorderMath.move(visible, id: id, to: index)
+        let hidden = full.filter { !mainRowItemVisible($0) }
+        mainRowOrderJSON = MainRowOrder.encode(movedVisible + hidden)
+    }
+
+    /// What a tap does on a main-row button, nil while it is disabled. The
+    /// Button inside each item calls the same closure, for VoiceOver.
+    private func mainRowTapAction(_ id: String) -> (() -> Void)? {
+        switch id {
+        case MainRowOrder.cycleLeft:
+            return windows.count > 1 ? { cycleWindow(direction: -1) } : nil
+        case MainRowOrder.cycleRight:
+            return windows.count > 1 ? { cycleWindow(direction: 1) } : nil
+        case MainRowOrder.spawn:
+            return { showSpawnPicker = true }
+        case MainRowOrder.arrange:
+            guard windows.filter(\.enabled).count >= 2 else { return nil }
+            return {
+                // Three-mode cycle: horizontal → vertical → grid → horizontal.
+                // Grid mode (added 2026-05-06) is the natural pick for 4+
+                // windows where vertical strips get too narrow to read.
+                switch phoneLayoutOverride {
+                case "horizontal": phoneLayoutOverrideRaw = "vertical"
+                case "vertical":   phoneLayoutOverrideRaw = "grid"
+                default:           phoneLayoutOverrideRaw = "horizontal"
+                }
+                manualLayoutSticky = true
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
+        case MainRowOrder.broadcast:
+            return BroadcastPromptPlan.canOpen(windows: windows, isConnected: client.isConnected)
+                ? { openBroadcast(draft: textInputValue) } : nil
+        case MainRowOrder.photo:
+            return { showingImageSourceSheet = true }
+        case MainRowOrder.prompts:
+            let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
+            return canFire ? { showPromptsPickerSheet = true } : nil
+        case MainRowOrder.keyboard:
+            return {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showTextInput.toggle()
+                    if !showTextInput { textInputValue = "" }
+                }
+            }
+        case MainRowOrder.return:
+            return selectedWindowId != nil ? { submitOrPressReturn() } : nil
+        default:
+            return nil
+        }
+    }
+
+    /// What a hold-without-drag does: the long presses the buttons had
+    /// before the drag took the gesture (Q-65).
+    private func mainRowHoldAction(_ id: String) -> (() -> Void)? {
+        switch id {
+        case MainRowOrder.arrange:
+            return {
+                realignWindows()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }
+        case MainRowOrder.keyboard:
+            // §35 Cross-app paste — hold the keyboard button to read iPhone's
+            // clipboard and ship it straight to the selected window via
+            // send_text. Skipped silently if no window selected OR clipboard
+            // is empty — the accessibility hint documents the gesture.
+            return { pasteClipboardToSelectedWindow() }
+        default:
+            return nil
+        }
+    }
+
+    private func micButton(sizes: MainRowSizes) -> some View {
+        // Push to talk — icon-only, and the one tinted tile in the row
+        // so the primary action wins it (Q-62): the recording amber
+        // token at low alpha, never a solid rectangle. Live adds a
+        // 2 pt stroke and a stop square. Red stays for "no mic".
+        Button {
+            if isRecording {
+                onStopRecording()
+            } else {
+                onStartRecording()
+            }
+        } label: {
+            Image(systemName: isRecording ? "stop.fill" : "mic.fill")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(colors.recording)
+                .frame(width: sizes.pttW, height: sizes.btnH)
+                .background(colors.recording.opacity(0.18))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(colors.recording, lineWidth: isRecording ? 2 : 0)
+                )
+        }
+        .accessibilityLabel(isRecording ? "Stop recording" : "Push to talk")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    @ViewBuilder
+    private func mainRowItem(_ id: String, sizes: MainRowSizes) -> some View {
+        switch id {
+        case MainRowOrder.cycleLeft:
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                    .frame(width: sizes.navW, height: sizes.navH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    // The pill and the row width stay as they are; only
+                    // the tappable shape grows to 44 pt (Q-62). A wider
+                    // frame here pushed the row past the screen edge.
+                    .contentShape(Rectangle().inset(by: -10))
+            }
+            .disabled(windows.count <= 1)
+            .accessibilityLabel("Previous window")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.cycleRight:
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(windows.count > 1 ? colors.textPrimary : colors.textFaint)
+                    .frame(width: sizes.navW, height: sizes.navH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .contentShape(Rectangle().inset(by: -10))
+            }
+            .disabled(windows.count <= 1)
+            .accessibilityLabel("Next window")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.spawn:
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(colors.textPrimary)
+                    .frame(width: sizes.auxW, height: sizes.auxH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .accessibilityLabel("New window")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.arrange:
+            // Arrange — phone-only display toggle. Cycles through
+            // Mac-layout (default, shows real Mac positions), columns
+            // (side-by-side on phone), rows (stacked on phone). Does
+            // NOT move windows on the Mac; just reorganizes the preview
+            // here so overlapping/off-screen windows become distinct
+            // cards when you need 'em.
+            // Single button — tap cycles horizontal/vertical, hold-and-release
+            // realigns (clears manual drag overrides + re-fires the
+            // auto-chooser, see mainRowHoldAction). Combined into one slot
+            // per `feedback_compact_ui` so the row doesn't overflow. nil isn't
+            // a tap-cycle step anymore; the auto-chooser owns "no override" now.
+            Button { mainRowTapAction(id)?() } label: {
+                let icon: String = {
+                    switch phoneLayoutOverride {
+                    case "horizontal": return "rectangle.split.3x1"
+                    case "vertical":   return "rectangle.split.1x3"
+                    case "grid":       return "rectangle.grid.2x2"
+                    default:           return "rectangle.3.group"
+                    }
+                }()
+                // ZStack with a text fallback so the button is never
+                // blank if the SF Symbol fails to draw — which has
+                // happened when the icon name churns mid-redraw
+                // (cycling between rectangle.split.3x1/1x3/group).
+                // The text sits behind the icon, hidden when the icon
+                // renders correctly.
+                ZStack {
+                    Text("⊞")
+                        .font(.system(size: 14, weight: .semibold))
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .semibold))
+                        // Stable identity per icon name forces a clean
+                        // redraw instead of a partial swap that can
+                        // leave the symbol blank.
+                        .id("arrange-\(icon)")
+                        .accessibilityLabel("Arrange windows")
+                }
+                .foregroundStyle(windows.count >= 2 ? colors.textPrimary : colors.textFaint)
+                .frame(width: sizes.auxW, height: sizes.auxH)
+                .background(colors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(windows.filter(\.enabled).count < 2)
+            .accessibilityLabel("Arrange windows")
+            .accessibilityHint("Double tap to cycle layout. Hold and release to realign; hold and drag to move the button.")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.broadcast:
+            // Broadcast, beside the mic by default: the same sheet the bar
+            // opened, as one icon tile (the owner wanted no extra row).
+            let canBroadcast = BroadcastPromptPlan.canOpen(windows: windows, isConnected: client.isConnected)
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(canBroadcast ? colors.textPrimary : colors.textFaint)
+                    .frame(width: sizes.bcW, height: sizes.auxH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(!canBroadcast)
+            .accessibilityLabel("Broadcast prompt")
+            .accessibilityInputLabels(["Broadcast", "Broadcast Prompt"])
+            .accessibilityHint("Choose terminal windows and send the same prompt to each one")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.photo:
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: pendingImage.hasPendingImage ? "photo.fill" : "photo")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(pendingImage.hasPendingImage ? colors.buttonPrimary : colors.textPrimary)
+                    .frame(width: sizes.btnW, height: sizes.btnH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .accessibilityLabel(pendingImage.hasPendingImage ? "Attached image, tap to change" : "Attach image")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.prompts:
+            let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(canFire ? colors.textPrimary : colors.textFaint)
+                    .frame(width: sizes.auxW, height: sizes.auxH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(!canFire)
+            .accessibilityLabel("Prompts")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.keyboard:
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: showTextInput ? "keyboard.chevron.compact.down" : "keyboard")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(colors.textPrimary)
+                    .frame(width: sizes.auxW, height: sizes.auxH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .accessibilityLabel(showTextInput ? "Hide keyboard" : "Show keyboard")
+            .accessibilityHint("Hold and release to paste from iPhone clipboard; hold and drag to move the button")
+            .accessibilityAddTraits(.isButton)
+        case MainRowOrder.return:
+            Button { mainRowTapAction(id)?() } label: {
+                Image(systemName: "return")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(selectedWindowId != nil ? colors.textPrimary : colors.textFaint)
+                    .frame(width: sizes.btnW, height: sizes.btnH)
+                    .background(colors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(selectedWindowId == nil)
+            .accessibilityLabel("Send")
+            .accessibilityAddTraits(.isButton)
+        default:
+            EmptyView()
+        }
     }
 
     private var broadcastPromptButton: some View {
@@ -5837,36 +5907,133 @@ struct MainiOSView: View {
     /// Render the full slot row — built-ins, customs, spacers, and grouped
     /// `/x…` menus — in the user's chosen order.
     @ViewBuilder
-    private func slotRowView(_ slots: [QuickSlot]) -> some View {
+    private func slotRowView(_ slots: [QuickSlot], space: String) -> some View {
         let items = rowItems(slots, defs: customButtonDefs)
         // Decoded once per row, not per pill: this body re-evaluates on every
         // terminal update.
         let tints = KeyColors.decode(quickSlotColorsJSON)
+        // Q-65: every pill can be held and dragged to a new slot. Items are
+        // the render plan (a slash group is one pill for several slots), so a
+        // move re-emits the slot list from the new item order.
+        let order = items.map(\.id)
+        let slotsByItem = quickSlotsByItem(slots, items: items)
         ForEach(items) { item in
-            switch item {
-            case .builtinButton(let b):
-                // Slash pills (incl. the bare "/") get the hold-for-all-slash
-                // palette; answer/keystroke pills don't (slash-only gesture).
-                if b.isSlashCommand {
-                    slashPalette(quickActionButton(b, tint: tints[QuickSlot.builtin(b).id]))
-                } else {
-                    quickActionButton(b, tint: tints[QuickSlot.builtin(b).id])
+            Group {
+                switch item {
+                case .builtinButton(let b):
+                    // Slash pills (incl. the bare "/") get the hold-for-all-slash
+                    // palette; answer/keystroke pills don't (slash-only gesture).
+                    if b.isSlashCommand {
+                        slashPalette(quickActionButton(b, tint: tints[QuickSlot.builtin(b).id]))
+                    } else {
+                        quickActionButton(b, tint: tints[QuickSlot.builtin(b).id])
+                    }
+                case .customButton(let c):
+                    if case .slash = c.payload {
+                        slashPalette(customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id]))
+                    } else {
+                        customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id])
+                    }
+                case .promptButton(let pid, let label):
+                    promptQuickButton(promptID: pid, label: label, tint: tints[QuickSlot.prompt(promptID: pid).id])
+                case .promptsPicker:
+                    promptsPickerButton(tint: tints[QuickSlot.promptsPicker.id])
+                case .spacer(let w, _):
+                    Spacer().frame(width: w)
+                case .slashGroup(let letter, let members):
+                    slashGroupMenuButton(letter: letter, members: members)
                 }
-            case .customButton(let c):
-                if case .slash = c.payload {
-                    slashPalette(customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id]))
-                } else {
-                    customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id])
-                }
-            case .promptButton(let pid, let label):
-                promptQuickButton(promptID: pid, label: label, tint: tints[QuickSlot.prompt(promptID: pid).id])
-            case .promptsPicker:
-                promptsPickerButton(tint: tints[QuickSlot.promptsPicker.id])
-            case .spacer(let w, _):
-                Spacer().frame(width: w)
-            case .slashGroup(let letter, let members):
-                slashGroupMenuButton(letter: letter, members: members)
             }
+            .modifier(QuickRowItemGesture(
+                item: item, state: quickReorder, space: space, order: order,
+                tap: quickRowTapAction(item), hold: quickRowHoldAction(item),
+                onMove: { id, index in
+                    let newOrder = RowReorderMath.move(order, id: id, to: index)
+                    quickSlotsJSON = QuickSlotStore.encode(newOrder.flatMap { slotsByItem[$0] ?? [] })
+                }))
+        }
+    }
+
+    /// Applies the hold-and-drag gesture to every quick pill except a slash
+    /// group, whose pill is a Menu that must keep its own touches.
+    private struct QuickRowItemGesture: ViewModifier {
+        let item: RowItem
+        let state: RowReorderState
+        let space: String
+        let order: [String]
+        let tap: (() -> Void)?
+        let hold: (() -> Void)?
+        let onMove: (String, Int) -> Void
+
+        func body(content: Content) -> some View {
+            if case .slashGroup = item {
+                content
+            } else {
+                content.rowReorderItem(item.id, state: state, space: space, order: order,
+                                       tap: tap, hold: hold, exclusive: false, onMove: onMove)
+            }
+        }
+    }
+
+    /// What a tap does on a quick pill, nil when the pill is disabled. The
+    /// Button inside keeps the same action for VoiceOver.
+    private func quickRowTapAction(_ item: RowItem) -> (() -> Void)? {
+        switch item {
+        case .builtinButton(let b):
+            let enabled = b == .broadcast ? broadcastUnavailableReason == nil : selectedWindowId != nil
+            return enabled || b == .broadcast ? { fireQuickButton(b) } : nil
+        case .customButton(let c):
+            return selectedWindowId != nil ? { fireCustomButton(c) } : nil
+        case .promptButton(let pid, _):
+            return { firePromptSlot(promptID: pid, pressReturn: false) }
+        case .promptsPicker:
+            let canFire = client.isConnected && !client.promptLibrary.isEmpty && selectedWindowId != nil
+            return canFire ? { showPromptsPickerSheet = true } : nil
+        case .spacer, .slashGroup:
+            return nil
+        }
+    }
+
+    /// The slots each rendered item stands for, so a reorder of items can be
+    /// written back as a slot list. A slash group owns every slot that shares
+    /// its letter, in their current order.
+    private func quickSlotsByItem(_ slots: [QuickSlot], items: [RowItem]) -> [String: [QuickSlot]] {
+        let defsById = Dictionary(uniqueKeysWithValues: customButtonDefs.map { ($0.id, $0) })
+        var out: [String: [QuickSlot]] = [:]
+        for item in items {
+            switch item {
+            case .builtinButton(let b): out[item.id] = [.builtin(b)]
+            case .customButton(let c): out[item.id] = [.custom(c.id)]
+            case .promptButton(let pid, _): out[item.id] = [.prompt(promptID: pid)]
+            case .promptsPicker: out[item.id] = [.promptsPicker]
+            case .spacer(_, let uid): out[item.id] = [.spacer(uid)]
+            case .slashGroup(let letter, _):
+                out[item.id] = slots.filter { slot in
+                    switch slot {
+                    case .builtin(let b): return slashLetter(of: b) == letter
+                    case .custom(let id): return defsById[id].flatMap { slashLetter(of: $0) } == letter
+                    default: return false
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    /// What a hold-without-drag does on a quick pill: the prompt pill's
+    /// paste-and-submit and the slash pills' palette moved here from their
+    /// own long presses, which the drag would otherwise swallow.
+    private func quickRowHoldAction(_ item: RowItem) -> (() -> Void)? {
+        switch item {
+        case .promptButton(let pid, _):
+            return { firePromptSlot(promptID: pid, pressReturn: true) }
+        case .builtinButton(let b) where b.isSlashCommand:
+            return { showSlashPalette = true }
+        case .customButton(let c):
+            if case .slash = c.payload { return { showSlashPalette = true } }
+            return nil
+        default:
+            return nil
         }
     }
 
@@ -5900,12 +6067,10 @@ struct MainiOSView: View {
         .buttonStyle(.plain)
         .disabled(!canFire)
         .accessibilityLabel("Prompt: \(label)")
-        .accessibilityHint(canFire ? "Tap to paste, long-press to paste and submit" : "Prompt unavailable")
+        .accessibilityHint(canFire ? "Tap to paste, hold and release to paste and submit, hold and drag to move" : "Prompt unavailable")
         .accessibilityAddTraits(.isButton)
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.4)
-                .onEnded { _ in firePromptSlot(promptID: promptID, pressReturn: true) }
-        )
+        // The hold-and-release submit lives in the row's reorder modifier
+        // (quickRowHoldAction), which owns the long press now (Q-65).
     }
 
     private func firePromptSlot(promptID: String, pressReturn: Bool) {

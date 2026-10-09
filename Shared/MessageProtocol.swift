@@ -1315,6 +1315,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// is newer than the phone's own last edit; an unstamped copy never
     /// overwrites an edited phone. Optional: older copies decode as nil.
     var savedAt: Double?
+    /// JSON `[String]` of the main button row's user-arranged order (Q-65).
+    var mainRowOrderJSON: String?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -1343,7 +1345,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         recentConnectionsJSON: String? = nil,
         activeBackendID: String? = nil,
         promptUsageJSON: String? = nil,
-        savedAt: Double? = nil
+        savedAt: Double? = nil,
+        mainRowOrderJSON: String? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -1372,6 +1375,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.activeBackendID = activeBackendID
         self.promptUsageJSON = promptUsageJSON
         self.savedAt = savedAt
+        self.mainRowOrderJSON = mainRowOrderJSON
     }
 }
 
