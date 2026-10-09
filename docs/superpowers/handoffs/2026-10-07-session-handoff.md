@@ -50,7 +50,7 @@ Everything from `5ffd8f2` back is addendum 3's.
 | Peer | Installed | Code it is missing |
 | --- | --- | --- |
 | Mac `/Applications/Quip.app` | eb-branch `47968a3` (Q-63 stamped preference backups; Q-60 push payload), 1.5.7 Release, Developer ID, installed 2026-10-09 09:39 (fresh pid 63701, port 8765 listening). Stamp reads `47968a3-dirty` (docs were uncommitted at build time; same code). | Nothing. Re-grant Accessibility / Screen Recording if the Mac Status row shows red. |
-| iPhone (owner's primary) | eb-branch `93a323b`, 1.5.7, Debug, installed over the LAN 2026-10-09 09:48 (stamp reads `25c6bd9-dirty`: built a minute before the commit, same code). Q-60 extension, Q-61 card menu, Q-62 audit fixes + edge-clipping regression fix, Q-63 settings guard, PIN field after rejection, compact broadcast bar. One Quip icon. Force-quit and relaunch. | Nothing. |
+| iPhone (owner's primary) | eb-branch `b1d5d4e`-era build, see the last docs commit for the exact stamp; installed over the LAN 2026-10-09 10:1x from a clean tree (Q-58 pin hardening, Q-60 extension, Q-61 card menu, Q-62 audit fixes + clipping fix, Q-63 settings guard). One Quip icon. Force-quit and relaunch. | Nothing. |
 | QA simulator D8C5154B | eb-branch `b65c734` (`com.fintechadventures.quip`), paired to the fake Mac on 127.0.0.1:8799, notifications allowed (2026-10-08 14:13). A stray `com.quip.QuipiOS` test host was uninstalled; it had been catching the `quip://` pair link. Must never pair with the real Mac. | Use `tools/fake-mac` (`--ack-paste --error-ids`) for any simulator check; `xcrun simctl push` with `aps.category=waiting.yn` exercises the alert actions. |
 
 One phone socket was ESTABLISHED on port 8765 at handoff time.
@@ -94,6 +94,9 @@ Both peers now carry today's code (installed 2026-10-08 08:28); the hardware che
   running at handoff. `cea03cb` stops the ruflo-rewritten `QuipiOS/ruvector.db`
   from marking builds `-dirty`.
 - **Q-57 and Q-58 simulator pass 2026-10-08 14:00–14:16** (board rows have the detail): pinned card first live and after relaunch; lock-screen Yes, Reply and the unreachable alert all verified against the fake Mac with the app killed.
+- **Release notes written** for today's push: `docs/RELEASE_NOTES.md` top section "eb-branch → 2026-10-09" (`117525c`). Owner intends to push today; push only on the owner's word.
+- **Q-58 follow-up** `bbddd32`: a pin from the phone clears the card's free-drag position and forces an arranged mode; fake Mac handles `set_pin`.
+- **Why builds read `-dirty`:** the stamp is taken at build time from `git status` over tracked files; any uncommitted edit (even docs) at that moment marks the build. Build only from a clean tree, and do not edit while a build runs.
 - **Q-63 settings survive updates** landed `47968a3` (Shared + iOS + fake Mac): stamped backups, freshness gate, PIN-after-rejection fix, compact broadcast bar, hint removed. Both peers rebuilt from it (see table). Watch for: with the Mac rebuilt, `preferences_request` replies now carry `savedAt`; a restore the phone skips prints `[Quip][Prefs] restore skipped` (print only).
 - **Q-62 design-audit fixes** landed `af0c65c` (iOS only); audit text in `docs/superpowers/2026-10-09-ios-main-screen-design-audit.md`; the cosmetic remainder (type tokens, pressed state, radii, quick-key label floor) is listed on the board row, not scheduled.
 - **Q-61 card menu discoverability** landed `383c7db` (iOS only, Mac untouched): ⋯ button on every card, Color submenu with named swatches, hint under the grid. Simulator-verified against the fake Mac (which now handles `set_color`). Phone install: see the table.
