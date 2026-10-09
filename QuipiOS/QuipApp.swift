@@ -128,6 +128,7 @@ struct QuipApp: App {
     @State private var pendingContentShare: PendingContentShare?
 
     @State private var windows: [WindowState] = []
+    @State private var layoutReceived = false
     @State private var selectedWindowId: String?
     @State private var monitorName: String = "Mac"
     @State private var screenAspect: Double = 16.0 / 10.0
@@ -238,6 +239,7 @@ struct QuipApp: App {
                 speech: speech,
                 bonjourBrowser: bonjourBrowser,
                 windows: $windows,
+                layoutReceived: $layoutReceived,
                 selectedWindowId: $selectedWindowId,
                 isRecording: $isRecording,
                 terminalContentText: $terminalContentText,
@@ -606,6 +608,7 @@ struct QuipApp: App {
             DispatchQueue.main.async {
                 let wasEmpty = windows.isEmpty
                 windows = update.windows
+                layoutReceived = true
                 ContentMapMutations.pruneToWindowIDs(
                     Set(update.windows.map(\.id)),
                     textMap: &terminalContentTextById,
@@ -1387,6 +1390,10 @@ struct MainiOSView: View {
     var speech: SpeechService
     var bonjourBrowser: BonjourBrowser
     @Binding var windows: [WindowState]
+    /// Q-62: true once this connection has delivered a layout. Until then an
+    /// empty list means "not here yet", not "no windows", so the grid must
+    /// not offer New Window (a duplicate spawn in waiting).
+    @Binding var layoutReceived: Bool
     @Binding var selectedWindowId: String?
     @Binding var isRecording: Bool
     @Binding var terminalContentText: String?
@@ -1926,6 +1933,7 @@ struct MainiOSView: View {
             withAnimation(.easeInOut(duration: 0.5)) {
                 if !connected {
                     windows = []
+                    layoutReceived = false
                     selectedWindowId = nil
                     // Reset auto-pop guard so the next reconnect can re-pop
                     // the SettingsSheet if Mac is still degraded.
@@ -1976,6 +1984,7 @@ struct MainiOSView: View {
             withAnimation(.easeInOut(duration: 0.5)) {
                 if !authenticated {
                     windows = []
+                    layoutReceived = false
                     selectedWindowId = nil
                 }
                 updateOrientation()
@@ -3019,6 +3028,9 @@ struct MainiOSView: View {
                                 .frame(width: navW, height: navH)
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                                // The pill stays narrow; the target is 44 pt (Q-62).
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
                         }
                         .disabled(windows.count <= 1)
                         .accessibilityLabel("Previous window")
@@ -3034,6 +3046,9 @@ struct MainiOSView: View {
                                 .frame(width: navW, height: navH)
                                 .background(colors.surface)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                                // The pill stays narrow; the target is 44 pt (Q-62).
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
                         }
                         .disabled(windows.count <= 1)
                         .accessibilityLabel("Next window")
@@ -3134,10 +3149,10 @@ struct MainiOSView: View {
                 // Big flexible spacer pinning mic to geometric center.
                 Spacer(minLength: 12)
 
-                // Push to talk — icon-only. Red mic when idle; when live, the
-                // pill keeps its surface fill but gains a red stroke so it
-                // reads as "recording" without scorching the eyeballs with a
-                // solid-red rectangle. Icon switches to a red stop square.
+                // Push to talk — icon-only, and the one tinted tile in the row
+                // so the primary action wins it (Q-62): the recording amber
+                // token at low alpha, never a solid rectangle. Live adds a
+                // 2 pt stroke and a stop square. Red stays for "no mic".
                 Button {
                     if isRecording {
                         onStopRecording()
@@ -3147,13 +3162,13 @@ struct MainiOSView: View {
                 } label: {
                     Image(systemName: isRecording ? "stop.fill" : "mic.fill")
                         .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Color.red.opacity(0.75))
+                        .foregroundStyle(colors.recording)
                         .frame(width: pttW, height: btnH)
-                        .background(colors.surface)
+                        .background(colors.recording.opacity(0.18))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(Color.red.opacity(0.7), lineWidth: isRecording ? 2 : 0)
+                                .strokeBorder(colors.recording, lineWidth: isRecording ? 2 : 0)
                         )
                 }
                 .accessibilityLabel(isRecording ? "Stop recording" : "Push to talk")
@@ -4641,7 +4656,19 @@ struct MainiOSView: View {
                                 .strokeBorder(colors.surfaceBorder, lineWidth: 0.5)
                         )
 
-                    if windows.isEmpty {
+                    if windows.isEmpty && client.isAuthenticated && !layoutReceived {
+                        // Q-62: authenticated, first layout not here yet. Says
+                        // so instead of "No windows" + New Window for a second.
+                        VStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(colors.textFaint)
+                            Text("Loading windows…")
+                                .font(.system(size: 10))
+                                .foregroundStyle(colors.textFaint)
+                        }
+                        .accessibilityElement(children: .combine)
+                    } else if windows.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "macwindow.on.rectangle")
                                 .font(.system(size: 24, weight: .light))
@@ -4658,7 +4685,7 @@ struct MainiOSView: View {
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 14)
                                         .padding(.vertical, 8)
-                                        .background(Color.blue.opacity(0.7))
+                                        .background(colors.buttonPrimary.opacity(0.7))
                                         .clipShape(Capsule())
                                 }
                             }

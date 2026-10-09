@@ -100,12 +100,14 @@ struct WindowRectangle: View {
             HStack(alignment: .top, spacing: 4) {
                 VStack(alignment: .leading, spacing: 3) {
                     // Primary label is the folder/project when known, else the app
-                    // name. Rendered in the window's palette color and bold so it
-                    // doubles as the visual identifier of the selection.
+                    // name. Bold in the text color: four of the ten palette
+                    // colors fail AA as text on their own 10 % tint (yellow
+                    // 1.2:1, green 1.6:1), so identity rides the border, the
+                    // pin, the ⋯ and the glow instead (Q-62).
                     let primary = (window.folder?.isEmpty == false ? window.folder! : window.app)
                     Text(primary)
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(windowColor)
+                        .foregroundStyle(colors.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
 
@@ -115,7 +117,7 @@ struct WindowRectangle: View {
                     // Terminal.app from iTerm2 at a glance.
                     Text(window.folder?.isEmpty == false ? window.app : window.name)
                         .font(.caption2)
-                        .foregroundStyle(colors.textSecondary.opacity(0.7))
+                        .foregroundStyle(colors.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
