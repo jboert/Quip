@@ -76,8 +76,10 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
 - **PIN field after a rejected PIN.** A saved PIN the Mac no longer accepts
   left the bar on "Authenticating…" with nothing to type into; the field
   now appears with the error.
-- Compact broadcast bar (one line; Settings → Main Row Buttons → Broadcast
-  Bar hides it). Search slash commands from the long-press palette (US-105).
+- **Broadcast beside the mic.** The main row has a broadcast icon tile
+  next to the mic (same sheet); the full-width bar is off by default and
+  stays a toggle in Settings → Main Row Buttons. Search slash commands from
+  the long-press palette (US-105).
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,

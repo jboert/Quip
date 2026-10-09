@@ -18,6 +18,7 @@ Written at ~50% context. Owner intends to push eb-branch to origin today.
 
 | Hash | Why |
 | --- | --- |
+| (see `git log`) | Q-64 broadcast tile beside the mic, bar off by default; release notes and board updated; phone reinstalled clean. |
 | `7761b50` | Handoff: phone on `9031192`, clean stamp. |
 | `9031192` | Board/handoff: pin investigation, release notes written, why a stamp reads `-dirty`. |
 | `117525c` | Release notes "eb-branch → 2026-10-09", everything since `e5ed6ee`. |
