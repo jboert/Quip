@@ -27,6 +27,7 @@ targets:
           - "*.xcodeproj/**"
           - "Resources/cloudflared"
           - "build/**"
+          - ".claude-flow/**"
           - "Tests/**"
       - path: ../Shared
         excludes:

@@ -82,8 +82,18 @@ enum AppleScriptRunner {
     /// OFF-MAIN CALLERS ONLY. On the main thread this blocks behind the entire
     /// queue, not just its own script — see the type comment for what that costs.
     /// A @MainActor caller wants `offMain`.
-    static func run(_ source: String) -> Output {
-        queue.sync { execute(source) }
+    ///
+    /// `cached: true` compiles `source` once and reuses the compiled script on
+    /// later calls. Pass it from polling paths (window lists, subtitles,
+    /// content reads): on macOS 27 the AppleScript parser occasionally faults
+    /// inside `UASEndTellScope1` while compiling, and the in-process exception
+    /// handler resumes the faulting instruction forever — a thread pegged at
+    /// 100% holding AppleScript's global lock, so every later script blocks and
+    /// Quip hangs for good. Polls that recompiled several times a second made
+    /// that rare fault certain within minutes. Don't pass it for scripts that
+    /// embed user text: each one would be a new cache entry.
+    static func run(_ source: String, cached: Bool = false) -> Output {
+        queue.sync { execute(source, cached: cached) }
     }
 
     /// Await, off the main thread, work that runs AppleScript through `run`.
@@ -137,15 +147,36 @@ enum AppleScriptRunner {
         return peak
     }
 
+    /// Compiled scripts for `run(_:cached: true)`. Only touched inside
+    /// `execute`, i.e. on `queue`, so it needs no lock of its own.
+    nonisolated(unsafe) private static var compiledScripts: [String: NSAppleScript] = [:]
+
     /// The only `NSAppleScript` execution in the process. Callers reach it
     /// through `run`, which is what confines it to `queue`.
-    private static func execute(_ source: String) -> Output {
+    private static func execute(_ source: String, cached: Bool) -> Output {
         enterExecution()
         defer { exitExecution() }
 
-        guard let script = NSAppleScript(source: source) else {
-            return Output(stringValue: nil, booleanValue: false,
-                          errorMessage: "Failed to create NSAppleScript")
+        let script: NSAppleScript
+        if cached, let hit = compiledScripts[source] {
+            script = hit
+        } else {
+            guard let fresh = NSAppleScript(source: source) else {
+                return Output(stringValue: nil, booleanValue: false,
+                              errorMessage: "Failed to create NSAppleScript")
+            }
+            if cached {
+                var compileError: NSDictionary?
+                guard fresh.compileAndReturnError(&compileError) else {
+                    let message = compileError?[NSAppleScript.errorMessage] as? String
+                    return Output(stringValue: nil, booleanValue: false,
+                                  errorMessage: message ?? "AppleScript compile failed")
+                }
+                // Sources embed window ids; cap growth as windows come and go.
+                if compiledScripts.count >= 64 { compiledScripts.removeAll() }
+                compiledScripts[source] = fresh
+            }
+            script = fresh
         }
         var error: NSDictionary?
         let descriptor: NSAppleEventDescriptor? = script.executeAndReturnError(&error)

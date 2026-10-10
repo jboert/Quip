@@ -57,6 +57,11 @@ final class KokoroTTS: @unchecked Sendable {
     /// thousands of times during a session. Touched only from `queue`.
     private var hasLoggedUnavailable = false
 
+    /// Stop the daemon after this long without a synth — it holds ~400 MB,
+    /// and relaunching costs only the ~1.5s model load. Touched only from `queue`.
+    private static let idleTimeout: TimeInterval = 600
+    private var idleShutdown: DispatchWorkItem?
+
     private var venvPython: String {
         (NSHomeDirectory() as NSString).appendingPathComponent("Library/Application Support/Quip/venv/bin/python3")
     }
@@ -104,6 +109,12 @@ final class KokoroTTS: @unchecked Sendable {
         // Drain stderr in background so it doesn't block the pipe
         stderrPipe.fileHandleForReading.readabilityHandler = { h in
             let data = h.availableData
+            // EOF (daemon exited): empty data forever — unregister or this
+            // handler spins a full core until Quip quits.
+            if data.isEmpty {
+                h.readabilityHandler = nil
+                return
+            }
             if let s = String(data: data, encoding: .utf8), !s.isEmpty {
                 KokoroTTSDebug.log("daemon stderr: \(s.trimmingCharacters(in: .whitespacesAndNewlines))")
             }
@@ -131,6 +142,7 @@ final class KokoroTTS: @unchecked Sendable {
                     onChunk: @escaping (Data) -> Void,
                     onComplete: @escaping () -> Void) {
         queue.async { [self] in
+            defer { scheduleIdleShutdown() }
             guard shouldProceed() else {
                 KokoroTTSDebug.log("synth skipped — shouldProceed returned false")
                 onComplete()
@@ -220,6 +232,23 @@ final class KokoroTTS: @unchecked Sendable {
         queue.async { [self] in
             guard isAvailable else { return }
             _ = ensureDaemonRunning()
+            scheduleIdleShutdown()
         }
+    }
+
+    /// (Re)arm the idle timer. Must be called on `queue`; the work item also
+    /// runs there, so it never races a synth in progress.
+    private func scheduleIdleShutdown() {
+        idleShutdown?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let p = self.process, p.isRunning else { return }
+            KokoroTTSDebug.log("daemon: idle \(Int(Self.idleTimeout))s — stopping to free memory")
+            p.terminate()
+            self.process = nil
+            self.stdinHandle = nil
+            self.stdoutHandle = nil
+        }
+        idleShutdown = work
+        queue.asyncAfter(deadline: .now() + Self.idleTimeout, execute: work)
     }
 }

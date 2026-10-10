@@ -122,7 +122,7 @@ final class TailscaleService {
             return .failure(DetectionError(message: "Tailscale not installed — install from tailscale.com"))
         }
 
-        // 2. Shell out with a 3-second timeout.
+        // 2. Shell out with a 15-second timeout.
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cli)
         process.arguments = ["status", "--json"]
@@ -143,8 +143,11 @@ final class TailscaleService {
             return .failure(DetectionError(message: "Failed to run Tailscale CLI: \(error.localizedDescription)"))
         }
 
-        // Manual 3s timeout — Process has no built-in.
-        let deadline = Date().addingTimeInterval(3.0)
+        // Manual timeout — Process has no built-in. 15s, not 3s: launching the
+        // Tailscale.app binary goes through code-signature checks that have
+        // been measured at 5–12s on a loaded Mac, and this runs off-main, so a
+        // generous limit costs nothing but avoids a false "timed out".
+        let deadline = Date().addingTimeInterval(15.0)
         while process.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }

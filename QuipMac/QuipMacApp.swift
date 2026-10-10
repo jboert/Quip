@@ -813,8 +813,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // the user granted or manually denied in System Settings.
         windowManager.promptForAccessibilityIfNeeded()
 
-        // Pre-warm the Kokoro daemon so the first synth doesn't pay model load
-        kokoroTTS.preload()
+        // No Kokoro pre-warm here: the daemon holds ~400 MB, and most sessions
+        // have no phone with TTS on. It's pre-warmed from `preferences_snapshot`
+        // when a phone reports TTS enabled, and stops itself after going idle.
 
         var subtitleCounter = 0
         // The AppleScript fetches below can block for 1-3 seconds — longer than
@@ -1205,6 +1206,13 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
             let gen = (ttsGeneration[windowId] ?? 0) + 1
             ttsGeneration[windowId] = gen
+
+            // Bumping `gen` above already cancels any in-flight synth for this
+            // window; now skip starting a new one when no phone will play it.
+            guard anyConnectedPhoneWantsTTS() else {
+                KokoroTTSDebug.log("synth skipped — no connected phone has TTS on")
+                return
+            }
 
             let wid = windowId
             let wname = name
@@ -2141,7 +2149,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             // the person looking at the blank screen actually is.
                             switch read {
                             case .ok(let content):
-                                redacted = TerminalContentWindow.tail(content)
+                                redacted = TerminalContentWindow.tail(TerminalContentWindow.tidy(content))
                             case .failed:
                                 KokoroTTSDebug.log("request_content read failed for \(wid)")
                                 redacted = "[Quip could not read this window — check Automation/Accessibility permissions for Quip]"
@@ -2399,6 +2407,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     let encoded = try JSONEncoder().encode(msg.preferences)
                     UserDefaults.standard.set(encoded, forKey: key)
                     print("[Quip] preferences_snapshot stored for device \(msg.deviceID.prefix(8))")
+                    // Pre-warm only once a phone actually wants speech.
+                    if msg.preferences.ttsEnabled == true {
+                        kokoroTTS.preload()
+                    }
                 } catch {
                     // The phone believes its settings are backed up the moment
                     // it sends this. If the encode fails we store nothing and
@@ -2479,6 +2491,24 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     /// lives. Per-device so a household with two phones doesn't collide.
     private func phonePrefsKey(deviceID: String) -> String {
         "phonePrefs.\(deviceID)"
+    }
+
+    /// True when at least one authenticated phone has TTS switched on, per the
+    /// `preferences_snapshot` it last synced (sent on every settings change).
+    /// Phones default TTS off and drop `tts_audio` when it's off, so
+    /// synthesizing for nobody just burns CPU and grows the Kokoro daemon.
+    /// A client with no `device_identity` yet (older phone) counts as wanting
+    /// TTS — the pre-gate behavior. No stored snapshot = phone default (off).
+    @MainActor
+    private func anyConnectedPhoneWantsTTS() -> Bool {
+        webSocketServer.connectedClients.contains { client in
+            guard client.isAuthenticated else { return false }
+            guard let deviceID = client.deviceID else { return true }
+            guard let blob = UserDefaults.standard.data(forKey: phonePrefsKey(deviceID: deviceID)),
+                  let prefs = try? JSONDecoder().decode(PreferencesSnapshot.self, from: blob)
+            else { return false }
+            return prefs.ttsEnabled == true
+        }
     }
 
     /// Phone (typically right after authenticating from a fresh install) is

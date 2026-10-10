@@ -454,10 +454,7 @@ def synth_to_wav_bytes(text: str, voice: str, speed: float, lang: str) -> bytes:
 
 
 def _get_kokoro():
-    """Load Kokoro model once and cache it globally.
-    Tries CoreML Execution Provider first (Apple Neural Engine / GPU),
-    falls back to CPU if unavailable.
-    """
+    """Load Kokoro model once and cache it globally (CPU EP, arena off)."""
     global _KOKORO
     try:
         return _KOKORO
@@ -473,24 +470,36 @@ def _get_kokoro():
         sys.stderr.write(f"ERROR: model files not found at {VOICES_DIR}\n")
         sys.exit(3)
 
-    # Try CoreML first for Apple Silicon acceleration
-    avail = ort.get_available_providers()
-    providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"] if "CoreMLExecutionProvider" in avail else ["CPUExecutionProvider"]
+    # CPU only, with onnxruntime's memory arena + memory-pattern cache off.
+    # The CoreML EP used to be tried first, but it only covers ~40% of the
+    # graph (129 partitions) and on this model it loaded at ~936 MB and grew
+    # ~190 MB on the first sentence; with every sentence a different input
+    # length, per-shape buffers accumulated until the daemon hit 1–1.6 GB and
+    # starved an 8 GB Mac (WindowServer watchdog crashes, 2026-09-29). The
+    # arena/pattern caches likewise hold buffers sized to every new shape.
+    providers = ["CPUExecutionProvider"]
+    so = ort.SessionOptions()
+    so.enable_cpu_mem_arena = False
+    so.enable_mem_pattern = False
+    # Leave cores for the rest of the machine; synthesis is per-sentence.
+    so.intra_op_num_threads = 4
 
-    # Newer kokoro-onnx accepts a `providers` kwarg; older versions don't
-    try:
-        _KOKORO = Kokoro(str(MODEL_PATH), str(VOICES_PATH), providers=providers)
-        sys.stderr.write(f"kokoro loaded with providers={providers}\n")
-    except TypeError:
-        # Monkey-patch onnxruntime.InferenceSession to inject our providers
+    if hasattr(Kokoro, "from_session"):
+        session = ort.InferenceSession(str(MODEL_PATH), so, providers=providers)
+        _KOKORO = Kokoro.from_session(session, str(VOICES_PATH))
+        sys.stderr.write(f"kokoro loaded from session, providers={providers}, arena off\n")
+    else:
+        # Older kokoro-onnx without from_session: inject options/providers
+        # into the InferenceSession it builds internally.
         _orig_session = ort.InferenceSession
         def _patched_session(path, *args, **kwargs):
+            kwargs.setdefault("sess_options", so)
             kwargs.setdefault("providers", providers)
             return _orig_session(path, *args, **kwargs)
         ort.InferenceSession = _patched_session
         try:
             _KOKORO = Kokoro(str(MODEL_PATH), str(VOICES_PATH))
-            sys.stderr.write(f"kokoro loaded via monkey-patched providers={providers}\n")
+            sys.stderr.write(f"kokoro loaded via monkey-patched providers={providers}, arena off\n")
         finally:
             ort.InferenceSession = _orig_session
     return _KOKORO

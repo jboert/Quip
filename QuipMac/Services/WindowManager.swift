@@ -1744,7 +1744,7 @@ final class WindowManager {
         return output
         """
 
-        let asResult = AppleScriptRunner.run(script)
+        let asResult = AppleScriptRunner.run(script, cached: true)
         if !asResult.failed, let output = asResult.stringValue {
             for line in output.components(separatedBy: "\n") where !line.isEmpty {
                 let parts = line.split(separator: ":", maxSplits: 1)
@@ -1785,7 +1785,7 @@ final class WindowManager {
             return (name of processes) contains "iTerm2"
         end tell
         """
-        let runResult = AppleScriptRunner.run(runningCheck)
+        let runResult = AppleScriptRunner.run(runningCheck, cached: true)
         guard !runResult.failed, runResult.booleanValue else { return [] }
 
         // Four fields per window, TAB-separated, newline between windows.
@@ -1814,7 +1814,7 @@ final class WindowManager {
         end tell
         return output
         """
-        let asResult = AppleScriptRunner.run(script)
+        let asResult = AppleScriptRunner.run(script, cached: true)
         guard !asResult.failed, let output = asResult.stringValue else { return [] }
         return parseITermWindowList(output)
     }
@@ -1933,7 +1933,7 @@ final class WindowManager {
         return output
         """
 
-        let asResult = AppleScriptRunner.run(script)
+        let asResult = AppleScriptRunner.run(script, cached: true)
         // `.failed` is NOT "no sessions" — see `Iterm2SessionFetch`. Reporting
         // it as an empty list made the caller wipe every good mapping.
         guard !asResult.failed, let output = asResult.stringValue else { return .failed }

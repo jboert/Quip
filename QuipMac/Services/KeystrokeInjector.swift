@@ -3,6 +3,8 @@
 // Supports Terminal.app and iTerm2
 
 import AppKit
+import ImageIO
+import IOKit.pwr_mgt
 import Observation
 
 enum TextInjectionRoute: String, Sendable {
@@ -1410,7 +1412,7 @@ final class KeystrokeInjector {
             """
         }
 
-        let result = AppleScriptRunner.run(script)
+        let result = AppleScriptRunner.run(script, cached: true)
         if result.failed { return .failed }
         guard let raw = result.stringValue else { return .failed }
         // Checked against the raw output, before trimming/redaction, so neither
@@ -1582,7 +1584,33 @@ final class KeystrokeInjector {
             return nil
         }
         Self.reportCaptureFailure(window: cgWindowNumber, cause: nil) // success — announces recovery
-        return data.base64EncodedString()
+        // `screencapture` writes a full-resolution (Retina) PNG — commonly
+        // 1–10 MiB — but the phone only renders a window thumbnail. Over remote
+        // links (Tailscale/tunnel) full-res frames saturate the pipe and stall
+        // the socket, and per-frame transfer time IS the window-update latency.
+        // 1400px / q0.72 JPEG keeps terminal text crisp at ~80–160 KB. The
+        // phone's `UIImage(data:)` decodes JPEG and PNG alike — no protocol
+        // change. Raw bytes only if re-encoding somehow fails.
+        return Self.downscaledJPEGBase64(data, maxPixel: 1400, quality: 0.72)
+            ?? data.base64EncodedString()
+    }
+
+    /// Downscale `imageData` so its longest side is ≤ `maxPixel`, re-encode as
+    /// JPEG at `quality`, return base64. ImageIO is thread-safe, so this is fine
+    /// on the off-main path `captureWindowScreenshot` runs on. nil on failure.
+    private nonisolated static func downscaledJPEGBase64(_ imageData: Data, maxPixel: Int, quality: Double) -> String? {
+        guard let src = CGImageSourceCreateWithData(imageData as CFData, nil) else { return nil }
+        let thumbOpts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let thumb = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOpts as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, thumb, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return (out as Data).base64EncodedString()
     }
 
     // MARK: - Helpers
@@ -1714,6 +1742,9 @@ final class KeystrokeInjector {
                                                 windowId: String,
                                                 terminalApp: TerminalApp?,
                                                 detail: String = "") -> InjectionResult {
+        if source.contains("tell application \"System Events\"") {
+            Self.wakeDisplayForKeystrokes()
+        }
         let result = AppleScriptRunner.run(source)
 
         if let message = result.errorMessage {
@@ -1730,6 +1761,28 @@ final class KeystrokeInjector {
         }
 
         return InjectionResult(success: true, error: nil)
+    }
+
+    // Reused across calls so repeated sends refresh one assertion instead of
+    // stacking new ones. Touched from the injection queues;
+    // IOPMAssertionDeclareUserActivity tolerates the race.
+    nonisolated(unsafe) private static var userActivityAssertion: IOPMAssertionID = 0
+
+    /// System Events keystrokes are silently dropped while the display is
+    /// asleep — and when the phone reaches the Mac remotely it's usually in
+    /// DarkWake with the display off. Synthetic events don't count as user
+    /// activity, so nothing wakes it: AppleScript reports success, the text
+    /// goes nowhere. Declaring user activity brings the Mac to FullWake with
+    /// the display on (same as touching the mouse); then wait for it before
+    /// typing. iTerm2's `write text` doesn't need this — it skips the HID path.
+    /// Blocks up to 3s, so off-main only (it runs from `executeAppleScript`).
+    nonisolated static func wakeDisplayForKeystrokes() {
+        IOPMAssertionDeclareUserActivity("Quip typing from phone" as CFString,
+                                         kIOPMUserActiveLocal, &userActivityAssertion)
+        let deadline = Date().addingTimeInterval(3)
+        while CGDisplayIsAsleep(CGMainDisplayID()) != 0, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     }
 
     /// `executeAppleScript` for @MainActor callers — same script, same serial
