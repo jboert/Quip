@@ -247,7 +247,7 @@ struct SecurityTab: View {
             }
             .task(id: encoded) {
                 guard let encoded else { qrImage = nil; return }
-                qrImage = await Task.detached { PairingQR.image(for: encoded) }.value
+                qrImage = await PairingQR.render(for: encoded)
             }
         }
     }

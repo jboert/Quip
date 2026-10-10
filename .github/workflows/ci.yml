@@ -132,14 +132,15 @@ jobs:
   # Apple targets. xcodegen regenerates QuipMac.xcodeproj / QuipiOS.xcodeproj
   # from project.yml on every run — Info.plist is gitignored, so without this
   # the build can't find it. Code signing is forced off; tests don't need it
-  # and we don't have a CI signing identity. macos-15 carries Xcode 16, which
-  # matches project.yml's `xcodeVersion: "16.0"` requirement.
+  # and we don't have a CI signing identity. macos-26 carries Xcode 26: the
+  # iOS app uses iOS 26 SDK APIs (SpeechAnalyzer/SpeechTranscriber in
+  # AnalyzerSession), which Xcode 16 on macos-15 cannot compile.
   # --------------------------------------------------------------------------
   apple-mac:
     name: xcodebuild test (QuipMac)
     needs: changes
     if: needs.changes.outputs.apple == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -148,7 +149,7 @@ jobs:
         # Pin: 2.45.x rewrites source paths to a "common ancestor" basePath
         # so iOS sources mixing `path: .` with `path: ../Shared` end up at
         # repo root instead of QuipiOS/. Pulling the .pkg from the upstream
-        # release is the simplest way to lock the version on macos-15.
+        # release is the simplest way to lock the version on the runner.
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/xcodegen.zip \
@@ -190,7 +191,7 @@ jobs:
     name: xcodebuild test (QuipiOS)
     needs: changes
     if: needs.changes.outputs.apple == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -199,7 +200,7 @@ jobs:
         # Pin: 2.45.x rewrites source paths to a "common ancestor" basePath
         # so iOS sources mixing `path: .` with `path: ../Shared` end up at
         # repo root instead of QuipiOS/. Pulling the .pkg from the upstream
-        # release is the simplest way to lock the version on macos-15.
+        # release is the simplest way to lock the version on the runner.
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/xcodegen.zip \
@@ -215,7 +216,7 @@ jobs:
       - name: Pick an available iPhone simulator
         id: sim
         # Hard-coding `name=iPhone 15` breaks every time GitHub bumps the
-        # macos-15 image to a newer Xcode whose default sim runtime drops
+        # macOS image to a newer Xcode whose default sim runtime drops
         # that device. Resolve to whatever iPhone simulator the runner has
         # available at job time and pass its UDID to xcodebuild.
         run: |

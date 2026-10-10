@@ -327,7 +327,7 @@ struct MainWindow: View {
         .padding(20)
         .frame(width: 280)
         .task(id: qrURL) {
-            qrImage = await Task.detached { PairingQR.image(for: qrURL) }.value
+            qrImage = await PairingQR.render(for: qrURL)
         }
     }
 

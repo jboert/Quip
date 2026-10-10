@@ -21,4 +21,13 @@ enum PairingQR {
         nsImage.addRepresentation(rep)
         return nsImage
     }
+
+    /// `image(for:)` rendered on a background thread, for `.task(id:)` callers.
+    /// `NSImage` is only `Sendable` in newer SDKs (CI's older Xcode rejects
+    /// returning one from `Task.detached`), so the hop carries it in a box; safe
+    /// because the image is freshly made and nothing else holds it.
+    static func render(for content: String) async -> NSImage? {
+        struct Box: @unchecked Sendable { let image: NSImage? }
+        return await Task.detached { Box(image: image(for: content)) }.value.image
+    }
 }
