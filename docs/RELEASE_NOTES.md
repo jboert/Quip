@@ -100,6 +100,15 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   New built-ins in the palette: `/superpowers:brainstorming`,
   `/superpowers:writing-plans`, `/superpowers:executing-plans`, `/resume`,
   `/model`, `/context`. Add any other with Quick Buttons → + → Custom Button.
+- **Edit a keyboard button where it is (Q-67).** Hold a quick-row button
+  still and a menu opens: **Edit…**, **Color…**, **Remove from Row**, plus
+  **All Slash Commands…** on slash buttons and **Paste & Send** on prompt
+  buttons (those were the hold itself before, so nothing is lost). Hold and
+  move still drags. In Settings → Quick Buttons, tapping any Row Order entry
+  now opens the same edit form (it used to do nothing). Editing a built-in
+  turns it into your own custom button in the same spot, with its color.
+  Prompts are still edited in the Prompts hub; slash group pills (`/x…`)
+  keep their own menu. Phone only, no Mac change, no new synced field.
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,

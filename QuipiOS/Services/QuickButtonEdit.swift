@@ -1,0 +1,78 @@
+import Foundation
+
+/// Editing a keyboard button from the row itself (Q-67). A custom button is
+/// edited in place. A built-in's label and command are fixed in the
+/// `QuickButton` enum, so editing one makes a custom copy that takes the
+/// built-in's place in the row and keeps its color.
+enum QuickButtonEdit {
+
+    /// A custom button that does what `button` does, ready to edit. Nil for
+    /// Broadcast, which opens a phone sheet and has no text or keystroke.
+    static func customCopy(of button: QuickButton, id: UUID = UUID()) -> CustomButton? {
+        let payload: CustomPayload
+        switch button.action {
+        case .sendText(let text, let pressReturn):
+            payload = text.hasPrefix("/")
+                ? .slash(text: text, autoSubmit: pressReturn)
+                : .rawText(text: text, autoSubmit: pressReturn)
+        case .quickAction(let action):
+            payload = .keystroke(action: action)
+        case .openBroadcast:
+            return nil
+        }
+        // Icon-only built-ins have an empty pill label; the form needs a name.
+        let label = button.label.isEmpty ? button.displayName : button.label
+        return CustomButton(id: id, label: label, systemImage: button.systemImage, payload: payload)
+    }
+
+    /// The custom button the edit form opens with for `slot`, or nil when the
+    /// slot can't be edited this way (prompts, spacers, Broadcast, a custom
+    /// whose definition is gone).
+    static func editable(_ slot: QuickSlot, defs: [CustomButton]) -> CustomButton? {
+        switch slot {
+        case .builtin(let b): return customCopy(of: b)
+        case .custom(let id): return defs.first { $0.id == id }
+        case .prompt, .promptsPicker, .spacer: return nil
+        }
+    }
+
+    struct Result: Equatable {
+        var slots: [QuickSlot]
+        var defs: [CustomButton]
+        var colors: [String: String]
+    }
+
+    /// Saves `edited` over `slot`. A custom slot's definition is replaced by
+    /// id. A built-in slot gets `edited` as a new definition, and every place
+    /// the built-in held in the row now points at it, with its color moved
+    /// across.
+    static func save(_ edited: CustomButton, over slot: QuickSlot,
+                     slots: [QuickSlot], defs: [CustomButton],
+                     colors: [String: String]) -> Result {
+        var out = Result(slots: slots, defs: defs, colors: colors)
+        switch slot {
+        case .custom:
+            if let i = out.defs.firstIndex(where: { $0.id == edited.id }) {
+                out.defs[i] = edited
+            } else {
+                out.defs.append(edited)
+            }
+        case .builtin:
+            out.defs.append(edited)
+            let replacement = QuickSlot.custom(edited.id)
+            out.slots = slots.map { $0 == slot ? replacement : $0 }
+            if let tint = out.colors.removeValue(forKey: slot.id) {
+                out.colors[replacement.id] = tint
+            }
+        case .prompt, .promptsPicker, .spacer:
+            break
+        }
+        return out
+    }
+
+    /// The row without `slot`. The custom definition stays, so the button can
+    /// be put back from Settings → Quick Buttons → +.
+    static func removing(_ slot: QuickSlot, from slots: [QuickSlot]) -> [QuickSlot] {
+        slots.filter { $0 != slot }
+    }
+}

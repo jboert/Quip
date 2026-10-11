@@ -1515,6 +1515,13 @@ struct MainiOSView: View {
     /// Q-65: the slash pills' hold palette, presented from the reorder
     /// gesture (a context menu cannot share the long press with the drag).
     @State private var showSlashPalette = false
+    /// Q-67: the keyboard button held still, whose menu (Edit, Color,
+    /// Remove…) is showing.
+    @State private var quickMenuSlot: QuickSlot?
+    /// Q-67: the keyboard button open in the edit form.
+    @State private var editingQuickSlot: QuickSlot?
+    /// Q-67: the keyboard button open in the color sheet.
+    @State private var coloringQuickSlot: QuickSlot?
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -2150,6 +2157,19 @@ struct MainiOSView: View {
                 ) { hex in
                     client.send(SetColorMessage(windowId: id, color: hex))
                 }
+            }
+        }
+        // Q-67: edit or color a keyboard button from its hold menu.
+        .sheet(item: $editingQuickSlot) { slot in
+            if let initial = QuickButtonEdit.editable(slot, defs: customButtonDefs) {
+                CustomButtonForm(initial: initial) { edited in saveQuickEdit(edited, over: slot) }
+            }
+        }
+        .sheet(item: $coloringQuickSlot) { slot in
+            let colors = KeyColors.decode(quickSlotColorsJSON)
+            ColorChoiceSheet(title: quickSlotTitle(slot), current: colors[slot.id],
+                             resetLabel: "Reset to default") { hex in
+                quickSlotColorsJSON = KeyColors.encode(KeyColors.setting(hex, for: slot.id, in: colors))
             }
         }
         .sheet(isPresented: $showQAPicker) {
@@ -3089,6 +3109,13 @@ struct MainiOSView: View {
                         }
                     }
                 }
+            }
+            // Q-67: hold a keyboard button still for its menu.
+            .confirmationDialog(quickMenuSlot.map(quickSlotTitle) ?? "", isPresented: Binding(
+                get: { quickMenuSlot != nil },
+                set: { if !$0 { quickMenuSlot = nil } }
+            ), titleVisibility: .visible, presenting: quickMenuSlot) { slot in
+                quickMenuActions(slot)
             }
             }
             .frame(height: btnH)
@@ -6030,21 +6057,74 @@ struct MainiOSView: View {
         return out
     }
 
-    /// What a hold-without-drag does on a quick pill: the prompt pill's
-    /// paste-and-submit and the slash pills' palette moved here from their
-    /// own long presses, which the drag would otherwise swallow.
+    /// What a hold-without-drag does on a quick pill: opens the button's menu
+    /// (Q-67). The prompt pill's paste-and-submit and the slash pills'
+    /// palette, which used to be the hold itself, are items in that menu.
     private func quickRowHoldAction(_ item: RowItem) -> (() -> Void)? {
+        guard let slot = quickSlot(for: item) else { return nil }
+        return { quickMenuSlot = slot }
+    }
+
+    /// The single slot a rendered pill stands for; nil for spacers and slash
+    /// groups, which have no menu.
+    private func quickSlot(for item: RowItem) -> QuickSlot? {
         switch item {
-        case .promptButton(let pid, _):
-            return { firePromptSlot(promptID: pid, pressReturn: true) }
-        case .builtinButton(let b) where b.isSlashCommand:
-            return { showSlashPalette = true }
-        case .customButton(let c):
-            if case .slash = c.payload { return { showSlashPalette = true } }
-            return nil
-        default:
-            return nil
+        case .builtinButton(let b): return .builtin(b)
+        case .customButton(let c): return .custom(c.id)
+        case .promptButton(let pid, _): return .prompt(promptID: pid)
+        case .promptsPicker: return .promptsPicker
+        case .spacer, .slashGroup: return nil
         }
+    }
+
+    private func quickSlotTitle(_ slot: QuickSlot) -> String {
+        switch slot {
+        case .builtin(let b): return b.displayName
+        case .custom(let id): return customButtonDefs.first { $0.id == id }?.label ?? "Button"
+        case .prompt(let pid): return client.promptLibrary.first { $0.id == pid }?.label ?? pid
+        case .promptsPicker: return "Prompts"
+        case .spacer: return "Spacer"
+        }
+    }
+
+    private func isSlashSlot(_ slot: QuickSlot) -> Bool {
+        switch slot {
+        case .builtin(let b): return b.isSlashCommand
+        case .custom(let id):
+            if case .slash = customButtonDefs.first(where: { $0.id == id })?.payload { return true }
+            return false
+        default: return false
+        }
+    }
+
+    /// Q-67: the menu a held keyboard button shows.
+    @ViewBuilder
+    private func quickMenuActions(_ slot: QuickSlot) -> some View {
+        if case .prompt(let pid) = slot {
+            Button("Paste & Send") { firePromptSlot(promptID: pid, pressReturn: true) }
+        }
+        if isSlashSlot(slot) {
+            Button("All Slash Commands…") {
+                // One dialog can't open while another is still animating away.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showSlashPalette = true }
+            }
+        }
+        if QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil {
+            Button("Edit…") { editingQuickSlot = slot }
+        }
+        Button("Color…") { coloringQuickSlot = slot }
+        Button("Remove from Row", role: .destructive) {
+            quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.removing(slot, from: effectiveQuickSlots))
+        }
+    }
+
+    /// Q-67: writes an edit made from the row's menu.
+    private func saveQuickEdit(_ edited: CustomButton, over slot: QuickSlot) {
+        let r = QuickButtonEdit.save(edited, over: slot, slots: effectiveQuickSlots, defs: customButtonDefs,
+                                     colors: KeyColors.decode(quickSlotColorsJSON))
+        customButtonsJSON = CustomButtonStore.encode(r.defs)
+        quickSlotsJSON = QuickSlotStore.encode(r.slots)
+        quickSlotColorsJSON = KeyColors.encode(r.colors)
     }
 
     /// Pill rendering + tap handling for a Mac-managed prompt slot.
@@ -6077,10 +6157,11 @@ struct MainiOSView: View {
         .buttonStyle(.plain)
         .disabled(!canFire)
         .accessibilityLabel("Prompt: \(label)")
-        .accessibilityHint(canFire ? "Tap to paste, hold and release to paste and submit, hold and drag to move" : "Prompt unavailable")
+        .accessibilityHint(canFire ? "Tap to paste, hold and release for options including paste and submit, hold and drag to move" : "Prompt unavailable")
         .accessibilityAddTraits(.isButton)
-        // The hold-and-release submit lives in the row's reorder modifier
-        // (quickRowHoldAction), which owns the long press now (Q-65).
+        // The hold-and-release menu (with Paste & Send) lives in the row's
+        // reorder modifier (quickRowHoldAction), which owns the long press
+        // (Q-65, Q-67).
     }
 
     private func firePromptSlot(promptID: String, pressReturn: Bool) {
@@ -8720,6 +8801,8 @@ struct QuickButtonsSheet: View {
     private var slotColors: [String: String] { KeyColors.decode(quickSlotColorsJSON) }
 
     @State private var editingCustomID: UUID?
+    /// Q-67: a built-in from Row Order open in the edit form, as a custom copy.
+    @State private var editingBuiltin: QuickButton?
     @State private var addingCustom: Bool = false
     @State private var showPromptPicker: Bool = false
     /// Drives the sheet-based add picker. Replaces the prior toolbar Menu,
@@ -8828,7 +8911,12 @@ struct QuickButtonsSheet: View {
                 } else {
                     ForEach(visibleSlots) { slot in
                         HStack(spacing: 8) {
+                            // Q-67: tap a button to edit it. Tap gesture, not
+                            // Button, so the List keeps scroll and drag (see
+                            // the Custom Buttons rows below).
                             slotRow(slot)
+                                .contentShape(Rectangle())
+                                .onTapGesture { editRowSlot(slot) }
                             slotColorButton(slot)
                         }
                     }
@@ -8845,8 +8933,8 @@ struct QuickButtonsSheet: View {
                 }
             } footer: {
                 Text(isFilteringEditor
-                     ? "Clear the search to reorder. Swipe to remove. Tap the dot to color a button."
-                     : "Drag the handle to reorder. Swipe to remove. Tap the dot to color a button. Spacers add fixed gaps between buttons.")
+                     ? "Clear the search to reorder. Tap a button to edit it. Swipe to remove. Tap the dot to color a button."
+                     : "Tap a button to edit it; editing a built-in makes it your own custom button. Drag the handle to reorder. Swipe to remove. Tap the dot to color a button. Spacers add fixed gaps between buttons.")
             }
 
             if !visibleCustoms.isEmpty {
@@ -8968,6 +9056,17 @@ struct QuickButtonsSheet: View {
                     customButtonsJSON = CustomButtonStore.encode(defs)
                 }
             )
+        }
+        .sheet(item: $editingBuiltin) { builtin in
+            if let copy = QuickButtonEdit.customCopy(of: builtin) {
+                CustomButtonForm(initial: copy) { edited in
+                    let r = QuickButtonEdit.save(edited, over: .builtin(builtin), slots: slots,
+                                                 defs: customs, colors: slotColors)
+                    customButtonsJSON = CustomButtonStore.encode(r.defs)
+                    persistSlots(r.slots)
+                    quickSlotColorsJSON = KeyColors.encode(r.colors)
+                }
+            }
         }
         .sheet(isPresented: $showPromptPicker) {
             promptPickerSheet
@@ -9125,6 +9224,16 @@ struct QuickButtonsSheet: View {
         case .prompt(let pid): return promptLabelByID[pid] ?? pid
         case .promptsPicker: return "Prompts"
         case .spacer: return "Spacer"
+        }
+    }
+
+    /// Q-67: what tapping a Row Order entry opens. Prompts are edited in the
+    /// Prompts hub, and spacers and Broadcast have nothing to edit.
+    private func editRowSlot(_ slot: QuickSlot) {
+        switch slot {
+        case .builtin(let b) where QuickButtonEdit.customCopy(of: b) != nil: editingBuiltin = b
+        case .custom(let id) where customsByID[id] != nil: editingCustomID = id
+        default: break
         }
     }
 
@@ -9686,6 +9795,8 @@ struct CustomButtonForm: View {
         ("Ctrl+C", "press_ctrl_c"),
         ("Ctrl+D", "press_ctrl_d"),
         ("Clear input", "clear_input"),
+        // Listed so an edited copy of the built-in keeps its key (Q-67).
+        ("Accept autocomplete", "press_right"),
     ]
 
     var body: some View {
