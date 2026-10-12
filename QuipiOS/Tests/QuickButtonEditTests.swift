@@ -63,4 +63,19 @@ final class QuickButtonEditTests: XCTestCase {
         let slots: [QuickSlot] = [.builtin(.yes), .custom(id), .builtin(.esc)]
         XCTAssertEqual(QuickButtonEdit.removing(.custom(id), from: slots), [.builtin(.yes), .builtin(.esc)])
     }
+
+    func test_addingASpacerPutsItRightAfterTheHeldButton() {
+        let gap = UUID()
+        let slots: [QuickSlot] = [.builtin(.yes), .custom(id), .builtin(.esc)]
+        XCTAssertEqual(QuickButtonEdit.addingSpacer(after: .custom(id), in: slots, id: gap),
+                       [.builtin(.yes), .custom(id), .spacer(gap), .builtin(.esc)])
+        XCTAssertEqual(QuickButtonEdit.addingSpacer(after: .builtin(.esc), in: slots, id: gap).last,
+                       .spacer(gap))
+    }
+
+    func test_addingASpacerAfterAMissingButtonAppendsIt() {
+        let gap = UUID()
+        XCTAssertEqual(QuickButtonEdit.addingSpacer(after: .builtin(.plan), in: [.builtin(.yes)], id: gap),
+                       [.builtin(.yes), .spacer(gap)])
+    }
 }

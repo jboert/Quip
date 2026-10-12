@@ -75,4 +75,14 @@ enum QuickButtonEdit {
     static func removing(_ slot: QuickSlot, from slots: [QuickSlot]) -> [QuickSlot] {
         slots.filter { $0 != slot }
     }
+
+    /// The row with a new spacer right after `slot`, or at the end when
+    /// `slot` is no longer in the row. Drag the spacer to move it.
+    static func addingSpacer(after slot: QuickSlot, in slots: [QuickSlot],
+                             id: UUID = UUID()) -> [QuickSlot] {
+        var out = slots
+        let at = out.firstIndex(of: slot).map { $0 + 1 } ?? out.endIndex
+        out.insert(.spacer(id), at: at)
+        return out
+    }
 }

@@ -5973,7 +5973,9 @@ struct MainiOSView: View {
                 case .promptsPicker:
                     promptsPickerButton(tint: tints[QuickSlot.promptsPicker.id])
                 case .spacer(let w, _):
-                    Spacer().frame(width: w)
+                    // Clear, but as tall as a pill so the gap can be held
+                    // (menu) or dragged; a bare Spacer has no height to touch.
+                    Color.clear.frame(width: w, height: 28)
                 case .slashGroup(let letter, let members):
                     slashGroupMenuButton(letter: letter, members: members)
                 }
@@ -6062,15 +6064,16 @@ struct MainiOSView: View {
         return { quickMenuSlot = slot }
     }
 
-    /// The single slot a rendered pill stands for; nil for spacers and slash
-    /// groups, which have no menu.
+    /// The single slot a rendered pill stands for; nil for slash groups,
+    /// whose pill is a Menu with no hold.
     private func quickSlot(for item: RowItem) -> QuickSlot? {
         switch item {
         case .builtinButton(let b): return .builtin(b)
         case .customButton(let c): return .custom(c.id)
         case .promptButton(let pid, _): return .prompt(promptID: pid)
         case .promptsPicker: return .promptsPicker
-        case .spacer, .slashGroup: return nil
+        case .spacer(_, let uid): return .spacer(uid)
+        case .slashGroup: return nil
         }
     }
 
@@ -6094,6 +6097,12 @@ struct MainiOSView: View {
         }
     }
 
+    /// A spacer is an empty gap; it has nothing to color or edit.
+    private func isSpacerSlot(_ slot: QuickSlot) -> Bool {
+        if case .spacer = slot { return true }
+        return false
+    }
+
     /// Q-67: the menu a held keyboard button shows.
     @ViewBuilder
     private func quickMenuActions(_ slot: QuickSlot) -> some View {
@@ -6112,7 +6121,12 @@ struct MainiOSView: View {
                   let entry = client.promptLibrary.first(where: { $0.id == pid }) {
             Button("Edit…") { editingQuickPrompt = entry }
         }
-        Button("Color…") { coloringQuickSlot = slot }
+        if !isSpacerSlot(slot) {
+            Button("Color…") { coloringQuickSlot = slot }
+        }
+        Button("Add Spacer After") {
+            quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.addingSpacer(after: slot, in: effectiveQuickSlots))
+        }
         Button("Remove from Row", role: .destructive) {
             quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.removing(slot, from: effectiveQuickSlots))
         }

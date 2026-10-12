@@ -112,6 +112,11 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   hub). Slash group pills (`/x…`) keep their own menu. VoiceOver reaches
   the slash palette as a named action on slash buttons. Phone only, no Mac
   change, no new synced field.
+- **Add a spacer from the keyboard (Q-68).** The hold menu has **Add Spacer
+  After**: a gap appears right after that button, and you drag it to move
+  it. Hold a gap for **Add Spacer After** (a wider gap) or **Remove from
+  Row**. Gaps are still invisible, but now as tall as a button, so a finger
+  can find them.
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,
