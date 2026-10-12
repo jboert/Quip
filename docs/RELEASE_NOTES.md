@@ -106,9 +106,12 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   buttons (those were the hold itself before, so nothing is lost). Hold and
   move still drags. In Settings → Quick Buttons, tapping any Row Order entry
   now opens the same edit form (it used to do nothing). Editing a built-in
-  turns it into your own custom button in the same spot, with its color.
-  Prompts are still edited in the Prompts hub; slash group pills (`/x…`)
-  keep their own menu. Phone only, no Mac change, no new synced field.
+  turns it into your own custom button in the same spot, with its color,
+  and the edit form's preview shows that color. **Edit…** on a prompt
+  button opens the prompt editor (the Mac saves it, as from the Prompts
+  hub). Slash group pills (`/x…`) keep their own menu. VoiceOver reaches
+  the slash palette as a named action on slash buttons. Phone only, no Mac
+  change, no new synced field.
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,

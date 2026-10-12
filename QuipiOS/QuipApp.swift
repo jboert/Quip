@@ -1522,6 +1522,10 @@ struct MainiOSView: View {
     @State private var editingQuickSlot: QuickSlot?
     /// Q-67: the keyboard button open in the color sheet.
     @State private var coloringQuickSlot: QuickSlot?
+    /// The prompt open in the editor from a prompt button's hold menu.
+    @State private var editingQuickPrompt: PromptEntry?
+    /// Mac's reply to that editor's save; the editor closes on success.
+    @State private var quickPromptAck: PutPromptAckMessage?
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -2162,8 +2166,24 @@ struct MainiOSView: View {
         // Q-67: edit or color a keyboard button from its hold menu.
         .sheet(item: $editingQuickSlot) { slot in
             if let initial = QuickButtonEdit.editable(slot, defs: customButtonDefs) {
-                CustomButtonForm(initial: initial) { edited in saveQuickEdit(edited, over: slot) }
+                CustomButtonForm(initial: initial,
+                                 tint: KeyColors.decode(quickSlotColorsJSON)[slot.id]) { edited in
+                    saveQuickEdit(edited, over: slot)
+                }
             }
+        }
+        // A prompt button edits the prompt itself, the same editor as the
+        // Prompts hub; the save goes to the Mac, which owns the library.
+        .sheet(item: $editingQuickPrompt) { entry in
+            PromptEditorSheet(initial: entry, latestAck: quickPromptAck) { entry, messageId in
+                guard client.isConnected && client.isAuthenticated else { return false }
+                return client.send(PutPromptMessage(
+                    id: entry.id, label: entry.label, body: entry.body, messageId: messageId,
+                    tags: entry.tags, targetAgent: entry.targetAgent, description: entry.description
+                ))
+            }
+            .onAppear { client.onPutPromptAck = { quickPromptAck = $0 } }
+            .onDisappear { client.onPutPromptAck = nil }
         }
         .sheet(item: $coloringQuickSlot) { slot in
             let colors = KeyColors.decode(quickSlotColorsJSON)
@@ -5907,38 +5927,15 @@ struct MainiOSView: View {
         if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
     }
 
-    /// Attach the "hold for all slash commands" palette to a slash-category
-    /// pill. Uses `.contextMenu` rather than a manual `LongPressGesture` /
-    /// `.simultaneousGesture` on purpose: the system context-menu recognizer
-    /// yields to an in-progress scroll pan, so the horizontal row keeps
-    /// scrolling (gesture-conflict precedent ~:6419) and the pill's primary
-    /// single-tap (its `Button` action) is untouched. Answer/keystroke pills
-    /// must NOT get this — the long-press meaning is slash-only.
+    /// Marks a slash-category pill. Touch never reaches it: the row's
+    /// reorder overlay owns the touch (Q-65), and holding the pill still
+    /// opens its menu, which lists All Slash Commands… (Q-67). VoiceOver
+    /// gets the same palette as a named action. Answer/keystroke pills must
+    /// NOT get this — the palette is slash-only.
     @ViewBuilder
     private func slashPalette<Content: View>(_ content: Content) -> some View {
-        let members = allSlashMembers()
         content
-            .contextMenu {
-                if SlashSearchSheet.offersSearch(memberCount: members.count) {
-                    Button {
-                        showSlashSearch = true
-                    } label: {
-                        Label("Search…", systemImage: "magnifyingglass")
-                    }
-                    Divider()
-                }
-                ForEach(members) { member in
-                    Button {
-                        switch member {
-                        case .builtin(let b): fireQuickButton(b)
-                        case .custom(let c): fireCustomButton(c)
-                        }
-                    } label: {
-                        Text(member.displayName)
-                    }
-                }
-            }
-            .accessibilityHint("Long-press for all slash commands")
+            .accessibilityAction(named: "All slash commands") { showSlashPalette = true }
     }
 
     /// Render the full slot row — built-ins, customs, spacers, and grouped
@@ -6111,6 +6108,9 @@ struct MainiOSView: View {
         }
         if QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil {
             Button("Edit…") { editingQuickSlot = slot }
+        } else if case .prompt(let pid) = slot,
+                  let entry = client.promptLibrary.first(where: { $0.id == pid }) {
+            Button("Edit…") { editingQuickPrompt = entry }
         }
         Button("Color…") { coloringQuickSlot = slot }
         Button("Remove from Row", role: .destructive) {
@@ -9048,6 +9048,7 @@ struct QuickButtonsSheet: View {
         )) { existing in
             CustomButtonForm(
                 initial: existing,
+                tint: slotColors[QuickSlot.custom(existing.id).id],
                 onSave: { updated in
                     var defs = customs
                     if let idx = defs.firstIndex(where: { $0.id == updated.id }) {
@@ -9059,7 +9060,7 @@ struct QuickButtonsSheet: View {
         }
         .sheet(item: $editingBuiltin) { builtin in
             if let copy = QuickButtonEdit.customCopy(of: builtin) {
-                CustomButtonForm(initial: copy) { edited in
+                CustomButtonForm(initial: copy, tint: slotColors[QuickSlot.builtin(builtin).id]) { edited in
                     let r = QuickButtonEdit.save(edited, over: .builtin(builtin), slots: slots,
                                                  defs: customs, colors: slotColors)
                     customButtonsJSON = CustomButtonStore.encode(r.defs)
@@ -9761,6 +9762,8 @@ struct QuickButtonsSheet: View {
 struct CustomButtonForm: View {
     /// nil = create-new flow; non-nil = edit existing.
     let initial: CustomButton?
+    /// The slot's color, so the preview matches the row. Nil = default chip.
+    var tint: String? = nil
     let onSave: (CustomButton) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -9919,11 +9922,11 @@ struct CustomButtonForm: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(colors.chipText)
+        .foregroundStyle(KeyTint.text(tint, default: colors.chipText))
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(colors.chipFill)
+        .background(KeyTint.fill(tint, default: colors.chipFill))
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
