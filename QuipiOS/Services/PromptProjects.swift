@@ -44,9 +44,13 @@ enum PromptProjects {
     }
 
     /// A project name the Mac can store: trimmed, with no commas (they
-    /// separate tags in the prompt file). Nil when nothing is left.
+    /// separate tags in the prompt file) and no line breaks or other control
+    /// characters (the tags are one line of the file's meta block, so a pasted
+    /// line break would end it). Nil when nothing is left.
     static func cleaned(_ name: String) -> String? {
-        let clean = name.replacingOccurrences(of: ",", with: " ").trimmingCharacters(in: .whitespaces)
+        let breaks = CharacterSet(charactersIn: ",").union(.newlines).union(.controlCharacters)
+        let spaced = String(name.unicodeScalars.map { breaks.contains($0) ? " " : Character($0) })
+        let clean = spaced.trimmingCharacters(in: .whitespaces)
         return clean.isEmpty ? nil : clean
     }
 

@@ -35,6 +35,15 @@ final class PromptProjectsTests: XCTestCase {
         XCTAssertNil(PromptProjects.tags(nil, settingProjects: []))
     }
 
+    func test_aLineBreakInAPastedNameCannotSplitThePromptFile() {
+        // The Mac writes every tag on one `tags:` line of the prompt file's meta
+        // block, so a line break would end that line and start a new meta key.
+        XCTAssertEqual(PromptProjects.cleaned("web\nagent: codex"), "web agent: codex")
+        XCTAssertEqual(PromptProjects.cleaned("orchard\u{2028}api\t"), "orchard api")
+        XCTAssertNil(PromptProjects.cleaned("\n\r\n"))
+        XCTAssertEqual(PromptProjects.tags(nil, settingProjects: ["lantern\nweb"]), ["project:lantern web"])
+    }
+
     func test_hubListsThisProjectAndFoldsOtherProjects() {
         let hub = PromptHub.sections([everywhere, api, web], hiddenJSON: "[]", store: [:],
                                      context: nil, query: "", at: now, projectFilter: .project("orchard-api"))
