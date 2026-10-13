@@ -124,7 +124,10 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   A short note confirms "Sent to api". **Remove from Row** now shows
   "Removed Y · Undo" for 8 seconds; tap the note to put it back. A photo
   waiting to be sent is not attached to a Send to…; it stays for the
-  current window.
+  current window. In the **Prompts** list, swipe a prompt right for Send
+  to…, Paste and Send or Broadcast…, and left for Delete…, Hide and Edit…;
+  holding it lists every action. `{{folder}}` fills from the window it is
+  sent to.
 - **Prompts for one project (Q-69).** In the prompt editor, **Projects →
   Only show in <folder>** (or type another folder name) limits a prompt to
   windows of that project. The prompt selector lists prompts with no

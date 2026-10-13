@@ -2087,7 +2087,8 @@ struct MainiOSView: View {
                 macPermissions: macPermissions,
                 windowIdProvider: { selectedWindowId },
                 promptContextProvider: { selectedPromptContext },
-                projectProvider: { selectedProject }
+                projectProvider: { selectedProject },
+                windowsProvider: { windows }
             )
         }
         .sheet(isPresented: $showPromptsPickerSheet) {
@@ -2100,6 +2101,7 @@ struct MainiOSView: View {
                     windowIdProvider: { selectedWindowId },
                     promptContextProvider: { selectedPromptContext },
                     projectProvider: { selectedProject },
+                    windowsProvider: { windows },
                     onPick: { entry, pressReturn in
                         firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
                         showPromptsPickerSheet = false
@@ -8182,6 +8184,8 @@ struct SettingsSheet: View {
     var promptContextProvider: () -> String? = { nil }
     /// The selected window's folder, resolved late (Q-69).
     var projectProvider: () -> String? = { nil }
+    /// The current windows, for Send to… in the Prompts hub (US-209).
+    var windowsProvider: () -> [WindowState] = { [] }
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     /// Same key the PTT path reads in QuipApp; @AppStorage keeps the two in
     /// step without threading a binding through the settings hierarchy.
@@ -8271,7 +8275,8 @@ struct SettingsSheet: View {
                     NavigationLink {
                         PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider,
                                            promptContextProvider: promptContextProvider,
-                                           projectProvider: projectProvider)
+                                           projectProvider: projectProvider,
+                                           windowsProvider: windowsProvider)
                     } label: {
                         settingsLinkRow(
                             title: "Prompts",
@@ -10740,6 +10745,8 @@ struct PromptLibrarySheet: View {
     /// The selected window's folder (Q-69): prompts set to other projects
     /// fold into Other Projects. Resolved late, like `windowIdProvider`.
     var projectProvider: () -> String? = { nil }
+    /// The windows a prompt can be sent to with Send to… (US-209).
+    var windowsProvider: () -> [WindowState] = { [] }
     /// Set when the hub is opened from the main screen: firing goes through
     /// the caller (which records usage and closes the sheet). Nil in
     /// Settings, where the sheet fires directly and stays open.
@@ -10752,6 +10759,10 @@ struct PromptLibrarySheet: View {
     @State private var showHiddenPrompts = false
     @State private var showOtherProjects = false
     @State private var lastFiredId: String?
+    /// What the row under `lastFiredId` says: "Pasted ✓" or "Sent to api ✓".
+    @State private var lastFiredNote = "Pasted ✓"
+    /// The prompt whose Send to… window list is open.
+    @State private var sendingTo: PromptEntry?
     @State private var editing: PromptEntry?
     @State private var creatingNew: Bool = false
     @State private var showingGenerator: Bool = false
@@ -10812,7 +10823,7 @@ struct PromptLibrarySheet: View {
                                 .font(.caption)
                         }
                     } footer: {
-                        Text("Tap to paste. ↵ pastes and sends. Hold a prompt to edit, hide or delete it. A prompt set to a project shows only in that project's windows. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
+                        Text("Tap to paste. ↵ pastes and sends. Hold a prompt for more. Swipe right to send it somewhere, left to edit, hide or delete it. A prompt set to a project shows only in that project's windows. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
                     }
                 }
                 if !hub.otherProjects.isEmpty {
@@ -10948,6 +10959,12 @@ struct PromptLibrarySheet: View {
             PromptEditorSheet(initial: nil, draft: draft, existingIDs: existingPromptIDs,
                               currentProject: projectProvider(), latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
+            }
+        }
+        .sheet(item: $sendingTo) { entry in
+            SendToWindowSheet(title: entry.label, action: .prompt(id: entry.id, pressReturn: false),
+                              targets: SendToTargets.targets(from: windowsProvider(), selectedID: windowIdProvider())) { windowID, action in
+                if case .prompt(_, let pressReturn) = action { send(entry, to: windowID, pressReturn: pressReturn) }
             }
         }
         .sheet(item: $editing) { entry in
@@ -11092,7 +11109,7 @@ struct PromptLibrarySheet: View {
                     .lineLimit(1)
             }
             if lastFiredId == entry.id {
-                Text("Pasted ✓")
+                Text(lastFiredNote)
                     .font(.system(size: 10))
                     .foregroundStyle(.green)
             }
@@ -11118,8 +11135,8 @@ struct PromptLibrarySheet: View {
     }
 
     /// One hub row: the prompt (tap pastes), a visible ↵ that pastes and
-    /// sends, and Edit / Hide / Delete on long-press. Swipes stay as
-    /// shortcuts for the same actions.
+    /// sends, every prompt action on long-press, and one swipe rule (US-209):
+    /// right to send, left to manage (`PromptRowActions`).
     @ViewBuilder
     private func hubRow(_ entry: PromptEntry, note: PromptHub.MatchNote? = nil) -> some View {
         let hidden = PromptHideState.isHidden(entry.id, in: hiddenPromptIDsJSON)
@@ -11137,57 +11154,75 @@ struct PromptLibrarySheet: View {
             .accessibilityLabel("Paste and send \(entry.label)")
         }
         .contextMenu {
-            Button {
-                broadcast(entry)
-            } label: {
-                Label("Broadcast…", systemImage: "dot.radiowaves.left.and.right")
+            ForEach(PromptRowActions.menu(hidden: hidden), id: \.title) { action in
+                rowActionButton(action, entry)
             }
-            .disabled(!client.isConnected)
-            Button {
-                editing = entry
-            } label: {
-                Label("Edit", systemImage: "pencil")
-            }
-            Button {
-                hiddenPromptIDsJSON = PromptHideState.toggled(entry.id, in: hiddenPromptIDsJSON)
-            } label: {
-                Label(hidden ? "Show" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
-            }
-            Button(role: .destructive) {
-                confirmingDelete = entry
-            } label: {
-                Label("Delete…", systemImage: "trash")
-            }
-            .disabled(pendingDeleteIDs.contains(entry.id))
         }
         .swipeActions(edge: .leading) {
-            Button {
-                hiddenPromptIDsJSON = PromptHideState.toggled(entry.id, in: hiddenPromptIDsJSON)
-            } label: {
-                Label(hidden ? "Show" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
+            ForEach(PromptRowActions.leadingSwipe, id: \.title) { action in
+                rowActionButton(action, entry)
             }
-            .tint(.gray)
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) {
-                confirmingDelete = entry
-            } label: {
-                Label("Delete", systemImage: "trash")
+            ForEach(PromptRowActions.trailingSwipe(hidden: hidden), id: \.title) { action in
+                rowActionButton(action, entry)
             }
-            .disabled(pendingDeleteIDs.contains(entry.id))
-            Button {
-                editing = entry
-            } label: {
-                Label("Edit", systemImage: "pencil")
-            }
-            .tint(.blue)
-            Button {
-                broadcast(entry)
-            } label: {
-                Label("Broadcast", systemImage: "dot.radiowaves.left.and.right")
-            }
-            .tint(.indigo)
-            .disabled(!client.isConnected)
+        }
+    }
+
+    private func rowActionButton(_ action: PromptRowAction, _ entry: PromptEntry) -> some View {
+        Button(role: action == .delete ? .destructive : nil) {
+            perform(action, on: entry)
+        } label: {
+            Label(action.title, systemImage: action.systemImage)
+        }
+        .tint(rowActionTint(action))
+        .disabled(rowActionDisabled(action, entry))
+    }
+
+    private func perform(_ action: PromptRowAction, on entry: PromptEntry) {
+        switch action {
+        case .paste: fire(entry, pressReturn: false)
+        case .pasteAndSend: fire(entry, pressReturn: true)
+        case .sendTo: sendingTo = entry
+        case .broadcast: broadcast(entry)
+        case .edit: editing = entry
+        case .hide, .show: hiddenPromptIDsJSON = PromptHideState.toggled(entry.id, in: hiddenPromptIDsJSON)
+        case .delete: confirmingDelete = entry
+        }
+    }
+
+    private func rowActionTint(_ action: PromptRowAction) -> Color? {
+        switch action {
+        case .sendTo, .broadcast: return .indigo
+        case .pasteAndSend, .paste: return .green
+        case .edit: return .blue
+        case .hide, .show: return .gray
+        case .delete: return nil
+        }
+    }
+
+    private func rowActionDisabled(_ action: PromptRowAction, _ entry: PromptEntry) -> Bool {
+        switch action {
+        case .sendTo, .broadcast: return !client.isConnected
+        case .delete: return pendingDeleteIDs.contains(entry.id)
+        default: return false
+        }
+    }
+
+    /// US-209: paste into a window other than the selected one, which stays
+    /// selected; the hub stays open and the row says where it went.
+    private func send(_ entry: PromptEntry, to windowID: String, pressReturn: Bool) {
+        guard client.send(PastePromptMessage(id: entry.id, windowId: windowID, pressReturn: pressReturn)) else { return }
+        let window = windowsProvider().first { $0.id == windowID }
+        promptUsageJSON = PromptRanker.encode(PromptRanker.recording(
+            entry.id, context: window.map { ($0.cliKind ?? .shell).rawValue }, at: Date(),
+            in: PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON)))
+        if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
+        lastFiredNote = "Sent to \(window?.displayTitle ?? "window") ✓"
+        lastFiredId = entry.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if lastFiredId == entry.id { lastFiredId = nil }
         }
     }
 
@@ -11244,6 +11279,7 @@ struct PromptLibrarySheet: View {
                 in: PromptRanker.load(usageJSON: promptUsageJSON, legacyMRUJSON: promptUsageMRUJSON)))
             if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
         }
+        lastFiredNote = "Pasted ✓"
         lastFiredId = entry.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             if lastFiredId == entry.id { lastFiredId = nil }
