@@ -2112,12 +2112,24 @@ struct MainiOSView: View {
         }
         .sheet(isPresented: $showSlashSearch) {
             // US-105 — "Search…" in the long-press slash palette.
-            SlashSearchSheet(members: allSlashMembers()) { member in
-                switch member {
-                case .builtin(let b): fireQuickButton(b)
-                case .custom(let c): fireCustomButton(c)
+            SlashSearchSheet(
+                members: allSlashMembers(),
+                onPick: { member in
+                    switch member {
+                    case .builtin(let b): fireQuickButton(b)
+                    case .custom(let c): fireCustomButton(c)
+                    }
+                },
+                isInRow: { effectiveQuickSlots.contains($0.slot) },
+                sendAction: { QuickSend.action(for: $0.slot, defs: customButtonDefs) },
+                targets: { SendToTargets.targets(from: windows, selectedID: selectedWindowId) },
+                onSendTo: { member, windowID, action in sendQuick(action, slot: member.slot, to: windowID) },
+                onTogglePin: { toggleQuickSlotPin($0.slot) },
+                onEdit: { member in
+                    // The search sheet is still closing; one sheet at a time.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editingQuickSlot = member.slot }
                 }
-            }
+            )
         }
         .sheet(item: $broadcastRequest) { request in
             BroadcastPromptSheet(
@@ -6200,6 +6212,20 @@ struct MainiOSView: View {
         quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.removing(slot, from: slots))
         showRowNote("Removed \(quickSlotTitle(slot))") {
             quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.restoring(slot, at: index, in: effectiveQuickSlots))
+        }
+    }
+
+    /// Q-51 / US-209: Pin to Row puts a slash command at the end of the row,
+    /// Remove from Row takes it out; both offer Undo.
+    private func toggleQuickSlotPin(_ slot: QuickSlot) {
+        let slots = effectiveQuickSlots
+        if slots.contains(slot) {
+            removeQuickSlot(slot)
+            return
+        }
+        quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.restoring(slot, at: slots.count, in: slots))
+        showRowNote("Pinned \(quickSlotTitle(slot)) to the row") {
+            quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.removing(slot, from: effectiveQuickSlots))
         }
     }
 

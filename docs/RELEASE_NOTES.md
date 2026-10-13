@@ -127,7 +127,10 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   current window. In the **Prompts** list, swipe a prompt right for Send
   to…, Paste and Send or Broadcast…, and left for Delete…, Hide and Edit…;
   holding it lists every action. `{{folder}}` fills from the window it is
-  sent to.
+  sent to. The **Slash Commands** search list works the same way: hold a
+  command for Send, Send to…, Pin to Row or Remove from Row, and Edit…
+  (your own commands); swipe right for Send to…, left to pin, remove or
+  edit. A pin marks the commands already in the row.
 - **Prompts for one project (Q-69).** In the prompt editor, **Projects →
   Only show in <folder>** (or type another folder name) limits a prompt to
   windows of that project. The prompt selector lists prompts with no
