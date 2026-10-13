@@ -145,6 +145,14 @@ final class PromptLibrary {
         var preserveBackup = false
         let old = try fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "txt" && $0.lastPathComponent.hasPrefix(VibeCutPromptMapper.idPrefix) }
+        // Projects set on the phone (Q-69) are the user's, not VibeCut's: read
+        // them before the old files go so the fresh copies keep them.
+        var projectTags: [String: [String]] = [:]
+        for url in old {
+            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let tags = Self.parsePrompt(filename: url.lastPathComponent, raw: raw).tags
+            projectTags[url.deletingPathExtension().lastPathComponent] = Self.projectTags(in: tags)
+        }
 
         try fm.createDirectory(at: staging, withIntermediateDirectories: false)
         do {
@@ -157,7 +165,8 @@ final class PromptLibrary {
                 guard !safeID.isEmpty else { continue }
                 let url = staging.appendingPathComponent("\(safeID).txt")
                 let body = Self.renderFile(id: safeID, label: entry.label, body: entry.body,
-                                           tags: entry.tags, targetAgent: entry.targetAgent,
+                                           tags: Self.tags(entry.tags, keepingProjects: projectTags[safeID] ?? []),
+                                           targetAgent: entry.targetAgent,
                                            description: entry.description)
                 guard fm.createFile(atPath: url.path, contents: Data(body.utf8)),
                       try String(contentsOf: url, encoding: .utf8) == body else {
@@ -199,6 +208,23 @@ final class PromptLibrary {
         // One rescan → one onChange → one broadcast.
         rescan()
         return stagedCount
+    }
+
+    /// The `project:` tags in `tags`. The phone writes them (Q-69,
+    /// `PromptProjects.tagPrefix` in QuipiOS) to list a prompt only in one
+    /// folder's windows; the Mac only keeps them across a VibeCut sync.
+    nonisolated static func projectTags(in tags: [String]?) -> [String] {
+        (tags ?? []).filter { $0.lowercased().hasPrefix("project:") }
+    }
+
+    /// VibeCut's `tags` with the user's `projects` from the file it replaces.
+    /// VibeCut's own project tags, if it ever writes any, are kept as well;
+    /// duplicates (ignoring case) are dropped.
+    nonisolated static func tags(_ tags: [String]?, keepingProjects projects: [String]) -> [String]? {
+        var out = tags ?? []
+        var seen = Set(out.map { $0.lowercased() })
+        for tag in projects where seen.insert(tag.lowercased()).inserted { out.append(tag) }
+        return out.isEmpty ? nil : out
     }
 
     /// Strip path separators / leading dots / shell metacharacters so a

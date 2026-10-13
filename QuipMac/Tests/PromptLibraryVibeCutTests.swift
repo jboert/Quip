@@ -162,4 +162,31 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         XCTAssertTrue(exists("vibecut__c.txt"))
         XCTAssertEqual(lib.entries.first { $0.id == "vibecut__a" }?.body, "1new")
     }
+
+    func testResyncKeepsProjectsSetOnThePhone() {
+        let lib = PromptLibrary()
+        try! lib.replaceVibeCutSet([
+            PromptEntry(id: "vibecut__a", label: "A", body: "1", tags: ["vibecut"]),
+            PromptEntry(id: "vibecut__b", label: "B", body: "2", tags: ["vibecut"]),
+        ])
+        // The phone sets a project on "a" (put_prompt writes the same file).
+        _ = lib.put(id: "vibecut__a", label: "A", body: "1", tags: ["vibecut", "project:Quip"])
+
+        try! lib.replaceVibeCutSet([
+            PromptEntry(id: "vibecut__a", label: "A", body: "1new", tags: ["vibecut", "git"]),
+            PromptEntry(id: "vibecut__b", label: "B", body: "2", tags: ["vibecut"]),
+        ])
+        let a = lib.entries.first { $0.id == "vibecut__a" }
+        XCTAssertEqual(a?.body, "1new")
+        XCTAssertEqual(a?.tags, ["vibecut", "git", "project:Quip"])
+        XCTAssertEqual(lib.entries.first { $0.id == "vibecut__b" }?.tags, ["vibecut"])
+    }
+
+    func testProjectTagsMergeWithoutDuplicates() {
+        XCTAssertEqual(PromptLibrary.projectTags(in: ["vibecut", "Project:Quip", "git"]), ["Project:Quip"])
+        XCTAssertEqual(PromptLibrary.tags(["vibecut", "project:quip"], keepingProjects: ["project:Quip", "project:Web"]),
+                       ["vibecut", "project:quip", "project:Web"])
+        XCTAssertNil(PromptLibrary.tags(nil, keepingProjects: []))
+        XCTAssertEqual(PromptLibrary.tags(nil, keepingProjects: ["project:Quip"]), ["project:Quip"])
+    }
 }

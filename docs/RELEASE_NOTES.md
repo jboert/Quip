@@ -135,7 +135,8 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   window's folder matches; the rest fold into **Other Projects (N)**, so
   nothing is lost. A small badge on the row names the project. Stored as a
   `project:<folder>` tag in the prompt file on the Mac, so no Mac update is
-  needed. A VibeCut prompt's projects are replaced on its next sync.
+  needed. A VibeCut prompt keeps its projects when the next sync replaces
+  its text (that part needs the updated Mac app).
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,

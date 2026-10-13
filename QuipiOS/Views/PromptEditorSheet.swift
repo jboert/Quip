@@ -198,7 +198,7 @@ struct PromptEditorSheet: View {
             ? "Shows in every window. Add a project and the prompt selector lists it only in windows of that folder."
             : "Listed only in windows whose folder is \(projects.joined(separator: " or ")); elsewhere it is under Other Projects. Swipe a project to remove it."
         if metadataSource?.isInherited == true {
-            text += " This prompt comes from VibeCut, and the next sync replaces it, projects included."
+            text += " This prompt comes from VibeCut: the next sync replaces its text but keeps its projects."
         }
         return text
     }
