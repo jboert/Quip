@@ -5779,6 +5779,15 @@ struct MainiOSView: View {
             case .custom(let c): return c.label
             }
         }
+
+        /// The row slot this member came from, so the group menu can offer
+        /// the same per-button actions a held pill gets.
+        var slot: QuickSlot {
+            switch self {
+            case .builtin(let b): return .builtin(b)
+            case .custom(let c): return .custom(c.id)
+            }
+        }
     }
 
     /// One renderable item in the slot row. Spacers carry their UUID so
@@ -5887,6 +5896,11 @@ struct MainiOSView: View {
     /// when tapped. The Menu auto-positions to avoid overlapping the keys
     /// around it (system handles edge clipping + the dismiss-on-outside-tap),
     /// so the keyboard stays tidy until the user actually drills in.
+    ///
+    /// The group pill has no hold menu of its own (the Menu keeps its
+    /// touches), so its members are edited from a "Change a Button" section
+    /// here: one submenu per member with the held-pill actions (Q-67). Only
+    /// the fire items need a selected window; editing works without one.
     @ViewBuilder
     private func slashGroupMenuButton(letter: Character, members: [SlashGroupMember]) -> some View {
         Menu {
@@ -5898,6 +5912,12 @@ struct MainiOSView: View {
                     }
                 } label: {
                     Text(member.displayName)
+                }
+                .disabled(selectedWindowId == nil)
+            }
+            Section("Change a Button") {
+                ForEach(members) { member in
+                    Menu(member.displayName) { quickMenuActions(member.slot) }
                 }
             }
         } label: {
@@ -5912,7 +5932,7 @@ struct MainiOSView: View {
                 .background(colors.chipFill)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
-        .disabled(selectedWindowId == nil)
+        .accessibilityHint(selectedWindowId == nil ? "Select a window to send; buttons can still be changed" : "")
     }
 
     /// Every slash command the user can reach from the long-press palette,

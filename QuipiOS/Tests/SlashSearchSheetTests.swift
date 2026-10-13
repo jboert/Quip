@@ -29,6 +29,17 @@ final class SlashSearchSheetTests: XCTestCase {
         XCTAssertTrue(SlashSearchSheet.offersSearch(memberCount: 2))
     }
 
+    /// A "/x…" group member is changed through its own row slot, so it must
+    /// map back to that slot and be editable there.
+    func test_aGroupMemberMapsToItsSlotAndCanBeEdited() {
+        let custom = CustomButton(id: UUID(), label: "Build", systemImage: nil,
+                                  payload: .slash(text: "/build", autoSubmit: true))
+        XCTAssertEqual(MainiOSView.SlashGroupMember.builtin(.btw).slot, .builtin(.btw))
+        XCTAssertEqual(MainiOSView.SlashGroupMember.custom(custom).slot, .custom(custom.id))
+        XCTAssertNotNil(QuickButtonEdit.editable(MainiOSView.SlashGroupMember.builtin(.btw).slot, defs: [custom]))
+        XCTAssertNotNil(QuickButtonEdit.editable(MainiOSView.SlashGroupMember.custom(custom).slot, defs: [custom]))
+    }
+
     func test_theRowShowsWhatTheCommandTypes() {
         XCTAssertEqual(MainiOSView.SlashGroupMember.builtin(.commitPushPr).sentText, "/commit-commands:commit-push-pr")
         XCTAssertEqual(MainiOSView.SlashGroupMember.builtin(.plan).sentText, "/plan", "trailing space trimmed")
