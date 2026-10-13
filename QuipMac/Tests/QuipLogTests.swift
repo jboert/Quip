@@ -63,22 +63,43 @@ final class QuipLogTests: XCTestCase {
         let mountPoint = workDir + "-mount"
         try fm.createDirectory(atPath: mountPoint, withIntermediateDirectories: true)
 
-        func run(_ tool: String, _ args: [String]) throws {
+        // hdiutil has hung here (2026-10-13: `create` stuck for 10 minutes
+        // with the disk-image service wedged), so each call gets a deadline
+        // and reports whether it finished cleanly.
+        @discardableResult
+        func run(_ tool: String, _ args: [String], timeout: TimeInterval = 30) throws -> Bool {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: tool)
             p.arguments = args
             p.standardOutput = FileHandle.nullDevice
             p.standardError = FileHandle.nullDevice
             try p.run()
-            p.waitUntilExit()
+            let deadline = Date().addingTimeInterval(timeout)
+            while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+            if p.isRunning {
+                p.terminate()
+                return false
+            }
+            return p.terminationStatus == 0
         }
 
-        try run("/usr/bin/hdiutil", ["create", "-size", "1m", "-fs", "HFS+", "-volname", "QuipLogTest", dmgPath])
-        try run("/usr/bin/hdiutil", ["attach", dmgPath, "-mountpoint", mountPoint, "-nobrowse", "-quiet"])
         defer {
             try? run("/usr/bin/hdiutil", ["detach", mountPoint, "-quiet", "-force"])
             try? fm.removeItem(atPath: dmgPath)
             try? fm.removeItem(atPath: mountPoint)
+        }
+        guard try run("/usr/bin/hdiutil", ["create", "-size", "1m", "-fs", "HFS+", "-volname", "QuipLogTest", dmgPath]),
+              try run("/usr/bin/hdiutil", ["attach", dmgPath, "-mountpoint", mountPoint, "-nobrowse", "-quiet"]) else {
+            throw XCTSkip("hdiutil could not create or attach the 1 MB test image")
+        }
+        // Without the image mounted, mountPoint is a plain folder on the boot
+        // volume and the fill below would fill the Mac's own disk: it wrote
+        // 20 GB there on 2026-10-13 before it was stopped. Refuse to go on
+        // unless mountPoint is its own volume.
+        let mountVolume = try URL(fileURLWithPath: mountPoint).resourceValues(forKeys: [.volumeURLKey]).volume
+        let tmpVolume = try URL(fileURLWithPath: NSTemporaryDirectory()).resourceValues(forKeys: [.volumeURLKey]).volume
+        guard let mountVolume, mountVolume != tmpVolume else {
+            throw XCTSkip("test image is not mounted at \(mountPoint)")
         }
 
         let logPath = mountPoint + "/quip.log"
@@ -92,8 +113,13 @@ final class QuipLogTests: XCTestCase {
         let fillerPath = mountPoint + "/filler.bin"
         fm.createFile(atPath: fillerPath, contents: nil)
         if let filler = FileHandle(forWritingAtPath: fillerPath) {
+            // The image is 1 MB; the 4 MB cap is a second guard so a wrong
+            // volume can never be filled.
             let chunk = Data(repeating: 0, count: 64 * 1024)
-            while (try? filler.write(contentsOf: chunk)) != nil {}
+            var written = 0
+            while written < 4 * 1024 * 1024, (try? filler.write(contentsOf: chunk)) != nil {
+                written += chunk.count
+            }
             try? filler.close()
         }
 
