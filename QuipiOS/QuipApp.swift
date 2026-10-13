@@ -5964,17 +5964,6 @@ struct MainiOSView: View {
         if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
     }
 
-    /// Marks a slash-category pill. Touch never reaches it: the row's
-    /// reorder overlay owns the touch (Q-65), and holding the pill still
-    /// opens its menu, which lists All Slash Commands… (Q-67). VoiceOver
-    /// gets the same palette as a named action. Answer/keystroke pills must
-    /// NOT get this — the palette is slash-only.
-    @ViewBuilder
-    private func slashPalette<Content: View>(_ content: Content) -> some View {
-        content
-            .accessibilityAction(named: "All slash commands") { showSlashPalette = true }
-    }
-
     /// Render the full slot row — built-ins, customs, spacers, and grouped
     /// `/x…` menus — in the user's chosen order.
     @ViewBuilder
@@ -5992,19 +5981,9 @@ struct MainiOSView: View {
             Group {
                 switch item {
                 case .builtinButton(let b):
-                    // Slash pills (incl. the bare "/") get the hold-for-all-slash
-                    // palette; answer/keystroke pills don't (slash-only gesture).
-                    if b.isSlashCommand {
-                        slashPalette(quickActionButton(b, tint: tints[QuickSlot.builtin(b).id]))
-                    } else {
-                        quickActionButton(b, tint: tints[QuickSlot.builtin(b).id])
-                    }
+                    quickActionButton(b, tint: tints[QuickSlot.builtin(b).id])
                 case .customButton(let c):
-                    if case .slash = c.payload {
-                        slashPalette(customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id]))
-                    } else {
-                        customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id])
-                    }
+                    customQuickButton(c, tint: tints[QuickSlot.custom(c.id).id])
                 case .promptButton(let pid, let label):
                     promptQuickButton(promptID: pid, label: label, tint: tints[QuickSlot.prompt(promptID: pid).id])
                 case .promptsPicker:
@@ -6013,9 +5992,17 @@ struct MainiOSView: View {
                     // Clear, but as tall as a pill so the gap can be held
                     // (menu) or dragged; a bare Spacer has no height to touch.
                     Color.clear.frame(width: w, height: 28)
+                        .accessibilityElement()
+                        .accessibilityLabel("Spacer")
                 case .slashGroup(let letter, let members):
                     slashGroupMenuButton(letter: letter, members: members)
                 }
+            }
+            // US-212: VoiceOver cannot hold a pill still, so the hold menu's
+            // items are also named actions (a slash group's members carry
+            // theirs inside its Menu).
+            .accessibilityActions {
+                if let slot = quickSlot(for: item) { quickMenuAccessibilityActions(slot) }
             }
             .modifier(QuickRowItemGesture(
                 item: item, state: quickReorder, space: space, order: order,
@@ -6140,34 +6127,65 @@ struct MainiOSView: View {
         return false
     }
 
-    /// Q-67: the menu a held keyboard button shows.
+    /// Q-67: the menu a held keyboard button shows. Built from
+    /// `QuickMenu.items`, the same list VoiceOver's Actions get (US-212).
     @ViewBuilder
     private func quickMenuActions(_ slot: QuickSlot) -> some View {
-        if case .prompt(let pid) = slot {
-            Button("Paste & Send") { firePromptSlot(promptID: pid, pressReturn: true) }
-        }
-        if isSlashSlot(slot) {
-            Button("All Slash Commands…") {
-                // One dialog can't open while another is still animating away.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showSlashPalette = true }
+        ForEach(QuickMenu.items(quickMenuFacts(slot))) { item in
+            Button(item.title, role: item.isDestructive ? .destructive : nil) {
+                performQuickMenuItem(item, on: slot)
             }
         }
-        if QuickSend.action(for: slot, defs: customButtonDefs) != nil {
-            Button("Send to…") { sendToSlot = slot }
+    }
+
+    /// Q-51 US-212: every hold-menu item as a named VoiceOver action, so the
+    /// Actions rotor reaches what a held pill offers.
+    @ViewBuilder
+    private func quickMenuAccessibilityActions(_ slot: QuickSlot) -> some View {
+        ForEach(QuickMenu.items(quickMenuFacts(slot))) { item in
+            Button(item.title) { performQuickMenuItem(item, on: slot) }
         }
-        if QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil {
-            Button("Edit…") { editingQuickSlot = slot }
-        } else if case .prompt(let pid) = slot,
-                  let entry = client.promptLibrary.first(where: { $0.id == pid }) {
-            Button("Edit…") { editingQuickPrompt = entry }
-        }
-        if !isSpacerSlot(slot) {
-            Button("Color…") { coloringQuickSlot = slot }
-        }
-        Button("Add Spacer After") {
+    }
+
+    private func quickMenuFacts(_ slot: QuickSlot) -> QuickMenu.Facts {
+        var facts = QuickMenu.Facts()
+        if case .prompt = slot { facts.isPrompt = true }
+        facts.isSlash = isSlashSlot(slot)
+        facts.isSpacer = isSpacerSlot(slot)
+        facts.canSendTo = QuickSend.action(for: slot, defs: customButtonDefs) != nil
+        facts.canEdit = QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil
+            || quickMenuPromptEntry(slot) != nil
+        return facts
+    }
+
+    /// The library entry a prompt slot edits, when the Mac has sent it.
+    private func quickMenuPromptEntry(_ slot: QuickSlot) -> PromptEntry? {
+        guard case .prompt(let pid) = slot else { return nil }
+        return client.promptLibrary.first(where: { $0.id == pid })
+    }
+
+    private func performQuickMenuItem(_ item: QuickMenuItem, on slot: QuickSlot) {
+        switch item {
+        case .pasteAndSend:
+            if case .prompt(let pid) = slot { firePromptSlot(promptID: pid, pressReturn: true) }
+        case .allSlashCommands:
+            // One dialog can't open while another is still animating away.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showSlashPalette = true }
+        case .sendTo:
+            sendToSlot = slot
+        case .edit:
+            if QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil {
+                editingQuickSlot = slot
+            } else if let entry = quickMenuPromptEntry(slot) {
+                editingQuickPrompt = entry
+            }
+        case .color:
+            coloringQuickSlot = slot
+        case .addSpacerAfter:
             quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.addingSpacer(after: slot, in: effectiveQuickSlots))
+        case .remove:
+            removeQuickSlot(slot)
         }
-        Button("Remove from Row", role: .destructive) { removeQuickSlot(slot) }
     }
 
     /// Removes a slot from the row and offers Undo for 8 s.
@@ -6292,7 +6310,7 @@ struct MainiOSView: View {
         .buttonStyle(.plain)
         .disabled(!canFire)
         .accessibilityLabel("Prompt: \(label)")
-        .accessibilityHint(canFire ? "Tap to paste, hold and release for options including paste and submit, hold and drag to move" : "Prompt unavailable")
+        .accessibilityHint(canFire ? "Tap to paste. Hold or use Actions for more; hold and drag to move" : "Prompt unavailable")
         .accessibilityAddTraits(.isButton)
         // The hold-and-release menu (with Paste & Send) lives in the row's
         // reorder modifier (quickRowHoldAction), which owns the long press
