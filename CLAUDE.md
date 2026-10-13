@@ -93,3 +93,25 @@ QUIP_SKIP_CHECK=1 git commit            # skip once (git commit --no-verify also
 A docs-only commit costs nothing; a `Shared/` commit pays for all three suites.
 Note the hook tests the **working tree**, not the index — if you stage only part
 of your edits, what runs is not exactly what you are committing.
+
+## Parallel sessions
+
+More than one agent session often works on Quip at once. Sharing the main
+checkout has cost real time: commits had to be staged hunk by hunk, a staged
+fix sat in the index with no owner, and one session's test host overwrote
+another's simulator state mid-QA (2026-10-12).
+
+- **Own worktree.** Before editing, run `git worktree list` and `git status`.
+  If another session has uncommitted work in the main checkout, work in your own
+  worktree on a branch off `eb-branch` (copy the gitignored
+  `QuipiOS/Signing.local.xcconfig` into it), then rebase onto `eb-branch` and
+  fast-forward when the main checkout is clean. Never stash, reset or commit
+  another session's changes.
+- **Own simulator.** `D8C5154B` (Quip-only QA) is the default gate host. Create
+  your own with `xcrun simctl create` and pass `QUIP_QA_SIM_UDID=<udid>` to
+  `tools/check.sh` and to `git commit` (the pre-commit hook reads it). Delete it
+  when done.
+- **Own fake Mac.** Run `tools/fake-mac` on a port other than `8799` when
+  another session's simulator is paired to that one, and stop it when done.
+- **Gate the combined tree.** After rebasing onto another session's commits,
+  re-run `tools/check.sh --since <base>` before fast-forwarding.
