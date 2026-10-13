@@ -2086,7 +2086,8 @@ struct MainiOSView: View {
                 pushRegistration: pushRegistration,
                 macPermissions: macPermissions,
                 windowIdProvider: { selectedWindowId },
-                promptContextProvider: { selectedPromptContext }
+                promptContextProvider: { selectedPromptContext },
+                projectProvider: { selectedProject }
             )
         }
         .sheet(isPresented: $showPromptsPickerSheet) {
@@ -2098,6 +2099,7 @@ struct MainiOSView: View {
                     client: client,
                     windowIdProvider: { selectedWindowId },
                     promptContextProvider: { selectedPromptContext },
+                    projectProvider: { selectedProject },
                     onPick: { entry, pressReturn in
                         firePromptSlot(promptID: entry.id, pressReturn: pressReturn)
                         showPromptsPickerSheet = false
@@ -2180,7 +2182,7 @@ struct MainiOSView: View {
         // A prompt button edits the prompt itself, the same editor as the
         // Prompts hub; the save goes to the Mac, which owns the library.
         .sheet(item: $editingQuickPrompt) { entry in
-            PromptEditorSheet(initial: entry, latestAck: quickPromptAck) { entry, messageId in
+            PromptEditorSheet(initial: entry, currentProject: selectedProject, latestAck: quickPromptAck) { entry, messageId in
                 guard client.isConnected && client.isAuthenticated else { return false }
                 return client.send(PutPromptMessage(
                     id: entry.id, label: entry.label, body: entry.body, messageId: messageId,
@@ -6333,6 +6335,14 @@ struct MainiOSView: View {
         // pill isn't placed in the Quick Buttons row.
     }
 
+    /// The selected window's folder: which project's prompts the selector
+    /// lists (Q-69). Nil with no window selected or no folder.
+    private var selectedProject: String? {
+        guard let folder = windows.first(where: { $0.id == selectedWindowId })?.folder,
+              !folder.isEmpty else { return nil }
+        return folder
+    }
+
     /// The agent running in the selected window, as a ranking context.
     private var selectedPromptContext: String? {
         selectedWindowId.flatMap(promptContext(forWindow:))
@@ -8170,6 +8180,8 @@ struct SettingsSheet: View {
     /// The selected window's agent as a prompt-ranking context, resolved
     /// late for the same reason as `windowIdProvider`. Seeds the generator.
     var promptContextProvider: () -> String? = { nil }
+    /// The selected window's folder, resolved late (Q-69).
+    var projectProvider: () -> String? = { nil }
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     /// Same key the PTT path reads in QuipApp; @AppStorage keeps the two in
     /// step without threading a binding through the settings hierarchy.
@@ -8258,7 +8270,8 @@ struct SettingsSheet: View {
                 Section {
                     NavigationLink {
                         PromptLibrarySheet(client: client, windowIdProvider: windowIdProvider,
-                                           promptContextProvider: promptContextProvider)
+                                           promptContextProvider: promptContextProvider,
+                                           projectProvider: projectProvider)
                     } label: {
                         settingsLinkRow(
                             title: "Prompts",
@@ -10724,6 +10737,9 @@ struct PromptLibrarySheet: View {
     /// The selected window's agent (a `CLIKind` raw value) for ranking the
     /// generator's examples. Nil ranks on global usage.
     var promptContextProvider: () -> String? = { nil }
+    /// The selected window's folder (Q-69): prompts set to other projects
+    /// fold into Other Projects. Resolved late, like `windowIdProvider`.
+    var projectProvider: () -> String? = { nil }
     /// Set when the hub is opened from the main screen: firing goes through
     /// the caller (which records usage and closes the sheet). Nil in
     /// Settings, where the sheet fires directly and stays open.
@@ -10734,6 +10750,7 @@ struct PromptLibrarySheet: View {
     @State private var searchCache = PromptSearchCache()
     @State private var confirmingDelete: PromptEntry?
     @State private var showHiddenPrompts = false
+    @State private var showOtherProjects = false
     @State private var lastFiredId: String?
     @State private var editing: PromptEntry?
     @State private var creatingNew: Bool = false
@@ -10769,7 +10786,7 @@ struct PromptLibrarySheet: View {
                 }
             } else {
                 let hub = hubSections
-                if hub.visible.isEmpty && hub.hidden.isEmpty {
+                if hub.visible.isEmpty && hub.hidden.isEmpty && hub.otherProjects.isEmpty {
                     Section {
                         Text("No matches for \"\(query)\"")
                             .font(.system(size: 12))
@@ -10795,7 +10812,22 @@ struct PromptLibrarySheet: View {
                                 .font(.caption)
                         }
                     } footer: {
-                        Text("Tap to paste. ↵ pastes and sends. Hold a prompt to edit, hide or delete it. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
+                        Text("Tap to paste. ↵ pastes and sends. Hold a prompt to edit, hide or delete it. A prompt set to a project shows only in that project's windows. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
+                    }
+                }
+                if !hub.otherProjects.isEmpty {
+                    Section {
+                        if showOtherProjects || !query.isEmpty {
+                            ForEach(hub.otherProjects) { entry in hubRow(entry, note: hub.notes[entry.id]) }
+                        }
+                    } header: {
+                        Button {
+                            showOtherProjects.toggle()
+                        } label: {
+                            Label("Other Projects (\(hub.otherProjects.count))",
+                                  systemImage: showOtherProjects || !query.isEmpty ? "chevron.down" : "chevron.right")
+                        }
+                        .font(.caption)
                     }
                 }
                 if !hub.hidden.isEmpty {
@@ -10892,7 +10924,8 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(isPresented: $creatingNew) {
-            PromptEditorSheet(initial: nil, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, existingIDs: existingPromptIDs, currentProject: projectProvider(),
+                              latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -10912,12 +10945,13 @@ struct PromptLibrarySheet: View {
             }
         }
         .sheet(item: $generatedDraft) { draft in
-            PromptEditorSheet(initial: nil, draft: draft, existingIDs: existingPromptIDs, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: nil, draft: draft, existingIDs: existingPromptIDs,
+                              currentProject: projectProvider(), latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
         .sheet(item: $editing) { entry in
-            PromptEditorSheet(initial: entry, latestAck: latestPutAck) { entry, messageId in
+            PromptEditorSheet(initial: entry, currentProject: projectProvider(), latestAck: latestPutAck) { entry, messageId in
                 putPrompt(entry, messageId: messageId)
             }
         }
@@ -11030,6 +11064,10 @@ struct PromptLibrarySheet: View {
                     .font(.system(size: 14, weight: .medium))
                 if entry.isInherited { promptBadge("VibeCut") }
                 if hidden { promptBadge("Hidden") }
+                let projects = PromptProjects.projects(of: entry)
+                if let first = projects.first {
+                    promptBadge(projects.count > 1 ? "\(first) +\(projects.count - 1)" : first)
+                }
                 Spacer()
                 Text("\(entry.bodyBytes)B")
                     .font(.system(size: 10))
@@ -11175,7 +11213,8 @@ struct PromptLibrarySheet: View {
             context: promptContextProvider(),
             query: query,
             at: Date(),
-            cache: searchCache
+            cache: searchCache,
+            projectFilter: .project(projectProvider())
         )
     }
 
@@ -11273,6 +11312,8 @@ struct PromptEditorSheet: View {
     /// save silently replaces a neighbour. Empty is safe — it just disables
     /// the collision warning.
     var existingIDs: Set<String> = []
+    /// The selected window's folder, offered as "Only show in …" (Q-69).
+    var currentProject: String? = nil
     let latestAck: PutPromptAckMessage?
     let onSave: (_ entry: PromptEntry, _ messageId: UUID) -> Bool
     @Environment(\.dismiss) private var dismiss
@@ -11280,6 +11321,9 @@ struct PromptEditorSheet: View {
     @State private var idText: String = ""
     @State private var labelText: String = ""
     @State private var bodyText: String = ""
+    /// The projects this prompt is listed in (Q-69); empty = every window.
+    @State private var projects: [String] = []
+    @State private var newProject: String = ""
     @State private var saveError: String?
     @State private var pendingMessageId: UUID?
     @State private var saveTimeout: Task<Void, Never>?
@@ -11328,6 +11372,8 @@ struct PromptEditorSheet: View {
                     Text("Tap a prompt to paste it into the selected window. The Mac fills {{folder}}, {{window}}, {{agent}}, {{date}} and {{clipboard}} ({{cwd}} in iTerm2 only). Any other {{name}} is sent as written.")
                 }
 
+                projectsSection
+
                 if let saveError {
                     Section {
                         Text(saveError)
@@ -11358,7 +11404,7 @@ struct PromptEditorSheet: View {
                             id: id,
                             label: label.isEmpty ? id : label,
                             body: bodyText,
-                            tags: metadataSource?.tags,
+                            tags: PromptProjects.tags(metadataSource?.tags, settingProjects: projects + [newProject]),
                             targetAgent: metadataSource?.targetAgent,
                             description: metadataSource?.description
                         )
@@ -11399,6 +11445,7 @@ struct PromptEditorSheet: View {
                     idText = source.id
                     labelText = source.label == source.id ? "" : source.label
                     bodyText = source.body
+                    projects = PromptProjects.projects(inTags: source.tags)
                 }
             }
             .onChange(of: latestAck?.messageId) { _, _ in
@@ -11412,6 +11459,57 @@ struct PromptEditorSheet: View {
 
     private var metadataSource: PromptEntry? {
         initial ?? draft
+    }
+
+    /// Q-69: which projects list this prompt. Empty means every window.
+    @ViewBuilder
+    private var projectsSection: some View {
+        Section {
+            ForEach(projects, id: \.self) { name in
+                Label(name, systemImage: "folder")
+            }
+            .onDelete { projects.remove(atOffsets: $0) }
+            if let current = currentProject.flatMap(PromptProjects.cleaned), !hasProject(current) {
+                Button {
+                    projects.append(current)
+                } label: {
+                    Label("Only show in \(current)", systemImage: "plus.circle")
+                }
+            }
+            HStack {
+                TextField("Another project's folder name", text: $newProject)
+                    .autocorrectionDisabled(true)
+                    .textInputAutocapitalization(.never)
+                    .onSubmit(addTypedProject)
+                Button("Add", action: addTypedProject)
+                    .buttonStyle(.borderless)
+                    .disabled(PromptProjects.cleaned(newProject) == nil)
+            }
+        } header: {
+            Text("Projects")
+        } footer: {
+            Text(projectsFooter)
+        }
+    }
+
+    private var projectsFooter: String {
+        var text = projects.isEmpty
+            ? "Shows in every window. Add a project and the prompt selector lists it only in windows of that folder."
+            : "Listed only in windows whose folder is \(projects.joined(separator: " or ")); elsewhere it is under Other Projects. Swipe a project to remove it."
+        if metadataSource?.isInherited == true {
+            text += " This prompt comes from VibeCut, and the next sync replaces it, projects included."
+        }
+        return text
+    }
+
+    private func hasProject(_ name: String) -> Bool {
+        projects.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    private func addTypedProject() {
+        guard let name = PromptProjects.cleaned(newProject) else { return }
+        if !hasProject(name) { projects.append(name) }
+        newProject = ""
     }
 
     /// What the Mac will actually name the file. Same function the Mac runs

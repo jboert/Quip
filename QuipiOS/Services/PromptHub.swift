@@ -18,6 +18,10 @@ enum PromptHub {
     struct Sections: Equatable {
         var visible: [PromptEntry]
         var hidden: [PromptEntry]
+        /// Visible prompts that belong to other projects (Q-69), folded in
+        /// the hub so they can still be found and edited. Empty unless the
+        /// caller filters by project.
+        var otherProjects: [PromptEntry] = []
         /// Why a prompt matched the query, by prompt id, for the prompts whose
         /// row needs to say more than its name and first line. Empty without
         /// a query.
@@ -33,24 +37,40 @@ enum PromptHub {
         var closeMatch: String?
     }
 
+    /// Which project's prompts the selector lists (Q-69).
+    enum ProjectFilter: Equatable {
+        /// Every prompt, whatever its projects (management lists, tests).
+        case all
+        /// Prompts with no project plus those of this folder (nil: none
+        /// selected); other projects' prompts go to `otherProjects`.
+        case project(String?)
+    }
+
     /// Without a query: visible prompts most used first, hidden ones by name.
     /// With a query: the prompts that match, best match first in each
     /// section; equally good matches keep the order above.
     static func sections(_ library: [PromptEntry], hiddenJSON: String, store: PromptRanker.Store,
                          context: String?, query: String, at now: Date,
-                         cache: PromptSearchCache? = nil) -> Sections {
+                         cache: PromptSearchCache? = nil,
+                         projectFilter: ProjectFilter = .all) -> Sections {
         let hiddenIDs = PromptHideState.decode(hiddenJSON)
-        let visible = PromptRanker.ranked(library.filter { !hiddenIDs.contains($0.id) },
-                                          store: store, context: context, at: now)
+        func elsewhere(_ entry: PromptEntry) -> Bool {
+            guard case .project(let project) = projectFilter else { return false }
+            return !hiddenIDs.contains(entry.id) && !PromptProjects.belongs(entry, to: project)
+        }
+        let ranked = PromptRanker.ranked(library.filter { !hiddenIDs.contains($0.id) },
+                                         store: store, context: context, at: now)
+        let visible = ranked.filter { !elsewhere($0) }
+        let otherProjects = ranked.filter(elsewhere)
         let hidden = library
             .filter { hiddenIDs.contains($0.id) }
             .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         guard !QuipSearch.tokens(query).isEmpty else {
-            return Sections(visible: visible, hidden: hidden)
+            return Sections(visible: visible, hidden: hidden, otherProjects: otherProjects)
         }
 
         var order: [String: Int] = [:]
-        for (position, entry) in (visible + hidden).enumerated() where order[entry.id] == nil {
+        for (position, entry) in (visible + otherProjects + hidden).enumerated() where order[entry.id] == nil {
             order[entry.id] = position
         }
         let index = cache?.index(for: library) ?? QuipSearch.Index(library)
@@ -61,6 +81,8 @@ enum PromptHub {
             let entry = hit.item
             if hiddenIDs.contains(entry.id) {
                 sections.hidden.append(entry)
+            } else if elsewhere(entry) {
+                sections.otherProjects.append(entry)
             } else {
                 sections.visible.append(entry)
             }

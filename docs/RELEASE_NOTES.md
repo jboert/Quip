@@ -125,6 +125,14 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   "Removed Y · Undo" for 8 seconds; tap the note to put it back. A photo
   waiting to be sent is not attached to a Send to…; it stays for the
   current window.
+- **Prompts for one project (Q-69).** In the prompt editor, **Projects →
+  Only show in <folder>** (or type another folder name) limits a prompt to
+  windows of that project. The prompt selector lists prompts with no
+  project everywhere, and a project's prompts only when the selected
+  window's folder matches; the rest fold into **Other Projects (N)**, so
+  nothing is lost. A small badge on the row names the project. Stored as a
+  `project:<folder>` tag in the prompt file on the Mac, so no Mac update is
+  needed. A VibeCut prompt's projects are replaced on its next sync.
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,
