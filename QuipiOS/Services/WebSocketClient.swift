@@ -32,6 +32,16 @@ import Network
 /// openssl recipe.
 final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
 
+    /// Told the host whose chain failed the pin check, on the session's
+    /// delegate queue. The task itself only fails with NSURLErrorCancelled,
+    /// which says nothing about why.
+    private let onReject: (@Sendable (String) -> Void)?
+
+    init(onReject: (@Sendable (String) -> Void)? = nil) {
+        self.onReject = onReject
+        super.init()
+    }
+
     /// Manifest JSON shape. Extra fields in the file (commentary, chain
     /// notes) are ignored, so the JSON can carry inline documentation
     /// without breaking decoding.
@@ -54,15 +64,23 @@ final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
 
     /// Hardcoded SPKI hashes used when no manifest is loadable. Mirrors the
     /// bundled `CertPins.json` so test targets without the resource still
-    /// pin to the same chain — keep the two in sync if you rotate.
+    /// pin to the same set — `CertPinningTests` fails if the two drift.
     ///
-    /// Current chain (as of 2026-04):
-    ///   Leaf:         CN=trycloudflare.com       (issued by WE1) — NOT pinned
-    ///   Intermediate: CN=WE1                     (Google Trust Services)
-    ///   Root:         CN=GTS Root R4             (cross-signed by GlobalSign)
-    private static let hardcodedFallback: Set<String> = [
-        "kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",
-        "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=",
+    /// Chain as of 2026-10-13: trycloudflare.com (leaf, NOT pinned) → WE1 →
+    /// GTS Root R4. The other roots are the CAs Cloudflare issues edge
+    /// certificates from, so a CA change at renewal keeps the tunnel up.
+    static let hardcodedFallback: Set<String> = [
+        "kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=", // WE1 (Google Trust Services intermediate; signs trycloudflare.com today)
+        "hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=", // GTS Root R1
+        "Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=", // GTS Root R2
+        "QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=", // GTS Root R3
+        "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=", // GTS Root R4 (root of today's chain)
+        "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=", // ISRG Root X1 (Let's Encrypt)
+        "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=", // ISRG Root X2 (Let's Encrypt)
+        "oyD01TTXvpfBro3QSZc1vIlcMjrdLTiL/M9mLCPX+Zo=", // SSL.com Root Certification Authority ECC
+        "0cRTd+vc1hjNFlHcLgLCHXUeWqn80bNDH/bs9qMTSPo=", // SSL.com Root Certification Authority RSA
+        "G/ANXI8TwJTdF+AFBM8IiIUPEv0Gf6H5LA/b9guG4yE=", // SSL.com TLS ECC Root CA 2022
+        "K89VOmb1cJAN3TK6bf4ezAbJGC1mLcG2Dh97dnwr3VQ=", // SSL.com TLS RSA Root CA 2022
     ]
 
     /// Override path inside the app's Documents container. iOS sandboxes mean
@@ -182,31 +200,72 @@ final class CloudflareCertificatePinningDelegate: NSObject, URLSessionDelegate {
         // certificate in the chain) — and, before the latches above, emitted
         // its failure lines that many times too.
         let pins = Self.pinnedSPKIHashes
-        for i in 0..<chainLength {
-            let cert = certChain[i]
-            let spkiHash = Self.sha256SPKIHash(for: cert)
-            if pins.contains(spkiHash) {
-                NSLog("[CertPin] Pin matched at chain position %d for %@", i, host)
-                completionHandler(.useCredential, URLCredential(trust: serverTrust))
-                return
-            }
+        if let i = Self.firstPinnedPosition(in: certChain, pins: pins) {
+            NSLog("[CertPin] Pin matched at chain position %d for %@", i, host)
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            return
         }
 
         NSLog("[CertPin] No pinned certificate matched for %@ (chain length: %d)", host, chainLength)
+        onReject?(host)
         completionHandler(.cancelAuthenticationChallenge, nil)
     }
 
-    /// Compute Base64(SHA-256(SubjectPublicKeyInfo DER)) for a certificate.
-    private static func sha256SPKIHash(for certificate: SecCertificate) -> String {
-        guard let publicKey = SecCertificateCopyKey(certificate) else { return "" }
-        var error: Unmanaged<CFError>?
-        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else { return "" }
+    /// Position of the first certificate in `chain` whose SPKI hash is in
+    /// `pins`, or nil when none is. Pure so tests can drive it with real
+    /// certificates and no handshake.
+    static func firstPinnedPosition(in chain: [SecCertificate], pins: Set<String>) -> Int? {
+        chain.firstIndex { cert in
+            spkiSHA256(of: cert).map(pins.contains) ?? false
+        }
+    }
 
+    /// Base64(SHA-256(SubjectPublicKeyInfo DER)) for a certificate — the
+    /// same value `openssl x509 -pubkey | openssl pkey -pubin -outform der |
+    /// openssl dgst -sha256 -binary | base64` prints, which is what the pin
+    /// files hold. `SecKeyCopyExternalRepresentation` returns only the bare
+    /// key (PKCS#1 for RSA, X9.63 for EC), so the ASN.1 SPKI prefix for the
+    /// key's algorithm and size is put back before hashing. Hashing the bare
+    /// key, as this did before, never matched a pin. Returns nil for a key
+    /// type with no known prefix, which therefore never matches.
+    static func spkiSHA256(of certificate: SecCertificate) -> String? {
+        guard let publicKey = SecCertificateCopyKey(certificate),
+              let attributes = SecKeyCopyAttributes(publicKey) as? [CFString: Any],
+              let keyType = attributes[kSecAttrKeyType] as? String,
+              let bits = attributes[kSecAttrKeySizeInBits] as? Int,
+              let prefix = spkiPrefix(keyType: keyType, bits: bits) else { return nil }
+        var error: Unmanaged<CFError>?
+        guard let rawKey = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else { return nil }
+
+        let spki = prefix + rawKey
         var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        _ = publicKeyData.withUnsafeBytes { bytes in
-            CC_SHA256(bytes.baseAddress, CC_LONG(publicKeyData.count), &hash)
+        _ = spki.withUnsafeBytes { bytes in
+            CC_SHA256(bytes.baseAddress, CC_LONG(spki.count), &hash)
         }
         return Data(hash).base64EncodedString()
+    }
+
+    /// DER header of a SubjectPublicKeyInfo up to the key bits, for the key
+    /// shapes public CAs use.
+    private static func spkiPrefix(keyType: String, bits: Int) -> Data? {
+        let rsa = kSecAttrKeyTypeRSA as String
+        let ec = kSecAttrKeyTypeECSECPrimeRandom as String
+        let hex: String
+        switch (keyType, bits) {
+        case (rsa, 2048): hex = "30820122300d06092a864886f70d01010105000382010f00"
+        case (rsa, 4096): hex = "30820222300d06092a864886f70d01010105000382020f00"
+        case (ec, 256): hex = "3059301306072a8648ce3d020106082a8648ce3d030107034200"
+        case (ec, 384): hex = "3076301006072a8648ce3d020106052b81040022036200"
+        default: return nil
+        }
+        var bytes = Data()
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            bytes.append(UInt8(hex[index..<next], radix: 16)!)
+            index = next
+        }
+        return bytes
     }
 }
 
@@ -386,6 +445,8 @@ final class WebSocketClient {
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
     private var pinningDelegate: CloudflareCertificatePinningDelegate?
+    /// Host whose certificate failed the pin check on the current attempt.
+    private var pinRejectedHost: String?
     private var intentionalDisconnect = false
     /// Full URL list for the current pairing — primary at index 0,
     /// fallbacks after — and the position in it. On a failure the cursor
@@ -1064,16 +1125,21 @@ final class WebSocketClient {
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 10
 
-        // Certificate pinning disabled by default. Pin set lives in
-        // QuipiOS/Resources/CertPins.json (verify it matches Cloudflare's
-        // current chain via docs/protocol.md → "Updating Pins" before
-        // flipping this on). Users can additionally drop their own
-        // override at ~/Documents/quip-cert-pins.json — see
-        // CloudflareCertificatePinningDelegate for the resolution order.
-        // To enable, replace this line with:
-        //   pinningDelegate = CloudflareCertificatePinningDelegate()
-        pinningDelegate = nil
-        let urlSession = URLSession(configuration: config)
+        // Pins wss://*.trycloudflare.com to Cloudflare's CAs (GH #10); every
+        // other host gets default handling. Pin set lives in
+        // QuipiOS/Resources/CertPins.json (docs/protocol.md → "Updating
+        // Pins"); a user override at ~/Documents/quip-cert-pins.json wins —
+        // see CloudflareCertificatePinningDelegate for the resolution order.
+        // The session holds its delegate strongly; every path that replaces
+        // `session` calls invalidateAndCancel(), which releases it.
+        pinRejectedHost = nil
+        // Main queue, not a Task: the rejection is queued before the task's
+        // own failure, which also reaches the client through the main queue.
+        let delegate = CloudflareCertificatePinningDelegate(onReject: { [weak self] host in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.pinRejectedHost = host } }
+        })
+        pinningDelegate = delegate
+        let urlSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         session = urlSession
 
         let task = urlSession.webSocketTask(with: url)
@@ -1121,8 +1187,9 @@ final class WebSocketClient {
                 self.connectionTimeoutTask = nil
 
                 if let error = error {
-                    self.logEvent("initial ping failed: \(error.localizedDescription)")
-                    let reason: DisconnectReason = .networkError(error.localizedDescription)
+                    let detail = Self.connectFailureDetail(error, pinRejectedHost: self.pinRejectedHost)
+                    self.logEvent("initial ping failed: \(detail)")
+                    let reason: DisconnectReason = .networkError(detail)
                     self.lastDisconnectReason = reason
                     self.lastError = reason.label
                     self.handleDisconnect(error: error)
@@ -1157,6 +1224,15 @@ final class WebSocketClient {
                 }
             }
         }
+    }
+
+    /// What a failed connect attempt reports. A pin rejection surfaces as a
+    /// bare "cancelled", so name the real cause when the delegate saw one.
+    nonisolated static func connectFailureDetail(_ error: Error, pinRejectedHost: String?) -> String {
+        if let host = pinRejectedHost {
+            return "\(host)'s certificate is not from a CA Quip trusts for the tunnel (pin check failed)"
+        }
+        return error.localizedDescription
     }
 
     private func receiveNext() {

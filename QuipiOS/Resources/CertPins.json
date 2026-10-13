@@ -1,12 +1,30 @@
 {
-  "_comment": "Quip Cloudflare-tunnel cert pins. Edit this JSON to ship updated pins without touching Swift. Each entry is Base64(SHA-256(SPKI DER)) for one cert in the trycloudflare.com chain. Pin intermediate + root CAs (not the leaf — it rotates frequently). To rotate, see docs/protocol.md → 'Updating Pins' for the openssl recipe. Users can override locally by dropping a file with the same shape at ~/Documents/quip-cert-pins.json (the iOS app's Documents container).",
-  "_chain_2026_04": [
-    "Leaf:         CN=trycloudflare.com (NOT pinned — rotates often)",
-    "Intermediate: CN=WE1 (Google Trust Services)",
-    "Root:         CN=GTS Root R4 (cross-signed by GlobalSign)"
+  "_comment": "Quip Cloudflare-tunnel cert pins. Each entry is Base64(SHA-256(SPKI DER)) for a CA key. A connection to *.trycloudflare.com passes when any certificate in its evaluated chain matches. The set is the WE1 intermediate that signs trycloudflare.com today plus the roots of the CAs Cloudflare issues edge certificates from (Google Trust Services, Let's Encrypt, SSL.com), so a Cloudflare CA change does not cut the tunnel off. Never pin the leaf. To rotate, see docs/protocol.md -> 'Updating Pins'. Keep CloudflareCertificatePinningDelegate.hardcodedFallback in step (CertPinningTests checks). Users can override locally by dropping a file with the same shape at ~/Documents/quip-cert-pins.json (the iOS app's Documents container).",
+  "_checked": "2026-10-13: trycloudflare.com and *.trycloudflare.com share one certificate, chain leaf -> WE1 -> GTS Root R4 (cross-signed by GlobalSign Root CA). Root hashes computed from the macOS system root store.",
+  "_pins": [
+    "kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=  WE1 (Google Trust Services intermediate; signs trycloudflare.com today)",
+    "hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=  GTS Root R1",
+    "Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=  GTS Root R2",
+    "QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=  GTS Root R3",
+    "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=  GTS Root R4 (root of today's chain)",
+    "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=  ISRG Root X1 (Let's Encrypt)",
+    "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=  ISRG Root X2 (Let's Encrypt)",
+    "oyD01TTXvpfBro3QSZc1vIlcMjrdLTiL/M9mLCPX+Zo=  SSL.com Root Certification Authority ECC",
+    "0cRTd+vc1hjNFlHcLgLCHXUeWqn80bNDH/bs9qMTSPo=  SSL.com Root Certification Authority RSA",
+    "G/ANXI8TwJTdF+AFBM8IiIUPEv0Gf6H5LA/b9guG4yE=  SSL.com TLS ECC Root CA 2022",
+    "K89VOmb1cJAN3TK6bf4ezAbJGC1mLcG2Dh97dnwr3VQ=  SSL.com TLS RSA Root CA 2022"
   ],
   "spkiHashes": [
     "kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=",
-    "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c="
+    "hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=",
+    "Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=",
+    "QXnt2YHvdHR3tJYmQIr0Paosp6t/nggsEGD4QJZ3Q0g=",
+    "mEflZT5enoR1FuXLgYYGqnVEoZvmf9c2bVBpiOjYQ0c=",
+    "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+    "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+    "oyD01TTXvpfBro3QSZc1vIlcMjrdLTiL/M9mLCPX+Zo=",
+    "0cRTd+vc1hjNFlHcLgLCHXUeWqn80bNDH/bs9qMTSPo=",
+    "G/ANXI8TwJTdF+AFBM8IiIUPEv0Gf6H5LA/b9guG4yE=",
+    "K89VOmb1cJAN3TK6bf4ezAbJGC1mLcG2Dh97dnwr3VQ="
   ]
 }

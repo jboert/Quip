@@ -727,7 +727,9 @@ The server reads the `type` field from the JSON envelope first, then deserialize
 
 When connecting via `wss://*.trycloudflare.com`, mobile clients pin the server's TLS certificate chain to prevent MITM attacks from compromised CAs. Direct LAN `ws://` connections are not affected.
 
-**Pinning strategy:** SPKI (Subject Public Key Info) SHA-256 hashes of the intermediate and root CA certificates in the chain. Leaf certificates are NOT pinned since they rotate frequently.
+**Pinning strategy:** SPKI (Subject Public Key Info) SHA-256 hashes of CA keys. A connection passes when any certificate in the evaluated chain matches. The set holds the WE1 intermediate that signs `trycloudflare.com` today, plus the roots of every CA Cloudflare issues edge certificates from (Google Trust Services R1–R4, Let's Encrypt ISRG X1/X2, SSL.com), so a Cloudflare CA change at renewal does not cut the tunnel off. Leaf certificates are NOT pinned since they rotate frequently. The iOS hash is computed over the SPKI DER (the key plus its algorithm header), the same bytes the openssl recipe below hashes; `CertPinningTests` checks this against real certificates.
+
+Pinning is on for iOS since 2026-10-13 (GH #10) on both the connection and the pairing probe. Before that the delegate was never attached, and its hash covered the bare key only, so it could not have matched a pin.
 
 ### Updating Pins
 
@@ -752,7 +754,7 @@ Update the pinned hashes in:
 - **iOS:** `QuipiOS/Resources/CertPins.json` (`spkiHashes` array). The Swift code in `WebSocketClient.swift` reads this file at runtime — no Swift edit needed for a rotation.
 - **Android:** `QuipAndroid/.../services/WebSocketClient.kt` → `CertificatePinner` configuration.
 
-Pin the **intermediate** and **root** CA hashes (not the leaf).
+Pin the **intermediate** and **root** CA hashes (not the leaf). Keep `CloudflareCertificatePinningDelegate.hardcodedFallback` equal to the JSON; `CertPinningTests` fails when they drift. Root hashes can be computed from the macOS store: `security find-certificate -c "ISRG Root X1" -p /System/Library/Keychains/SystemRootCertificates.keychain`, then the same openssl pipe.
 
 ### iOS override file
 

@@ -5396,7 +5396,12 @@ struct MainiOSView: View {
     /// down. Any error along the way counts as failure. Does not save or
     /// send any app-level messages.
     private nonisolated func probeWebSocket(url: URL, timeout: TimeInterval) async throws {
-        let session = URLSession(configuration: .ephemeral)
+        // Same pin check as the real connection, so a probe never passes a
+        // tunnel URL that the connection would then refuse (GH #10).
+        let session = URLSession(configuration: .ephemeral,
+                                 delegate: CloudflareCertificatePinningDelegate(),
+                                 delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
         let task = session.webSocketTask(with: url)
         task.resume()
         defer { task.cancel(with: .normalClosure, reason: nil) }
