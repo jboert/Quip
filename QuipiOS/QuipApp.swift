@@ -2188,9 +2188,18 @@ struct MainiOSView: View {
         .sheet(item: $editingQuickSlot) { slot in
             if let initial = QuickButtonEdit.editable(slot, defs: customButtonDefs) {
                 CustomButtonForm(initial: initial,
-                                 tint: KeyColors.decode(quickSlotColorsJSON)[slot.id]) { edited in
-                    saveQuickEdit(edited, over: slot)
-                }
+                                 tint: KeyColors.decode(quickSlotColorsJSON)[slot.id],
+                                 onSave: { edited in
+                                     // Only the color changed: a built-in stays
+                                     // a built-in instead of becoming a copy.
+                                     if edited != initial { saveQuickEdit(edited, over: slot) }
+                                 },
+                                 // Runs before onSave, so a built-in's new color
+                                 // moves with it if it becomes a copy.
+                                 onColor: { hex in
+                                     let colors = KeyColors.decode(quickSlotColorsJSON)
+                                     quickSlotColorsJSON = KeyColors.encode(KeyColors.setting(hex, for: slot.id, in: colors))
+                                 })
             }
         }
         // A prompt button edits the prompt itself, the same editor as the
@@ -6170,8 +6179,9 @@ struct MainiOSView: View {
         facts.isSlash = isSlashSlot(slot)
         facts.isSpacer = isSpacerSlot(slot)
         facts.canSendTo = QuickSend.action(for: slot, defs: customButtonDefs) != nil
-        facts.canEdit = QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil
-            || quickMenuPromptEntry(slot) != nil
+        let editsButton = QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil
+        facts.canEdit = editsButton || quickMenuPromptEntry(slot) != nil
+        facts.editIncludesColor = editsButton
         return facts
     }
 

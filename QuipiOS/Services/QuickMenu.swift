@@ -40,6 +40,10 @@ enum QuickMenu {
         var isSpacer = false
         var canSendTo = false
         var canEdit = false
+        /// Edit… opens the button's own form, which carries its color, so
+        /// Color… is not listed separately. False for prompts (Edit… edits
+        /// the library prompt) and for buttons with no form (Broadcast).
+        var editIncludesColor = false
     }
 
     /// The menu items for a slot, in menu order.
@@ -49,7 +53,7 @@ enum QuickMenu {
         if facts.isSlash { items.append(.allSlashCommands) }
         if facts.canSendTo { items.append(.sendTo) }
         if facts.canEdit { items.append(.edit) }
-        if !facts.isSpacer { items.append(.color) }
+        if !facts.isSpacer && !facts.editIncludesColor { items.append(.color) }
         items.append(.addSpacerAfter)
         items.append(.remove)
         return items

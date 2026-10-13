@@ -23,6 +23,13 @@ final class QuickMenuTests: XCTestCase {
                        ["Paste & Send", "Send to…", "Edit…", "Color…", "Add Spacer After", "Remove from Row"])
     }
 
+    func test_colorIsInEditWhenTheEditFormCarriesIt() {
+        XCTAssertEqual(titles(.init(isSlash: true, canSendTo: true, canEdit: true, editIncludesColor: true)),
+                       ["All Slash Commands…", "Send to…", "Edit…", "Add Spacer After", "Remove from Row"])
+        // A prompt's Edit… edits the library prompt, so its pill keeps Color….
+        XCTAssertTrue(titles(.init(isPrompt: true, canSendTo: true, canEdit: true)).contains("Color…"))
+    }
+
     func test_aSpacerHasNothingToColorOrEdit() {
         XCTAssertEqual(titles(.init(isSpacer: true)), ["Add Spacer After", "Remove from Row"])
     }

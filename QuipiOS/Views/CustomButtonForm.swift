@@ -10,6 +10,10 @@ struct CustomButtonForm: View {
     /// The slot's color, so the preview matches the row. Nil = default chip.
     var tint: String? = nil
     let onSave: (CustomButton) -> Void
+    /// When set, the form shows a Color row and calls this on Save with the
+    /// new color (nil = default) if it changed, before `onSave`. The keyboard
+    /// row's hold menu uses it so Edit… covers color too.
+    var onColor: ((String?) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var label: String = ""
@@ -22,6 +26,7 @@ struct CustomButtonForm: View {
     /// an explicit label is never overwritten as the payload changes. Cleared
     /// when the field is emptied, so auto-fill resumes.
     @State private var labelEdited: Bool = false
+    @State private var chosenTint: String?
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
@@ -61,6 +66,10 @@ struct CustomButtonForm: View {
                     Text("Preview")
                 } footer: {
                     Text("Live preview of the pill exactly as it appears on the keyboard row.")
+                }
+
+                if onColor != nil {
+                    colorSection
                 }
 
                 Section {
@@ -143,7 +152,10 @@ struct CustomButtonForm: View {
                         .disabled(!isValid)
                 }
             }
-            .onAppear { hydrate() }
+            .onAppear {
+                chosenTint = tint.flatMap(WindowColor.normalized)
+                hydrate()
+            }
             .onChange(of: text) { _, _ in autofillLabelIfNeeded() }
             .onChange(of: keystroke) { _, _ in autofillLabelIfNeeded() }
             .onChange(of: payloadKind) { _, _ in autofillLabelIfNeeded() }
@@ -167,11 +179,11 @@ struct CustomButtonForm: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(KeyTint.text(tint, default: colors.chipText))
+        .foregroundStyle(KeyTint.text(shownTint, default: colors.chipText))
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
         .frame(minWidth: 20, minHeight: 28)
-        .background(KeyTint.fill(tint, default: colors.chipFill))
+        .background(KeyTint.fill(shownTint, default: colors.chipFill))
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
@@ -264,7 +276,58 @@ struct CustomButtonForm: View {
             systemImage: symbol.isEmpty ? nil : symbol,
             payload: payload
         )
+        if let onColor, chosenTint != tint.flatMap(WindowColor.normalized) {
+            onColor(chosenTint)
+        }
         onSave(btn)
         dismiss()
+    }
+
+    /// The preview's color: the one being picked when the form edits color.
+    private var shownTint: String? {
+        onColor == nil ? tint : chosenTint
+    }
+
+    /// One row of swatches, Default first, as in the window color sheet.
+    private var colorSection: some View {
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    swatch(nil)
+                    ForEach(WindowColor.palette, id: \.self) { swatch($0) }
+                    if let chosenTint, !WindowColor.palette.contains(chosenTint) {
+                        swatch(chosenTint)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        } header: {
+            Text("Color")
+        }
+    }
+
+    private func swatch(_ hex: String?) -> some View {
+        let selected = chosenTint == hex
+        return Button {
+            chosenTint = hex
+        } label: {
+            Circle()
+                .fill(hex.map { Color(hex: $0) } ?? colors.chipFill)
+                .frame(width: 30, height: 30)
+                .overlay {
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(KeyTint.text(hex, default: colors.chipText))
+                    } else if hex == nil {
+                        Image(systemName: "slash.circle")
+                            .font(.system(size: 13))
+                            .foregroundStyle(colors.chipText)
+                    }
+                }
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(hex.map { "Color \($0)" } ?? "Default color")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

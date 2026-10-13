@@ -101,13 +101,16 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   `/superpowers:writing-plans`, `/superpowers:executing-plans`, `/resume`,
   `/model`, `/context`. Add any other with Quick Buttons → + → Custom Button.
 - **Edit a keyboard button where it is (Q-67).** Hold a quick-row button
-  still and a menu opens: **Edit…**, **Color…**, **Remove from Row**, plus
+  still and a menu opens: **Edit…** (its label, action and color),
+  **Remove from Row**, plus
   **All Slash Commands…** on slash buttons and **Paste & Send** on prompt
   buttons (those were the hold itself before, so nothing is lost). Hold and
   move still drags. In Settings → Quick Buttons, tapping any Row Order entry
   now opens the same edit form (it used to do nothing). Editing a built-in
   turns it into your own custom button in the same spot, with its color,
-  and the edit form's preview shows that color. **Edit…** on a prompt
+  and the edit form's preview shows that color. Changing only the color
+  leaves a built-in as it is. Prompt buttons, whose **Edit…** opens the
+  prompt, keep **Color…** in the menu. **Edit…** on a prompt
   button opens the prompt editor (the Mac saves it, as from the Prompts
   hub). Slash group pills (`/x…`) keep their own menu. VoiceOver reaches
   the slash palette as a named action on slash buttons. Phone only, no Mac
