@@ -117,6 +117,14 @@ For Jakob. Summarizes what eb-branch adds since the last push (`e5ed6ee`,
   it. Hold a gap for **Add Spacer After** (a wider gap) or **Remove from
   Row**. Gaps are still invisible, but now as tall as a button, so a finger
   can find them.
+- **Send a button to another window (Q-51).** The hold menu has **Send
+  to…**: pick a terminal (the current one is listed first and marked) and
+  the button or prompt goes there while you stay on your window. Text that
+  a tap only types, and prompts, get a Press Return switch (on by default).
+  A short note confirms "Sent to api". **Remove from Row** now shows
+  "Removed Y · Undo" for 8 seconds; tap the note to put it back. A photo
+  waiting to be sent is not attached to a Send to…; it stays for the
+  current window.
 
 ### Broadcast and minimize (Q-49, Q-53)
 - **Broadcast (US-106 to US-116).** Suggestions and a Most-used shelf,

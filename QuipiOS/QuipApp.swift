@@ -1526,6 +1526,12 @@ struct MainiOSView: View {
     @State private var editingQuickPrompt: PromptEntry?
     /// Mac's reply to that editor's save; the editor closes on success.
     @State private var quickPromptAck: PutPromptAckMessage?
+    /// Q-51: the keyboard button whose "Send to…" window list is open.
+    @State private var sendToSlot: QuickSlot?
+    /// One neutral line under the top of the screen ("Sent to api", "Removed
+    /// Y" with Undo); gone after 4 s (8 s with Undo) or a newer note.
+    @State private var rowNote: RowNote?
+    @State private var rowNoteTask: Task<Void, Never>?
     // Per-button toggles for the main control row (chevrons, spawn, arrange,
     // photo, keyboard, return). PTT mic and the row itself stay mandatory.
     // Default ON — existing users keep their current button set.
@@ -1659,9 +1665,6 @@ struct MainiOSView: View {
     /// The window whose color sheet is open, from "Color…" in the card's
     /// long-press menu.
     @State private var colorSheetWindowId: String? = nil
-    /// Q-61: the one-line hint under the grid goes away once the card menu
-    /// has been used (any action from it, by tap or long press).
-
     /// Colors the user gave keyboard buttons (see `KeyColors`).
     @AppStorage(KeyColors.storageKey) private var quickSlotColorsJSON: String = "{}"
 
@@ -1788,9 +1791,11 @@ struct MainiOSView: View {
                         .animation(.easeInOut(duration: 0.3), value: errorToast)
                 }
                 broadcastResultLine
+                rowNoteLine
             }
             .padding(.top, 50)
             .animation(.easeInOut(duration: 0.3), value: broadcastDelivery?.startedAt)
+            .animation(.easeInOut(duration: 0.3), value: rowNote?.id)
         }
         .sensoryFeedback(.warning, trigger: broadcastWarningTick)
         .environment(\.quipColors, colors)
@@ -2184,6 +2189,14 @@ struct MainiOSView: View {
             }
             .onAppear { client.onPutPromptAck = { quickPromptAck = $0 } }
             .onDisappear { client.onPutPromptAck = nil }
+        }
+        .sheet(item: $sendToSlot) { slot in
+            if let action = QuickSend.action(for: slot, defs: customButtonDefs) {
+                SendToWindowSheet(title: quickSlotTitle(slot), action: action,
+                                  targets: SendToTargets.targets(from: windows, selectedID: selectedWindowId)) { windowID, action in
+                    sendQuick(action, slot: slot, to: windowID)
+                }
+            }
         }
         .sheet(item: $coloringQuickSlot) { slot in
             let colors = KeyColors.decode(quickSlotColorsJSON)
@@ -6115,6 +6128,9 @@ struct MainiOSView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showSlashPalette = true }
             }
         }
+        if QuickSend.action(for: slot, defs: customButtonDefs) != nil {
+            Button("Send to…") { sendToSlot = slot }
+        }
         if QuickButtonEdit.editable(slot, defs: customButtonDefs) != nil {
             Button("Edit…") { editingQuickSlot = slot }
         } else if case .prompt(let pid) = slot,
@@ -6127,8 +6143,89 @@ struct MainiOSView: View {
         Button("Add Spacer After") {
             quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.addingSpacer(after: slot, in: effectiveQuickSlots))
         }
-        Button("Remove from Row", role: .destructive) {
-            quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.removing(slot, from: effectiveQuickSlots))
+        Button("Remove from Row", role: .destructive) { removeQuickSlot(slot) }
+    }
+
+    /// Removes a slot from the row and offers Undo for 8 s.
+    private func removeQuickSlot(_ slot: QuickSlot) {
+        let slots = effectiveQuickSlots
+        guard let index = slots.firstIndex(of: slot) else { return }
+        quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.removing(slot, from: slots))
+        showRowNote("Removed \(quickSlotTitle(slot))") {
+            quickSlotsJSON = QuickSlotStore.encode(QuickButtonEdit.restoring(slot, at: index, in: effectiveQuickSlots))
+        }
+    }
+
+    /// Q-51: a button's action aimed at `windowID` instead of the selected
+    /// window, which stays selected. A pending photo is not attached: it was
+    /// meant for the selected window and stays queued for it.
+    private func sendQuick(_ action: QuickSend, slot: QuickSlot, to windowID: String) {
+        let sent: Bool
+        switch action {
+        case .text(let text, let pressReturn):
+            sent = client.send(SendTextMessage(windowId: windowID, text: text, pressReturn: pressReturn))
+        case .keystroke(let key):
+            sent = client.send(QuickActionMessage(windowId: windowID, action: key))
+        case .prompt(let id, let pressReturn):
+            sent = client.send(PastePromptMessage(id: id, windowId: windowID, pressReturn: pressReturn))
+            if sent { recordPromptUsage(id, context: promptContext(forWindow: windowID)) }
+        }
+        if sent, isSlashSlot(slot) {
+            switch slot {
+            case .builtin(let b): recordSlashUsage(.builtin(b))
+            case .custom(let id):
+                if let def = customButtonDefs.first(where: { $0.id == id }) { recordSlashUsage(.custom(def)) }
+            default: break
+            }
+        }
+        let name = windows.first { $0.id == windowID }?.displayTitle ?? "window"
+        showRowNote(sent ? "Sent to \(name)" : "Not sent: not connected")
+    }
+
+    private struct RowNote {
+        let id = UUID()
+        let text: String
+        let undo: (() -> Void)?
+    }
+
+    private func showRowNote(_ text: String, undo: (() -> Void)? = nil) {
+        let note = RowNote(text: text, undo: undo)
+        rowNote = note
+        rowNoteTask?.cancel()
+        rowNoteTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(undo == nil ? 4 : 8))
+            guard !Task.isCancelled, rowNote?.id == note.id else { return }
+            rowNote = nil
+        }
+    }
+
+    /// The whole capsule is the button, as with `broadcastResultLine`: Undo
+    /// when the note offers it, otherwise it just dismisses.
+    @ViewBuilder
+    private var rowNoteLine: some View {
+        if let note = rowNote {
+            Button {
+                note.undo?()
+                rowNote = nil
+            } label: {
+                HStack(spacing: 12) {
+                    Text(note.text)
+                    if note.undo != nil {
+                        Text("Undo")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.yellow)
+                    }
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.78))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(note.undo == nil ? "Dismisses this message" : "Undoes it")
+            .transition(toastTransition)
         }
     }
 
@@ -8948,7 +9045,7 @@ struct QuickButtonsSheet: View {
             } footer: {
                 Text(isFilteringEditor
                      ? "Clear the search to reorder. Tap a button to edit it. Swipe to remove. Tap the dot to color a button."
-                     : "Tap a button to edit it; editing a built-in makes it your own custom button. Drag the handle to reorder. Swipe to remove. Tap the dot to color a button. Spacers add fixed gaps between buttons.")
+                     : "Tap a button to edit it; editing a built-in makes it your own custom button. Drag the handle to reorder. Swipe to remove. Tap the dot to color a button. Spacers add fixed gaps between buttons. On the keyboard itself, hold any button for more: send it to another window, edit, color, add a spacer, remove.")
             }
 
             if !visibleCustoms.isEmpty {

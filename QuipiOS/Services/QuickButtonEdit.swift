@@ -76,6 +76,15 @@ enum QuickButtonEdit {
         slots.filter { $0 != slot }
     }
 
+    /// Undo for `removing`: `slot` back at `index`, or at the end when the
+    /// row has since shrunk. A slot already back in the row is left alone.
+    static func restoring(_ slot: QuickSlot, at index: Int, in slots: [QuickSlot]) -> [QuickSlot] {
+        guard !slots.contains(slot) else { return slots }
+        var out = slots
+        out.insert(slot, at: min(max(index, 0), out.count))
+        return out
+    }
+
     /// The row with a new spacer right after `slot`, or at the end when
     /// `slot` is no longer in the row. Drag the spacer to move it.
     static func addingSpacer(after slot: QuickSlot, in slots: [QuickSlot],

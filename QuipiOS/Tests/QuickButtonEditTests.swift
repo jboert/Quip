@@ -64,6 +64,16 @@ final class QuickButtonEditTests: XCTestCase {
         XCTAssertEqual(QuickButtonEdit.removing(.custom(id), from: slots), [.builtin(.yes), .builtin(.esc)])
     }
 
+    func test_undoPutsARemovedSlotBackWhereItWas() {
+        let slots: [QuickSlot] = [.builtin(.yes), .custom(id), .builtin(.esc)]
+        let removed = QuickButtonEdit.removing(.custom(id), from: slots)
+        XCTAssertEqual(QuickButtonEdit.restoring(.custom(id), at: 1, in: removed), slots)
+        // Row shrank meanwhile: lands at the end. Already back: unchanged.
+        XCTAssertEqual(QuickButtonEdit.restoring(.custom(id), at: 5, in: [.builtin(.yes)]),
+                       [.builtin(.yes), .custom(id)])
+        XCTAssertEqual(QuickButtonEdit.restoring(.custom(id), at: 0, in: slots), slots)
+    }
+
     func test_addingASpacerPutsItRightAfterTheHeldButton() {
         let gap = UUID()
         let slots: [QuickSlot] = [.builtin(.yes), .custom(id), .builtin(.esc)]
