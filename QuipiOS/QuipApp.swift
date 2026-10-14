@@ -2839,6 +2839,7 @@ struct MainiOSView: View {
                             .foregroundStyle(colors.textTertiary)
                         Text("\(manager.paired.count) paired")
                             .font(.system(size: 9))
+                            .monospacedDigit()
                             .foregroundStyle(colors.textTertiary)
                     }
                 }
@@ -4394,6 +4395,8 @@ struct MainiOSView: View {
             autosuggest: activeAutosuggest,
             windowName: windows.first(where: { $0.id == selectedWindowId })?.name ?? "",
             windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
+            windowId: selectedWindowId,
+            lastUpdate: terminalContentUpdatedAtById[wid],
             isExpanded: $isTerminalExpanded,
             onRefresh: {
                 if let wid = selectedWindowId { onRequestContent(wid) }
@@ -4933,6 +4936,13 @@ struct MainiOSView: View {
                                     // just selects + focuses.
                                     if !window.enabled {
                                         client.send(QuickActionMessage(windowId: window.id, action: "toggle_enabled"))
+                                    }
+                                    // Q-62: the card has no pressed state, so a
+                                    // tap is felt as well as seen. Only on a
+                                    // real change, and never for a Mac-driven
+                                    // follow (that path does not run here).
+                                    if selectedWindowId != window.id {
+                                        UISelectionFeedbackGenerator().selectionChanged()
                                     }
                                     withAnimation(.spring(duration: 0.2)) {
                                         selectedWindowId = window.id

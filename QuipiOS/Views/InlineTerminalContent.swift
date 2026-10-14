@@ -368,6 +368,12 @@ struct InlineTerminalContent: View {
     private var hasAutosuggest: Bool { autosuggest != nil }
     let windowName: String
     let windowColor: Color
+    /// Keys the loading timer, so switching windows restarts it. Falls back to
+    /// the name for callers that have no id.
+    var windowId: String? = nil
+    /// When the Mac last answered for this window. Drives the "N s old" chip
+    /// and the slow-loading text (`TerminalPanelFreshness`); nil hides both.
+    var lastUpdate: Date? = nil
     @Binding var isExpanded: Bool
     var onRefresh: () -> Void
     /// (action, promptFingerprint?) — fingerprint is non-nil only for one-tap
@@ -411,6 +417,13 @@ struct InlineTerminalContent: View {
         ContentRenderMode(rawValue: contentRenderModeRaw) ?? .auto
     }
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    /// The clock the freshness chip and the slow-loading text read. Advanced
+    /// by `refreshTimer` only while one of them could change, so a live
+    /// panel is not re-rendered for nothing.
+    @State private var now = Date()
+    /// When the panel last entered the loading branch for this window.
+    @State private var loadingSince: Date?
+    private var loadingKey: String { "\(windowId ?? windowName)|\(currentBranch == .loading)" }
 
     /// Live horizontal offset applied to the content panel while a
     /// window-cycle swipe is in progress. Dampened to 30% of the finger
@@ -485,6 +498,17 @@ struct InlineTerminalContent: View {
         }
     }
 
+    private func syncLoadingSince() {
+        let date = Date()
+        loadingSince = currentBranch == .loading ? date : nil
+        now = date
+    }
+
+    private func tick(_ date: Date) {
+        let mayBeStale = lastUpdate.map { date.timeIntervalSince($0) >= TerminalPanelFreshness.staleAfter - 2 } ?? false
+        if loadingSince != nil || mayBeStale { now = date }
+    }
+
     /// Tiny pill in the header showing which render branch is live.
     /// Horizontal scroll of tap-to-open URL pills. Renders above the
     /// terminal content, below the window-name header. Hidden entirely when
@@ -547,6 +571,29 @@ struct InlineTerminalContent: View {
                 Text(windowName)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.8))
+                    // One line, so the stale chip truncates the name rather
+                    // than wrapping it and growing the header.
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                // Q-62: frozen text looked live. The chip rides the header row
+                // (no new row) and a tap asks again.
+                if currentBranch != .loading,
+                   let stale = TerminalPanelFreshness.staleLabel(lastUpdate: lastUpdate, now: now) {
+                    Button { onRefresh() } label: {
+                        Text(stale)
+                            .font(.system(size: 10, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(Color.orange)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.15))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .accessibilityLabel(TerminalPanelFreshness.spokenStaleLabel(lastUpdate: lastUpdate, now: now) ?? stale)
+                    .accessibilityHint("Asks the Mac again")
+                }
                 Spacer()
                 // Phone-only text size (GH #38): changes how the phone draws
                 // the text, never the Mac terminal's font. Pinching the text
@@ -843,7 +890,9 @@ struct InlineTerminalContent: View {
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loading:
-                Text(loadingPlaceholder)
+                Text(TerminalPanelFreshness.loadingText(base: loadingPlaceholder,
+                                                        waitingSince: loadingSince, now: now))
+                    .multilineTextAlignment(.center)
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.4))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -883,8 +932,15 @@ struct InlineTerminalContent: View {
         )
         .offset(x: swipeOffset)
         .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.75), value: swipeOffset)
-        .onAppear { onRefresh() }
-        .onReceive(refreshTimer) { _ in onRefresh() }
+        .onAppear {
+            syncLoadingSince()
+            onRefresh()
+        }
+        .onChange(of: loadingKey) { _, _ in syncLoadingSince() }
+        .onReceive(refreshTimer) { date in
+            tick(date)
+            onRefresh()
+        }
         // Swipe left/right on the panel → cycle windows. Threshold 90pt +
         // 2:1 horizontal-to-vertical ratio so vertical scroll inside the
         // image ScrollView + pinch-zoom still work. `simultaneousGesture`

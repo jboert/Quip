@@ -148,6 +148,7 @@ struct QAPairLayoutView: View {
             urls: urls,
             windowName: window.folder?.isEmpty == false ? window.folder! : window.name,
             windowColor: Color(hex: window.color),
+            windowId: window.id,
             isExpanded: .constant(false),
             onRefresh: { onRefresh() },
             onSendAction: { _, _ in },
