@@ -46,6 +46,7 @@ struct SlashSearchSheet: View {
                 }
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
+            .modifier(FocusSearchOnAppear())
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled(true)
             .navigationTitle("Slash Commands")
@@ -148,6 +149,23 @@ struct SlashSearchSheet: View {
         case .edit:
             dismiss()
             onEdit(member)
+        }
+    }
+}
+
+/// The sheet opens only from the palette's "Search…" item, so the field takes
+/// the keyboard at once; before, the first letters typed went nowhere until
+/// the field was tapped. iOS 17 has no API for this and keeps the tap.
+private struct FocusSearchOnAppear: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content
+                .searchFocused($focused)
+                .onAppear { focused = true }
+        } else {
+            content
         }
     }
 }
