@@ -1667,6 +1667,9 @@ struct MainiOSView: View {
     @State private var colorSheetWindowId: String? = nil
     /// Colors the user gave keyboard buttons (see `KeyColors`).
     @AppStorage(KeyColors.storageKey) private var quickSlotColorsJSON: String = "{}"
+    /// Q-50: every pill gets an icon and color from its words; off is the
+    /// plain row from before. Phone only, not in the Mac backup.
+    @AppStorage(KeyPillSpec.autoStyleKey) private var autoKeyStyle: Bool = true
 
     /// What the phone typed on the Mac by accepting an autosuggestion, and the
     /// window it typed it on. While the compose field still matches `text`, the
@@ -2226,7 +2229,7 @@ struct MainiOSView: View {
         .sheet(item: $coloringQuickSlot) { slot in
             let colors = KeyColors.decode(quickSlotColorsJSON)
             ColorChoiceSheet(title: quickSlotTitle(slot), current: colors[slot.id],
-                             resetLabel: "Reset to default") { hex in
+                             resetLabel: quickSlotColorResetLabel(slot)) { hex in
                 quickSlotColorsJSON = KeyColors.encode(KeyColors.setting(hex, for: slot.id, in: colors))
             }
         }
@@ -5961,16 +5964,7 @@ struct MainiOSView: View {
                 }
             }
         } label: {
-            Text("/\(String(letter))…")
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .lineLimit(1)
-                .minimumScaleFactor(0.55)
-                .foregroundStyle(colors.chipText.opacity(selectedWindowId != nil ? 1.0 : 0.4))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 5)
-                .frame(minWidth: 20)
-                .background(colors.chipFill)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+            KeyPill(spec: .slashGroup(letter: letter, auto: autoKeyStyle), enabled: selectedWindowId != nil)
         }
         .accessibilityHint(selectedWindowId == nil ? "Select a window to send; buttons can still be changed" : "")
     }
@@ -6145,6 +6139,15 @@ struct MainiOSView: View {
         case .promptsPicker: return "Prompts"
         case .spacer: return "Spacer"
         }
+    }
+
+    /// Names the automatic color a reset goes back to (Q-50, US-204).
+    private func quickSlotColorResetLabel(_ slot: QuickSlot) -> String {
+        let customs = Dictionary(customButtonDefs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let automatic = KeyPillSpec.slot(slot, auto: autoKeyStyle, userColor: nil, customs: customs,
+                                         promptLabel: { quickSlotTitle(.prompt(promptID: $0)) },
+                                         symbolExists: KeySymbol.exists)
+        return KeyPillSpec.colorResetLabel(automatic: automatic, auto: autoKeyStyle)
     }
 
     private func isSlashSlot(_ slot: QuickSlot) -> Bool {
@@ -6345,18 +6348,7 @@ struct MainiOSView: View {
         Button {
             firePromptSlot(promptID: promptID, pressReturn: false)
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 9, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 11, weight: .medium))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(canFire ? KeyTint.fill(tint, default: Color.purple.opacity(0.55)) : Color.gray.opacity(0.25))
-            .foregroundStyle(canFire ? KeyTint.text(tint, default: .white) : .white)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            KeyPill(spec: .prompt(label: label, auto: autoKeyStyle, userColor: tint), enabled: canFire)
         }
         .buttonStyle(.plain)
         .disabled(!canFire)
@@ -6384,17 +6376,7 @@ struct MainiOSView: View {
         Button {
             showPromptsPickerSheet = true
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 9, weight: .semibold))
-                Text("Prompts")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(canFire ? KeyTint.fill(tint, default: Color.purple.opacity(0.55)) : Color.gray.opacity(0.25))
-            .foregroundStyle(canFire ? KeyTint.text(tint, default: .white) : .white)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            KeyPill(spec: .promptsPicker(userColor: tint), enabled: canFire)
         }
         .buttonStyle(.plain)
         .disabled(!canFire)
@@ -6482,26 +6464,8 @@ struct MainiOSView: View {
         Button {
             fireCustomButton(btn)
         } label: {
-            Group {
-                if let symbol = btn.systemImage, !symbol.isEmpty {
-                    Image(systemName: symbol)
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 16, height: 16)
-                        .id("custom-icon-\(btn.id.uuidString)-\(symbol)")
-                        .accessibilityLabel(btn.label)
-                } else {
-                    Text(btn.label)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.55)
-                }
-            }
-            .foregroundStyle(KeyTint.text(tint, default: colors.chipText).opacity(selectedWindowId != nil ? 1.0 : 0.4))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 5)
-            .frame(minWidth: 20)
-            .background(KeyTint.fill(tint, default: colors.chipFill).opacity(selectedWindowId != nil || tint == nil ? 1.0 : 0.4))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            KeyPill(spec: .custom(btn, auto: autoKeyStyle, userColor: tint, symbolExists: KeySymbol.exists),
+                    enabled: selectedWindowId != nil)
         }
         .disabled(selectedWindowId == nil)
         .accessibilityLabel(btn.label)
@@ -6518,34 +6482,10 @@ struct MainiOSView: View {
         Button {
             fireQuickButton(button)
         } label: {
-            // Render EITHER the symbol OR the text label, never both. A prior
-            // ZStack-with-fallback approach drew Text behind Image, but for
-            // buttons whose `label` is wider than the 16x16 icon frame
-            // (e.g. "Ctrl+C", "⌫"), the Text bled out past the icon edges
-            // and looked like a second smaller pill nested inside the outer
-            // pill — the keystroke-cluster "collision" artifact. The stable
-            // `.id` per symbol is what prevents the intermittent
-            // icon-disappearance, not the text fallback.
-            Group {
-                if let symbol = button.systemImage {
-                    Image(systemName: symbol)
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 16, height: 16)
-                        .id("qb-icon-\(symbol)")
-                        .accessibilityLabel(button.displayName)
-                } else {
-                    Text(button.label)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.55)
-                }
-            }
-            .foregroundStyle(KeyTint.text(tint, default: colors.chipText).opacity(isEnabled ? 1.0 : 0.4))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 5)
-            .frame(minWidth: 20)
-            .background(KeyTint.fill(tint, default: colors.chipFill).opacity(isEnabled || tint == nil ? 1.0 : 0.4))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            // An icon-only pill draws the symbol alone, never a Text behind
+            // it: a label wider than the 16x16 frame (e.g. "Ctrl+C") bled
+            // past the icon and looked like a second pill nested inside.
+            KeyPill(spec: .builtin(button, auto: autoKeyStyle, userColor: tint), enabled: isEnabled)
         }
         .disabled(!isBroadcast && selectedWindowId == nil)
         .accessibilityLabel(isBroadcast ? (broadcastUnavailableReason ?? button.displayName) : button.displayName)

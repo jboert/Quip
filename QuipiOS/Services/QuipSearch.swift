@@ -493,7 +493,7 @@ enum QuipSearch {
 
     /// The words of folded text. Reads UTF-8 directly and decodes a scalar
     /// only for non-ASCII bytes, since nearly all prompt text is ASCII.
-    fileprivate static func words(_ folded: String) -> [String] {
+    static func words(_ folded: String) -> [String] {
         var text = folded
         return text.withUTF8 { bytes in
             var words: [String] = []

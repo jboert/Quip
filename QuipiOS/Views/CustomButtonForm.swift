@@ -27,6 +27,7 @@ struct CustomButtonForm: View {
     /// when the field is emptied, so auto-fill resumes.
     @State private var labelEdited: Bool = false
     @State private var chosenTint: String?
+    @AppStorage(KeyPillSpec.autoStyleKey) private var autoKeyStyle: Bool = true
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
 
@@ -86,13 +87,22 @@ struct CustomButtonForm: View {
                     ))
                         .autocorrectionDisabled(true)
                         .textInputAutocapitalization(.never)
-                    TextField("SF Symbol e.g. bolt.fill (optional)", text: $systemImage)
+                    TextField(autoKeyStyle ? "SF Symbol (suggested: \(suggestedStyle.symbol))"
+                                           : "SF Symbol e.g. bolt.fill (optional)", text: $systemImage)
                         .autocorrectionDisabled(true)
                         .textInputAutocapitalization(.never)
+                    if let unknownSymbol {
+                        // Saving is still allowed: a later iOS may know the name.
+                        Text("No SF Symbol named “\(unknownSymbol)”")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 } header: {
                     Text("Label")
                 } footer: {
-                    Text("Leave the label blank to auto-fill it from the action below. An SF Symbol, when set, replaces the label text on the pill; otherwise the label shows.")
+                    Text(autoKeyStyle
+                         ? "Leave the label blank to auto-fill it from the action below. The icon and color come from the label's words; an SF Symbol, when set, replaces the icon and label on the pill."
+                         : "Leave the label blank to auto-fill it from the action below. An SF Symbol, when set, replaces the label text on the pill; otherwise the label shows.")
                 }
 
                 Section {
@@ -162,29 +172,31 @@ struct CustomButtonForm: View {
         }
     }
 
-    /// Live pill preview — mirrors the `customQuickButton` row chrome (9pt
-    /// monospaced label or 16×16 symbol on the tinted chip) so the user sees
-    /// the actual keyboard-row pill while editing. Shows the effective label
-    /// (explicit, else auto-derived) when no symbol is set.
+    /// Live pill preview — the row's own `KeyPill` for the button as it
+    /// stands, so the user sees the actual keyboard-row pill while editing.
+    /// Shows the effective label (explicit, else auto-derived).
     private var previewPill: some View {
+        KeyPill(spec: .custom(draftButton, auto: autoKeyStyle, userColor: shownTint, symbolExists: KeySymbol.exists),
+                minHeight: 28)
+    }
+
+    /// The button the form would save now, for the preview.
+    private var draftButton: CustomButton {
+        let shown = effectiveLabel.isEmpty ? "—" : effectiveLabel
         let symbol = systemImage.trimmingCharacters(in: .whitespaces)
-        return Group {
-            if !symbol.isEmpty {
-                Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 16, height: 16)
-            } else {
-                Text(effectiveLabel.isEmpty ? "—" : effectiveLabel)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-            }
-        }
-        .foregroundStyle(KeyTint.text(shownTint, default: colors.chipText))
-        .padding(.horizontal, 4)
-        .padding(.vertical, 5)
-        .frame(minWidth: 20, minHeight: 28)
-        .background(KeyTint.fill(shownTint, default: colors.chipFill))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        return CustomButton(id: initial?.id ?? UUID(), label: shown, systemImage: symbol.isEmpty ? nil : symbol,
+                            payload: currentPayload)
+    }
+
+    /// The icon and color the label and action give the button (Q-50).
+    private var suggestedStyle: KeyStyle {
+        KeyStyles.custom(label: effectiveLabel, payload: currentPayload)
+    }
+
+    /// The typed symbol name when iOS does not know it.
+    private var unknownSymbol: String? {
+        let symbol = systemImage.trimmingCharacters(in: .whitespaces)
+        return symbol.isEmpty || KeySymbol.exists(symbol) ? nil : symbol
     }
 
     /// Per-type explanatory footer for the Action section.
@@ -261,13 +273,16 @@ struct CustomButtonForm: View {
         }
     }
 
-    private func save() {
-        let payload: CustomPayload
+    private var currentPayload: CustomPayload {
         switch payloadKind {
-        case .slash: payload = .slash(text: text, autoSubmit: autoSubmit)
-        case .rawText: payload = .rawText(text: text, autoSubmit: autoSubmit)
-        case .keystroke: payload = .keystroke(action: keystroke)
+        case .slash: return .slash(text: text, autoSubmit: autoSubmit)
+        case .rawText: return .rawText(text: text, autoSubmit: autoSubmit)
+        case .keystroke: return .keystroke(action: keystroke)
         }
+    }
+
+    private func save() {
+        let payload = currentPayload
         let trimmed = label.trimmingCharacters(in: .whitespaces)
         let symbol = systemImage.trimmingCharacters(in: .whitespaces)
         let btn = CustomButton(
@@ -287,6 +302,13 @@ struct CustomButtonForm: View {
     private var shownTint: String? {
         onColor == nil ? tint : chosenTint
     }
+
+    /// The no-color swatch shows the color the button gets without one.
+    private var defaultSwatchFill: Color {
+        autoKeyStyle ? KeyTint.defaultFill(suggestedStyle.hue, scheme: colorScheme) : colors.chipFill
+    }
+
+    private var defaultSwatchText: Color { autoKeyStyle ? .white : colors.chipText }
 
     /// One row of swatches, Default first, as in the window color sheet.
     private var colorSection: some View {
@@ -312,22 +334,23 @@ struct CustomButtonForm: View {
             chosenTint = hex
         } label: {
             Circle()
-                .fill(hex.map { Color(hex: $0) } ?? colors.chipFill)
+                .fill(hex.map { Color(hex: $0) } ?? defaultSwatchFill)
                 .frame(width: 30, height: 30)
                 .overlay {
                     if selected {
                         Image(systemName: "checkmark")
                             .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(KeyTint.text(hex, default: colors.chipText))
+                            .foregroundStyle(KeyTint.text(hex, default: defaultSwatchText))
                     } else if hex == nil {
                         Image(systemName: "slash.circle")
                             .font(.system(size: 13))
-                            .foregroundStyle(colors.chipText)
+                            .foregroundStyle(defaultSwatchText)
                     }
                 }
         }
         .buttonStyle(.borderless)
-        .accessibilityLabel(hex.map { "Color \($0)" } ?? "Default color")
+        .accessibilityLabel(hex.map { "Color \($0)" }
+                            ?? (autoKeyStyle ? "Automatic color, \(suggestedStyle.hue.name)" : "Default color"))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

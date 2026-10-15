@@ -15,6 +15,9 @@ struct QuickButtonsSheet: View {
     @AppStorage("quickSlotsJSON") private var quickSlotsJSON: String = ""
     @AppStorage("customButtonsJSON") private var customButtonsJSON: String = "[]"
     @AppStorage(KeyColors.storageKey) private var quickSlotColorsJSON: String = "{}"
+    /// Q-50, US-206: icons and colors from each button's words; off is the
+    /// plain row from before.
+    @AppStorage(KeyPillSpec.autoStyleKey) private var autoKeyStyle: Bool = true
     /// The row entry whose color sheet is open.
     @State private var coloringSlot: QuickSlot?
     @Environment(\.colorScheme) private var colorScheme
@@ -117,8 +120,13 @@ struct QuickButtonsSheet: View {
                 rowPreview
                     .listRowInsets(EdgeInsets(top: 8, leading: 6, bottom: 8, trailing: 6))
                     .listRowBackground(Color.clear)
+                Toggle("Automatic button style", isOn: $autoKeyStyle)
             } header: {
                 Text("Preview")
+            } footer: {
+                Text(autoKeyStyle
+                     ? "Each button gets an icon and color from its words: green go, red stop, orange build or interrupt, blue plan, teal review or test. Purple is only for prompts. A color you pick always wins."
+                     : "Plain buttons, as before. A color you pick still shows.")
             }
 
             Section {
@@ -298,7 +306,7 @@ struct QuickButtonsSheet: View {
             ColorChoiceSheet(
                 title: slotTitle(slot),
                 current: slotColors[slot.id],
-                resetLabel: "Reset to default"
+                resetLabel: KeyPillSpec.colorResetLabel(automatic: pillSpec(slot, userColor: nil), auto: autoKeyStyle)
             ) { hex in
                 quickSlotColorsJSON = KeyColors.encode(KeyColors.setting(hex, for: slot.id, in: slotColors))
             }
@@ -520,7 +528,7 @@ struct QuickButtonsSheet: View {
                     .frame(width: 36, height: 28)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(
-                        Image(systemName: "doc.text")
+                        Image(systemName: autoKeyStyle ? KeyStyles.prompt(label: label ?? pid).symbol : "doc.text")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.purple)
                     )
@@ -614,83 +622,33 @@ struct QuickButtonsSheet: View {
         return result
     }
 
-    /// Editor-only mock of the Prompts-picker pill so the preview row
-    /// renders correctly when the user has the picker slot configured.
-    @ViewBuilder
-    private func promptsPickerPillPreview(tint: String? = nil) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 9, weight: .semibold))
-            Text("Prompts")
-                .font(.system(size: 11, weight: .medium))
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(KeyTint.fill(tint, default: Color.purple.opacity(0.55)))
-        .foregroundStyle(KeyTint.text(tint, default: .white))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+    /// The same pill the keyboard row draws for `slot` (US-204), so the
+    /// editor shows each button exactly as the row will.
+    private func pillSpec(_ slot: QuickSlot, userColor: String?) -> KeyPillSpec? {
+        KeyPillSpec.slot(slot, auto: autoKeyStyle, userColor: userColor, customs: customsByID,
+                         promptLabel: { promptLabelByID[$0] ?? $0 }, symbolExists: KeySymbol.exists)
     }
 
-    /// Editor-only mock of the prompt pill — same purple tint + doc.text
-    /// icon as the live keyboard renderer in `promptQuickButton`. (§B3)
-    @ViewBuilder
+    /// Editor-only mock of the Prompts-picker pill so the preview row
+    /// renders correctly when the user has the picker slot configured.
+    private func promptsPickerPillPreview(tint: String? = nil) -> some View {
+        KeyPill(spec: .promptsPicker(userColor: tint))
+    }
+
+    /// Editor-only mock of the prompt pill — the live keyboard renderer's
+    /// `KeyPill`, as in `promptQuickButton`. (§B3)
     private func promptPillPreview(label: String, tint: String? = nil) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 9, weight: .semibold))
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(KeyTint.fill(tint, default: Color.purple.opacity(0.55)))
-        .foregroundStyle(KeyTint.text(tint, default: .white))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        KeyPill(spec: .prompt(label: label, auto: autoKeyStyle, userColor: tint))
     }
 
     /// Pill mock that matches the keyboard's `quickActionButton` chrome.
     /// Intentionally non-interactive in the editor — just a visual proxy.
-    @ViewBuilder
     private func builtinPillPreview(_ b: QuickButton, tint: String? = nil) -> some View {
-        Group {
-            if let sym = b.systemImage {
-                Image(systemName: sym)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 16, height: 16)
-            } else {
-                Text(b.label)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-            }
-        }
-        .foregroundStyle(KeyTint.text(tint, default: colors.chipText))
-        .padding(.horizontal, 4)
-        .padding(.vertical, 5)
-        .frame(minWidth: 20, minHeight: 28)
-        .background(KeyTint.fill(tint, default: colors.chipFill))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        KeyPill(spec: .builtin(b, auto: autoKeyStyle, userColor: tint), minHeight: 28)
     }
 
-    @ViewBuilder
     private func customPillPreview(_ c: CustomButton, tint: String? = nil) -> some View {
-        Group {
-            if let sym = c.systemImage, !sym.isEmpty {
-                Image(systemName: sym)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 16, height: 16)
-            } else {
-                Text(c.label)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-            }
-        }
-        .foregroundStyle(KeyTint.text(tint, default: colors.chipText))
-        .padding(.horizontal, 4)
-        .padding(.vertical, 5)
-        .frame(minWidth: 20, minHeight: 28)
-        .background(KeyTint.fill(tint, default: colors.chipFill))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        KeyPill(spec: .custom(c, auto: autoKeyStyle, userColor: tint, symbolExists: KeySymbol.exists), minHeight: 28)
     }
 
     /// "+" toolbar button — opens the sheet-based add picker. The previous
@@ -842,7 +800,12 @@ struct QuickButtonsSheet: View {
             showAddSheet = false
         } label: {
             HStack(spacing: 10) {
-                if let sym = btn.systemImage {
+                if autoKeyStyle {
+                    let style = KeyStyles.builtin(btn)
+                    Image(systemName: style.symbol)
+                        .frame(width: 22)
+                        .foregroundStyle(style.hue.iconColor)
+                } else if let sym = btn.systemImage {
                     Image(systemName: sym)
                         .frame(width: 22)
                         .foregroundStyle(.secondary)

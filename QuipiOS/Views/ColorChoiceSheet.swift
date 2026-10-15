@@ -123,4 +123,13 @@ enum KeyTint {
         guard let hex else { return fallback }
         return KeyColors.prefersDarkText(on: hex) ? .black : .white
     }
+
+    /// A button's automatic color (Q-50): a solid fill per appearance, under
+    /// white text. Purple has no pair of its own; it is the prompt pill's.
+    static func defaultFill(_ hue: KeyHue, scheme: ColorScheme) -> Color {
+        guard let hex = scheme == .dark ? hue.darkHex : hue.lightHex else { return promptFill }
+        return Color(hex: hex)
+    }
+
+    static let promptFill = Color.purple.opacity(0.55)
 }
