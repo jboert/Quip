@@ -5985,14 +5985,17 @@ struct MainiOSView: View {
             if case .slash = c.payload { members.append(.custom(c)) }
         }
         let window = windows.first(where: { $0.id == selectedWindowId })?.cliKind
-        return SlashUsage.ranked(SlashAgents.filter(members, window: window),
-                                 id: \.id, store: promptUsageStore(), at: Date())
+        return SlashUsage.ranked(SlashAgents.filter(members, window: window), id: \.id,
+                                 store: promptUsageStore(), context: selectedPromptContext, at: Date())
     }
 
-    /// Count one fire of a slash command so it climbs the palette.
-    private func recordSlashUsage(_ member: SlashGroupMember) {
+    /// Count one fire of a slash command so it climbs the palette, most of
+    /// all in windows running the same agent as `windowID` (Q-73; nil: the
+    /// selected window).
+    private func recordSlashUsage(_ member: SlashGroupMember, in windowID: String? = nil) {
+        let context = (windowID ?? selectedWindowId).flatMap(promptContext(forWindow:))
         promptUsageJSON = PromptRanker.encode(
-            SlashUsage.recording(member.id, at: Date(), in: promptUsageStore())
+            SlashUsage.recording(member.id, context: context, at: Date(), in: promptUsageStore())
         )
         if promptUsageMRUJSON != "{}" { promptUsageMRUJSON = "{}" }
     }
@@ -6271,9 +6274,11 @@ struct MainiOSView: View {
         }
         if sent, isSlashSlot(slot) {
             switch slot {
-            case .builtin(let b): recordSlashUsage(.builtin(b))
+            case .builtin(let b): recordSlashUsage(.builtin(b), in: windowID)
             case .custom(let id):
-                if let def = customButtonDefs.first(where: { $0.id == id }) { recordSlashUsage(.custom(def)) }
+                if let def = customButtonDefs.first(where: { $0.id == id }) {
+                    recordSlashUsage(.custom(def), in: windowID)
+                }
             default: break
             }
         }

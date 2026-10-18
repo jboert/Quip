@@ -46,6 +46,31 @@ final class SlashUsageTests: XCTestCase {
         XCTAssertNil(s["b:plan"], "slash keys are prefixed so they cannot collide with a prompt id")
     }
 
+    // MARK: Q-73 per-agent order
+
+    func test_aCommandUsedInCodexRanksUpInCodexWindows() {
+        var s: PromptRanker.Store = [:]
+        for _ in 0..<2 { s = SlashUsage.recording("b:compact", context: "codex", at: now, in: s) }
+        for _ in 0..<3 { s = SlashUsage.recording("b:resume", context: "claude", at: now, in: s) }
+        let inCodex = SlashUsage.ranked(ids, id: { $0 }, store: s, context: "codex", at: now)
+        let inClaude = SlashUsage.ranked(ids, id: { $0 }, store: s, context: "claude", at: now)
+        XCTAssertEqual(inCodex.first, "b:compact")
+        XCTAssertEqual(inClaude.first, "b:resume")
+    }
+
+    func test_noContextRanksOnEveryUse() {
+        var s: PromptRanker.Store = [:]
+        for _ in 0..<2 { s = SlashUsage.recording("b:compact", context: "codex", at: now, in: s) }
+        s = SlashUsage.recording("b:resume", context: "claude", at: now, in: s)
+        XCTAssertEqual(SlashUsage.ranked(ids, id: { $0 }, store: s, at: now).first, "b:compact")
+    }
+
+    func test_usageFromAnotherAgentStillCountsAboveNeverUsed() {
+        let s = SlashUsage.recording("b:resume", context: "claude", at: now, in: [:])
+        let inCodex = SlashUsage.ranked(ids, id: { $0 }, store: s, context: "codex", at: now)
+        XCTAssertEqual(inCodex.first, "b:resume")
+    }
+
     func test_popularBuiltinsAreInThePalette() {
         let slash = QuickButton.allCases.filter(\.isSlashCommand)
         for b in [QuickButton.brainstorm, .writePlan, .executePlan, .resume, .model, .context] {
