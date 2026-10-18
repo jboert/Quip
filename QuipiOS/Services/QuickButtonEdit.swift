@@ -22,7 +22,11 @@ enum QuickButtonEdit {
         }
         // Icon-only built-ins have an empty pill label; the form needs a name.
         let label = button.label.isEmpty ? button.displayName : button.label
-        return CustomButton(id: id, label: label, systemImage: button.systemImage, payload: payload)
+        // Keeps the built-in's agents, so the copy stays out of the same
+        // windows' palettes (Q-72).
+        let agents = button.agents.map(\.rawValue).sorted()
+        return CustomButton(id: id, label: label, systemImage: button.systemImage, payload: payload,
+                            agentIDs: agents.isEmpty ? nil : agents)
     }
 
     /// The custom button the edit form opens with for `slot`, or nil when the

@@ -12,10 +12,11 @@ final class SlashSearchSheetTests: XCTestCase {
     }
 
     func test_aCustomSlashCommandIsFoundByLabelAndText() {
-        let custom = CustomButton(id: UUID(), label: "Review", systemImage: nil,
-                                  payload: .slash(text: "/code-review", autoSubmit: true))
+        // "Audit", not "Review": Codex's /review is a built-in (Q-72).
+        let custom = CustomButton(id: UUID(), label: "Audit", systemImage: nil,
+                                  payload: .slash(text: "/code-audit", autoSubmit: true))
         let members = builtins + [.custom(custom)]
-        XCTAssertEqual(QuickButtonSearch.filter(members, query: "review").first?.id, "c:\(custom.id.uuidString)")
+        XCTAssertEqual(QuickButtonSearch.filter(members, query: "audit").first?.id, "c:\(custom.id.uuidString)")
         XCTAssertEqual(QuickButtonSearch.filter(members, query: "code").first?.id, "c:\(custom.id.uuidString)")
     }
 

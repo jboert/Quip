@@ -21,6 +21,9 @@ struct CustomButtonForm: View {
     @State private var payloadKind: PayloadKind = .slash
     @State private var text: String = ""
     @State private var autoSubmit: Bool = true
+    /// Which agents' windows list this slash button (Q-72), as `CLIKind` raw
+    /// values joined by ","; empty means every agent.
+    @State private var agents: String = ""
     @State private var keystroke: String = "press_y"
     /// True once the user has typed a label themselves. Gates the auto-fill so
     /// an explicit label is never overwritten as the payload changes. Cleared
@@ -36,6 +39,25 @@ struct CustomButtonForm: View {
         case rawText = "Text"
         case keystroke = "Keystroke"
         var id: String { rawValue }
+    }
+
+    private static let agentOptions: [(label: String, agents: String)] = [
+        ("All agents", ""),
+        ("Claude Code", CLIKind.claude.rawValue),
+        ("Codex", CLIKind.codex.rawValue),
+        ("Cursor", CLIKind.cursor.rawValue),
+        ("Grok", CLIKind.grok.rawValue),
+    ]
+
+    /// The picker's choices, plus the button's own set when it names more
+    /// than one agent (an edited copy of /model is for Claude Code and
+    /// Codex), so opening the form never changes it.
+    private var shownAgentOptions: [(label: String, agents: String)] {
+        guard !Self.agentOptions.contains(where: { $0.agents == agents }) else { return Self.agentOptions }
+        let names = agents.split(separator: ",").map { id in
+            Self.agentOptions.first { $0.agents == String(id) }?.label ?? String(id)
+        }
+        return Self.agentOptions + [(names.joined(separator: " + "), agents)]
     }
 
     private static let keystrokeOptions: [(label: String, action: String)] = [
@@ -116,6 +138,9 @@ struct CustomButtonForm: View {
                         TextField("/foo or /foo arg", text: $text)
                             .autocorrectionDisabled(true)
                             .textInputAutocapitalization(.never)
+                        Picker("Agent", selection: $agents) {
+                            ForEach(shownAgentOptions, id: \.agents) { Text($0.label).tag($0.agents) }
+                        }
                         Toggle(isOn: $autoSubmit) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("Submit when tapped")
@@ -185,7 +210,7 @@ struct CustomButtonForm: View {
         let shown = effectiveLabel.isEmpty ? "—" : effectiveLabel
         let symbol = systemImage.trimmingCharacters(in: .whitespaces)
         return CustomButton(id: initial?.id ?? UUID(), label: shown, systemImage: symbol.isEmpty ? nil : symbol,
-                            payload: currentPayload)
+                            payload: currentPayload, agentIDs: currentAgentIDs)
     }
 
     /// The icon and color the label and action give the button (Q-50).
@@ -204,7 +229,7 @@ struct CustomButtonForm: View {
     private var actionFooter: some View {
         switch payloadKind {
         case .slash:
-            Text("Sends “/command” to the active window. Auto-submit presses Return — leave it off for commands that take an argument (e.g. /plan). Tip: slash keys that share a first letter auto-group into a “/x…” menu on the keyboard row.")
+            Text("Sends “/command” to the active window. Agent picks whose windows list it in the slash palette. Auto-submit presses Return — leave it off for commands that take an argument (e.g. /plan). Tip: slash keys that share a first letter auto-group into a “/x…” menu on the keyboard row.")
         case .rawText:
             Text("Sends literal text (no leading slash) to the active window. Auto-submit presses Return after.")
         case .keystroke:
@@ -263,6 +288,7 @@ struct CustomButtonForm: View {
         // An existing button's label is explicit — never auto-overwrite it.
         labelEdited = !initial.label.trimmingCharacters(in: .whitespaces).isEmpty
         systemImage = initial.systemImage ?? ""
+        agents = (initial.agentIDs ?? []).joined(separator: ",")
         switch initial.payload {
         case .slash(let t, let a):
             payloadKind = .slash; text = t; autoSubmit = a
@@ -281,6 +307,12 @@ struct CustomButtonForm: View {
         }
     }
 
+    /// Agents apply to slash buttons only; text and keys go to any window.
+    private var currentAgentIDs: [String]? {
+        guard payloadKind == .slash, !agents.isEmpty else { return nil }
+        return agents.split(separator: ",").map(String.init)
+    }
+
     private func save() {
         let payload = currentPayload
         let trimmed = label.trimmingCharacters(in: .whitespaces)
@@ -289,7 +321,8 @@ struct CustomButtonForm: View {
             id: initial?.id ?? UUID(),
             label: trimmed,
             systemImage: symbol.isEmpty ? nil : symbol,
-            payload: payload
+            payload: payload,
+            agentIDs: currentAgentIDs
         )
         if let onColor, chosenTint != tint.flatMap(WindowColor.normalized) {
             onColor(chosenTint)

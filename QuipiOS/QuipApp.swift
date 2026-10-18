@@ -5975,7 +5975,8 @@ struct MainiOSView: View {
     /// by all custom `.slash` buttons (definition order). Deliberately INDEPENDENT of
     /// what's pinned in the row — the palette's whole purpose is to reach the
     /// slash commands the user didn't pin (vs. the `/x…` tap-menu, which only
-    /// surfaces same-first-letter pills already on the row).
+    /// surfaces same-first-letter pills already on the row). Only commands
+    /// for the selected window's agent, plus those for every agent (Q-72).
     private func allSlashMembers() -> [SlashGroupMember] {
         var members: [SlashGroupMember] = QuickButton.allCases
             .filter(\.isSlashCommand)
@@ -5983,7 +5984,9 @@ struct MainiOSView: View {
         for c in customButtonDefs {
             if case .slash = c.payload { members.append(.custom(c)) }
         }
-        return SlashUsage.ranked(members, id: \.id, store: promptUsageStore(), at: Date())
+        let window = windows.first(where: { $0.id == selectedWindowId })?.cliKind
+        return SlashUsage.ranked(SlashAgents.filter(members, window: window),
+                                 id: \.id, store: promptUsageStore(), at: Date())
     }
 
     /// Count one fire of a slash command so it climbs the palette.

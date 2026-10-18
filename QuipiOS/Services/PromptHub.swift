@@ -22,6 +22,10 @@ enum PromptHub {
         /// the hub so they can still be found and edited. Empty unless the
         /// caller filters by project.
         var otherProjects: [PromptEntry] = []
+        /// Visible prompts set to another agent than the selected window's
+        /// (Q-72), folded like `otherProjects`. Empty unless the caller
+        /// filters by project, and in a plain shell.
+        var otherAgents: [PromptEntry] = []
         /// Why a prompt matched the query, by prompt id, for the prompts whose
         /// row needs to say more than its name and first line. Empty without
         /// a query.
@@ -42,7 +46,8 @@ enum PromptHub {
         /// Every prompt, whatever its projects (management lists, tests).
         case all
         /// Prompts with no project plus those of this folder (nil: none
-        /// selected); other projects' prompts go to `otherProjects`.
+        /// selected); other projects' prompts go to `otherProjects`, and
+        /// prompts for another agent than `context` to `otherAgents`.
         case project(String?)
     }
 
@@ -60,17 +65,22 @@ enum PromptHub {
         }
         let ranked = PromptRanker.ranked(library.filter { !hiddenIDs.contains($0.id) },
                                          store: store, context: context, at: now)
-        let visible = ranked.filter { !elsewhere($0) }
+        func otherAgent(_ entry: PromptEntry) -> Bool {
+            guard case .project = projectFilter, !hiddenIDs.contains(entry.id) else { return false }
+            return !elsewhere(entry) && !SlashAgents.fits(targetAgent: entry.targetAgent, context: context)
+        }
+        let visible = ranked.filter { !elsewhere($0) && !otherAgent($0) }
         let otherProjects = ranked.filter(elsewhere)
+        let otherAgents = ranked.filter(otherAgent)
         let hidden = library
             .filter { hiddenIDs.contains($0.id) }
             .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         guard !QuipSearch.tokens(query).isEmpty else {
-            return Sections(visible: visible, hidden: hidden, otherProjects: otherProjects)
+            return Sections(visible: visible, hidden: hidden, otherProjects: otherProjects, otherAgents: otherAgents)
         }
 
         var order: [String: Int] = [:]
-        for (position, entry) in (visible + otherProjects + hidden).enumerated() where order[entry.id] == nil {
+        for (position, entry) in (visible + otherProjects + otherAgents + hidden).enumerated() where order[entry.id] == nil {
             order[entry.id] = position
         }
         let index = cache?.index(for: library) ?? QuipSearch.Index(library)
@@ -83,6 +93,8 @@ enum PromptHub {
                 sections.hidden.append(entry)
             } else if elsewhere(entry) {
                 sections.otherProjects.append(entry)
+            } else if otherAgent(entry) {
+                sections.otherAgents.append(entry)
             } else {
                 sections.visible.append(entry)
             }

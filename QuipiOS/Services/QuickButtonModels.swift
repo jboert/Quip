@@ -13,6 +13,9 @@ enum QuickButton: String, CaseIterable, Identifiable {
     // being pinned to the row: the Superpowers plugin workflow, then Claude
     // Code's own pickers.
     case brainstorm, writePlan, executePlan, resume, model, context
+    // Commands Codex has, some of which Claude Code shares. `SlashAgents`
+    // decides which windows' palettes list each one (Q-72).
+    case initProject, status, permissions, mcp, newChat, diff, review, side
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
     case shiftTab
@@ -41,6 +44,14 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .resume: return "/resume"
         case .model: return "/model"
         case .context: return "/context"
+        case .initProject: return "/init"
+        case .status: return "/status"
+        case .permissions: return "/permissions"
+        case .mcp: return "/mcp"
+        case .newChat: return "/new"
+        case .diff: return "/diff"
+        case .review: return "/review"
+        case .side: return "/side"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -79,6 +90,14 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .resume: return "/resume"
         case .model: return "/model"
         case .context: return "/context"
+        case .initProject: return "/init"
+        case .status: return "/status"
+        case .permissions: return "/perms"
+        case .mcp: return "/mcp"
+        case .newChat: return "/new"
+        case .diff: return "/diff"
+        case .review: return "/review"
+        case .side: return "/side"
         case .yes: return "Y"
         case .no: return "N"
         case .one: return "1"
@@ -134,7 +153,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
     var category: Category {
         switch self {
         case .slash, .plan, .btw, .compact, .clearContext, .prd, .commitPushPr, .caveman, .ultraReview,
-             .brainstorm, .writePlan, .executePlan, .resume, .model, .context: return .slash
+             .brainstorm, .writePlan, .executePlan, .resume, .model, .context,
+             .initProject, .status, .permissions, .mcp, .newChat, .diff, .review, .side: return .slash
         case .yes, .no, .one, .two, .three: return .answer
         case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab, .acceptAutocomplete: return .keystroke
         case .broadcast: return .app
@@ -170,6 +190,16 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .resume: return .sendText("/resume", pressReturn: true)
         case .model: return .sendText("/model", pressReturn: true)
         case .context: return .sendText("/context", pressReturn: true)
+        case .initProject: return .sendText("/init", pressReturn: true)
+        case .status: return .sendText("/status", pressReturn: true)
+        case .permissions: return .sendText("/permissions", pressReturn: true)
+        case .mcp: return .sendText("/mcp", pressReturn: true)
+        case .newChat: return .sendText("/new", pressReturn: true)
+        case .diff: return .sendText("/diff", pressReturn: true)
+        case .review: return .sendText("/review", pressReturn: true)
+        // Codex's side question, like Claude's /btw: leave it open for the
+        // question.
+        case .side: return .sendText("/side ", pressReturn: false)
         case .yes: return .quickAction("press_y")
         case .no: return .quickAction("press_n")
         case .one: return .sendText("1", pressReturn: true)
@@ -275,6 +305,10 @@ struct CustomButton: Codable, Hashable, Identifiable {
     /// Optional SF Symbol name. Empty / unknown falls back to text label.
     var systemImage: String?
     var payload: CustomPayload
+    /// Agent CLIs (`CLIKind` raw values) a slash button is for (Q-72); nil
+    /// or empty means every agent. Raw strings so an agent a newer build
+    /// adds does not cost an older build the whole button.
+    var agentIDs: [String]? = nil
 }
 
 /// One entry in the user's quick-button row. The row renders these in

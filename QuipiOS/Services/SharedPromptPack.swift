@@ -132,14 +132,17 @@ struct SharedPromptPack: Codable {
         let label: String
         let systemImage: String?
         let payload: CustomPayload
-        init(_ b: CustomButton) { label = b.label; systemImage = b.systemImage; payload = b.payload }
+        let agentIDs: [String]?
+        init(_ b: CustomButton) {
+            label = b.label; systemImage = b.systemImage; payload = b.payload; agentIDs = b.agentIDs
+        }
     }
 
     /// Re-mint a button's id so an imported button never collides with an
     /// existing local one. (§6.1)
     static func reminted(_ button: CustomButton) -> CustomButton {
         CustomButton(id: UUID(), label: button.label,
-                     systemImage: button.systemImage, payload: button.payload)
+                     systemImage: button.systemImage, payload: button.payload, agentIDs: button.agentIDs)
     }
 
     /// Stage the pack as a temp `.quippack` file for `UIActivityViewController`.

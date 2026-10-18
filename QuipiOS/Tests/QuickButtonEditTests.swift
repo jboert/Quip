@@ -14,6 +14,12 @@ final class QuickButtonEditTests: XCTestCase {
                        .slash(text: "/compact", autoSubmit: true))
     }
 
+    func test_copyKeepsTheBuiltinsAgents() {
+        XCTAssertEqual(QuickButtonEdit.customCopy(of: .plan, id: id)?.agentIDs, ["claude"])
+        XCTAssertEqual(QuickButtonEdit.customCopy(of: .model, id: id)?.agentIDs, ["claude", "codex"])
+        XCTAssertNil(QuickButtonEdit.customCopy(of: .esc, id: id)?.agentIDs)
+    }
+
     func test_numberBuiltinCopiesAsTextAndKeyAsKeystroke() {
         XCTAssertEqual(QuickButtonEdit.customCopy(of: .one, id: id)?.payload,
                        .rawText(text: "1", autoSubmit: true))
