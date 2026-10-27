@@ -13,10 +13,14 @@ struct VibeCutPromptReader {
     let root: URL
     /// VibeCut's user prompt packs (`~/Library/Application Support/VibeCut/packs/*.json`).
     let packsDirectory: URL
+    /// VibeCut's prompt-editor saves (`~/Library/Application Support/VibeCut/actions`, Q-77).
+    let actionsDirectory: URL
 
-    init(root: URL, packsDirectory: URL = VibeCutPromptReader.defaultPacksDirectory()) {
+    init(root: URL, packsDirectory: URL = VibeCutPromptReader.defaultPacksDirectory(),
+         actionsDirectory: URL = VibeCutEditRecords.defaultActionsDirectory()) {
         self.root = root
         self.packsDirectory = packsDirectory
+        self.actionsDirectory = actionsDirectory
     }
 
     enum ReadError: Error, CustomStringConvertible {
@@ -33,6 +37,14 @@ struct VibeCutPromptReader {
 
     var promptsFileURL: URL {
         root.appendingPathComponent("shared/prompts.json")
+    }
+
+    var fragmentsFileURL: URL {
+        root.appendingPathComponent("shared/prompt-fragments.json")
+    }
+
+    var organizationFileURL: URL {
+        root.appendingPathComponent("shared/prompt-organization.json")
     }
 
     static func defaultPacksDirectory() -> URL {
@@ -75,6 +87,16 @@ struct VibeCutPromptReader {
             var catalog = try JSONDecoder().decode(VibeCutCatalog.self, from: data)
             let packs = readPackPrompts()
             catalog.prompts.append(contentsOf: packs.prompts)
+            // Before fragments: a saved edit may still contain a placeholder.
+            catalog = VibeCutEditRecords.apply(to: catalog, actionsDirectory: actionsDirectory)
+            // Optional: a catalog with no placeholders needs no fragment file.
+            let fragments = (try? Data(contentsOf: fragmentsFileURL))
+                .map { VibeCutPromptMapper.decodeFragments($0) } ?? [:]
+            catalog = VibeCutPromptMapper.expandFragments(in: catalog, fragments: fragments)
+            // Optional: without it prompts just carry no purpose/needs tags.
+            let annotations = (try? Data(contentsOf: organizationFileURL))
+                .map { VibeCutPromptMapper.decodeOrganization($0) } ?? [:]
+            catalog = VibeCutPromptMapper.applyOrganization(in: catalog, annotations: annotations)
             return ReadResult(catalog: catalog, skippedPacks: packs.skipped)
         } catch {
             throw ReadError.unreadable(path: url.path)

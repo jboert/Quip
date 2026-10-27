@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import Quip
 
 @MainActor
@@ -84,6 +85,92 @@ final class PromptLibraryVibeCutTests: XCTestCase {
 
         XCTAssertEqual(result.skippedPacks, 2)
         XCTAssertEqual(Set(result.catalog.prompts.compactMap(\.name)), ["Base", "Pack"])
+    }
+
+    func testReaderExpandsFragmentsInCatalogAndPackBodies() throws {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        let packs = tmp.appendingPathComponent("VibeCutPacks", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+        try """
+        { "prompts": [ { "id": "base", "name": "Base", "prompt": "a {{merge-back}} b", "type": "text" } ] }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+        try """
+        { "fragments": { "merge-back": "RULES" } }
+        """.write(to: shared.appendingPathComponent("prompt-fragments.json"), atomically: true, encoding: .utf8)
+        try """
+        { "format": "vibecutpack/1", "prompts": [ { "id": "p", "name": "Pack", "prompt": "{{merge-back}}", "type": "text" } ] }
+        """.write(to: packs.appendingPathComponent("Good.json"), atomically: true, encoding: .utf8)
+
+        let catalog = try VibeCutPromptReader(root: root, packsDirectory: packs).read().catalog
+
+        XCTAssertEqual(catalog.prompts.compactMap(\.prompt), ["a RULES b", "RULES"])
+    }
+
+    func testReaderUsesTheVibeCutEditorsSavedText() throws {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        let actions = tmp.appendingPathComponent("VibeCutActions", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: actions, withIntermediateDirectories: true)
+        try """
+        { "prompts": [ { "id": "65-proceed", "name": "Proceed", "prompt": "catalog body", "mode": "send", "type": "text" } ] }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+        let script = Data("compiled".utf8)
+        try script.write(to: actions.appendingPathComponent("65-proceed.scpt"))
+        let hash = SHA256.hash(data: script).map { String(format: "%02x", $0) }.joined()
+        try """
+        { "id": "65-proceed", "prompt": "edited body", "mode": "paste", "type": "text",
+          "skipPreamble": true, "screenshotPrefix": "65-proceed", "scriptSHA256": "\(hash)" }
+        """.write(to: actions.appendingPathComponent("65-proceed.edit.json"), atomically: true, encoding: .utf8)
+
+        let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
+        let catalog = try VibeCutPromptReader(root: root, packsDirectory: missing,
+                                              actionsDirectory: actions).read().catalog
+
+        XCTAssertEqual(catalog.prompts.first?.prompt, "edited body")
+        XCTAssertEqual(catalog.prompts.first?.mode, "paste")
+    }
+
+    func testReaderWithoutFragmentsFileLeavesPlaceholders() throws {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try """
+        { "prompts": [ { "id": "base", "name": "Base", "prompt": "a {{merge-back}}", "type": "text" } ] }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+
+        let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
+        let catalog = try VibeCutPromptReader(root: root, packsDirectory: missing).read().catalog
+
+        XCTAssertEqual(catalog.prompts.compactMap(\.prompt), ["a {{merge-back}}"])
+    }
+
+    func testReaderAppliesOrganizationAnnotationsToTags() throws {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try """
+        { "prompts": [
+          { "id": "life-1", "name": "Life Prompt", "prompt": "b", "type": "text" },
+          { "id": "cmd-1", "name": "Cmd", "prompt": "b", "type": "text" }
+        ] }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+        try """
+        { "version": 1, "actions": {
+          "life-1": { "purpose": "life", "requirements": ["chat"], "kind": "prompt" },
+          "cmd-1": { "purpose": "mac", "requirements": [], "kind": "local-command" }
+        } }
+        """.write(to: shared.appendingPathComponent("prompt-organization.json"), atomically: true, encoding: .utf8)
+
+        let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
+        let catalog = try VibeCutPromptReader(root: root, packsDirectory: missing).read().catalog
+        let mapped = VibeCutPromptMapper.map(catalog: catalog)
+
+        XCTAssertEqual(mapped.entries.map(\.label), ["Life Prompt"])   // local-command skipped
+        XCTAssertTrue(mapped.entries[0].tags?.contains("purpose:life") == true)
+        XCTAssertTrue(mapped.entries[0].tags?.contains("needs:chat") == true)
     }
 
     func testReaderReportsZeroSkippedPacksWhenPacksDirectoryMissing() throws {

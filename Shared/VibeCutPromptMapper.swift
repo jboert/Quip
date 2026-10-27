@@ -6,10 +6,16 @@ import Foundation
 ///
 /// Source of truth: `<vibecut-repo>/shared/prompts.json` (git-tracked in the
 /// VibeCut project). Only "real" text prompts inherit:
+///   - `kind` is not `runtime-command` / `local-command` (those are VibeCut
+///     machinery, not prompts), AND
 ///   - `type` is `text` or absent, AND
 ///   - the `prompt` body is non-empty, AND
-///   - `mode != "send"` (the send-immediately slash shortcuts like `/clear`,
-///     `/compact` are intentionally skipped).
+///   - `mode != "send"` — unless `kind == "prompt"`, which VibeCut sets on a real
+///     prompt it sends on tap (e.g. "Proceed"); then `mode` is ignored. With no
+///     `kind` the send-immediately slash shortcuts like `/clear`, `/compact` are
+///     intentionally skipped.
+/// `kind`, `purpose` and `requirements` come from `shared/prompt-organization.json`
+/// (or the prompt row itself, which wins) and ride along as `purpose:` / `needs:` tags.
 /// VibeCut's shared `preamble` is deliberately NOT prepended (strip decision) — we
 /// inherit only the per-prompt body.
 ///
@@ -30,18 +36,36 @@ struct VibeCutPrompt: Codable, Sendable, Equatable {
     var mode: String?
     var type: String?
     var skipPreamble: Bool?
+    /// VibeCut organization metadata. `requirements == []` is an explicit "needs
+    /// nothing" and is NOT the same as nil ("not stated").
+    var purpose: String?
+    var requirements: [String]?
+    var kind: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, slug, name, category, tags, prompt, mode, type
+        case id, slug, name, category, tags, prompt, mode, type, purpose, requirements, kind
         case skipPreamble = "skip_preamble"
+    }
+
+    /// One `shared/prompt-organization.json` annotation. Every field optional.
+    struct Organization: Sendable, Equatable {
+        var purpose: String?
+        var requirements: [String]?
+        var kind: String?
+
+        init(purpose: String? = nil, requirements: [String]? = nil, kind: String? = nil) {
+            self.purpose = purpose; self.requirements = requirements; self.kind = kind
+        }
     }
 
     init(id: String? = nil, slug: String? = nil, name: String? = nil,
          category: String? = nil, tags: [String]? = nil, prompt: String? = nil,
-         mode: String? = nil, type: String? = nil, skipPreamble: Bool? = nil) {
+         mode: String? = nil, type: String? = nil, skipPreamble: Bool? = nil,
+         purpose: String? = nil, requirements: [String]? = nil, kind: String? = nil) {
         self.id = id; self.slug = slug; self.name = name; self.category = category
         self.tags = tags; self.prompt = prompt; self.mode = mode; self.type = type
         self.skipPreamble = skipPreamble
+        self.purpose = purpose; self.requirements = requirements; self.kind = kind
     }
 
     init(from decoder: Decoder) throws {
@@ -55,6 +79,9 @@ struct VibeCutPrompt: Codable, Sendable, Equatable {
         mode = try c.decodeIfPresent(String.self, forKey: .mode)
         type = try c.decodeIfPresent(String.self, forKey: .type)
         skipPreamble = try c.decodeIfPresent(Bool.self, forKey: .skipPreamble)
+        purpose = try c.decodeIfPresent(String.self, forKey: .purpose)
+        requirements = try c.decodeIfPresent([String].self, forKey: .requirements)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind)
     }
 }
 
@@ -142,12 +169,102 @@ enum VibeCutPromptMapper {
     }
 
     /// A VibeCut entry inherits iff it is a real text prompt: a non-empty body, a
-    /// text (or absent) type, and not a send-immediately shortcut.
+    /// text (or absent) type, and not a send-immediately shortcut. `kind` overrides
+    /// that: `runtime-command` / `local-command` never inherit; `prompt` ignores
+    /// `mode` (a send-mode prompt like "Proceed" is still a prompt).
     static func isInheritable(_ p: VibeCutPrompt) -> Bool {
+        if p.kind == "runtime-command" || p.kind == "local-command" { return false }
         guard let body = p.prompt, !body.isEmpty else { return false }
         let typeOK = (p.type == nil || p.type == "text")
+        if p.kind == "prompt" { return typeOK }
         let modeOK = (p.mode != "send")
         return typeOK && modeOK
+    }
+
+    /// Fill the organization fields from `prompt-organization.json` annotations,
+    /// matched by prompt `id`. Only nil fields are filled: an explicit row field
+    /// wins, including an explicit empty `requirements: []` (VibeCut's
+    /// `applyOrganization` has the same precedence).
+    static func applyOrganization(in catalog: VibeCutCatalog,
+                                  annotations: [String: VibeCutPrompt.Organization]) -> VibeCutCatalog {
+        guard !annotations.isEmpty else { return catalog }
+        var out = catalog
+        for i in out.prompts.indices {
+            guard let id = out.prompts[i].id, let note = annotations[id] else { continue }
+            if out.prompts[i].purpose == nil { out.prompts[i].purpose = note.purpose }
+            if out.prompts[i].requirements == nil { out.prompts[i].requirements = note.requirements }
+            if out.prompts[i].kind == nil { out.prompts[i].kind = note.kind }
+        }
+        return out
+    }
+
+    /// Decode `{"actions": {id: {purpose, requirements, kind}}}`. Bad JSON or
+    /// shape reads as no annotations; non-dict entries are skipped and non-string
+    /// values ignored (non-string items inside `requirements` are dropped).
+    static func decodeOrganization(_ data: Data) -> [String: VibeCutPrompt.Organization] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let actions = object["actions"] as? [String: Any] else { return [:] }
+        var out: [String: VibeCutPrompt.Organization] = [:]
+        for (id, value) in actions {
+            guard let entry = value as? [String: Any] else { continue }
+            out[id] = VibeCutPrompt.Organization(
+                purpose: entry["purpose"] as? String,
+                requirements: (entry["requirements"] as? [Any])?.compactMap { $0 as? String },
+                kind: entry["kind"] as? String)
+        }
+        return out
+    }
+
+    /// Fill VibeCut's `{{name}}` placeholders from `shared/prompt-fragments.json`,
+    /// as VibeCut's own `prompt_fragments.py` / `PromptFragments.swift` do: one
+    /// pass, names of `[a-z0-9-]` only, unknown names (and the compiler-owned
+    /// `{{screenshot}}`) left verbatim. Without this, Autopilot, Enforce PRD and
+    /// Plan Orchestrator reached the phone with a literal `{{merge-back}}` where
+    /// VibeCut pastes its merge-back rules (Q-74).
+    static func expandFragments(in catalog: VibeCutCatalog, fragments: [String: String]) -> VibeCutCatalog {
+        guard !fragments.isEmpty else { return catalog }
+        var out = catalog
+        for i in out.prompts.indices {
+            if let body = out.prompts[i].prompt {
+                out.prompts[i].prompt = expandFragments(body, fragments: fragments)
+            }
+        }
+        return out
+    }
+
+    static func expandFragments(_ text: String, fragments: [String: String]) -> String {
+        var out = ""
+        var rest = Substring(text)
+        while let open = rest.range(of: "{{") {
+            out += rest[..<open.lowerBound]
+            let afterOpen = rest[open.upperBound...]
+            guard let close = afterOpen.range(of: "}}") else {
+                rest = rest[open.lowerBound...]
+                break
+            }
+            let name = afterOpen[..<close.lowerBound]
+            let isName = !name.isEmpty && name.allSatisfy {
+                ($0 >= "a" && $0 <= "z") || ($0 >= "0" && $0 <= "9") || $0 == "-"
+            }
+            if isName, let body = fragments[String(name)] {
+                out += body
+                rest = afterOpen[close.upperBound...]
+            } else {
+                // Not a fragment: keep the "{{" and rescan just after it, so
+                // "{{{{merge-back}}" still finds the inner placeholder.
+                out += "{{"
+                rest = afterOpen
+            }
+        }
+        out += rest
+        return out
+    }
+
+    /// Decode `{"fragments": {name: body}}`; anything else reads as no fragments.
+    static func decodeFragments(_ data: Data) -> [String: String] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = object["fragments"] as? [String: Any] else { return [:] }
+        return raw.compactMapValues { $0 as? String }
     }
 
     /// Lowercase, collapse every run of non-`[a-z0-9]` to a single `-`, trim `-`.
@@ -173,11 +290,15 @@ enum VibeCutPromptMapper {
         let body: String
     }
 
-    /// `vibecut` first, then the category, then the prompt's own tags, deduped.
+    /// `vibecut` first, then the category, then the prompt's own tags, then
+    /// `purpose:<p>` and `needs:<r>` per requirement, deduped. The `purpose:` /
+    /// `needs:` spellings are a contract with the iOS filters — do not rename.
     private static func tags(for p: VibeCutPrompt) -> [String] {
         var tags = [providerTag]
         if let cat = p.category, !cat.isEmpty { tags.append(cat) }
         if let extra = p.tags { for t in extra where !t.isEmpty { tags.append(t) } }
+        if let purpose = p.purpose, !purpose.isEmpty { tags.append("purpose:\(purpose)") }
+        if let needs = p.requirements { for r in needs where !r.isEmpty { tags.append("needs:\(r)") } }
         return dedupePreservingOrder(tags)
     }
 

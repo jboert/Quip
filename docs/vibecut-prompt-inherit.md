@@ -14,6 +14,8 @@ sync). Edits belong in VibeCut; Quip is a refreshable consumer.
 - Base catalog: `<vibecut-repo>/shared/prompts.json` (git-tracked in the VibeCut project).
 - User prompt packs: `~/Library/Application Support/VibeCut/packs/*.json`
   (`vibecutpack/1` files created/imported by VibeCut).
+- Organization labels: `<vibecut-repo>/shared/prompt-organization.json`
+  (optional; `{"version":1,"actions":{"<prompt id>":{"purpose","requirements","kind"}}}`).
 - Repo path: `~/Projects/vibecut` by default, overridable on the Mac via
   `defaults write com.quip.mac vibecutRepoPath /path/to/vibecut`.
 
@@ -29,7 +31,8 @@ sync). Edits belong in VibeCut; Quip is a refreshable consumer.
       "id": "14-commit", "slug": "commit", "name": "Commit",
       "category": "git", "tags": ["workflow"],
       "prompt": "Write a commit…",                 // -> PromptEntry.body
-      "mode": "paste", "type": "text", "skip_preamble": false
+      "mode": "paste", "type": "text", "skip_preamble": false,
+      "purpose": "build", "requirements": ["project-tools"], "kind": "prompt"  // optional
     }
   ]
 }
@@ -39,10 +42,14 @@ sync). Edits belong in VibeCut; Quip is a refreshable consumer.
 
 A VibeCut entry becomes a Quip prompt **iff** all hold — "real prompts only":
 
+- `kind` is not `runtime-command` or `local-command` (VibeCut machinery, never
+  inherited, even with a body), AND
 - `type` is `text` or absent, AND
 - the `prompt` body is non-empty, AND
 - `mode != "send"` (the send-immediately slash shortcuts like `/clear`,
-  `/compact` are skipped).
+  `/compact` are skipped) — **unless** `kind == "prompt"`, which ignores `mode`
+  (VibeCut's send-mode "Proceed" prompt inherits). With no `kind`, the rule above
+  is unchanged.
 
 Everything else (screenshot / stats / shell / chain actions, empty bodies, and
 the send shortcuts) is counted as *skipped* and reported in the sync ack.
@@ -62,7 +69,17 @@ per-prompt body.
 | `id`/`slug`/`name` | `id = "vibecut__" + slug(name)` | reserved namespace; slug = lowercase, non-`[a-z0-9]` runs → single `-`, trimmed |
 | `prompt` | `body` | preamble stripped |
 | `tags[]` + `category` + `"vibecut"` | `tags[]` | `"vibecut"` always present (dedup preserved) → drives the badge + hide |
+| `purpose` | `tags[]` `purpose:<purpose>` | `build\|plan\|life\|mac\|other`; lets non-coding prompts be told apart |
+| `requirements[]` | `tags[]` `needs:<r>` each | `chat\|project-tools\|web\|current-lookup`; e.g. `needs:chat`, `needs:project-tools` |
+| `kind` | (filter only) | see include filter; not emitted as a tag |
 | — | `targetAgent` | left nil |
+
+`purpose` / `requirements` / `kind` come from the prompt row if present, else from
+the `prompt-organization.json` annotation for the same `id`. Row fields win per
+field, including an explicit empty `requirements: []` (VibeCut's
+`applyOrganization` precedence). A missing or malformed organization file just
+means no such tags. The `purpose:` / `needs:` tag spellings are a contract with
+the iOS filters.
 
 Intra-catalog id collisions get deterministic `-2`/`-3` suffixes (name-sorted for
 stability). Empty slug → `vibecut__untitled-<n>`.

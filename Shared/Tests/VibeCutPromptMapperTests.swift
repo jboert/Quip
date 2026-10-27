@@ -63,6 +63,87 @@ final class VibeCutPromptMapperTests: XCTestCase {
         XCTAssertEqual(Set(result.entries.map(\.label)), ["Keep Text", "Keep No Type"])
     }
 
+    // MARK: - Organization (purpose / requirements / kind)
+
+    func testDecodesOrganizationFieldsAndExplicitEmptyRequirements() throws {
+        let json = """
+        { "prompts": [
+          { "name": "A", "prompt": "b", "purpose": "life", "requirements": [], "kind": "prompt" },
+          { "name": "B", "prompt": "b" }
+        ] }
+        """
+        let catalog = try JSONDecoder().decode(VibeCutCatalog.self, from: Data(json.utf8))
+        XCTAssertEqual(catalog.prompts[0].purpose, "life")
+        XCTAssertEqual(catalog.prompts[0].requirements, [])
+        XCTAssertEqual(catalog.prompts[0].kind, "prompt")
+        XCTAssertNil(catalog.prompts[1].requirements)
+        XCTAssertNil(catalog.prompts[1].purpose)
+        XCTAssertNil(catalog.prompts[1].kind)
+    }
+
+    func testDecodeOrganizationIsTolerant() {
+        let json = """
+        { "version": 1, "actions": {
+          "a": { "purpose": "life", "requirements": ["chat", 7], "kind": "prompt" },
+          "b": "not a dict",
+          "c": { "purpose": 5, "requirements": "chat", "kind": null }
+        } }
+        """
+        let notes = VibeCutPromptMapper.decodeOrganization(Data(json.utf8))
+        XCTAssertEqual(Set(notes.keys), ["a", "c"])
+        XCTAssertEqual(notes["a"], VibeCutPrompt.Organization(purpose: "life", requirements: ["chat"], kind: "prompt"))
+        XCTAssertEqual(notes["c"], VibeCutPrompt.Organization())
+        XCTAssertTrue(VibeCutPromptMapper.decodeOrganization(Data("{ nope".utf8)).isEmpty)
+        XCTAssertTrue(VibeCutPromptMapper.decodeOrganization(Data("[1]".utf8)).isEmpty)
+        XCTAssertTrue(VibeCutPromptMapper.decodeOrganization(Data("{\"actions\": 3}".utf8)).isEmpty)
+    }
+
+    func testApplyOrganizationFillsOnlyNilFieldsAndExplicitEmptyWins() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "x", name: "X", prompt: "b"),
+            VibeCutPrompt(id: "y", name: "Y", prompt: "b", purpose: "mac", requirements: [], kind: "prompt"),
+            VibeCutPrompt(id: "z", name: "Z", prompt: "b"),
+            VibeCutPrompt(name: "NoID", prompt: "b"),
+        ])
+        let note = VibeCutPrompt.Organization(purpose: "life", requirements: ["chat"], kind: "local-command")
+        let out = VibeCutPromptMapper.applyOrganization(in: catalog, annotations: ["x": note, "y": note])
+        XCTAssertEqual(out.prompts[0].purpose, "life")
+        XCTAssertEqual(out.prompts[0].requirements, ["chat"])
+        XCTAssertEqual(out.prompts[0].kind, "local-command")
+        XCTAssertEqual(out.prompts[1].purpose, "mac")
+        XCTAssertEqual(out.prompts[1].requirements, [])   // explicit [] beats the annotation
+        XCTAssertEqual(out.prompts[1].kind, "prompt")
+        XCTAssertEqual(out.prompts[2], catalog.prompts[2])
+        XCTAssertEqual(out.prompts[3], catalog.prompts[3])
+    }
+
+    func testKindFilter() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(name: "Runtime", prompt: "body", mode: "paste", type: "text", kind: "runtime-command"),
+            VibeCutPrompt(name: "Local", prompt: "body", type: "text", kind: "local-command"),
+            VibeCutPrompt(name: "Proceed", prompt: "body", mode: "send", type: "text", kind: "prompt"),
+            VibeCutPrompt(name: "EmptyPrompt", prompt: "", kind: "prompt"),
+            VibeCutPrompt(name: "ShotPrompt", prompt: "body", type: "screenshot", kind: "prompt"),
+            VibeCutPrompt(name: "SendNoKind", prompt: "/clear", mode: "send", type: "text"),
+            VibeCutPrompt(name: "PlainNoKind", prompt: "body", mode: "paste", type: "text"),
+        ])
+        let result = VibeCutPromptMapper.map(catalog: catalog)
+        XCTAssertEqual(Set(result.entries.map(\.label)), ["Proceed", "PlainNoKind"])
+        XCTAssertEqual(result.skipped, 5)
+    }
+
+    func testTagsCarryPurposeAndNeeds() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(name: "Life", category: "misc", tags: ["x"], prompt: "b",
+                          purpose: "life", requirements: ["chat", "web", "chat", ""]),
+            VibeCutPrompt(name: "Bare", prompt: "b2", requirements: []),
+        ])
+        let entries = VibeCutPromptMapper.map(catalog: catalog).entries
+        XCTAssertEqual(entries.first { $0.label == "Life" }?.tags,
+                       ["vibecut", "misc", "x", "purpose:life", "needs:chat", "needs:web"])
+        XCTAssertEqual(entries.first { $0.label == "Bare" }?.tags, ["vibecut"])
+    }
+
     // MARK: - Body: preamble is stripped
 
     func testBodyIsRawPromptWithoutPreamble() {
@@ -209,6 +290,38 @@ final class VibeCutPromptMapperTests: XCTestCase {
         XCTAssertEqual(result.skipped, 2)
         XCTAssertEqual(result.entries[0].id, "vibecut__session-rules")
         XCTAssertTrue(result.entries[0].tags?.contains("vibecut") == true)
+    }
+
+    // MARK: - Fragments (Q-74)
+
+    func testFragmentsExpandIntoTheInheritedBody() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(name: "Autopilot", prompt: "Go.\n{{merge-back}}\nStop.", mode: "paste", type: "text"),
+        ])
+        let expanded = VibeCutPromptMapper.expandFragments(in: catalog,
+                                                           fragments: ["merge-back": "MERGE RULES"])
+        let entries = VibeCutPromptMapper.map(catalog: expanded).entries
+        XCTAssertEqual(entries.map(\.body), ["Go.\nMERGE RULES\nStop."])
+    }
+
+    func testUnknownAndReservedPlaceholdersStayVerbatim() {
+        let fragments = ["merge-back": "M"]
+        XCTAssertEqual(VibeCutPromptMapper.expandFragments("{{screenshot}} {{merge-bak}} {{Merge-Back}} {{folder}}",
+                                                           fragments: fragments),
+                       "{{screenshot}} {{merge-bak}} {{Merge-Back}} {{folder}}")
+        XCTAssertEqual(VibeCutPromptMapper.expandFragments("{{{{merge-back}} {{merge-back", fragments: fragments),
+                       "{{M {{merge-back")
+    }
+
+    func testFragmentExpansionIsOnePass() {
+        let fragments = ["a": "{{b}}", "b": "B"]
+        XCTAssertEqual(VibeCutPromptMapper.expandFragments("{{a}}{{b}}", fragments: fragments), "{{b}}B")
+    }
+
+    func testDecodeFragmentsToleratesBadShapes() {
+        XCTAssertEqual(VibeCutPromptMapper.decodeFragments(Data(#"{"fragments":{"x":"X","n":3}}"#.utf8)), ["x": "X"])
+        XCTAssertEqual(VibeCutPromptMapper.decodeFragments(Data(#"{"fragments":[]}"#.utf8)), [:])
+        XCTAssertEqual(VibeCutPromptMapper.decodeFragments(Data("not json".utf8)), [:])
     }
 
     // MARK: - US-002: sync wire messages + isInherited
