@@ -329,6 +329,26 @@ final class WindowManager {
     private(set) var attachedSessionIds: Set<String> = []
     private static let attachedSessionIdsKey = "attachedITermSessionIds"
 
+    /// The ids of the windows the user enabled, with when, so a window comes
+    /// back enabled after a Quip relaunch or reinstall. Before this the flag
+    /// lived only in memory: with "Mirror desktop terminals" off, every
+    /// relaunch emptied the phone's grid ("No windows") until each window was
+    /// enabled again by hand (2026-10-27). An id is bundle id plus CG window
+    /// number, which lives as long as the terminal window does — the pins and
+    /// the color memory already rely on that. Kept only within one boot: CG
+    /// window numbers restart after a reboot, so a stale id could name a
+    /// different window. An iTerm2 window attached by session is remembered
+    /// by `attachedSessionIds` instead, which does survive a reboot.
+    @ObservationIgnored private var enabledWindowIDs: [String: Date] = [:]
+    static let enabledWindowIDsKey = "windowEnabledIDs"
+    static let enabledWindowIDsBootKey = "windowEnabledIDsBoot"
+    /// At most this many ids are remembered, least recently enabled dropped first.
+    nonisolated static let enabledWindowMaxCount = 200
+    /// Saved and current boot times this close apart are the same boot.
+    nonisolated static let bootTimeTolerance: TimeInterval = 5
+    /// When this Mac booted; the enabled memory is keyed to it.
+    private let bootTime: Date
+
     /// Available displays
     var displays: [DisplayInfo] = []
 
@@ -402,13 +422,54 @@ final class WindowManager {
     /// clear it again; color tests removed and rewrote `windowColorOverrides`.
     nonisolated static var defaultStore: UserDefaults { TestSafeDefaults.store("windows") }
 
-    init(defaults: UserDefaults = WindowManager.defaultStore, clock: @escaping () -> Date = Date.init) {
+    init(defaults: UserDefaults = WindowManager.defaultStore, clock: @escaping () -> Date = Date.init,
+         bootTime: Date = WindowManager.systemBootTime()) {
         self.defaults = defaults
         self.clock = clock
+        self.bootTime = bootTime
         pinnedWindowIDs = Set(defaults.stringArray(forKey: Self.pinnedKey) ?? [])
         colorOverrides = defaults.dictionary(forKey: Self.colorOverridesKey) as? [String: String] ?? [:]
         loadAutoColors()
         loadAttachedSessionIds()
+        loadEnabledWindowIDs()
+    }
+
+    /// When the Mac booted, from `kern.boottime`. `.distantPast` if the sysctl
+    /// fails, so such a launch neither restores nor leaves a usable memory.
+    nonisolated static func systemBootTime() -> Date {
+        var tv = timeval()
+        var size = MemoryLayout<timeval>.size
+        guard sysctlbyname("kern.boottime", &tv, &size, nil, 0) == 0, tv.tv_sec > 0 else { return .distantPast }
+        return Date(timeIntervalSince1970: TimeInterval(tv.tv_sec))
+    }
+
+    /// Load the enabled-window memory, only if it was written during this boot.
+    private func loadEnabledWindowIDs() {
+        let savedBoot = defaults.double(forKey: Self.enabledWindowIDsBootKey)
+        guard abs(savedBoot - bootTime.timeIntervalSince1970) <= Self.bootTimeTolerance,
+              let saved = defaults.dictionary(forKey: Self.enabledWindowIDsKey) as? [String: Double] else { return }
+        enabledWindowIDs = saved.mapValues(Date.init(timeIntervalSince1970:))
+        if !enabledWindowIDs.isEmpty {
+            print("[WindowManager] loaded \(enabledWindowIDs.count) enabled window id(s)")
+        }
+    }
+
+    private func persistEnabledWindowIDs() {
+        enabledWindowIDs = Self.prunedEnabledWindowIDs(enabledWindowIDs)
+        defaults.set(enabledWindowIDs.mapValues(\.timeIntervalSince1970), forKey: Self.enabledWindowIDsKey)
+        defaults.set(bootTime.timeIntervalSince1970, forKey: Self.enabledWindowIDsBootKey)
+    }
+
+    /// The memory without the least recently enabled ids beyond `maxCount`
+    /// (ties broken by id, so the result is deterministic). Pure / testable.
+    nonisolated static func prunedEnabledWindowIDs(_ ids: [String: Date],
+                                                   maxCount: Int = enabledWindowMaxCount) -> [String: Date] {
+        guard ids.count > maxCount else { return ids }
+        let newestFirst = ids.keys.sorted {
+            let a = ids[$0]!, b = ids[$1]!
+            return a != b ? a > b : $0 < $1
+        }
+        return newestFirst.prefix(maxCount).reduce(into: [:]) { $0[$1] = ids[$1] }
     }
 
     private func loadAutoColors() {
@@ -876,11 +937,15 @@ final class WindowManager {
                     spaceID: info.spaceID
                 ))
             } else {
+                // A window the user enabled before a relaunch comes back
+                // enabled; its color is kept apart from the other enabled
+                // windows' below, once the list is built.
                 refreshed.append(ManagedWindow(
                     id: info.id, name: info.name, app: info.app,
                     subtitle: "", cwdPath: nil,
                     bundleId: info.bundleId, icon: icon,
-                    isEnabled: false, assignedColor: colorForNew[info.id] ?? assignColor(avoiding: colorsOnScreen),
+                    isEnabled: enabledWindowIDs[info.id] != nil,
+                    assignedColor: colorForNew[info.id] ?? assignColor(avoiding: colorsOnScreen),
                     pid: info.pid, windowNumber: info.windowNumber, bounds: info.bounds,
                     iterm2SessionId: nil,
                     iterm2Tty: nil,
@@ -926,6 +991,18 @@ final class WindowManager {
             customOrder = order
         }
         applyPinsToCurrentOrder(keepingHeldSlotsFrom: previousOrder)
+
+        // Colors were dealt with every new window disabled; a new window that
+        // came back enabled from memory is kept apart from the other enabled
+        // windows' colors, as a toggle is.
+        let restoredEnabled = Set(newIDs.filter { enabledWindowIDs[$0] != nil })
+        if !restoredEnabled.isEmpty {
+            var recolored = false
+            for i in windows.indices where restoredEnabled.contains(windows[i].id) {
+                if recolorIfAnEnabledWindowShowsItsColor(at: i) { recolored = true }
+            }
+            if recolored { persistAutoColors() }
+        }
 
         for window in windows where autoColors[window.id] != nil {
             autoColorLastSeen[window.id] = now
@@ -1536,6 +1613,12 @@ final class WindowManager {
         if enabled, !wasEnabled, recolorIfAnEnabledWindowShowsItsColor(at: index) {
             persistAutoColors()
         }
+        if enabled {
+            enabledWindowIDs[windowId] = clock()
+        } else {
+            enabledWindowIDs.removeValue(forKey: windowId)
+        }
+        persistEnabledWindowIDs()
     }
 
     /// A window that has just been enabled, in the color of another enabled

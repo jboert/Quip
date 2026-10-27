@@ -64,7 +64,7 @@ struct GeneralTab: View {
             // and which recognizer the phone uses for dictation.
             Section("Phone") {
                 Toggle("Mirror desktop terminals", isOn: $mirrorDesktop)
-                Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible.")
+                Text("When on, every visible Terminal.app and iTerm2 window shows up on the phone — tap a dimmed one to start driving it. When off, only windows you've explicitly enabled are visible; they stay enabled across a Quip relaunch or reinstall until the Mac reboots.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

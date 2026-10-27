@@ -2513,3 +2513,26 @@ Still owed:
 - **Q-36** "pin a bomb": the owner said it is NOT pinning a prompt. Meaning unknown.
 - `{{branch}}` needs the pane's real path plus a git call off the main actor.
   Not filed yet.
+
+## Session log — 2026-10-27 (phone shows "No windows" after a Mac relaunch)
+
+Owner report: after Quip.app is reinstalled or quit and reopened, the phone
+"doesn't connect". `websocket.log` + `kokoro.log` showed the phone DID connect
+and auth every time (PIN replayed, `device_identity`, heartbeats); what it got
+was an empty layout. With "Mirror desktop terminals" off the Mac broadcasts only
+windows whose `isEnabled` is on, and that flag lived in memory only
+(`toggleWindow` never persisted it), so every relaunch emptied the grid.
+
+Shipped: `WindowManager` remembers enabled window ids in `UserDefaults`
+(`windowEnabledIDs`, keyed to `kern.boottime` so the memory never outlives a
+reboot, where CG window numbers restart); a new window in a snapshot comes back
+enabled if its id was enabled this boot, and is kept apart from the other
+enabled windows' colors. Settings → General → Phone help text says so.
+Tests: `WindowEnabledMemoryTests`.
+
+Open:
+- The Mac app in /Applications predates this; install it (each Mac install
+  wipes Screen Recording + Accessibility grants, so the owner picks the moment).
+- "Settings are very confusing": the Phone section mixes mirroring, any-app
+  dictation and the Whisper status. Worth a pass that leads with "what does the
+  phone show" and demotes the rest.

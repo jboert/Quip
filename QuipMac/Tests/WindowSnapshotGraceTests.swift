@@ -127,7 +127,7 @@ final class WindowSnapshotGraceTests: XCTestCase {
         XCTAssertEqual(index("E", in: m), 4)
     }
 
-    func testAfterTheGraceTheWindowIsForgottenAndAReturnIsNew() {
+    func testAfterTheGraceTheWindowIsForgottenAndAReturnJoinsTheEnd() {
         let m = placedManager()
         m.toggleWindow("C", enabled: true)
         let colorC = window("C", in: m)?.assignedColor
@@ -143,7 +143,8 @@ final class WindowSnapshotGraceTests: XCTestCase {
         clock.advance(2)
         m.applyWindowSnapshot(snapshot(["A", "B", "C", "D", "E"]))
         let back = window("C", in: m)
-        XCTAssertEqual(back?.isEnabled, false, "a window back after the grace is a new window")
+        XCTAssertEqual(back?.isEnabled, true,
+                       "a window back after the grace is a new window, but its id was enabled this boot")
         XCTAssertEqual(index("C", in: m), 4, "a new window joins the end of a manual order")
         XCTAssertEqual(back?.assignedColor, colorC,
                        "its remembered automatic color still applies: that memory lasts 24 h")
