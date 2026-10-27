@@ -36,6 +36,33 @@ final class VibeCutSyncService {
 
     private static let outcomeKey = "vibecutLastSyncOutcome"
 
+    /// VibeCut source id → Quip id from earlier syncs (Q-79). Tests point this at a temp file.
+    static var idMapURLOverrideForTests: URL?
+    static var idMapURL: URL {
+        if let idMapURLOverrideForTests { return idMapURLOverrideForTests }
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first ?? URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("Quip/vibecut-ids.json")
+    }
+
+    /// Missing or corrupt reads as no known ids, so every prompt falls back to its name-derived id.
+    static func loadIDMap() -> [String: String] {
+        guard let data = try? Data(contentsOf: idMapURL),
+              let map = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return map
+    }
+
+    static func saveIDMap(_ map: [String: String]) throws {
+        let url = idMapURL
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        try encoder.encode(map).write(to: url, options: .atomic)
+    }
+
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.outcomeKey),
            let outcome = try? JSONDecoder().decode(Outcome.self, from: data) {
@@ -89,7 +116,7 @@ final class VibeCutSyncService {
             return record(synced: 0, skipped: 0, skippedPacks: 0, error: reason)
         }
 
-        let mapped = VibeCutPromptMapper.map(catalog: readResult.catalog)
+        let mapped = VibeCutPromptMapper.map(catalog: readResult.catalog, knownIDs: Self.loadIDMap())
         guard !mapped.entries.isEmpty else {
             return record(synced: 0, skipped: mapped.skipped,
                           skippedPacks: readResult.skippedPacks,
@@ -103,6 +130,12 @@ final class VibeCutSyncService {
             return record(synced: 0, skipped: mapped.skipped,
                           skippedPacks: readResult.skippedPacks,
                           error: "VibeCut prompts were left unchanged: \(error.localizedDescription)")
+        }
+        // Only after the files are written: a failed sync must not record ids the phone never got.
+        do { try Self.saveIDMap(mapped.idMap) } catch {
+            QuipLog.write(severity: .error, subsystem: "vibecut",
+                          message: "could not save vibecut-ids.json: \(error.localizedDescription)",
+                          to: LogPaths.webSocketPath)
         }
         refreshRepoProbe()
         return record(synced: written, skipped: mapped.skipped,

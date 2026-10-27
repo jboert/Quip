@@ -211,6 +211,110 @@ final class VibeCutPromptMapperTests: XCTestCase {
         XCTAssertEqual(ids, ["vibecut__code-review", "vibecut__code-review-2", "vibecut__code-review-3"])
     }
 
+    // MARK: - Q-79: ids follow the source id across a rename
+
+    func testRenamedPromptKeepsKnownID() {
+        let first = VibeCutPromptMapper.map(catalog: VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "p1", name: "Commit", prompt: "body")]), knownIDs: [:])
+        XCTAssertEqual(first.entries.map(\.id), ["vibecut__commit"])
+        XCTAssertEqual(first.idMap, ["p1": "vibecut__commit"])
+
+        let renamed = VibeCutPromptMapper.map(catalog: VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "p1", name: "Ship It", prompt: "body")]), knownIDs: first.idMap)
+        XCTAssertEqual(renamed.entries.map(\.id), ["vibecut__commit"])
+        XCTAssertEqual(renamed.entries.map(\.label), ["Ship It"])
+        XCTAssertEqual(renamed.idMap, ["p1": "vibecut__commit"])
+    }
+
+    func testRepeatedSourceIDKeepsIdsStableAcrossSyncs() {
+        // Same VibeCut id in two packs with different names: the first in sort
+        // order owns the map entry, so the second sync gives the same ids.
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "dup", name: "Alpha", prompt: "a"),
+            VibeCutPrompt(id: "dup", name: "Beta", prompt: "b"),
+        ])
+        let first = VibeCutPromptMapper.map(catalog: catalog, knownIDs: [:])
+        XCTAssertEqual(first.idMap, ["dup": "vibecut__alpha"])
+        let second = VibeCutPromptMapper.map(catalog: catalog, knownIDs: first.idMap)
+        XCTAssertEqual(second.entries.map(\.id), first.entries.map(\.id))
+    }
+
+    func testNewPromptWhoseSlugEqualsReservedIDGetsSuffix() {
+        // "Alpha" sorts before "Commit", so without the up-front reservation it
+        // would take vibecut__commit and push the renamed prompt to a new id.
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "p1", name: "Renamed", prompt: "one"),
+            VibeCutPrompt(id: "p2", name: "Commit", prompt: "two")])
+        let r = VibeCutPromptMapper.map(catalog: catalog, knownIDs: ["p1": "vibecut__commit"])
+        let byLabel = Dictionary(uniqueKeysWithValues: r.entries.map { ($0.label, $0.id) })
+        XCTAssertEqual(byLabel["Renamed"], "vibecut__commit")
+        XCTAssertEqual(byLabel["Commit"], "vibecut__commit-2")
+        XCTAssertEqual(r.idMap, ["p1": "vibecut__commit", "p2": "vibecut__commit-2"])
+    }
+
+    func testEmptyKnownIDsMatchesPlainMap() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "b", name: "Code Review", prompt: "one"),
+            VibeCutPrompt(id: "a", name: "Code Review", prompt: "two"),
+            VibeCutPrompt(name: "", prompt: "three"),
+            VibeCutPrompt(id: "c", name: "Clear", prompt: "/clear", mode: "send")])
+        let plain = VibeCutPromptMapper.map(catalog: catalog)
+        let withMap = VibeCutPromptMapper.map(catalog: catalog, knownIDs: [:])
+        XCTAssertEqual(plain.entries, withMap.entries)
+        XCTAssertEqual(plain.skipped, withMap.skipped)
+        XCTAssertEqual(withMap.entries.map(\.id),
+                       ["vibecut__untitled-1", "vibecut__code-review", "vibecut__code-review-2"])
+        XCTAssertEqual(withMap.idMap, ["a": "vibecut__code-review", "b": "vibecut__code-review-2"])
+    }
+
+    func testAbsentSourceStaysInReturnedMap() {
+        let r = VibeCutPromptMapper.map(
+            catalog: VibeCutCatalog(prompts: [VibeCutPrompt(id: "p1", name: "One", prompt: "x")]),
+            knownIDs: ["gone": "vibecut__old-name"])
+        XCTAssertEqual(r.idMap, ["gone": "vibecut__old-name", "p1": "vibecut__one"])
+        // And it comes back under the same id, even renamed, as long as the id is free.
+        let back = VibeCutPromptMapper.map(
+            catalog: VibeCutCatalog(prompts: [VibeCutPrompt(id: "gone", name: "New Name", prompt: "x")]),
+            knownIDs: r.idMap)
+        XCTAssertEqual(back.entries.map(\.id), ["vibecut__old-name"])
+    }
+
+    func testNonVibeCutMapValueIsIgnored() {
+        let r = VibeCutPromptMapper.map(
+            catalog: VibeCutCatalog(prompts: [VibeCutPrompt(id: "p1", name: "Notes", prompt: "x")]),
+            knownIDs: ["p1": "my-own-note", "p2": "other"])
+        XCTAssertEqual(r.entries.map(\.id), ["vibecut__notes"])
+        XCTAssertEqual(r.idMap, ["p1": "vibecut__notes"])
+    }
+
+    func testTwoSourcesClaimingOneIDFirstInSortOrderKeepsIt() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "b", name: "Zed", prompt: "two"),
+            VibeCutPrompt(id: "a", name: "Alpha", prompt: "one")])
+        let r = VibeCutPromptMapper.map(catalog: catalog,
+                                        knownIDs: ["a": "vibecut__shared", "b": "vibecut__shared"])
+        XCTAssertEqual(r.entries.map(\.id), ["vibecut__shared", "vibecut__zed"])
+        XCTAssertEqual(r.idMap, ["a": "vibecut__shared", "b": "vibecut__zed"])
+    }
+
+    func testCollapsedDuplicateKeepsOwnerIDAndAddsNoMapEntry() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "a", name: "Same", prompt: "body"),
+            VibeCutPrompt(id: "b", name: "Same", prompt: "body")])
+        let r = VibeCutPromptMapper.map(catalog: catalog, knownIDs: ["a": "vibecut__kept"])
+        XCTAssertEqual(r.entries.map(\.id), ["vibecut__kept"])
+        XCTAssertEqual(r.skipped, 1)
+        XCTAssertEqual(r.idMap, ["a": "vibecut__kept"])
+    }
+
+    func testPromptWithoutSourceIDGetsNameIDAndNoMapEntry() {
+        let r = VibeCutPromptMapper.map(
+            catalog: VibeCutCatalog(prompts: [VibeCutPrompt(name: "Loose", prompt: "x")]),
+            knownIDs: [:])
+        XCTAssertEqual(r.entries.map(\.id), ["vibecut__loose"])
+        XCTAssertTrue(r.idMap.isEmpty)
+    }
+
     // MARK: - Q-27: content duplicates collapse
 
     /// Same name AND same body used to become two entries identical in every

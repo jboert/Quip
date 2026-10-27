@@ -20,7 +20,8 @@ import Foundation
 /// inherit only the per-prompt body.
 ///
 /// Every inherited row is tagged `"vibecut"` (drives the iOS "VibeCut" badge and
-/// the per-prompt hide filter) and its id is namespaced `vibecut__<slug>` so the
+/// the per-prompt hide filter) and its id is namespaced `vibecut__<slug>` (the slug of the name when first seen; see
+/// `map(catalog:knownIDs:)`) so the
 /// Mac re-sync can cleanly replace the whole inherited set without touching the
 /// user's own prompts.
 
@@ -118,6 +119,27 @@ enum VibeCutPromptMapper {
     /// entry. `skipped` feeds the sync ack, so the phone's "synced N" always
     /// equals the number of rows it will show.
     static func map(catalog: VibeCutCatalog) -> (entries: [PromptEntry], skipped: Int) {
+        let r = map(catalog: catalog, knownIDs: [:])
+        return (r.entries, r.skipped)
+    }
+
+    /// Same mapping, but a prompt keeps the Quip id an earlier sync gave its VibeCut
+    /// source `id`, so renaming it in VibeCut does not mint a new phone prompt and
+    /// lose its hide state, project tags and usage ranking (Q-79). `knownIDs` is
+    /// source id → Quip id; the returned `idMap` is that map updated for this run.
+    ///   - Known ids are reserved BEFORE any name-derived id is assigned, so a new
+    ///     prompt whose slug equals a reserved id takes a `-2` suffix instead.
+    ///   - If two present sources claim one Quip id, the first in the sort order
+    ///     below keeps it and the other is re-derived from its name.
+    ///   - Map values outside the `vibecut__` namespace are ignored (and dropped):
+    ///     the Mac deletes `vibecut__*` files, so the map must never point at a
+    ///     user's own file.
+    ///   - Entries for sources absent from this catalog are kept, so a prompt that
+    ///     comes back reuses its id. A prompt with no source id gets a name-derived
+    ///     id and no map entry; a collapsed content duplicate adds none either.
+    static func map(catalog: VibeCutCatalog, knownIDs: [String: String])
+        -> (entries: [PromptEntry], skipped: Int, idMap: [String: String]) {
+        let known = knownIDs.filter { !$0.key.isEmpty && $0.value.hasPrefix(idPrefix) }
         let included = catalog.prompts.filter(isInheritable)
         var skipped = catalog.prompts.count - included.count
 
@@ -129,7 +151,20 @@ enum VibeCutPromptMapper {
             return (lhs.id ?? "") < (rhs.id ?? "")
         }
 
+        // Reserve every kept id up front. Walks the same content-dedupe as the main
+        // loop so a collapsed duplicate never holds an id for a row that is not there.
         var used = Set<String>()
+        var keptID: [Int: String] = [:]
+        var seenContent = Set<ContentKey>()
+        for (i, p) in sorted.enumerated() {
+            guard seenContent.insert(ContentKey(name: p.name ?? "", body: p.prompt ?? "")).inserted,
+                  let sourceID = p.id, let id = known[sourceID], used.insert(id).inserted
+            else { continue }
+            keptID[i] = id
+        }
+        var idMap = known
+        var mappedThisRun = Set<String>()
+
         var fallbackCounter = 0
         var entries: [PromptEntry] = []
         entries.reserveCapacity(sorted.count)
@@ -138,7 +173,7 @@ enum VibeCutPromptMapper {
         // each is handed its own `untitled-N` fallback (Q-27).
         var entryIndexByContent: [ContentKey: Int] = [:]
 
-        for p in sorted {
+        for (i, p) in sorted.enumerated() {
             let name = p.name ?? ""
             let key = ContentKey(name: name, body: p.prompt ?? "")
             if let owner = entryIndexByContent[key] {
@@ -158,7 +193,12 @@ enum VibeCutPromptMapper {
                 fallbackCounter += 1
                 core = "untitled-\(fallbackCounter)"
             }
-            let id = uniqueID(idPrefix + core, used: &used)
+            let id = keptID[i] ?? uniqueID(idPrefix + core, used: &used)
+            // First owner per source id only: a source id repeated across packs must
+            // not hand its map entry to the second row and swap ids next sync.
+            if let sourceID = p.id, !sourceID.isEmpty, mappedThisRun.insert(sourceID).inserted {
+                idMap[sourceID] = id
+            }
             // One line: the Mac writes the label as the file's `# ` header, and a
             // newline from an imported pack would start a header line of its own.
             let label = name.isEmpty ? core : singleLine(name)
@@ -167,7 +207,7 @@ enum VibeCutPromptMapper {
             entries.append(PromptEntry(id: id, label: label, body: p.prompt ?? "",
                                        tags: tags(for: p), targetAgent: nil, description: nil))
         }
-        return (entries, skipped)
+        return (entries, skipped, idMap)
     }
 
     /// A VibeCut entry inherits iff it is a real text prompt: a non-empty body, a
