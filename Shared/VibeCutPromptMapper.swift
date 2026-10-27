@@ -159,7 +159,9 @@ enum VibeCutPromptMapper {
                 core = "untitled-\(fallbackCounter)"
             }
             let id = uniqueID(idPrefix + core, used: &used)
-            let label = name.isEmpty ? core : name
+            // One line: the Mac writes the label as the file's `# ` header, and a
+            // newline from an imported pack would start a header line of its own.
+            let label = name.isEmpty ? core : singleLine(name)
 
             entryIndexByContent[key] = entries.count
             entries.append(PromptEntry(id: id, label: label, body: p.prompt ?? "",
@@ -299,7 +301,16 @@ enum VibeCutPromptMapper {
         if let extra = p.tags { for t in extra where !t.isEmpty { tags.append(t) } }
         if let purpose = p.purpose, !purpose.isEmpty { tags.append("purpose:\(purpose)") }
         if let needs = p.requirements { for r in needs where !r.isEmpty { tags.append("needs:\(r)") } }
-        return dedupePreservingOrder(tags)
+        // The Mac stores tags as one comma-separated `tags:` line in the file's
+        // meta block (Q-78). A comma or line break from an imported pack would
+        // split a tag or add an `agent:` / `desc:` line, so such a tag is dropped.
+        return dedupePreservingOrder(tags.filter { tag in
+            !tag.contains(where: { $0 == "," || $0.isNewline })
+        })
+    }
+
+    private static func singleLine(_ s: String) -> String {
+        s.split(whereSeparator: \.isNewline).joined(separator: " ")
     }
 
     private static func uniqueID(_ base: String, used: inout Set<String>) -> String {

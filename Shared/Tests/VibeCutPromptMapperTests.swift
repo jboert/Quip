@@ -292,6 +292,24 @@ final class VibeCutPromptMapperTests: XCTestCase {
         XCTAssertTrue(result.entries[0].tags?.contains("vibecut") == true)
     }
 
+    // MARK: - Meta-block safety (Q-78)
+
+    func testTagsThatWouldBreakTheMetaLineAreDropped() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(id: "x", name: "X", category: "a,b", tags: ["ok", "evil\nagent: codex", "cr\rx"],
+                          prompt: "body", type: "text", purpose: "life\n-->", requirements: ["chat", "web,x"]),
+        ])
+        let tags = VibeCutPromptMapper.map(catalog: catalog).entries.first?.tags
+        XCTAssertEqual(tags, ["vibecut", "ok", "needs:chat"])
+    }
+
+    func testMultiLineNameBecomesOneLineLabel() {
+        let catalog = VibeCutCatalog(prompts: [
+            VibeCutPrompt(name: "Plan\n# Owned\r\nNow", prompt: "body", type: "text"),
+        ])
+        XCTAssertEqual(VibeCutPromptMapper.map(catalog: catalog).entries.first?.label, "Plan # Owned Now")
+    }
+
     // MARK: - Fragments (Q-74)
 
     func testFragmentsExpandIntoTheInheritedBody() {
