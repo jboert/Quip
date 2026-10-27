@@ -34,7 +34,24 @@ final class VibeCutSyncService {
     private(set) var repoPath: String = VibeCutPromptReader.defaultRoot().path
     private(set) var repoFound: Bool?
 
+    /// Whether VibeCut changed since the last successful sync (Q-82). Unknown is
+    /// its own state: it is never shown as Current.
+    enum Freshness: Equatable, Sendable {
+        case unknown, neverSynced, current, changed
+    }
+    private(set) var freshness: Freshness = .unknown
+
     private static let outcomeKey = "vibecutLastSyncOutcome"
+    private static let syncedFingerprintKey = "vibecutLastSyncedFingerprint"
+
+    /// Pure rule behind `freshness`. `hasSynced` is true once any sync succeeded,
+    /// including ones from before fingerprints were recorded: those read Unknown.
+    static func freshness(syncedFingerprint: String?, currentFingerprint: String?,
+                          hasSynced: Bool) -> Freshness {
+        guard let current = currentFingerprint else { return .unknown }
+        guard let synced = syncedFingerprint else { return hasSynced ? .unknown : .neverSynced }
+        return synced == current ? .current : .changed
+    }
 
     /// VibeCut source id → Quip id from earlier syncs (Q-79). Tests point this at a temp file.
     static var idMapURLOverrideForTests: URL?
@@ -78,14 +95,19 @@ final class VibeCutSyncService {
     func refreshRepoProbe() {
         let root = VibeCutPromptReader.defaultRoot()
         repoPath = root.path
-        let url = VibeCutPromptReader(root: root).promptsFileURL
+        let reader = VibeCutPromptReader(root: root)
+        let url = reader.promptsFileURL
         Task { @MainActor in
-            let found = await Task.detached(priority: .utility) {
-                FileManager.default.fileExists(atPath: url.path)
+            let (found, fingerprint) = await Task.detached(priority: .utility) {
+                (FileManager.default.fileExists(atPath: url.path), reader.sourceFingerprint())
             }.value
             // The user may have changed the path while the stat was in flight.
             guard VibeCutPromptReader.defaultRoot().path == root.path else { return }
             self.repoFound = found
+            self.freshness = Self.freshness(
+                syncedFingerprint: UserDefaults.standard.string(forKey: Self.syncedFingerprintKey),
+                currentFingerprint: fingerprint,
+                hasSynced: self.lastOutcome.map { $0.error == nil } ?? false)
         }
     }
 
@@ -137,6 +159,8 @@ final class VibeCutSyncService {
                           message: "could not save vibecut-ids.json: \(error.localizedDescription)",
                           to: LogPaths.webSocketPath)
         }
+        // What this sync read, so the probe below can answer Current / Changed.
+        UserDefaults.standard.set(readResult.fingerprint, forKey: Self.syncedFingerprintKey)
         refreshRepoProbe()
         return record(synced: written, skipped: mapped.skipped,
                       skippedPacks: readResult.skippedPacks, error: nil)

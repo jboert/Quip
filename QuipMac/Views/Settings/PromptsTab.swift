@@ -109,7 +109,10 @@ struct PromptsTab: View {
             }
 
             HStack(spacing: 8) {
-                lastSyncLabel
+                VStack(alignment: .leading, spacing: 2) {
+                    lastSyncLabel
+                    freshnessLabel
+                }
                 Spacer()
                 if vibeCutSync.isSyncing {
                     ProgressView().controlSize(.small)
@@ -125,6 +128,25 @@ struct PromptsTab: View {
             Text("One-way inherit of VibeCut's prompt catalog + packs into the library below. Edits belong in VibeCut; sync here or from the phone (Settings → Prompts → ⟳).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Q-82: text and icon, not color alone. Never synced is already said by
+    /// `lastSyncLabel`, and Unknown (repo missing, or a sync from before
+    /// fingerprints) shows nothing rather than a guess.
+    @ViewBuilder
+    private var freshnessLabel: some View {
+        switch vibeCutSync.freshness {
+        case .current:
+            Label("VibeCut unchanged since this sync", systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .changed:
+            Label("VibeCut changed since this sync — Sync Now to update", systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .neverSynced, .unknown:
+            EmptyView()
         }
     }
 

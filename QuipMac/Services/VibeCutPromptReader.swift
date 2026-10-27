@@ -7,6 +7,7 @@
 // `VibeCutPromptMapper`, so this type just locates + decodes the JSON sources.
 
 import Foundation
+import CryptoKit
 
 struct VibeCutPromptReader {
     /// Repo root (e.g. `~/Projects/vibecut`). The catalog is `<root>/shared/prompts.json`.
@@ -78,6 +79,35 @@ struct VibeCutPromptReader {
     struct ReadResult: Sendable {
         let catalog: VibeCutCatalog
         let skippedPacks: Int
+        /// `sourceFingerprint()` taken just BEFORE the read (Q-82): a file that
+        /// changes mid-read shows as "changed" next time, never as "current".
+        var fingerprint: String? = nil
+    }
+
+    /// SHA-256 over every file a sync reads — the catalog, fragments,
+    /// organization, each pack, and each editor save — by name and bytes, so
+    /// Settings can say whether VibeCut changed since the last sync (Q-82).
+    /// Nil when the catalog is missing: "unknown", not "changed".
+    func sourceFingerprint() -> String? {
+        guard let catalog = try? Data(contentsOf: promptsFileURL) else { return nil }
+        var hasher = SHA256()
+        func add(_ name: String, _ data: Data?) {
+            hasher.update(data: Data("\(name)\u{0}\(data?.count ?? -1)\u{0}".utf8))
+            if let data { hasher.update(data: data) }
+        }
+        add("prompts.json", catalog)
+        add("prompt-fragments.json", try? Data(contentsOf: fragmentsFileURL))
+        add("prompt-organization.json", try? Data(contentsOf: organizationFileURL))
+        let fm = FileManager.default
+        for name in ((try? fm.contentsOfDirectory(atPath: packsDirectory.path)) ?? []).sorted()
+        where name.hasSuffix(".json") {
+            add("packs/" + name, try? Data(contentsOf: packsDirectory.appendingPathComponent(name)))
+        }
+        for name in ((try? fm.contentsOfDirectory(atPath: actionsDirectory.path)) ?? []).sorted()
+        where name.hasSuffix(".edit.json") || name.hasSuffix(".scpt") {
+            add("actions/" + name, try? Data(contentsOf: actionsDirectory.appendingPathComponent(name)))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Decode the catalog and merge any VibeCut prompt packs. Throws `.repoNotFound`
@@ -91,6 +121,7 @@ struct VibeCutPromptReader {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw ReadError.repoNotFound(path: url.path)
         }
+        let fingerprint = sourceFingerprint()
         do {
             let data = try Data(contentsOf: url)
             var catalog = try JSONDecoder().decode(VibeCutCatalog.self, from: data)
@@ -110,7 +141,7 @@ struct VibeCutPromptReader {
             let annotations = (try? Data(contentsOf: organizationFileURL))
                 .map { VibeCutPromptMapper.decodeOrganization($0) } ?? [:]
             catalog = VibeCutPromptMapper.applyOrganization(in: catalog, annotations: annotations)
-            return ReadResult(catalog: catalog, skippedPacks: packs.skipped)
+            return ReadResult(catalog: catalog, skippedPacks: packs.skipped, fingerprint: fingerprint)
         } catch let error as ReadError {
             throw error
         } catch {
