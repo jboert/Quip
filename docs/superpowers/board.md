@@ -137,10 +137,10 @@ Status: `ready` (picked up in priority order) · `in progress` · `blocked` · `
 
 ## Branch policy
 
-Work stays on `eb-branch`. Merging to `main` and pushing to GitHub are **not**
-automatic here: the repo owner has a standing rule that every push needs
-explicit per-push confirmation. Finished work is committed on `eb-branch` and
-reported; the merge-back is the owner's call.
+Work stays on `eb-branch`. Every commit is pushed to `origin/eb-branch` without
+asking (owner, 2026-10-27: "always push to eb-branch"). Merging to `main`, any
+other branch, and force-pushes still need the owner's explicit OK; the
+merge-back is the owner's call.
 
 Two things about that merge-back, both established 2026-08-06:
 
