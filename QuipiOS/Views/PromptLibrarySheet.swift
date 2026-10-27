@@ -37,6 +37,7 @@ struct PromptLibrarySheet: View {
     @State private var searchCache = PromptSearchCache()
     @State private var confirmingDelete: PromptEntry?
     @State private var showHiddenPrompts = false
+    @State private var showChatPrompts = true
     @State private var showOtherProjects = false
     @State private var showOtherAgents = false
     @State private var lastFiredId: String?
@@ -78,7 +79,7 @@ struct PromptLibrarySheet: View {
                 }
             } else {
                 let hub = hubSections
-                if hub.visible.isEmpty && hub.hidden.isEmpty && hub.otherProjects.isEmpty && hub.otherAgents.isEmpty {
+                if hub.visible.isEmpty && hub.hidden.isEmpty && hub.chat.isEmpty && hub.otherProjects.isEmpty && hub.otherAgents.isEmpty {
                     Section {
                         Text("No matches for \"\(query)\"")
                             .font(.system(size: 12))
@@ -105,6 +106,23 @@ struct PromptLibrarySheet: View {
                         }
                     } footer: {
                         Text("Tap to paste. ↵ pastes and sends. Hold a prompt for more. Swipe right to send it somewhere, left to edit, hide or delete it. A prompt set to a project or an agent shows only in that project's or agent's windows. {{folder}}, {{agent}}, {{clipboard}}… fill in on the Mac.")
+                    }
+                }
+                if !hub.chat.isEmpty {
+                    Section {
+                        if showChatPrompts || !query.isEmpty {
+                            ForEach(hub.chat) { entry in hubRow(entry, note: hub.notes[entry.id]) }
+                        }
+                    } header: {
+                        Button {
+                            showChatPrompts.toggle()
+                        } label: {
+                            Label("Chat & Life (\(hub.chat.count))",
+                                  systemImage: showChatPrompts || !query.isEmpty ? "chevron.down" : "chevron.right")
+                        }
+                        .font(.caption)
+                    } footer: {
+                        Text("VibeCut prompts written for a chat, not a coding agent's project tools.")
                     }
                 }
                 if !hub.otherProjects.isEmpty {
@@ -545,7 +563,8 @@ struct PromptLibrarySheet: View {
             query: query,
             at: Date(),
             cache: searchCache,
-            projectFilter: .project(projectProvider())
+            projectFilter: .project(projectProvider()),
+            splitChat: true
         )
     }
 

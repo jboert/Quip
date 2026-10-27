@@ -118,4 +118,47 @@ final class PromptHubTests: XCTestCase {
                                      context: nil, query: "brand", at: now, cache: cache)
         XCTAssertEqual(hub.visible.map(\.id), ["new"])
     }
+
+    // MARK: Chat & Life (Q-76)
+
+    private let chatPrompt = PromptEntry(id: "plan-trip", label: "Plan a trip", body: "help me plan",
+                                         tags: ["vibecut", "purpose:life", "needs:chat"])
+    private let toolsPrompt = PromptEntry(id: "fix-bug", label: "Fix a bug", body: "read the repo",
+                                          tags: ["vibecut", "needs:chat", "needs:project-tools"])
+
+    func test_chatReadyPromptsSplitOutWhenAsked() {
+        let hub = PromptHub.sections(library + [chatPrompt], hiddenJSON: "[]", store: [:],
+                                     context: nil, query: "", at: now, splitChat: true)
+        XCTAssertEqual(hub.chat.map(\.id), ["plan-trip"])
+        XCTAssertFalse(hub.visible.contains { $0.id == "plan-trip" })
+        XCTAssertEqual(Set(hub.visible.map(\.id)), ["ship", "review", "old"])
+    }
+
+    func test_projectToolsKeepAChatPromptInVisible() {
+        let hub = PromptHub.sections([toolsPrompt], hiddenJSON: "[]", store: [:],
+                                     context: nil, query: "", at: now, splitChat: true)
+        XCTAssertEqual(hub.visible.map(\.id), ["fix-bug"])
+        XCTAssertTrue(hub.chat.isEmpty)
+    }
+
+    func test_withoutSplitChatNothingMoves() {
+        let hub = PromptHub.sections(library + [chatPrompt], hiddenJSON: "[]", store: [:],
+                                     context: nil, query: "", at: now)
+        XCTAssertTrue(hub.visible.contains { $0.id == "plan-trip" })
+        XCTAssertTrue(hub.chat.isEmpty)
+    }
+
+    func test_aMatchingChatPromptLandsInChatWhileSearching() {
+        let hub = PromptHub.sections(library + [chatPrompt], hiddenJSON: "[]", store: [:],
+                                     context: nil, query: "trip", at: now, splitChat: true)
+        XCTAssertEqual(hub.chat.map(\.id), ["plan-trip"])
+        XCTAssertTrue(hub.visible.isEmpty)
+    }
+
+    func test_aHiddenChatPromptStaysHidden() {
+        let hub = PromptHub.sections([chatPrompt], hiddenJSON: "[\"plan-trip\"]", store: [:],
+                                     context: nil, query: "", at: now, splitChat: true)
+        XCTAssertEqual(hub.hidden.map(\.id), ["plan-trip"])
+        XCTAssertTrue(hub.chat.isEmpty)
+    }
 }

@@ -14,6 +14,15 @@ extension PromptEntry: QuipSearchable {
     }
 }
 
+extension PromptEntry {
+    /// VibeCut prompts written for a chat (`needs:chat`) that do not lean on a
+    /// coding agent's project tools (`needs:project-tools`), Q-76.
+    var isChatReady: Bool {
+        let tags = tags ?? []
+        return tags.contains("needs:chat") && !tags.contains("needs:project-tools")
+    }
+}
+
 enum PromptHub {
     struct Sections: Equatable {
         var visible: [PromptEntry]
@@ -26,6 +35,9 @@ enum PromptHub {
         /// (Q-72), folded like `otherProjects`. Empty unless the caller
         /// filters by project, and in a plain shell.
         var otherAgents: [PromptEntry] = []
+        /// VibeCut prompts that need a chat, not a coding agent's project
+        /// tools (Q-76). Empty unless the caller asks to `splitChat`.
+        var chat: [PromptEntry] = []
         /// Why a prompt matched the query, by prompt id, for the prompts whose
         /// row needs to say more than its name and first line. Empty without
         /// a query.
@@ -57,7 +69,8 @@ enum PromptHub {
     static func sections(_ library: [PromptEntry], hiddenJSON: String, store: PromptRanker.Store,
                          context: String?, query: String, at now: Date,
                          cache: PromptSearchCache? = nil,
-                         projectFilter: ProjectFilter = .all) -> Sections {
+                         projectFilter: ProjectFilter = .all,
+                         splitChat: Bool = false) -> Sections {
         let hiddenIDs = PromptHideState.decode(hiddenJSON)
         func elsewhere(_ entry: PromptEntry) -> Bool {
             guard case .project(let project) = projectFilter else { return false }
@@ -69,18 +82,23 @@ enum PromptHub {
             guard case .project = projectFilter, !hiddenIDs.contains(entry.id) else { return false }
             return !elsewhere(entry) && !SlashAgents.fits(targetAgent: entry.targetAgent, context: context)
         }
-        let visible = ranked.filter { !elsewhere($0) && !otherAgent($0) }
+        func chatReady(_ entry: PromptEntry) -> Bool {
+            splitChat && !hiddenIDs.contains(entry.id) && !elsewhere(entry) && entry.isChatReady
+        }
+        let visible = ranked.filter { !elsewhere($0) && !chatReady($0) && !otherAgent($0) }
         let otherProjects = ranked.filter(elsewhere)
-        let otherAgents = ranked.filter(otherAgent)
+        let chat = ranked.filter(chatReady)
+        let otherAgents = ranked.filter { !chatReady($0) && otherAgent($0) }
         let hidden = library
             .filter { hiddenIDs.contains($0.id) }
             .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         guard !QuipSearch.tokens(query).isEmpty else {
-            return Sections(visible: visible, hidden: hidden, otherProjects: otherProjects, otherAgents: otherAgents)
+            return Sections(visible: visible, hidden: hidden, otherProjects: otherProjects,
+                            otherAgents: otherAgents, chat: chat)
         }
 
         var order: [String: Int] = [:]
-        for (position, entry) in (visible + otherProjects + otherAgents + hidden).enumerated() where order[entry.id] == nil {
+        for (position, entry) in (visible + chat + otherProjects + otherAgents + hidden).enumerated() where order[entry.id] == nil {
             order[entry.id] = position
         }
         let index = cache?.index(for: library) ?? QuipSearch.Index(library)
@@ -93,6 +111,8 @@ enum PromptHub {
                 sections.hidden.append(entry)
             } else if elsewhere(entry) {
                 sections.otherProjects.append(entry)
+            } else if chatReady(entry) {
+                sections.chat.append(entry)
             } else if otherAgent(entry) {
                 sections.otherAgents.append(entry)
             } else {
