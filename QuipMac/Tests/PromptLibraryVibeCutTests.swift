@@ -188,6 +188,70 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         XCTAssertEqual(result.catalog.prompts.count, 1)
     }
 
+    // MARK: Unsupported schema (Q-81)
+
+    private func makeCatalogRoot(version: String?) throws -> URL {
+        let root = tmp.appendingPathComponent("vibecut", isDirectory: true)
+        let shared = root.appendingPathComponent("shared", isDirectory: true)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        let versionLine = version.map { "\"version\": \"\($0)\"," } ?? ""
+        try """
+        { \(versionLine) "prompts": [ { "id": "base", "name": "Base", "prompt": "b", "type": "text" } ] }
+        """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
+        return root
+    }
+
+    private func readNoPacks(root: URL) throws -> VibeCutPromptReader.ReadResult {
+        let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
+        return try VibeCutPromptReader(root: root, packsDirectory: missing).read()
+    }
+
+    func testReaderRefusesCatalogVersionNewerThanSupported() throws {
+        let root = try makeCatalogRoot(version: "4.0")
+        XCTAssertThrowsError(try readNoPacks(root: root)) { error in
+            guard case VibeCutPromptReader.ReadError.unsupportedVersion(let v) = error else {
+                return XCTFail("expected unsupportedVersion, got \(error)")
+            }
+            XCTAssertEqual(v, "4.0")
+            XCTAssertEqual((error as? VibeCutPromptReader.ReadError)?.description,
+                           "VibeCut catalog version 4.0 is newer than this Quip understands")
+        }
+    }
+
+    func testReaderAcceptsMinorBumpAndMissingVersion() throws {
+        XCTAssertEqual(try readNoPacks(root: makeCatalogRoot(version: "3.1")).catalog.prompts.count, 1)
+        XCTAssertEqual(try readNoPacks(root: makeCatalogRoot(version: nil)).catalog.prompts.count, 1)
+    }
+
+    func testReaderRefusesUnparseableCatalogVersion() throws {
+        let root = try makeCatalogRoot(version: "abc")
+        XCTAssertThrowsError(try readNoPacks(root: root)) { error in
+            guard case VibeCutPromptReader.ReadError.unsupportedVersion = error else {
+                return XCTFail("expected unsupportedVersion, got \(error)")
+            }
+        }
+    }
+
+    func testReaderCountsPacksWithWrongOrMissingFormatAsSkipped() throws {
+        let root = try makeCatalogRoot(version: "3.0")
+        let packs = tmp.appendingPathComponent("VibeCutPacks", isDirectory: true)
+        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+        try """
+        { "format": "vibecutpack/1", "prompts": [ { "id": "ok", "name": "Ok Pack", "prompt": "p", "type": "text" } ] }
+        """.write(to: packs.appendingPathComponent("Good.json"), atomically: true, encoding: .utf8)
+        try """
+        { "format": "vibecutpack/2", "prompts": [ { "id": "v2", "name": "V2 Pack", "prompt": "p", "type": "text" } ] }
+        """.write(to: packs.appendingPathComponent("V2.json"), atomically: true, encoding: .utf8)
+        try """
+        { "prompts": [ { "id": "nf", "name": "No Format Pack", "prompt": "p", "type": "text" } ] }
+        """.write(to: packs.appendingPathComponent("NoFormat.json"), atomically: true, encoding: .utf8)
+
+        let result = try VibeCutPromptReader(root: root, packsDirectory: packs).read()
+
+        XCTAssertEqual(result.skippedPacks, 2)
+        XCTAssertEqual(Set(result.catalog.prompts.compactMap(\.name)), ["Base", "Ok Pack"])
+    }
+
     func testReplaceVibeCutSetOnlyTouchesReservedNamespaceAndBroadcastsOnce() {
         // Pre-existing: a user prompt, the README, and a STALE inherited file.
         write("mine.txt", "# My Prompt\n\nkeep me")

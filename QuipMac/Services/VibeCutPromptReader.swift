@@ -26,14 +26,22 @@ struct VibeCutPromptReader {
     enum ReadError: Error, CustomStringConvertible {
         case repoNotFound(path: String)
         case unreadable(path: String)
+        case unsupportedVersion(String)
 
         var description: String {
             switch self {
             case .repoNotFound(let p): return "VibeCut repo not found at \(p)"
             case .unreadable(let p): return "VibeCut prompts could not be read at \(p)"
+            case .unsupportedVersion(let v):
+                return "VibeCut catalog version \(v) is newer than this Quip understands"
             }
         }
     }
+
+    /// Highest catalog `version` major this Quip understands.
+    static let supportedCatalogMajor = 3
+    /// The only pack `format` this Quip understands.
+    static let supportedPackFormat = "vibecutpack/1"
 
     var promptsFileURL: URL {
         root.appendingPathComponent("shared/prompts.json")
@@ -74,8 +82,9 @@ struct VibeCutPromptReader {
 
     /// Decode the catalog and merge any VibeCut prompt packs. Throws `.repoNotFound`
     /// when the git-tracked catalog is absent (so the caller can leave the existing
-    /// inherited set untouched) and `.unreadable` on a read/parse failure of the main
-    /// catalog. Pack files are best-effort: a single corrupt user pack must not block
+    /// inherited set untouched), `.unsupportedVersion` when the catalog `version` major
+    /// is newer than Quip understands (or unparseable), and `.unreadable` on a
+    /// read/parse failure of the main catalog. Pack files are best-effort: a single corrupt user pack must not block
     /// the rest of the VibeCut inherit sync — it is counted in `skippedPacks` instead.
     func read() throws -> ReadResult {
         let url = promptsFileURL
@@ -85,6 +94,10 @@ struct VibeCutPromptReader {
         do {
             let data = try Data(contentsOf: url)
             var catalog = try JSONDecoder().decode(VibeCutCatalog.self, from: data)
+            // A missing version is a legacy catalog and is accepted.
+            if let version = catalog.version, !Self.isSupported(version: version) {
+                throw ReadError.unsupportedVersion(version)
+            }
             let packs = readPackPrompts()
             catalog.prompts.append(contentsOf: packs.prompts)
             // Before fragments: a saved edit may still contain a placeholder.
@@ -98,9 +111,24 @@ struct VibeCutPromptReader {
                 .map { VibeCutPromptMapper.decodeOrganization($0) } ?? [:]
             catalog = VibeCutPromptMapper.applyOrganization(in: catalog, annotations: annotations)
             return ReadResult(catalog: catalog, skippedPacks: packs.skipped)
+        } catch let error as ReadError {
+            throw error
         } catch {
             throw ReadError.unreadable(path: url.path)
         }
+    }
+
+    /// Major = the integer before the first ".". Unparseable counts as unsupported.
+    private static func isSupported(version: String) -> Bool {
+        let head = version.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map(String.init) ?? ""
+        guard let major = Int(head) else { return false }
+        return major <= supportedCatalogMajor
+    }
+
+    /// Just the pack's top-level `format`; `VibeCutCatalog` stays untouched.
+    private struct PackHeader: Decodable {
+        let format: String?
     }
 
     private func readPackPrompts() -> (prompts: [VibeCutPrompt], skipped: Int) {
@@ -115,6 +143,8 @@ struct VibeCutPromptReader {
             let url = packsDirectory.appendingPathComponent(name)
             guard
                 let data = try? Data(contentsOf: url),
+                let header = try? JSONDecoder().decode(PackHeader.self, from: data),
+                header.format == Self.supportedPackFormat,
                 let pack = try? JSONDecoder().decode(VibeCutCatalog.self, from: data)
             else {
                 skipped += 1
