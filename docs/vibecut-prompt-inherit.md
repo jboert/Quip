@@ -56,7 +56,9 @@ the send shortcuts) is counted as *skipped* and reported in the sync ack.
 
 Prompt-pack entries are merged after the base catalog and go through the same
 filter/mapping rules. Corrupt pack files are skipped so one bad imported pack
-cannot block sync of the base VibeCut catalog or other valid packs.
+cannot block sync of the base VibeCut catalog or other valid packs. A pack whose
+top-level `format` is not exactly `vibecutpack/1` (missing included) counts as
+unreadable the same way (Q-81).
 
 VibeCut's shared `preamble` is **not** prepended — Quip inherits only the raw
 per-prompt body.
@@ -66,7 +68,7 @@ per-prompt body.
 | VibeCut | Quip `PromptEntry` | Notes |
 |---|---|---|
 | `name` | `label` | display title (falls back to the slug if name is empty) |
-| `id`/`slug`/`name` | `id = "vibecut__" + slug(name)` | reserved namespace; slug = lowercase, non-`[a-z0-9]` runs → single `-`, trimmed |
+| `id`/`name` | `id = "vibecut__" + slug(name)` the first time; afterwards the remembered id (see below) | reserved namespace; slug = lowercase, non-`[a-z0-9]` runs → single `-`, trimmed |
 | `prompt` | `body` | preamble stripped |
 | `tags[]` + `category` + `"vibecut"` | `tags[]` | `"vibecut"` always present (dedup preserved) → drives the badge + hide |
 | `purpose` | `tags[]` `purpose:<purpose>` | `build\|plan\|life\|mac\|other`; lets non-coding prompts be told apart |
@@ -83,6 +85,26 @@ the iOS filters.
 
 Intra-catalog id collisions get deterministic `-2`/`-3` suffixes (name-sorted for
 stability). Empty slug → `vibecut__untitled-<n>`.
+
+### Ids survive a rename (Q-79)
+
+The Mac remembers VibeCut source `id` → Quip id in
+`~/Library/Application Support/Quip/vibecut-ids.json` (missing or corrupt reads as
+empty). A source already in the map keeps its Quip id when its name changes, so the
+phone's hide state, project tags and usage ranking follow the prompt. Rules:
+
+- Remembered ids are reserved before any name-derived id is assigned, so a new
+  prompt whose slug equals one gets a `-2` suffix instead of taking it.
+- A new source gets today's name-derived id, so existing ids need no migration.
+- Two sources claiming one id: the first in name-then-id order keeps it.
+- A prompt with no source `id` gets a name-derived id and is not remembered; a
+  content duplicate collapsed into another row adds no map entry.
+- Entries for sources missing from this sync are kept, so a prompt that comes back
+  reuses its id.
+- Map values outside the `vibecut__` namespace are ignored and dropped; the map can
+  never point at one of your own files.
+- The map is saved only after the batch write succeeded; a failed sync leaves it
+  as it was.
 
 ## Reserved namespace & clean re-sync
 
@@ -107,7 +129,10 @@ produce exactly **one** `prompt_library` broadcast — no per-file flap on the p
 
 On repo-not-found (or a valid-but-empty read) the Mac leaves the existing
 inherited set **untouched** and acks `syncedCount: 0` with a reason
-(`"VibeCut repo not found at <path>"`).
+(`"VibeCut repo not found at <path>"`). The same holds for a catalog whose
+`version` major is above 3 or does not parse (`"VibeCut catalog version <v> is
+newer than this Quip understands"`); a catalog with no `version` is read as
+legacy (Q-81).
 
 ## On the phone
 
@@ -124,7 +149,7 @@ inherited set **untouched** and acks `syncedCount: 0` with a reason
 
 ## Source references
 
-- Pure mapping + include filter: `Shared/VibeCutPromptMapper.swift`
+- Pure mapping + include filter + id stability: `Shared/VibeCutPromptMapper.swift` (`map(catalog:knownIDs:)`); id map file: `QuipMac/Services/VibeCutSyncService.swift`
 - Hide-state helpers: `Shared/PromptHideState.swift`
 - Wire messages: `Shared/MessageProtocol.swift` (`SyncVibeCut*`, `PromptEntry.isInherited`)
 - Mac reader + batch writer + handler: `QuipMac/Services/VibeCutPromptReader.swift`,
