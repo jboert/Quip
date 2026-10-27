@@ -75,6 +75,16 @@ struct PromptEditorSheet: View {
 
                 projectsSection
 
+                if initial?.isInherited == true {
+                    Section {
+                        Button("Make my own copy", action: makeOwnCopy)
+                            .disabled(bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                      || isSaving)
+                    } footer: {
+                        Text("Saves your edited text as a new prompt that VibeCut syncs never touch.")
+                    }
+                }
+
                 if let saveError {
                     Section {
                         Text(saveError)
@@ -100,28 +110,14 @@ struct PromptEditorSheet: View {
                         let id = initial?.id ?? sanitizedID
                         let label = labelText.trimmingCharacters(in: .whitespaces)
                         guard !id.isEmpty, !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                        let messageId = UUID()
-                        let entry = PromptEntry(
+                        submit(PromptEntry(
                             id: id,
                             label: label.isEmpty ? id : label,
                             body: bodyText,
                             tags: PromptProjects.tags(metadataSource?.tags, settingProjects: projects + [newProject]),
                             targetAgent: metadataSource?.targetAgent,
                             description: metadataSource?.description
-                        )
-                        guard onSave(entry, messageId) else {
-                            saveError = "Connect to the Mac before saving prompts."
-                            return
-                        }
-                        pendingMessageId = messageId
-                        saveError = nil
-                        saveTimeout?.cancel()
-                        saveTimeout = Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 8_000_000_000)
-                            guard pendingMessageId == messageId else { return }
-                            pendingMessageId = nil
-                            saveError = "Timed out waiting for the Mac to confirm save."
-                        }
+                        ))
                     }
                     .disabled((initial == nil && sanitizedID.isEmpty)
                               || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -156,6 +152,40 @@ struct PromptEditorSheet: View {
                 saveTimeout?.cancel()
             }
         }
+    }
+
+    /// Sends `entry` to the Mac and keeps the sheet open until it acks.
+    private func submit(_ entry: PromptEntry) {
+        let messageId = UUID()
+        guard onSave(entry, messageId) else {
+            saveError = "Connect to the Mac before saving prompts."
+            return
+        }
+        pendingMessageId = messageId
+        saveError = nil
+        saveTimeout?.cancel()
+        saveTimeout = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard pendingMessageId == messageId else { return }
+            pendingMessageId = nil
+            saveError = "Timed out waiting for the Mac to confirm save."
+        }
+    }
+
+    /// Q-80: saves the edited text as a new prompt outside the `vibecut__`
+    /// namespace, so the next VibeCut sync leaves it alone.
+    private func makeOwnCopy() {
+        guard let initial, initial.isInherited,
+              !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let copy = PromptCopy.ownCopy(of: initial, label: labelText, body: bodyText, existingIDs: existingIDs)
+        submit(PromptEntry(
+            id: copy.id,
+            label: copy.label,
+            body: copy.body,
+            tags: PromptProjects.tags(copy.tags, settingProjects: projects + [newProject]),
+            targetAgent: copy.targetAgent,
+            description: copy.description
+        ))
     }
 
     private var metadataSource: PromptEntry? {
@@ -198,7 +228,7 @@ struct PromptEditorSheet: View {
             ? "Shows in every window. Add a project and the prompt selector lists it only in windows of that folder."
             : "Listed only in windows whose folder is \(projects.joined(separator: " or ")); elsewhere it is under Other Projects. Swipe a project to remove it."
         if metadataSource?.isInherited == true {
-            text += " This prompt comes from VibeCut: the next sync replaces its text but keeps its projects."
+            text += " This prompt comes from VibeCut: the next sync replaces its text but keeps its projects. A copy made with Make my own copy is kept on sync."
         }
         return text
     }
