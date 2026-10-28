@@ -56,7 +56,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         """.write(to: packs.appendingPathComponent("User Pack.json"), atomically: true, encoding: .utf8)
         try "{ nope".write(to: packs.appendingPathComponent("Broken.json"), atomically: true, encoding: .utf8)
 
-        let catalog = try VibeCutPromptReader(root: root, packsDirectory: packs).read().catalog
+        let catalog = try reader(root: root, packs: packs).read().catalog
         let mapped = VibeCutPromptMapper.map(catalog: catalog)
 
         XCTAssertEqual(Set(mapped.entries.map(\.label)), ["Base Prompt", "Pack Prompt"])
@@ -81,7 +81,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         // Non-.json files are ignored entirely — neither merged nor counted.
         try "notes".write(to: packs.appendingPathComponent("readme.txt"), atomically: true, encoding: .utf8)
 
-        let result = try VibeCutPromptReader(root: root, packsDirectory: packs).read()
+        let result = try reader(root: root, packs: packs).read()
 
         XCTAssertEqual(result.skippedPacks, 2)
         XCTAssertEqual(Set(result.catalog.prompts.compactMap(\.name)), ["Base", "Pack"])
@@ -103,7 +103,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         { "format": "vibecutpack/1", "prompts": [ { "id": "p", "name": "Pack", "prompt": "{{merge-back}}", "type": "text" } ] }
         """.write(to: packs.appendingPathComponent("Good.json"), atomically: true, encoding: .utf8)
 
-        let catalog = try VibeCutPromptReader(root: root, packsDirectory: packs).read().catalog
+        let catalog = try reader(root: root, packs: packs).read().catalog
 
         XCTAssertEqual(catalog.prompts.compactMap(\.prompt), ["a RULES b", "RULES"])
     }
@@ -126,8 +126,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         """.write(to: actions.appendingPathComponent("65-proceed.edit.json"), atomically: true, encoding: .utf8)
 
         let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
-        let catalog = try VibeCutPromptReader(root: root, packsDirectory: missing,
-                                              actionsDirectory: actions).read().catalog
+        let catalog = try reader(root: root, packs: missing, actions: actions).read().catalog
 
         XCTAssertEqual(catalog.prompts.first?.prompt, "edited body")
         XCTAssertEqual(catalog.prompts.first?.mode, "paste")
@@ -142,7 +141,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
 
         let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
-        let catalog = try VibeCutPromptReader(root: root, packsDirectory: missing).read().catalog
+        let catalog = try reader(root: root, packs: missing).read().catalog
 
         XCTAssertEqual(catalog.prompts.compactMap(\.prompt), ["a {{merge-back}}"])
     }
@@ -165,7 +164,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         """.write(to: shared.appendingPathComponent("prompt-organization.json"), atomically: true, encoding: .utf8)
 
         let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
-        let catalog = try VibeCutPromptReader(root: root, packsDirectory: missing).read().catalog
+        let catalog = try reader(root: root, packs: missing).read().catalog
         let mapped = VibeCutPromptMapper.map(catalog: catalog)
 
         XCTAssertEqual(mapped.entries.map(\.label), ["Life Prompt"])   // local-command skipped
@@ -182,7 +181,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         """.write(to: shared.appendingPathComponent("prompts.json"), atomically: true, encoding: .utf8)
 
         let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
-        let result = try VibeCutPromptReader(root: root, packsDirectory: missing).read()
+        let result = try reader(root: root, packs: missing).read()
 
         XCTAssertEqual(result.skippedPacks, 0)
         XCTAssertEqual(result.catalog.prompts.count, 1)
@@ -201,9 +200,21 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         return root
     }
 
+    /// A reader whose every input is under `tmp`. The reader's defaults for
+    /// the actions directory and the private store point at the owner's real
+    /// `~/Library/Application Support/VibeCut`, and on 2026-10-27 a real
+    /// private-store prompt ("Update email draft") leaked into nine of these
+    /// fixture tests through that default.
+    private func reader(root: URL, packs: URL, actions: URL? = nil) -> VibeCutPromptReader {
+        VibeCutPromptReader(
+            root: root, packsDirectory: packs,
+            actionsDirectory: actions ?? tmp.appendingPathComponent("no-such-actions", isDirectory: true),
+            privateStoreURL: tmp.appendingPathComponent("no-such-private/projects.json"))
+    }
+
     private func readNoPacks(root: URL) throws -> VibeCutPromptReader.ReadResult {
         let missing = tmp.appendingPathComponent("no-such-packs", isDirectory: true)
-        return try VibeCutPromptReader(root: root, packsDirectory: missing).read()
+        return try reader(root: root, packs: missing).read()
     }
 
     func testReaderRefusesCatalogVersionNewerThanSupported() throws {
@@ -246,7 +257,7 @@ final class PromptLibraryVibeCutTests: XCTestCase {
         { "prompts": [ { "id": "nf", "name": "No Format Pack", "prompt": "p", "type": "text" } ] }
         """.write(to: packs.appendingPathComponent("NoFormat.json"), atomically: true, encoding: .utf8)
 
-        let result = try VibeCutPromptReader(root: root, packsDirectory: packs).read()
+        let result = try reader(root: root, packs: packs).read()
 
         XCTAssertEqual(result.skippedPacks, 2)
         XCTAssertEqual(Set(result.catalog.prompts.compactMap(\.name)), ["Base", "Ok Pack"])
