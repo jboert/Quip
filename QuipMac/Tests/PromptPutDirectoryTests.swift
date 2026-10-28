@@ -37,4 +37,31 @@ final class PromptPutDirectoryTests: XCTestCase {
         XCTAssertTrue(try String(contentsOf: url!, encoding: .utf8).contains("You are Any agent"),
                       "the written body must round-trip")
     }
+
+    /// Editing a prompt in the Mac's Settings must keep its tags: an edited
+    /// VibeCut project prompt used to lose `project:` and `local-only`.
+    @MainActor
+    func test_update_keepsTagsAgentAndDescription() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("quip-pl-\(UUID().uuidString)")
+        PromptLibrary.directoryOverrideForTests = root.appendingPathComponent("prompts", isDirectory: true)
+        defer {
+            PromptLibrary.directoryOverrideForTests = nil
+            try? FileManager.default.removeItem(at: root)
+        }
+        let lib = PromptLibrary()
+        let tags = ["vibecut", "project", "project:Acme", "local-only"]
+        XCTAssertNotNil(lib.put(id: "vibecut__proj-1a2b3c4d", label: "Plan", body: "old body",
+                                tags: tags, targetAgent: "claude", description: "Plans the day"))
+        let original = try XCTUnwrap(lib.entries.first { $0.id == "vibecut__proj-1a2b3c4d" })
+
+        XCTAssertNotNil(lib.update(original, label: "Plan v2", body: "new body"))
+
+        let edited = try XCTUnwrap(lib.entries.first { $0.id == "vibecut__proj-1a2b3c4d" })
+        XCTAssertEqual(edited.label, "Plan v2")
+        XCTAssertEqual(edited.body, "new body")
+        XCTAssertEqual(Set(edited.tags ?? []), Set(tags), "an edit must not drop project: or local-only")
+        XCTAssertEqual(edited.targetAgent, "claude")
+        XCTAssertEqual(edited.description, "Plans the day")
+    }
 }

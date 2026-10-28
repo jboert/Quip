@@ -75,8 +75,10 @@ struct PromptsTab: View {
             }
         }
         .sheet(item: $editingPrompt) { entry in
-            PromptEditorSheet(initial: entry) { id, label, body in
-                library.put(id: id, label: label, body: body) != nil
+            // The id field is locked when editing, so `entry` is the prompt
+            // being saved; `update` keeps its tags, agent and description.
+            PromptEditorSheet(initial: entry) { _, label, body in
+                library.update(entry, label: label, body: body) != nil
             }
         }
     }

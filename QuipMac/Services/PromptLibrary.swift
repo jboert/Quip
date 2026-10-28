@@ -104,6 +104,18 @@ final class PromptLibrary {
         return url
     }
 
+    /// Save an edit of an existing prompt: new label and body, everything
+    /// else carried over. The Mac's Settings editor used to call `put` with
+    /// no tags, which wrote the file without them: an edited VibeCut project
+    /// prompt lost `project:<name>` (its grouping on the phone) and
+    /// `local-only` (which keeps it out of the phone's iCloud copy) until the
+    /// next sync rewrote it.
+    @discardableResult
+    func update(_ entry: PromptEntry, label: String, body: String) -> URL? {
+        put(id: entry.id, label: label, body: body, tags: entry.tags,
+            targetAgent: entry.targetAgent, description: entry.description)
+    }
+
     /// Delete the prompt file for the given id. README.txt is excluded
     /// from sanitization since it can't be deleted via this path anyway.
     @discardableResult
