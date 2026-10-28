@@ -327,6 +327,9 @@ struct SettingsSheet: View {
                                 .monospacedDigit()
                         }
                     }
+                    // A plain button hit-tests only its content; without
+                    // this the gap between label and value is dead.
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
