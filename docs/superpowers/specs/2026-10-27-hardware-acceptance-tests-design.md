@@ -45,10 +45,13 @@ on phone → O5 enabled windows on phone.
 
 ## Current blockers found while writing this
 
-- **Q-83 cannot run yet.** The private store is read from
-  `~/Projects/vibecut/private/projects.json` and that directory does not
-  exist on this Mac. Either VibeCut has not written it or the path differs.
-  Confirm with the VibeCut side before O3; until then Q-83 stays "built".
+- **Q-83 private store location (corrected).** The store is NOT under the
+  repo: the reader's default is
+  `~/Library/Application Support/VibeCut/private/projects.json`, and it
+  exists on this Mac (388 bytes, one prompt, "Update email draft"). Packs and
+  editor actions live beside it (`…/VibeCut/packs`, `…/VibeCut/actions`).
+  O3 is runnable. Any fixture test that builds a reader must pass all four
+  paths, or it reads this real store (fixed in `PromptLibraryVibeCutTests`).
 - **Q-79's map file does not exist yet** (`~/Library/Application
   Support/Quip/vibecut-ids.json`): no sync has run since the build. A3 starts
   by creating it with one sync.
@@ -239,8 +242,10 @@ Runner: owner.
 
 ## O3 — Q-83: VibeCut private project prompts stay local-only
 
-Blocked until `~/Projects/vibecut/private/projects.json` exists (see
-blockers). When it does:
+Private store: `~/Library/Application Support/VibeCut/private/projects.json`
+(exists, one prompt). A copy for odd cases goes through the reader's
+`privateStoreURL`, which has no defaults-key override today: test with the
+real store's current contents.
 
 Claim: store prompts arrive tagged `project:<name>` and `local-only`; a
 tunnel client never receives them and cannot paste, put or delete them; the
@@ -283,7 +288,7 @@ simulator. Evidence: the grid after relaunch. Runner: owner.
 | A6 | Q-84 | agent | not run | | |
 | O1 | Q-80 | owner | not run | | |
 | O2 | Q-84 | owner | not run | | |
-| O3 | Q-83 | owner | blocked: no private store on disk | | |
+| O3 | Q-83 | owner | not run (store found at `~/Library/Application Support/VibeCut/private/projects.json`) | | |
 | O4 | f3ef01a | owner | not run | | |
 | O5 | baee33d | owner | not run | | |
 
