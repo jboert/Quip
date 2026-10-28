@@ -16,6 +16,13 @@
 #                    CFBundleVersion is left alone — the watch app and the
 #                    extensions must match it, and they are not stamped.
 #                    Absent when there is no history to count.
+#
+# A build whose commit cannot be named is refused (Xcode "error:" line, exit
+# 1): on 2026-10-27 a phone showed "unknown" for its version and nobody could
+# tell what code it ran. A builder without a usable .git (a copied tree, a
+# sandboxed script phase) passes the hash itself in QUIP_BUILD_COMMIT (and
+# optionally QUIP_BUILD_NUMBER); QUIP_ALLOW_UNSTAMPED=1 is the explicit
+# escape hatch that restores the old "unknown" stamp.
 set -euo pipefail
 
 plist="${SRCROOT:-}/${INFOPLIST_FILE:-}"
@@ -25,18 +32,28 @@ if [ ! -f "$plist" ]; then
 fi
 
 repo="${SRCROOT:-$(pwd)}/.."
-commit="unknown"
-if git -C "$repo" rev-parse --short=7 HEAD >/dev/null 2>&1; then
-  commit="$(git -C "$repo" rev-parse --short=7 HEAD)"
+# Xcode's script environment carries a minimal PATH; name git by path so a
+# missing PATH entry cannot turn into an unidentifiable build.
+git_bin="$(command -v git 2>/dev/null || true)"
+[ -n "$git_bin" ] || git_bin=/usr/bin/git
+commit="${QUIP_BUILD_COMMIT:-}"
+number="${QUIP_BUILD_NUMBER:-}"
+if [ -z "$commit" ] && "$git_bin" -C "$repo" rev-parse --short=7 HEAD >/dev/null 2>&1; then
+  commit="$("$git_bin" -C "$repo" rev-parse --short=7 HEAD)"
   # Generated project files and the tracked plugin database that tooling
   # rewrites on its own are not source changes.
-  if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no -- . ':(exclude)*.pbxproj' ':(exclude)*.db' 2>/dev/null)" ]; then
+  if [ -n "$("$git_bin" -C "$repo" status --porcelain --untracked-files=no -- . ':(exclude)*.pbxproj' ':(exclude)*.db' 2>/dev/null)" ]; then
     commit="${commit}-dirty"
   fi
+  [ -n "$number" ] || number="$("$git_bin" -C "$repo" rev-list --count HEAD 2>/dev/null || true)"
 fi
-number=""
-if [ "$commit" != "unknown" ]; then
-  number="$(git -C "$repo" rev-list --count HEAD 2>/dev/null || true)"
+if [ -z "$commit" ]; then
+  if [ "${QUIP_ALLOW_UNSTAMPED:-0}" = "1" ]; then
+    commit="unknown"
+  else
+    echo "error: stamp-build-info: cannot name this build's commit (no usable git at '$repo'). Pass QUIP_BUILD_COMMIT=<hash>, or QUIP_ALLOW_UNSTAMPED=1 to ship it as 'unknown'." >&2
+    exit 1
+  fi
 fi
 date="$(date '+%Y-%m-%d %H:%M')"
 
