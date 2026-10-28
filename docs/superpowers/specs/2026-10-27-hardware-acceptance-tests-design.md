@@ -334,3 +334,47 @@ copies and builds removed, only `/Applications/Quip.app` registered.
 Next: O1–O5 with the phone in hand (phone has `d8d293d`, build 1652, which
 already carries Q-85/Q-86).
 
+## Pre-run and code checks before the owner's sitting, 2026-10-28 03:30–03:55 MST
+
+Five parallel tracks: one simulator pre-run against the fake Mac, four
+read-only.
+
+- **O1, O2, O4 on the simulator (fake Mac): PASS.** The copy has a
+  non-`vibecut__` id (`Morning-standup`), no `vibecut` tag, keeps purpose /
+  needs tags; the original is unchanged; delete removes only the copy. A
+  `project:` tag lists the prompt for its window and folds it under "Other
+  Projects" elsewhere. Settings shows the Version and Mac build rows. Caveats:
+  the stock fixture has no inherited prompt (a scratch copy added one), the
+  fake's sync does not rewrite `vibecut__*` files so "survives a sync" is
+  only proven on the real Mac, and fixture windows carry `folder` but no
+  `project`.
+- **Spec wording vs the UI.** O1: a tap in the hub PASTES; the editor is
+  long-press → Edit… or a left swipe. O2: the "project group" is the main
+  list vs the folded "Other Projects (N)". The copy keeps the original's
+  label, so two rows read the same and the delete dialog does not say which.
+- **O3 step 2 is not runnable as written.** `networkMode` is `tailscale` and
+  cloudflared is not running; switching to the tunnel stops Quip's Tailscale
+  and gives a new quick-tunnel URL. The phone disables a quick button whose
+  prompt the tunnel stripped, so "paste by id" needs a scripted client. A
+  refusal sends nothing back (only a `websocket.log` warn line), so "an
+  attributed failure on the phone" will not happen today.
+- **Fixed from the code checks:** `22f83e6`, the Q-85 probe timeout really
+  bounds the wait (a task group waited on the blocked stat), replies send the
+  probe's answer not the stored value, and the root URL no longer stats on
+  the MainActor; `87d6a6f`, the tunnel refusal compares the sanitized,
+  case-folded id (`!`, `/`, a leading `.`, or upper case got past it for
+  put/delete). Both need the next Mac install to be live.
+- **Open, owner's call:** a tunnel refusal could send an `error` with the
+  `messageId` so the phone can say why; the Mac's Settings prompt editor
+  saves without tags, so editing a project prompt on the Mac drops
+  `local-only` until the next sync; window `project` names go to tunnel
+  clients unfiltered.
+- **A1 step 4** stays unit-test-only: packs have no path override, and
+  `testReaderCountsPacksWithWrongOrMissingFormatAsSkipped` fails if the
+  format check is removed (covers wrong and missing `format`).
+- **"UNKNOWN" on the phone:** nothing in QuipiOS/Shared upper-cases text.
+  The likeliest source is the 9pt grey build line at the bottom of the main
+  screen on an unstamped build (`v1.5.7 unknown`), which `0038c48` now
+  refuses to build. Capital letters can only come from mirrored terminal or
+  window text.
+
