@@ -97,6 +97,23 @@ next Mac install (owner picks the moment; it risks the TCC grants) brings
 Q-83..Q-86 at once. Hardware acceptance for both lives in the spec's
 Acceptance sections.
 
+## 2026-10-28 morning: acceptance, fan-out, fixes, Mac install
+
+- Agent-run hardware acceptance A1–A6: all pass (results in the
+  hardware-acceptance spec). A1 found a stale sync ack, fixed `1fcb85b`.
+- Fan-out (5 tracks) found and fixed: `22f83e6` the Q-85 probe timeout
+  really bounds the wait + replies send the probe's answer + no MainActor
+  stat; `87d6a6f` tunnel refusal compares the sanitized, case-folded id;
+  `7756f32` the Mac Settings editor keeps a prompt's tags on save.
+- Owner no longer uses the Cloudflare tunnel (memory
+  `project_no_cloudflare_tunnel`); O3 step 2 is not applicable.
+- **Mac installed `7756f32` (build 1660) at 08:00 MST**, grants intact,
+  enabled windows unchanged. Phone still `d8d293d` (1652): fine, the
+  phone-side code for Q-85/Q-86 is in it.
+- Next: owner's phone sitting O1, O2, O3 (Tailscale steps), O4, O5, with the
+  log tail running to `<scratch>/button-test.log`. Then the "settings are
+  very confusing" pass.
+
 ## Shared checkout warning
 
 A Codex desktop session was editing the main checkout alongside this one; it
