@@ -70,6 +70,33 @@ Earlier today, other sessions (VibeCut sync Q-74..Q-82, board docs):
 3. Workaround for the owner right now: Settings → General → Phone → turn on
    "Mirror desktop terminals".
 
+## Q-85 / Q-86 shipped (23:55 MST)
+
+Spec: `docs/superpowers/specs/2026-10-27-q85-q86-phone-knows-vibecut-and-mac-build-design.md`.
+Rebased onto the Codex session's `46ecfe4` (no file overlap), gate green on
+the combined tree, pushed.
+
+- `d67fb77` feat(sync): Prompts hub shows the Mac's VibeCut freshness (Q-85).
+- `c3592d9` feat(phone): Settings names the Mac build (Q-86).
+- `d8d293d` fix(phone): the whole Mac build row copies (sim pass caught a
+  dead gap in a plain-style button).
+
+Verified on the QA simulator against the fake Mac: orange "VibeCut changed
+since the last sync — Sync" at the top of the hub, tap → "12 synced" flash
+and "Up to date with VibeCut · 12 prompts · just now", `vibecut changed` on
+the fake's console → orange again on reopen; Settings → "Mac build ·
+0.0.0 (0) fake000", tap → "Copied". Mutation checks from the spec all fail
+their test.
+
+Phone: `d8d293d` (build 1652) installed OTA on the iPhone. Force-quit and
+relaunch to pick it up. Until the Mac is reinstalled, the phone shows
+neither line (the running Mac predates both messages; by design, not a bug).
+
+Mac: NOT installed. `/Applications/Quip.app` still predates `75838b5`. The
+next Mac install (owner picks the moment; it risks the TCC grants) brings
+Q-83..Q-86 at once. Hardware acceptance for both lives in the spec's
+Acceptance sections.
+
 ## Shared checkout warning
 
 A Codex desktop session was editing the main checkout alongside this one; it
