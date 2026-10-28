@@ -51,6 +51,8 @@ struct SettingsSheet: View {
     /// the inline "Copied" confirmation; auto-resets after 1.5s so the row
     /// reverts to the version string.
     @State private var versionCopied = false
+    /// Same flip for the Mac build row (Q-86).
+    @State private var macBuildCopied = false
 
     /// "1.5.7 (a8f2308, 2026-10-08 08:30)": the version with the commit and
     /// build time stamped by tools/stamp-build-info.sh, so an install can be
@@ -298,6 +300,35 @@ struct SettingsSheet: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
+            }
+            // Q-86: which Mac build this phone talks to, rendered by the same
+            // BuildInfo.shortDisplay as the Version row below. Absent from a
+            // Mac that predates mac_build.
+            if let macBuild = client.macBuild {
+                let display = BuildInfo.shortDisplay(macBuild.stamp)
+                Button {
+                    UIPasteboard.general.string = "Quip Mac \(display)"
+                    macBuildCopied = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        await MainActor.run { macBuildCopied = false }
+                    }
+                } label: {
+                    settingsLinkRow(title: "Mac build", systemImage: "desktopcomputer", tint: .gray) {
+                        if macBuildCopied {
+                            Text("Copied")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity)
+                        } else {
+                            Text(display)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
             }
         } header: {
             Text("Mac Permissions")

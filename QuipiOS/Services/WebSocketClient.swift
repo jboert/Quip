@@ -442,6 +442,11 @@ final class WebSocketClient {
     /// Cached catalog from the Mac — published so SwiftUI views can
     /// observe directly (avoids piping through host state).
     var promptLibrary: [PromptEntry] = []
+    /// The Mac's build (Q-86), from `mac_build` on auth. nil until it arrives
+    /// and again after any disconnect, so a reconnect to another Mac never
+    /// shows the old one's row.
+    var macBuild: MacBuildMessage?
+    var onMacBuild: ((MacBuildMessage) -> Void)?
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -855,6 +860,7 @@ final class WebSocketClient {
         isConnected = false
         isConnecting = false
         isAuthenticated = false
+        macBuild = nil
         authError = nil
         sessionPIN = nil
         // Bug #1 — without these, the previous run's "Stalled 26s — resetting"
@@ -1545,6 +1551,13 @@ final class WebSocketClient {
             if let msg = Self.decodeMessage(MacPermissionsMessage.self, from: data, msgType: peek.type) {
                 onMacPermissions?(msg)
             }
+        case "mac_build":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(MacBuildMessage.self, from: data, msgType: peek.type) {
+                NSLog("[WebSocketClient] mac_build: %@", BuildInfo.shortDisplay(msg.stamp))
+                macBuild = msg
+                onMacBuild?(msg)
+            }
         case "transcript_result":
             guard isAuthenticated else { return }
             if let msg = Self.decodeMessage(TranscriptResultMessage.self, from: data, msgType: peek.type) {
@@ -1675,6 +1688,7 @@ final class WebSocketClient {
         isConnecting = true
         if connectingStartedAt == nil { connectingStartedAt = Date() }
         isAuthenticated = false
+        macBuild = nil
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = nil
 

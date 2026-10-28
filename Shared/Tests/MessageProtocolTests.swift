@@ -1611,4 +1611,38 @@ final class BroadcastWireFieldsTests: XCTestCase {
         let decoded = try XCTUnwrap(MessageCoder.decode(SyncVibeCutAckMessage.self, from: data))
         XCTAssertEqual(decoded.freshness, "current")
     }
+
+    // MARK: - Mac build (Q-86)
+
+    func testMacBuildRoundTrip() throws {
+        let stamp = BuildInfo.Stamp(short: "1.5.7", build: "1", commit: "0038c48",
+                                    date: "2026-10-27 19:55", number: "1642")
+        let msg = MacBuildMessage(stamp: stamp, deviceID: "17161F64-0000-4000-8000-000000000000")
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["type"] as? String, "mac_build")
+        XCTAssertEqual(json["number"] as? String, "1642")
+        XCTAssertNil(json["display"], "the display string is rendered on the phone, never sent")
+        let decoded = try XCTUnwrap(MessageCoder.decode(MacBuildMessage.self, from: data))
+        XCTAssertEqual(decoded, msg)
+        XCTAssertEqual(decoded.stamp, stamp)
+    }
+
+    func testMacBuildDecodesWithoutTheStampedFields() throws {
+        let data = Data(#"{"type":"mac_build","short":"1.5.7","build":"1","deviceID":"abc"}"#.utf8)
+        let decoded = try XCTUnwrap(MessageCoder.decode(MacBuildMessage.self, from: data))
+        XCTAssertNil(decoded.commit)
+        XCTAssertNil(decoded.number)
+        XCTAssertNil(decoded.date)
+        XCTAssertEqual(BuildInfo.shortDisplay(decoded.stamp), "1.5.7")
+    }
+
+    func testOneRendererNamesBothPeersBuilds() throws {
+        let stamp = BuildInfo.Stamp(short: "1.5.7", build: "1", commit: "0038c48",
+                                    date: "2026-10-27 19:55", number: "1642")
+        let data = try XCTUnwrap(MessageCoder.encode(MacBuildMessage(stamp: stamp, deviceID: "abc")))
+        let decoded = try XCTUnwrap(MessageCoder.decode(MacBuildMessage.self, from: data))
+        XCTAssertEqual(BuildInfo.shortDisplay(decoded.stamp), BuildInfo.shortDisplay(stamp))
+        XCTAssertEqual(BuildInfo.shortDisplay(decoded.stamp), "1.5.7 (1642) 0038c48")
+    }
 }

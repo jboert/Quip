@@ -98,6 +98,7 @@ final class BackendConnectionManager {
     var onAuthResult: ((BackendSession, Bool, String?) -> Void)?
     var onPreferencesRestore: ((BackendSession, PreferencesSnapshot) -> Void)?
     var onMacPermissions: ((BackendSession, MacPermissionsMessage) -> Void)?
+    var onMacBuild: ((BackendSession, MacBuildMessage) -> Void)?
     var onImageUploadAck: ((BackendSession, String) -> Void)?
     var onImageUploadError: ((BackendSession, String) -> Void)?
     /// A `send_text_ack`'s message id, for broadcast delivery (US-111).
@@ -1592,6 +1593,11 @@ final class BackendConnectionManager {
             guard let self, let session else { return }
             session.macPermissions = snapshot
             self.onMacPermissions?(session, snapshot)
+        }
+
+        c.onMacBuild = { [weak self, weak session] build in
+            guard let self, let session else { return }
+            self.onMacBuild?(session, build)
         }
 
         c.onError = { [weak self, weak session] reason in

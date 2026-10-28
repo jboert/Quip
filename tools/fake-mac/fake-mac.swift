@@ -320,6 +320,17 @@ struct DeviceIdentityMsg: Encodable {
 }
 
 /// Everything granted, so the phone shows no permission badge.
+/// Q-86: the fake names its build so Settings reads "0.0.0 (0) fake000".
+struct MacBuildMsg: Encodable {
+    let type = "mac_build"
+    let short = "0.0.0"
+    let build = "1"
+    let commit = "fake000"
+    let number = "0"
+    let date = "2026-01-01 00:00"
+    let deviceID = "fake-mac"
+}
+
 struct MacPermissionsMsg: Encodable {
     let type = "mac_permissions"
     let accessibility = true
@@ -932,8 +943,10 @@ final class FakeMac: @unchecked Sendable {
             rest.append("project_directories(\(dirs.count))")
         }
         send(MacPermissionsMsg(), to: client)
+        send(MacBuildMsg(), to: client)
         send(WhisperStatusMsg(), to: client)
         rest.append("mac_permissions(all granted)")
+        rest.append("mac_build(0.0.0 (0) fake000)")
         rest.append("whisper_status(preparing)")
         send(PromptLibraryMsg(prompts: prompts), to: client)
         log.line("\(client.tag) sent prompt_library: \(prompts.count) prompts")

@@ -1645,6 +1645,36 @@ enum MacSettingsPane: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// Mac → every authenticated iPhone, once per auth (Q-86). Which build the
+/// Mac is, so the phone's Settings can name it beside its own. The fields are
+/// the Mac's `BuildInfo.Stamp`; the display string is never sent — the phone
+/// renders it with the shared `BuildInfo.shortDisplay`, so one function names
+/// both peers' builds. `deviceID` keys the row per backend on a phone with
+/// two Macs. A Mac that predates this sends nothing and the row is absent.
+struct MacBuildMessage: Codable, Sendable, Equatable {
+    let type: String
+    let short: String
+    let build: String
+    let commit: String?
+    let number: String?
+    let date: String?
+    let deviceID: String
+
+    init(stamp: BuildInfo.Stamp, deviceID: String) {
+        self.type = "mac_build"
+        self.short = stamp.short
+        self.build = stamp.build
+        self.commit = stamp.commit
+        self.number = stamp.number
+        self.date = stamp.date
+        self.deviceID = deviceID
+    }
+
+    var stamp: BuildInfo.Stamp {
+        BuildInfo.Stamp(short: short, build: build, commit: commit, date: date, number: number)
+    }
+}
+
 /// Mac → iPhone. Snapshot of what's currently granted on the Mac. Sent on
 /// startup, on each new client auth, and every 5s while a client is connected.
 /// Local Network is intentionally omitted — if you can read this message at all,

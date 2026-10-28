@@ -588,6 +588,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             DispatchQueue.main.async {
                 self.broadcastLayout()
                 self.broadcastPermissions(force: true)
+                // Q-86: name this build to the phone. No per-phone data, so
+                // a broadcast is fine; the other phones already have it.
+                self.webSocketServer.broadcast(MacBuildMessage(
+                    stamp: BuildInfo.current, deviceID: WebSocketServer.deviceID()))
                 self.broadcastWhisperStatus()
                 // Push the prompt-library catalog so a fresh phone sees
                 // the user's saved prompts without waiting for the next
