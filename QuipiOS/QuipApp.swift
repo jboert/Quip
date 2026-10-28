@@ -339,6 +339,11 @@ struct QuipApp: App {
                 // the pulsing dot and badge count go quiet. Fires from every
                 // selection path: tap, Mac echo, deep-link tap, etc.
                 if let newId { attentionCenter.clearAttention(for: newId) }
+                // Remember it so a reconnect (e.g. after backgrounding) comes
+                // back to this window instead of windows.first.
+                if let newId, !manager.activeBackendID.isEmpty {
+                    WindowSelectionMemory.remember(newId, forBackendId: manager.activeBackendID)
+                }
             }
             .onChange(of: manager.activeBackendID) { _, _ in
                 // Active backend changed — copy the new session's slice into
@@ -657,10 +662,15 @@ struct QuipApp: App {
                 // Same gate kills the on-screen mic button AND the hardware
                 // volume-down PTT path, so "nothing happens when I tap mic"
                 // means "no window selected." Picking windows.first restores
-                // both paths.
-                if selectedWindowId == nil, let first = update.windows.first {
-                    selectedWindowId = first.id
-                    session.client.send(SelectWindowMessage(windowId: first.id))
+                // both paths. Prefer the window the user last had selected:
+                // a reconnect after backgrounding clears the selection, and
+                // landing on windows.first put them in a different terminal.
+                if selectedWindowId == nil,
+                   let pick = WindowSelectionMemory.initialSelection(
+                       remembered: WindowSelectionMemory.remembered(forBackendId: session.backendID),
+                       available: update.windows.map(\.id)) {
+                    selectedWindowId = pick
+                    session.client.send(SelectWindowMessage(windowId: pick))
                 }
                 if wasEmpty, let wid = selectedWindowId, update.windows.contains(where: { $0.id == wid }) {
                     session.client.send(SelectWindowMessage(windowId: wid))

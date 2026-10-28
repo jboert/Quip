@@ -23,6 +23,27 @@ struct AttentionPulseDot: View {
     }
 }
 
+/// A text view that can be told to land on its last line once it has real
+/// bounds. Scrolling a view SwiftUI hasn't laid out yet does nothing, so the
+/// request is held until `layoutSubviews` sees a non-zero height.
+final class BottomFollowingTextView: UITextView {
+    private var pendingScrollToBottom = false
+
+    func scrollToBottomAfterLayout() {
+        pendingScrollToBottom = true
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard pendingScrollToBottom, bounds.height > 0 else { return }
+        pendingScrollToBottom = false
+        // By character, not contentSize: TextKit 2 lays long text out lazily,
+        // so contentSize is only an estimate until the tail is laid out.
+        scrollRangeToVisible(NSRange(location: max(0, textStorage.length - 1), length: 1))
+    }
+}
+
 /// `UITextView`-backed terminal text view. SwiftUI `Text` with `.link`
 /// AttributedString is documented to be tappable but in practice tap routing
 /// drops to the floor inside our InlineTerminalContent layout (parent
@@ -39,13 +60,17 @@ struct LinkableTerminalText: UIViewRepresentable {
     let content: String
     /// The phone's own font size (GH #38); never affects the Mac terminal.
     var fontSize: Double = TerminalTextSize.standard
+    /// Which window this text belongs to. A new key (first show, or switching
+    /// terminals) starts the reader at the bottom — the newest output — instead
+    /// of inheriting the last window's scroll position.
+    var scrollKey: String? = nil
     /// Receives the new size when a pinch ends.
     var onFontSizeChange: ((Double) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> UITextView {
-        let tv = UITextView()
+    func makeUIView(context: Context) -> BottomFollowingTextView {
+        let tv = BottomFollowingTextView()
         tv.isEditable = false
         tv.isSelectable = true
         tv.isScrollEnabled = true            // owns scrolling
@@ -67,19 +92,22 @@ struct LinkableTerminalText: UIViewRepresentable {
         return tv
     }
 
-    func updateUIView(_ tv: UITextView, context: Context) {
+    func updateUIView(_ tv: BottomFollowingTextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.fontSize = fontSize
         coordinator.onFontSizeChange = onFontSizeChange
+        let keyChanged = coordinator.renderedScrollKey != scrollKey
         // Same text at the same size: leave the view alone so a refresh never
         // moves the reader.
         let sizeChanged = coordinator.renderedFontSize != fontSize
-        guard tv.attributedText.string != content || sizeChanged else { return }
+        guard tv.attributedText.string != content || sizeChanged || keyChanged else { return }
         coordinator.renderedFontSize = fontSize
+        coordinator.renderedScrollKey = scrollKey
         // Follow new output only if the reader was already at the bottom
         // (`TerminalScrollPolicy`, same rule as the screenshot view). Scrolled
-        // up reading history, they stay where they are.
-        let pinned = TerminalScrollPolicy.isPinnedToBottom(
+        // up reading history, they stay where they are. A new window starts
+        // at the bottom regardless.
+        let pinned = keyChanged || TerminalScrollPolicy.isPinnedToBottom(
             contentHeight: tv.contentSize.height,
             offsetY: tv.contentOffset.y,
             visibleHeight: tv.bounds.height - tv.adjustedContentInset.bottom)
@@ -93,8 +121,11 @@ struct LinkableTerminalText: UIViewRepresentable {
         ])
         tv.attributedText = attr
         if pinned {
-            let bottom = NSRange(location: max(0, attr.length - 1), length: 1)
-            tv.scrollRangeToVisible(bottom)
+            // Not `scrollRangeToVisible` here: on first show the view has no
+            // size yet, the scroll is a no-op, and the reader was left at the
+            // TOP — where every later refresh read as "scrolled up" and stopped
+            // following. The view scrolls itself once it has been laid out.
+            tv.scrollToBottomAfterLayout()
         } else {
             tv.layoutIfNeeded()
             let maxY = max(0, tv.contentSize.height - tv.bounds.height + tv.adjustedContentInset.bottom)
@@ -106,6 +137,9 @@ struct LinkableTerminalText: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var fontSize: Double = TerminalTextSize.standard
         var renderedFontSize: Double?
+        /// Double optional so the first render (outer nil) always counts as
+        /// a new key, even when the window id itself is nil.
+        var renderedScrollKey: String??
         var onFontSizeChange: ((Double) -> Void)?
 
         @objc func handlePinch(_ pinch: UIPinchGestureRecognizer) {
@@ -848,6 +882,8 @@ struct InlineTerminalContent: View {
                                 .frame(width: geo.size.width * screenshotZoom)
                                 .id("bottom")
                         }
+                        // Open on the newest output (the bottom of the frame).
+                        .defaultScrollAnchor(.bottom)
                         .simultaneousGesture(
                             MagnificationGesture()
                                 .onChanged { value in
@@ -885,7 +921,7 @@ struct InlineTerminalContent: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             case .text:
-                LinkableTerminalText(content: content, fontSize: terminalTextSize) { size in
+                LinkableTerminalText(content: content, fontSize: terminalTextSize, scrollKey: windowId) { size in
                     terminalTextSize = size
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
