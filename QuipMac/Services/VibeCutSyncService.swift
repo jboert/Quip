@@ -186,7 +186,19 @@ final class VibeCutSyncService {
                       to: LogPaths.webSocketPath)
         isSyncing = true
         defer { isSyncing = false }
+        let outcome = await readMapAndReplace(into: library)
+        // Awaited, not fired, and on EVERY path: the phone's ack carries
+        // `freshness`, so it must be the post-sync answer. A failed sync used
+        // to return before this and ack whatever the previous sync had left
+        // (seen on hardware 2026-10-28: a refused v4 catalog acked "current").
+        // After `record`, so `hasSynced` sees this outcome.
+        _ = await probeFreshness()
+        return outcome
+    }
 
+    /// The read/map/replace pipeline behind `sync`. Every exit records its
+    /// outcome; the caller probes freshness afterwards.
+    private func readMapAndReplace(into library: PromptLibrary) async -> Outcome {
         let readResult: VibeCutPromptReader.ReadResult
         do {
             readResult = try await Task.detached(priority: .userInitiated) {
@@ -220,13 +232,8 @@ final class VibeCutSyncService {
         }
         // What this sync read, so the probe below can answer Current / Changed.
         UserDefaults.standard.set(readResult.fingerprint, forKey: Self.syncedFingerprintKey)
-        let outcome = record(synced: written, skipped: mapped.skipped,
-                             skippedPacks: readResult.skippedPacks, error: nil)
-        // Awaited, not fired: the phone's ack carries `freshness`, so it must
-        // be the post-sync answer, not whatever the Settings pane last saw.
-        // After `record`, so `hasSynced` sees this outcome.
-        _ = await probeFreshness()
-        return outcome
+        return record(synced: written, skipped: mapped.skipped,
+                      skippedPacks: readResult.skippedPacks, error: nil)
     }
 
     private func record(synced: Int, skipped: Int, skippedPacks: Int, error: String?) -> Outcome {
