@@ -16,12 +16,19 @@ struct VibeCutPromptReader {
     let packsDirectory: URL
     /// VibeCut's prompt-editor saves (`~/Library/Application Support/VibeCut/actions`, Q-77).
     let actionsDirectory: URL
+    /// VibeCut's PRIVATE project-prompt store
+    /// (`~/Library/Application Support/VibeCut/private/projects.json`). It holds
+    /// the owner's project prompts and is never in any repo, so it is read from
+    /// the app-support folder only. Missing is normal: no project prompts.
+    let privateStoreURL: URL
 
     init(root: URL, packsDirectory: URL = VibeCutPromptReader.defaultPacksDirectory(),
-         actionsDirectory: URL = VibeCutEditRecords.defaultActionsDirectory()) {
+         actionsDirectory: URL = VibeCutEditRecords.defaultActionsDirectory(),
+         privateStoreURL: URL = VibeCutPromptReader.defaultPrivateStoreURL()) {
         self.root = root
         self.packsDirectory = packsDirectory
         self.actionsDirectory = actionsDirectory
+        self.privateStoreURL = privateStoreURL
     }
 
     enum ReadError: Error, CustomStringConvertible {
@@ -61,6 +68,11 @@ struct VibeCutPromptReader {
             ("~/Library/Application Support/VibeCut/packs" as NSString).expandingTildeInPath)
     }
 
+    static func defaultPrivateStoreURL() -> URL {
+        URL(fileURLWithPath:
+            ("~/Library/Application Support/VibeCut/private/projects.json" as NSString).expandingTildeInPath)
+    }
+
     /// The configured repo root: `vibecutRepoPath` UserDefaults override (tilde
     /// expanded) if set, else the `~/Projects/vibecut` default. Mirrors the
     /// override precedent used by `spawnCommand` / `tailscaleHostnameOverride`.
@@ -98,6 +110,7 @@ struct VibeCutPromptReader {
         add("prompts.json", catalog)
         add("prompt-fragments.json", try? Data(contentsOf: fragmentsFileURL))
         add("prompt-organization.json", try? Data(contentsOf: organizationFileURL))
+        add("private/projects.json", try? Data(contentsOf: privateStoreURL))
         let fm = FileManager.default
         for name in ((try? fm.contentsOfDirectory(atPath: packsDirectory.path)) ?? []).sorted()
         where name.hasSuffix(".json") {
@@ -131,6 +144,9 @@ struct VibeCutPromptReader {
             }
             let packs = readPackPrompts()
             catalog.prompts.append(contentsOf: packs.prompts)
+            // After packs: store prompts are appended, and assignments scope
+            // catalog/pack buttons to projects by VibeCut id.
+            catalog = Self.applyPrivateStore(to: catalog, storeData: try? Data(contentsOf: privateStoreURL))
             // Before fragments: a saved edit may still contain a placeholder.
             catalog = VibeCutEditRecords.apply(to: catalog, actionsDirectory: actionsDirectory)
             // Optional: a catalog with no placeholders needs no fragment file.
@@ -147,6 +163,40 @@ struct VibeCutPromptReader {
         } catch {
             throw ReadError.unreadable(path: url.path)
         }
+    }
+
+    /// Shape of VibeCut's private store (`version` 1). Decoded leniently: any
+    /// failure reads as "no store" and never blocks the rest of the sync.
+    private struct PrivateStore: Decodable {
+        var version: Int?
+        var prompts: [VibeCutPrompt]?
+        var assignments: [String: [String]]?
+    }
+
+    static let supportedStoreVersion = 1
+
+    /// Fold the private store into `catalog`: its prompts are appended (text,
+    /// category `project`, `projects` carried, flagged so the mapper tags them
+    /// local-only), and each assignment sets `projects` on the catalog prompt
+    /// with that VibeCut id. Nil data, a corrupt file, or a `version` above 1
+    /// leaves the catalog untouched.
+    static func applyPrivateStore(to catalog: VibeCutCatalog, storeData: Data?) -> VibeCutCatalog {
+        guard let storeData,
+              let store = try? JSONDecoder().decode(PrivateStore.self, from: storeData),
+              (store.version ?? 1) <= supportedStoreVersion else { return catalog }
+        var out = catalog
+        for (id, projects) in store.assignments ?? [:] where !projects.isEmpty {
+            for i in out.prompts.indices where out.prompts[i].id == id {
+                out.prompts[i].projects = projects
+            }
+        }
+        for var p in store.prompts ?? [] {
+            p.type = "text"
+            p.category = "project"
+            p.fromPrivateStore = true
+            out.prompts.append(p)
+        }
+        return out
     }
 
     /// Major = the integer before the first ".". Unparseable counts as unsupported.

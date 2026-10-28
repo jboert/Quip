@@ -123,6 +123,98 @@ final class WebSocketServer {
         }
     }
     private let networkQueue = DispatchQueue(label: "quip.websocket", qos: .userInitiated)
+
+    // MARK: - Tunnel detection (local-only prompts)
+
+    /// Set once any upgrade request on the direct listener carried Cloudflare
+    /// headers. Sticky for the life of the server: it can only make the server
+    /// more careful, never less.
+    @ObservationIgnored
+    nonisolated private let cloudflareHeadersSeen = OSAllocatedUnfairLock<Bool>(initialState: false)
+
+    /// True when `headers` came through Cloudflare's edge.
+    nonisolated static func hasCloudflareHeaders(_ headers: [(name: String, value: String)]) -> Bool {
+        headers.contains { header in
+            let name = header.name.lowercased()
+            return name == "cf-connecting-ip" || name == "cf-ray"
+        }
+    }
+
+    /// Loopback source: IPv4 127/8, IPv6 ::1, or an IPv4-mapped loopback.
+    nonisolated static func isLoopbackHost(_ host: String) -> Bool {
+        var h = host.lowercased()
+        if let scope = h.firstIndex(of: "%") { h = String(h[..<scope]) }
+        if h.hasPrefix("[") && h.hasSuffix("]") { h = String(h.dropFirst().dropLast()) }
+        if h.hasPrefix("::ffff:") { h = String(h.dropFirst("::ffff:".count)) }
+        return h == "::1" || h == "127.0.0.1" || h.hasPrefix("127.")
+    }
+
+    /// Whether a direct-listener client is to be treated as a tunnel client.
+    /// Without per-connection headers the rule is: once Cloudflare headers have
+    /// been seen on this listener, every loopback client (where a local
+    /// cloudflared or reverse proxy would connect from) is treated as tunnel.
+    /// LAN and Tailscale clients are never affected.
+    nonisolated static func classifyAsTunnel(remoteHost: String, cloudflareHeadersSeen: Bool) -> Bool {
+        cloudflareHeadersSeen && isLoopbackHost(remoteHost)
+    }
+
+    nonisolated private static func noteDirectUpgradeHeaders(
+        _ headers: [(name: String, value: String)],
+        seen: OSAllocatedUnfairLock<Bool>,
+        onFirstSighting: @Sendable () -> Void
+    ) {
+        guard hasCloudflareHeaders(headers) else { return }
+        let first = seen.withLock { flag -> Bool in
+            let was = flag
+            flag = true
+            return !was
+        }
+        if first {
+            wslog("direct listener saw Cloudflare headers; loopback clients are now treated as tunnel clients", severity: .warn)
+            onFirstSighting()
+        }
+    }
+
+    private func reclassifyLoopbackClients() {
+        for i in clients.indices where !clients[i].isTunnel {
+            if let host = Self.remoteHost(of: clients[i].connection.endpoint),
+               Self.classifyAsTunnel(remoteHost: host, cloudflareHeadersSeen: true) {
+                clients[i].isTunnel = true
+            }
+        }
+    }
+
+    nonisolated private static func remoteHost(of endpoint: NWEndpoint) -> String? {
+        if case .hostPort(let host, _) = endpoint { return "\(host)" }
+        return nil
+    }
+
+    /// For a message arriving over a tunnel: the id of the local-only prompt it
+    /// names, if it is a `paste_prompt` / `put_prompt` / `delete_prompt` for one.
+    /// Such a message is refused. Pure, so the rule is testable without a socket.
+    nonisolated static func refusedTunnelPromptID(in data: Data, localOnly: Set<String>) -> String? {
+        guard !localOnly.isEmpty,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String,
+              type == "paste_prompt" || type == "put_prompt" || type == "delete_prompt",
+              let id = object["id"] as? String,
+              localOnly.contains(id) else { return nil }
+        return id
+    }
+
+    /// Which prompt ids are local-only right now; set by the app from the library.
+    var localOnlyPromptIDs: () -> Set<String> = { [] }
+
+    /// Entry point for a message that arrived through the Cloudflare tunnel
+    /// proxy (`CloudflareTunnel`). Refuses prompt actions on local-only prompts,
+    /// logging the id only, and hands everything else on.
+    func receiveFromTunnel(_ data: Data) {
+        if let id = Self.refusedTunnelPromptID(in: data, localOnly: localOnlyPromptIDs()) {
+            Self.wslog("tunnel client refused: prompt id=\(id) is local-only", severity: .warn)
+            return
+        }
+        onMessageReceived?(data)
+    }
     /// Retry interval when the listener can't bind (e.g. port 8765 squatted by
     /// another process). Without this the server would give up silently and the
     /// phone would talk to whatever is on 8765 and report "bad response from server".
@@ -166,6 +258,10 @@ final class WebSocketServer {
         var pendingHeartbeatSeq: Int? = nil
         var pendingHeartbeatSentAt: Date? = nil
         var lastHeartbeatAckAt: Date? = nil
+        /// True when this connection reached the Mac through a Cloudflare
+        /// tunnel rather than the owner's LAN / Tailscale / loopback. Such a
+        /// client never receives, and cannot paste, `local-only` prompts.
+        var isTunnel: Bool = false
 
         static let maxMessagesPerSecond = 10
         /// Drop broadcasts once a single client has this much buffered. Chosen to
@@ -308,6 +404,21 @@ final class WebSocketServer {
         // Default max message size is ~1 MiB, which rejects image uploads
         // (base64 of a full-resolution phone photo is ~7-10 MB). See WSLimits.
         wsOptions.maximumMessageSize = WSLimits.maxMessageBytes
+        // Cloudflare's edge adds CF-Connecting-IP / CF-Ray to every request it
+        // forwards. Quip's own cloudflared is pointed at the tunnel proxy, not
+        // this listener, so a request here carrying them means some other
+        // tunnel or reverse proxy is in front of it. The framework hands the
+        // headers over with no handle on the connection, so this can only mark
+        // the LISTENER (see `noteDirectUpgradeHeaders`); the safe reading is
+        // applied to loopback clients in `classifyAsTunnel`.
+        let seen = cloudflareHeadersSeen
+        let onSeen: @Sendable () -> Void = { [weak self] in
+            DispatchQueue.main.async { self?.reclassifyLoopbackClients() }
+        }
+        wsOptions.setClientRequestHandler(networkQueue) { subprotocols, headers in
+            Self.noteDirectUpgradeHeaders(headers, seen: seen, onFirstSighting: onSeen)
+            return NWProtocolWebSocket.Response(status: .accept, subprotocol: subprotocols.first)
+        }
         parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
         return try NWListener(using: parameters)
@@ -408,8 +519,12 @@ final class WebSocketServer {
                 Self.wslog("Sent auth signal, starting receiveMessage")
                 Self.wslog("client live: \(connection.endpoint) (auth=\(requireAuthNow ? "pin" : "none"))")
                 let remoteStr = String(describing: connection.endpoint)
+                let tunnel = Self.remoteHost(of: connection.endpoint).map {
+                    Self.classifyAsTunnel(remoteHost: $0, cloudflareHeadersSeen: self.cloudflareHeadersSeen.withLock { $0 })
+                } ?? false
                 DispatchQueue.main.async {
                     var client = ClientConnection(connection: connection)
+                    client.isTunnel = tunnel
                     client.isAuthenticated = !requireAuthNow
                     client.remoteDescription = remoteStr
                     self.clients.append(client)
@@ -718,13 +833,17 @@ final class WebSocketServer {
     /// The send half of `broadcast`, once the message is already bytes.
     /// Snapshotting `clients` here rather than at call time is deliberate: a
     /// client that dropped while its payload was encoding should not be sent to.
-    private func deliverBroadcast(_ data: Data) {
+    ///
+    /// `restricted`, when given, is what tunnel clients get instead of `data`
+    /// (the prompt library with its local-only prompts removed).
+    private func deliverBroadcast(_ data: Data, restricted: Data? = nil) {
         // Send to authenticated direct WebSocket clients
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "textMessage", metadata: [metadata])
-        let payloadSize = data.count
         for i in clients.indices {
             guard clients[i].isAuthenticated else { continue }
+            let data = clients[i].isTunnel ? (restricted ?? data) : data
+            let payloadSize = data.count
             // Backpressure: skip this client if its NWConnection is already sitting
             // on a large backlog — a phone that backgrounded and hasn't been TCP-
             // reaped yet must not soak up layout updates, TTS chunks, and screenshots.
@@ -751,7 +870,28 @@ final class WebSocketServer {
         let broadcasters = tunnelBroadcasters
         tunnelBroadcastersLock.unlock()
         for broadcaster in broadcasters {
-            broadcaster.sender(data)
+            broadcaster.sender(restricted ?? data)
+        }
+    }
+
+    /// Broadcast the prompt library. Local-only prompts (VibeCut project
+    /// prompts) go to the owner's LAN / Tailscale / loopback clients only; every
+    /// tunnel client gets the library with them removed.
+    func broadcastPromptLibrary(_ entries: [PromptEntry]) {
+        let safe = PromptPrivacy.strippingLocalOnly(entries)
+        encodeQueue.async { [weak self] in
+            let full: Data, restricted: Data?
+            do {
+                full = try JSONEncoder().encode(PromptLibraryMessage(prompts: entries))
+                restricted = safe.count == entries.count
+                    ? nil : try JSONEncoder().encode(PromptLibraryMessage(prompts: safe))
+            } catch {
+                print("[WebSocketServer] broadcastPromptLibrary encode FAILED err=\(error)")
+                return
+            }
+            DispatchQueue.main.async {
+                self?.deliverBroadcast(full, restricted: restricted)
+            }
         }
     }
 
@@ -1143,6 +1283,13 @@ final class WebSocketServer {
                         return
                     }
 
+                    // A direct client marked as tunnel (see `classifyAsTunnel`)
+                    // may not act on local-only prompts any more than a proxy one.
+                    if self.clients[clientIndex].isTunnel,
+                       let id = Self.refusedTunnelPromptID(in: receivedData, localOnly: self.localOnlyPromptIDs()) {
+                        Self.wslog("tunnel client refused: prompt id=\(id) is local-only", severity: .warn)
+                        return
+                    }
                     self.touchActivity(for: connection)
                     self.onMessageWithConnection?(receivedData, connection)
                     self.onMessageReceived?(receivedData)

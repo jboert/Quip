@@ -122,6 +122,12 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
     /// own Dock is not known here; it reads as off screen only. Optional:
     /// older Mac builds omit it.
     let isMinimized: Bool
+    /// The project this window works in: the folder of the nearest git root
+    /// above its working directory, else the working directory's own name (see
+    /// `ProjectName`). Computed on the Mac, so a window in `demo-proj/src`
+    /// still reads `demo-proj` where `folder` says `src`. Optional: older Mac
+    /// builds omit it and clients fall back to `folder`.
+    let project: String?
 
     // Synthesized Equatable compares ALL fields including frame
 
@@ -130,7 +136,8 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
          frame: WindowFrame, state: String, color: String, isThinking: Bool = false,
          claudeMode: String? = nil, cliKind: CLIKind? = nil, targetKind: String? = nil,
          displayID: String? = nil, spaceID: String? = nil, isPinned: Bool = false,
-         isMinimized: Bool = false) {
+         isMinimized: Bool = false, project: String? = nil) {
+        self.project = project
         self.id = id; self.name = name; self.app = app; self.folder = folder
         self.enabled = enabled
         self.frame = frame; self.state = state; self.color = color
@@ -162,11 +169,12 @@ struct WindowState: Codable, Identifiable, Sendable, Equatable, Hashable {
         spaceID = try? c.decode(String.self, forKey: .spaceID)
         isPinned = (try? c.decode(Bool.self, forKey: .isPinned)) ?? false
         isMinimized = (try? c.decode(Bool.self, forKey: .isMinimized)) ?? false
+        project = try? c.decode(String.self, forKey: .project)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, app, folder, enabled, frame, state, color, isThinking, claudeMode, cliKind, targetKind
-        case displayID, spaceID, isPinned, isMinimized
+        case displayID, spaceID, isPinned, isMinimized, project
     }
 }
 

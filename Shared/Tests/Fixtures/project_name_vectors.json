@@ -1,0 +1,13 @@
+[
+  {"name": "file in a subfolder resolves to the git root", "cwd": "/Users/x/Projects/demo-proj/src", "gitDirs": ["/Users/x/Projects/demo-proj"], "expect": "demo-proj"},
+  {"name": "the git root itself", "cwd": "/Users/x/Projects/demo-proj", "gitDirs": ["/Users/x/Projects/demo-proj"], "expect": "demo-proj"},
+  {"name": "deeply nested", "cwd": "/Users/x/Projects/demo-proj/src/mail/templates", "gitDirs": ["/Users/x/Projects/demo-proj"], "expect": "demo-proj"},
+  {"name": "no git anywhere falls back to the cwd basename", "cwd": "/Users/x/Projects/other-proj/src", "gitDirs": [], "expect": "src"},
+  {"name": "a git repo elsewhere does not count", "cwd": "/Users/x/Projects/other-proj/src", "gitDirs": ["/Users/x/Projects/demo-proj"], "expect": "src"},
+  {"name": "the nearest .git wins over an outer one", "cwd": "/Users/x/Projects/demo-proj/vendor/lib/src", "gitDirs": ["/Users/x/Projects/demo-proj", "/Users/x/Projects/demo-proj/vendor/lib"], "expect": "lib"},
+  {"name": "trailing slash", "cwd": "/Users/x/Projects/demo-proj/src/", "gitDirs": ["/Users/x/Projects/demo-proj"], "expect": "demo-proj"},
+  {"name": "repeated slashes", "cwd": "/Users/x//Projects/demo-proj//src", "gitDirs": ["/Users/x/Projects/demo-proj"], "expect": "demo-proj"},
+  {"name": "empty cwd has no project", "cwd": "", "gitDirs": [], "expect": null},
+  {"name": "root has no project", "cwd": "/", "gitDirs": [], "expect": null},
+  {"name": "a name with spaces keeps them", "cwd": "/Users/x/Projects/demo proj/src", "gitDirs": ["/Users/x/Projects/demo proj"], "expect": "demo proj"}
+]

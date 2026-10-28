@@ -29,6 +29,11 @@ final class PreferencesSyncService {
     var onRestorePaired: ((String, String?) -> Void)?
     var onRestoreRecents: ((String) -> Void)?
 
+    /// Prompt ids that must stay on the owner's devices (`local-only` tag:
+    /// VibeCut project prompts). Set by the owner from the cached prompt
+    /// library. The iCloud copy of the snapshot never mentions them.
+    var localOnlyPromptIDs: () -> Set<String> = { [] }
+
     /// Stable device identifier used as the Mac-side storage key.
     let deviceID: String
 
@@ -211,7 +216,10 @@ final class PreferencesSyncService {
         // own coalescing and throttles writes to roughly once per second
         // internally before pushing to iCloud.
         do {
-            let blob = try JSONEncoder().encode(snapshot)
+            // iCloud is not the owner's device alone: strip local-only prompts
+            // from the copy that goes there. The Mac keeps the full snapshot.
+            let blob = try JSONEncoder().encode(
+                Self.scrubbed(snapshot, localOnly: rememberedLocalOnlyIDs()))
             NSUbiquitousKeyValueStore.default.set(blob, forKey: kvsSnapshotKey)
             NSUbiquitousKeyValueStore.default.synchronize()
         } catch {
@@ -224,6 +232,58 @@ final class PreferencesSyncService {
             return
         }
         send?(data)
+    }
+
+    private static let localOnlyMemoryKey = "prefs.localOnlyPromptIDs"
+
+    /// Current local-only ids united with every one this phone has seen before.
+    /// The library cache is empty while the phone is not connected, and a
+    /// snapshot written then must still leave those prompts out. Kept in the
+    /// meta suite so writing it does not re-enter the change observer.
+    private func rememberedLocalOnlyIDs() -> Set<String> {
+        let known = Set(Self.metaSuite?.stringArray(forKey: Self.localOnlyMemoryKey) ?? [])
+        let all = known.union(localOnlyPromptIDs())
+        if all != known { Self.metaSuite?.set(Array(all).sorted(), forKey: Self.localOnlyMemoryKey) }
+        return all
+    }
+
+    /// `snapshot` without anything that names a local-only prompt: its usage
+    /// record, its pinned quick-button slot, and that slot's color. Everything
+    /// else in the snapshot is untouched. Pure, so it is tested without iCloud.
+    nonisolated static func scrubbed(_ snapshot: PreferencesSnapshot, localOnly: Set<String>) -> PreferencesSnapshot {
+        guard !localOnly.isEmpty else { return snapshot }
+        var out = snapshot
+        if let json = snapshot.promptUsageJSON {
+            let store = PromptRanker.decode(json).filter { !localOnly.contains($0.key) }
+            out.promptUsageJSON = PromptRanker.encode(store)
+        }
+        // Edited as plain JSON, not through `QuickSlot`: a slot kind this build
+        // cannot decode must pass through untouched, not break the scrub.
+        if let json = snapshot.quickSlotsJSON, !json.isEmpty,
+           let data = json.data(using: .utf8),
+           let slots = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            let kept = slots.filter { slot in
+                !(slot["kind"] as? String == "prompt"
+                  && (slot["promptID"] as? String).map(localOnly.contains) == true)
+            }
+            if kept.count != slots.count,
+               let encoded = try? JSONSerialization.data(withJSONObject: kept),
+               let text = String(data: encoded, encoding: .utf8) {
+                out.quickSlotsJSON = text
+            }
+        }
+        if let json = snapshot.quickSlotColorsJSON, !json.isEmpty,
+           let data = json.data(using: .utf8),
+           let colors = try? JSONDecoder().decode([String: String].self, from: data) {
+            let kept = colors.filter { key, _ in
+                !(key.hasPrefix("p:") && localOnly.contains(String(key.dropFirst(2))))
+            }
+            if kept.count != colors.count, let encoded = try? JSONEncoder().encode(kept),
+               let text = String(data: encoded, encoding: .utf8) {
+                out.quickSlotColorsJSON = text
+            }
+        }
+        return out
     }
 
     /// Read all tracked keys from UserDefaults into a typed snapshot.

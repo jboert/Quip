@@ -767,7 +767,7 @@ struct QuipApp: App {
                     windows[i] = WindowState(
                         id: w.id, name: w.name, app: w.app, folder: w.folder, enabled: w.enabled,
                         frame: w.frame, state: newState, color: w.color,
-                        isThinking: w.isThinking
+                        isThinking: w.isThinking, project: w.project
                     )
                     if windowId == selectedWindowId, liveActivitiesEnabled {
                         let islandState: String? = switch newState {
@@ -1009,6 +1009,9 @@ struct QuipApp: App {
         // it always targets the current active backend even after a swap.
         prefsSync.send = { [manager] data in
             manager.active.client.sendRaw(data)
+        }
+        prefsSync.localOnlyPromptIDs = { [manager] in
+            PromptPrivacy.localOnlyIDs(manager.active.client.promptLibrary)
         }
         prefsSync.start()
 
@@ -6396,12 +6399,16 @@ struct MainiOSView: View {
         // pill isn't placed in the Quick Buttons row.
     }
 
-    /// The selected window's folder: which project's prompts the selector
-    /// lists (Q-69). Nil with no window selected or no folder.
+    /// The selected window's project: which project's prompts the selector
+    /// lists (Q-69). The Mac's `project` (git root, so a window in `demo-proj/src`
+    /// is `demo-proj`) wins; an older Mac sends only the folder. Nil with no
+    /// window selected or neither.
     private var selectedProject: String? {
-        guard let folder = windows.first(where: { $0.id == selectedWindowId })?.folder,
-              !folder.isEmpty else { return nil }
-        return folder
+        let window = windows.first(where: { $0.id == selectedWindowId })
+        for name in [window?.project, window?.folder] {
+            if let name, !name.isEmpty { return name }
+        }
+        return nil
     }
 
     /// The agent running in the selected window, as a ranking context.

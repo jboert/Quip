@@ -790,7 +790,7 @@ final class CloudflareTunnel {
                 let mainDelay = Date().timeIntervalSince(arrivedAt)
                 KokoroTTSDebug.log("TUNNEL \(msgType) reached main after \(String(format: "%.1f", mainDelay))s")
                 guard let self, let server = self.cachedServer else { return }
-                server.onMessageReceived?(data)
+                server.receiveFromTunnel(data)
             }
         }
     }

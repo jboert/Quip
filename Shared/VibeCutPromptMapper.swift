@@ -42,9 +42,17 @@ struct VibeCutPrompt: Codable, Sendable, Equatable {
     var purpose: String?
     var requirements: [String]?
     var kind: String?
+    /// Projects this prompt belongs to (VibeCut's private project store). Each
+    /// becomes a `project:<name>` tag, and any prompt with projects is tagged
+    /// `local-only` so it never leaves the owner's devices.
+    var projects: [String]?
+    /// Set by the Mac reader for a prompt that came from VibeCut's private
+    /// project store. Never decoded from JSON: a shared catalog or pack cannot
+    /// claim to be (or avoid being) private by carrying this field itself.
+    var fromPrivateStore: Bool = false
 
     private enum CodingKeys: String, CodingKey {
-        case id, slug, name, category, tags, prompt, mode, type, purpose, requirements, kind
+        case id, slug, name, category, tags, prompt, mode, type, purpose, requirements, kind, projects
         case skipPreamble = "skip_preamble"
     }
 
@@ -62,11 +70,13 @@ struct VibeCutPrompt: Codable, Sendable, Equatable {
     init(id: String? = nil, slug: String? = nil, name: String? = nil,
          category: String? = nil, tags: [String]? = nil, prompt: String? = nil,
          mode: String? = nil, type: String? = nil, skipPreamble: Bool? = nil,
-         purpose: String? = nil, requirements: [String]? = nil, kind: String? = nil) {
+         purpose: String? = nil, requirements: [String]? = nil, kind: String? = nil,
+         projects: [String]? = nil, fromPrivateStore: Bool = false) {
         self.id = id; self.slug = slug; self.name = name; self.category = category
         self.tags = tags; self.prompt = prompt; self.mode = mode; self.type = type
         self.skipPreamble = skipPreamble
         self.purpose = purpose; self.requirements = requirements; self.kind = kind
+        self.projects = projects; self.fromPrivateStore = fromPrivateStore
     }
 
     init(from decoder: Decoder) throws {
@@ -83,6 +93,25 @@ struct VibeCutPrompt: Codable, Sendable, Equatable {
         purpose = try c.decodeIfPresent(String.self, forKey: .purpose)
         requirements = try c.decodeIfPresent([String].self, forKey: .requirements)
         kind = try c.decodeIfPresent(String.self, forKey: .kind)
+        projects = try? c.decodeIfPresent([String].self, forKey: .projects)
+    }
+
+    /// Encoded without `fromPrivateStore` on purpose (see the property).
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(id, forKey: .id)
+        try c.encodeIfPresent(slug, forKey: .slug)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(category, forKey: .category)
+        try c.encodeIfPresent(tags, forKey: .tags)
+        try c.encodeIfPresent(prompt, forKey: .prompt)
+        try c.encodeIfPresent(mode, forKey: .mode)
+        try c.encodeIfPresent(type, forKey: .type)
+        try c.encodeIfPresent(skipPreamble, forKey: .skipPreamble)
+        try c.encodeIfPresent(purpose, forKey: .purpose)
+        try c.encodeIfPresent(requirements, forKey: .requirements)
+        try c.encodeIfPresent(kind, forKey: .kind)
+        try c.encodeIfPresent(projects, forKey: .projects)
     }
 }
 
@@ -188,7 +217,10 @@ enum VibeCutPromptMapper {
                 skipped += 1
                 continue
             }
-            var core = slug(name)
+            // A private-store prompt is named by its opaque source id, so the
+            // prompt's name never lands in the Quip id (ids reach logs, usage
+            // history and the quick-button row).
+            var core = slug(p.fromPrivateStore ? (p.id ?? name) : name)
             if core.isEmpty {
                 fallbackCounter += 1
                 core = "untitled-\(fallbackCounter)"
@@ -218,7 +250,9 @@ enum VibeCutPromptMapper {
         if p.kind == "runtime-command" || p.kind == "local-command" { return false }
         guard let body = p.prompt, !body.isEmpty else { return false }
         let typeOK = (p.type == nil || p.type == "text")
-        if p.kind == "prompt" { return typeOK }
+        // A project prompt is something the owner wrote for a project; its
+        // mode (paste or send) is VibeCut's tap behaviour, not a reason to skip.
+        if p.kind == "prompt" || p.fromPrivateStore { return typeOK }
         let modeOK = (p.mode != "send")
         return typeOK && modeOK
     }
@@ -341,6 +375,10 @@ enum VibeCutPromptMapper {
         if let extra = p.tags { for t in extra where !t.isEmpty { tags.append(t) } }
         if let purpose = p.purpose, !purpose.isEmpty { tags.append("purpose:\(purpose)") }
         if let needs = p.requirements { for r in needs where !r.isEmpty { tags.append("needs:\(r)") } }
+        let projects = (p.projects ?? [])
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        for name in projects { tags.append("project:\(name)") }
+        if !projects.isEmpty || p.fromPrivateStore { tags.append(PromptPrivacy.localOnlyTag) }
         // The Mac stores tags as one comma-separated `tags:` line in the file's
         // meta block (Q-78). A comma or line break from an imported pack would
         // split a tag or add an `agent:` / `desc:` line, so such a tag is dropped.
@@ -367,5 +405,25 @@ enum VibeCutPromptMapper {
         var out: [String] = []
         for item in items where seen.insert(item).inserted { out.append(item) }
         return out
+    }
+}
+
+/// Which prompts must stay on the owner's own devices. A prompt tagged
+/// `local-only` (every VibeCut project prompt) is never sent over the
+/// Cloudflare tunnel and never recorded in iCloud. Pure, shared by Mac and phone.
+enum PromptPrivacy {
+    static let localOnlyTag = "local-only"
+
+    static func isLocalOnly(_ entry: PromptEntry) -> Bool {
+        (entry.tags ?? []).contains { $0.lowercased() == localOnlyTag }
+    }
+
+    static func localOnlyIDs(_ entries: [PromptEntry]) -> Set<String> {
+        Set(entries.filter(isLocalOnly).map(\.id))
+    }
+
+    /// `entries` without the local-only ones.
+    static func strippingLocalOnly(_ entries: [PromptEntry]) -> [PromptEntry] {
+        entries.filter { !isLocalOnly($0) }
     }
 }

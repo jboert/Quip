@@ -570,6 +570,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             }
         }
 
+        webSocketServer.localOnlyPromptIDs = { [self] in
+            PromptPrivacy.localOnlyIDs(promptLibrary.entries)
+        }
+
         webSocketServer.onClientAuthenticated = { [self] in
             DispatchQueue.main.async {
                 self.broadcastLayout()
@@ -580,9 +584,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // file-system change. (wishlist §57)
                 let entries = self.promptLibrary.entries
                 NSLog("[QuipMacApp] onClientAuthenticated -> broadcasting prompt_library: %d prompts", entries.count)
-                self.webSocketServer.broadcast(
-                    PromptLibraryMessage(prompts: entries)
-                )
+                self.webSocketServer.broadcastPromptLibrary(entries)
                 // (wishlist §B16.) Send the current frontmost so a
                 // freshly-authenticated phone with "Auto" enabled
                 // doesn't wait up to 400ms for the timer to catch up.
@@ -600,7 +602,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // paste_prompt back, the Mac then sendText's the body into the
         // currently-targeted iTerm window. (wishlist §57)
         promptLibrary.onChange = { [self] entries in
-            self.webSocketServer.broadcast(PromptLibraryMessage(prompts: entries))
+            self.webSocketServer.broadcastPromptLibrary(entries)
         }
         promptLibrary.start()
 

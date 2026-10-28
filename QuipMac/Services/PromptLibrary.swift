@@ -218,10 +218,14 @@ final class PromptLibrary {
     }
 
     /// VibeCut's `tags` with the user's `projects` from the file it replaces.
-    /// VibeCut's own project tags, if it ever writes any, are kept as well;
-    /// duplicates (ignoring case) are dropped.
+    /// When VibeCut supplies `project:` tags (its private project store), those
+    /// are the truth and win: the hand-added ones from the old file are dropped,
+    /// so removing a prompt from a project in VibeCut sticks after the next
+    /// sync. When VibeCut supplies none, the hand-added ones are kept.
+    /// Duplicates (ignoring case) are dropped.
     nonisolated static func tags(_ tags: [String]?, keepingProjects projects: [String]) -> [String]? {
         var out = tags ?? []
+        if !projectTags(in: out).isEmpty { return out.isEmpty ? nil : out }
         var seen = Set(out.map { $0.lowercased() })
         for tag in projects where seen.insert(tag.lowercased()).inserted { out.append(tag) }
         return out.isEmpty ? nil : out

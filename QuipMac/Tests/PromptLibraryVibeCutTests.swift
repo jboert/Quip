@@ -335,8 +335,9 @@ final class PromptLibraryVibeCutTests: XCTestCase {
 
     func testProjectTagsMergeWithoutDuplicates() {
         XCTAssertEqual(PromptLibrary.projectTags(in: ["vibecut", "Project:Quip", "git"]), ["Project:Quip"])
+        // VibeCut-supplied project tags win over the hand-added ones.
         XCTAssertEqual(PromptLibrary.tags(["vibecut", "project:quip"], keepingProjects: ["project:Quip", "project:Web"]),
-                       ["vibecut", "project:quip", "project:Web"])
+                       ["vibecut", "project:quip"])
         XCTAssertNil(PromptLibrary.tags(nil, keepingProjects: []))
         XCTAssertEqual(PromptLibrary.tags(nil, keepingProjects: ["project:Quip"]), ["project:Quip"])
     }

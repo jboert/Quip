@@ -147,11 +147,80 @@ legacy (Q-81).
   next Sync re-lands the VibeCut version — prefer Hide over Edit/Delete for
   inherited prompts.
 
+## Project prompts & privacy
+
+VibeCut can scope prompts to a project. Those prompts are the owner's own, so
+Quip treats them as **local-only**: they reach the owner's phone over the LAN,
+Tailscale or loopback, and nowhere else. All names below are invented.
+
+### Source
+
+`~/Library/Application Support/VibeCut/private/projects.json`, written by VibeCut
+and never part of any repo (path override for tests: `privateStoreURL` on
+`VibeCutPromptReader`):
+
+```jsonc
+{
+  "version": 1,
+  "prompts": [
+    { "id": "proj-1a2b3c4d", "name": "Update email draft", "prompt": "…",
+      "mode": "paste", "emoji": "✉️", "projects": ["demo-proj"],
+      "createdAt": "2026-10-27T12:00:00Z" }
+  ],
+  "assignments": { "<vibecut catalog id>": ["demo-proj"] }
+}
+```
+
+- Read after the packs. Store prompts are appended as text prompts (category
+  `project`, whatever their `mode`); `assignments` set `projects` on the catalog
+  or pack prompt with that VibeCut id.
+- A missing file is normal. A corrupt file, or a `version` above 1, is ignored
+  without an error and the rest of the sync still runs.
+- The file is part of `sourceFingerprint()` (as `private/projects.json`), so
+  Settings reads "changed" after a new project prompt.
+
+### Tags and ids
+
+- Each project becomes a `project:<name>` tag (same comma / line-break filter as
+  every other tag). Any prompt with projects, and every prompt from the store,
+  also gets the `local-only` tag.
+- A store prompt's Quip id is `vibecut__` + its opaque store id
+  (`vibecut__proj-1a2b3c4d`), not a slug of its name, so the name never reaches
+  logs, usage history or the quick-button row.
+- On a re-sync, `project:` tags VibeCut supplies replace the ones added by hand
+  on the phone. When VibeCut supplies none, the hand-added ones are kept as before.
+
+### What `local-only` keeps off other paths
+
+| Path | Guard |
+|---|---|
+| Cloudflare tunnel | `prompt_library` sent to tunnel clients has local-only prompts removed (`WebSocketServer.broadcastPromptLibrary`); `paste_prompt`, `put_prompt` and `delete_prompt` naming one are refused, logging the prompt id only. |
+| iCloud | The phone drops local-only ids from the usage history, the pinned quick-button slots and their colors before writing the iCloud copy of the preferences snapshot (`PreferencesSyncService.scrubbed`). The ids are remembered across launches, so a snapshot written while disconnected is scrubbed too. The copy sent to the Mac keeps them. |
+| Logs | Prompt bodies and project names are never logged; only prompt ids. |
+| Repos | Fixtures and docs use invented names only. |
+
+How a tunnel client is told apart: Quip's own cloudflared is pointed at the
+tunnel proxy (`CloudflareTunnel`), not at the main listener, so every message
+and broadcast on that path is a tunnel one. The main listener also reads the
+upgrade headers; the first request carrying `CF-Connecting-IP` or `CF-Ray` marks
+that listener as fronted by some other tunnel, after which every loopback client
+is treated as a tunnel client. LAN and Tailscale clients are never affected.
+
+### Which window is in which project
+
+`WindowState.project` (optional, additive) is computed on the Mac from the
+window's working directory: the basename of the nearest ancestor holding a
+`.git` entry, else the directory's own name (`Shared/ProjectName.swift`, checked
+against `Shared/Tests/Fixtures/project_name_vectors.json`, which VibeCut's
+resolver is checked against too). The phone lists a window's project prompts by
+`project ?? folder`, so a window in `demo-proj/src` still shows `demo-proj`.
+
 ## Source references
 
 - Pure mapping + include filter + id stability: `Shared/VibeCutPromptMapper.swift` (`map(catalog:knownIDs:)`); id map file: `QuipMac/Services/VibeCutSyncService.swift`
 - Hide-state helpers: `Shared/PromptHideState.swift`
 - Wire messages: `Shared/MessageProtocol.swift` (`SyncVibeCut*`, `PromptEntry.isInherited`)
+- Project prompts: `Shared/ProjectName.swift`, `PromptPrivacy` in `Shared/VibeCutPromptMapper.swift`, `QuipMac/Services/WebSocketServer.swift`, `QuipiOS/Services/PreferencesSyncService.swift`
 - Mac reader + batch writer + handler: `QuipMac/Services/VibeCutPromptReader.swift`,
   `QuipMac/Services/PromptLibrary.swift` (`replaceVibeCutSet`), `QuipMac/QuipMacApp.swift`
 - iOS UI: `QuipiOS/QuipApp.swift` (`PromptLibrarySheet`), `QuipiOS/Services/WebSocketClient.swift`

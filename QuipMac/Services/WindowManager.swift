@@ -114,7 +114,8 @@ struct ManagedWindow: Identifiable, @unchecked Sendable {
             displayID: displayID,
             spaceID: spaceID,
             isPinned: isPinned,
-            isMinimized: isMinimized
+            isMinimized: isMinimized,
+            project: ProjectName.resolve(cwd: cwdPath)
         )
     }
 }

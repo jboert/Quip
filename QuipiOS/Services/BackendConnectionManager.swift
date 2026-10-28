@@ -1533,7 +1533,7 @@ final class BackendConnectionManager {
                 session.windows[i] = WindowState(
                     id: w.id, name: w.name, app: w.app, folder: w.folder, enabled: w.enabled,
                     frame: w.frame, state: newState, color: w.color,
-                    isThinking: w.isThinking, claudeMode: w.claudeMode
+                    isThinking: w.isThinking, claudeMode: w.claudeMode, project: w.project
                 )
             }
             self.onStateChange?(session, windowId, newState)
