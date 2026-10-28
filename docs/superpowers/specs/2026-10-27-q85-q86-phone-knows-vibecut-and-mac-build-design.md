@@ -26,8 +26,11 @@ on the Mac and has no way to see from the phone that a sync is due.
 ### Non-goals
 
 - No automatic sync. The line says "Sync" is due; the owner taps it.
-- No polling. The phone asks once when the hub appears and once after each
-  ack. The Mac's own 5 s permissions cadence is not reused.
+- No polling. The phone asks when the hub appears, once after each ack, and
+  once when `isAuthenticated` flips false → true while the hub is open (a
+  Mac restart with the hub up is exactly the "is this outdated?" moment, and
+  without the re-ask the line stays blank until the hub is reopened). No
+  timer; the Mac's own 5 s permissions cadence is not reused.
 - No change to the Mac's Prompts pane.
 
 ### Anti-goals
@@ -74,9 +77,12 @@ on the Mac and has no way to see from the phone that a sync is due.
     the path-changed guard), returning what it set. `refreshRepoProbe()`
     becomes a fire-and-forget wrapper around it so the Settings pane is
     unchanged.
-  - `var wireFreshness: VibeCutFreshnessWire` (pure mapping, one switch).
-  - `func statusMessage() -> VibeCutStatusMessage` built from `freshness`
-    and `lastOutcome`.
+  - Pure statics, so tests never go through `UserDefaults.standard` (the
+    leak class `c5003fe` just fixed): `static func wire(_ freshness:
+    Freshness) -> VibeCutFreshnessWire` (one switch) and `static func
+    statusMessage(freshness: Freshness, lastOutcome: Outcome?) ->
+    VibeCutStatusMessage`. Instance conveniences `wireFreshness` and
+    `statusMessage()` call them with the live state.
 - `QuipMacApp.onMessageWithConnection`, new case next to
   `preferences_request` (the reply must go to one connection):
   `"vibecut_status_request"` → on main, `Task { let _ = await
@@ -118,18 +124,28 @@ on the Mac and has no way to see from the phone that a sync is due.
   - `@State private var vibecutStatus: VibeCutStatusMessage?`.
   - `.onAppear`: set `client.onVibeCutStatus = { vibecutStatus = $0 }`; if
     connected and authenticated, `client.requestVibeCutStatus()`.
+  - `.onChange(of: client.isAuthenticated)`: on a false → true edge, clear
+    `vibecutStatus` (the old Mac's answer is stale) and request again.
   - `.onDisappear`: nil the callback.
   - `handleSyncAck`: unchanged result text; additionally, if
     `ack.freshness != nil`, `client.requestVibeCutStatus()` (one round trip,
     the Mac has the fresh outcome by then).
-  - The line renders directly under the "Most used first" header row, as a
-    `Text` in `.caption`, colour by tone: `.secondary`, `.orange`, `.red`.
-    When `tone == .due` the whole line is a `Button` that calls
-    `syncFromVibeCut()`, with `accessibilityLabel("Sync from VibeCut now")`.
+  - The line is its own `Section` at the top of the list, present whenever
+    `VibeCutStatusText.line` is non-nil, in every state of the hub: empty
+    library ("No prompts yet" is exactly where "Never synced from VibeCut"
+    must show), searching, and the normal list. It is NOT tied to the
+    "Most used first" header, which exists only when the library has
+    visible prompts. A `Text` in `.caption`, colour by tone: `.secondary`,
+    `.orange`, `.red`. When `tone == .due` the whole row is a `Button` that
+    calls `syncFromVibeCut()`, with `accessibilityLabel("Sync from VibeCut
+    now")`.
   - The three-second `syncResult` flash stays as it is.
 
 ### Fake Mac (tools/fake-mac/fake-mac.swift)
 
+- The fake has NO `sync_vibecut` case today (it falls to `default:` and only
+  logs, so every simulator Sync so far ended in "Sync timed out"). Add the
+  case and a `SyncVibeCutAckMsg: Encodable` type beside `PromptAckMsg`.
 - `case "sync_vibecut"`: log, then `broadcast` an ack
   `{"type":"sync_vibecut_ack","messageId":…,"syncedCount":<fixture prompt
   count>,"skippedCount":0,"skippedPacks":0,"freshness":"current"}` and set
@@ -149,9 +165,9 @@ on the Mac and has no way to see from the phone that a sync is due.
   the optionals), `SyncVibeCutAckMessage` decoding an old Mac's JSON without
   `freshness` (nil) and a new one with it.
 - `QuipMac/Tests/VibeCutFreshnessTests.swift`: `testWireFreshnessMapsEveryCase`
-  (4 cases); `testStatusMessageCarriesLastOutcome` (never synced → nil
-  fields; a failed outcome → error set, syncedCount nil; a good one → count
-  and date).
+  (4 cases, through the static); `testStatusMessageCarriesLastOutcome`
+  (through the static: never synced → nil fields; a failed outcome → error
+  set, syncedCount nil; a good one → count and date).
 - `QuipiOS/Tests/VibeCutStatusTextTests.swift`: one test per rule above
   plus `testUnknownFreshnessShowsNothing` and
   `testFutureFreshnessValueReadsUnknown` (`VibeCutFreshnessWire(rawValue:
@@ -275,10 +291,16 @@ design document. Gate: `tools/check.sh` (Shared change → all three suites).
 Install: iOS OTA for both; the Mac half rides the next Mac install, which
 the owner schedules because it risks the TCC grants.
 
+## Builder check, 2026-10-27
+
+A reviewer read this against the code. Four points, all settled here, none
+needing the owner: re-ask on the auth edge (goals + phone section), the line
+as its own Section so the empty library shows Never synced (phone section),
+the fake Mac has no `sync_vibecut` case at all (fake section), and the Mac
+mapping/status as pure statics (Mac + tests sections).
+
 ## Left to the builder
 
-- Exact placement of the status line if the "Most used first" header turns
-  out to be hidden while searching: put it above the list in that case.
 - Whether `probeFreshness()` needs a timeout: the stat can hang on a dead
   network volume (see the comment on `refreshRepoProbe`). If the phone's
   request would otherwise wait forever, reply Unknown after 3 s.
