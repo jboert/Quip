@@ -302,3 +302,35 @@ three `send_text … success=1` lines in `latency.log`.
 - What `project` the Mac sends for a window with no git root (A6 step 3).
 - Whether a simulator pass is accepted for the phone halves of A3/A4/O1, or
   the owner wants the iPhone for all of them.
+
+---
+
+## Results, agent-run, 2026-10-28 03:10–03:22 MST
+
+Mac installed twice from clean worktrees: `550696c` (build 1653), then
+`1fcb85b` (1654) with the fix A1 found. Accessibility, Automation and Screen
+Recording stayed granted across both installs (`mac_permissions` all true).
+Driven by a one-off WebSocket client on the Mac (PIN read from the Keychain,
+never printed): the phone's `sync_vibecut` runs the same
+`VibeCutSyncService.sync()` as Settings → Sync Now, and the acks plus Q-85's
+`vibecut_status` carry the outcome the pane would show.
+
+| Test | Result | Evidence |
+|---|---|---|
+| A1 Q-81 | PASS, step 4 not run | v4.0 copy: ack error "VibeCut catalog version 4.0 is newer than this Quip understands", inherited files 50 before and after; real-root resync 50 synced. Step 4 (bad pack format) not run: packs come only from `~/Library/Application Support/VibeCut/packs`, which has no override, and editing it is editing the owner's live VibeCut data. Covered by unit tests only. |
+| A1 side find | FIXED `1fcb85b` | The refused sync acked `freshness: current` (stale from the previous sync) while status said `changed`. Rerun on 1654: ack `changed`. |
+| A2 Q-82 | PASS | unknown → sync → current → `touch` → current → fragments +1 char in a copy → changed (no sync) → sync → current → back to real root → changed → sync → current. Ack and status agreed at each step. |
+| A3 Q-79 | PASS (Mac half) | `04-ux-review` renamed in a copy: id stays `vibecut__ux-review`, map byte-identical (50 entries), same inherited file set, file title updated. Restored. Phone hide/tag half → O-tests. |
+| A4 `baee33d` | PASS | 9 enabled ids identical before and after each of two install relaunches; boot key = `kern.boottime`; 7 live windows broadcast (the other ids are closed windows within the boot). |
+| A5 build number | PASS (Mac + script) | Mac sends `mac_build` 1.5.7 / 1654 / 1fcb85b. Script outside git: exit 1 with the error line; `QUIP_BUILD_COMMIT=abc1234` stamps it; `QUIP_ALLOW_UNSTAMPED=1` stamps `unknown`. Menu bar not screenshotted. |
+| A6 Q-84 Mac half | PASS | 7 repo-root windows: project = repo folder. Test windows: `~/Projects/Quip/QuipMac` → `Quip`; `~/Downloads` → `Downloads` (basename, no git). Mirroring turned on for the read, then off; test windows closed. |
+| Q-85 Mac half | PASS | as A1/A2 above. |
+| Q-86 Mac half | PASS | `mac_build` on every auth, matches the installed stamp. |
+
+State left behind: none. `vibecutRepoPath` deleted, final sync against the
+real root (50 synced, current), mirroring off, enabled ids unchanged, scratch
+copies and builds removed, only `/Applications/Quip.app` registered.
+
+Next: O1–O5 with the phone in hand (phone has `d8d293d`, build 1652, which
+already carries Q-85/Q-86).
+
