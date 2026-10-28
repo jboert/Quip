@@ -378,3 +378,14 @@ read-only.
   refuses to build. Capital letters can only come from mirrored terminal or
   window text.
 
+## Owner decision, 2026-10-28
+
+The owner no longer uses the Cloudflare tunnel; Quip runs in Tailscale mode.
+O3 step 2 (tunnel client) is **not applicable** and is dropped from the
+sitting; O3 steps 1 and 3 (tags on LAN/Tailscale, VibeCut's `project:` tag
+wins on re-sync) still run. The tunnel-only gaps (silent refusal, window
+project names over the tunnel) are parked. The Mac editor dropping tags on
+save still matters without a tunnel: it loses a prompt's `project:` tag
+(its project grouping) and its `local-only` tag (which the phone uses to
+keep it out of the iCloud preferences copy) until the next VibeCut sync.
+
