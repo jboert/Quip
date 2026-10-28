@@ -160,6 +160,24 @@ final class ProjectPromptPrivacyTests: XCTestCase {
         XCTAssertNil(WebSocketServer.refusedTunnelPromptID(in: Data("garbage".utf8), localOnly: local))
     }
 
+    /// put/delete sanitize the id before touching disk, and the volume is
+    /// case-insensitive: every spelling that reaches the protected file must
+    /// be refused, not only the exact one (fan-out review, 2026-10-28).
+    func testTunnelRefusalCatchesEverySpellingThatReachesTheSameFile() {
+        let local: Set<String> = ["vibecut__proj-1a2b3c4d"]
+        func body(_ type: String, _ id: String) -> Data {
+            Data(#"{"type":"\#(type)","id":"\#(id)"}"#.utf8)
+        }
+        for variant in ["vibecut__proj-1a2b3c4d!", "/vibecut__proj-1a2b3c4d", ".vibecut__proj-1a2b3c4d",
+                        "VIBECUT__PROJ-1A2B3C4D", "vibecut__proj 1a2b3c4d"] {
+            for type in ["put_prompt", "delete_prompt", "paste_prompt"] {
+                XCTAssertEqual(WebSocketServer.refusedTunnelPromptID(in: body(type, variant), localOnly: local),
+                               variant, "\(type) \(variant) reaches the local-only file and must be refused")
+            }
+        }
+        XCTAssertNil(WebSocketServer.refusedTunnelPromptID(in: body("put_prompt", "vibecut__proj-1a2b3c4e"), localOnly: local))
+    }
+
     func testReceiveFromTunnelDropsLocalOnlyPasteAndForwardsTheRest() {
         let server = WebSocketServer()
         server.localOnlyPromptIDs = { ["vibecut__proj-1a2b3c4d"] }

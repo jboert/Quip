@@ -197,8 +197,13 @@ final class WebSocketServer {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["type"] as? String,
               type == "paste_prompt" || type == "put_prompt" || type == "delete_prompt",
-              let id = object["id"] as? String,
-              localOnly.contains(id) else { return nil }
+              let id = object["id"] as? String else { return nil }
+        // put/delete act on PromptID.sanitize(id), and the prompts volume is
+        // case-insensitive, so "vibecut__proj-x!", "/vibecut__proj-x" or
+        // "VIBECUT__PROJ-X" reach the same file as "vibecut__proj-x". Compare
+        // the form the library will use, case-folded, not the raw string.
+        let target = PromptID.sanitize(id).lowercased()
+        guard localOnly.contains(where: { $0.lowercased() == target }) else { return nil }
         return id
     }
 
