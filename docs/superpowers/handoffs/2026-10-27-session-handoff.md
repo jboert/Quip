@@ -25,25 +25,24 @@ Earlier today, other sessions (VibeCut sync Q-74..Q-82, board docs):
 `018ccc6` `47c5119` `5982933` `38749aa` `e3eccd0` `c757b0d` `82e0fdb`
 `2792674` `8173149` `93c24b0` — see `git log --since=2026-10-27`.
 
-## Install state
+## Install state (updated 19:11 MST)
 
 | Target | Installed | Notes |
 |---|---|---|
-| Mac `/Applications/Quip.app` | 1.5.7 (`47c5119`), launched 14:26 MST | Predates `baee33d`. Still forgets enables on relaunch until reinstalled. Each Mac install wipes Screen Recording + Accessibility grants, so the owner picks the moment. |
-| iPhone | not touched this session | No iOS change in `baee33d`. |
+| Mac `/Applications/Quip.app` | built from `75838b5` (eb-branch HEAD, includes `baee33d` + the Codex session's Q-83/Q-84), launched 19:09 MST, pid 23282 | Developer ID signed, verified. Built from a clean worktree, not the dirty checkout. `nm` shows `systemBootTime`/`prunedEnabledWindowIDs`. TCC re-grant may be needed. |
+| iPhone 17 Pro Max | same `75838b5`, Debug, installed OTA via devicectl (`00008150-000248600280401C`) at 19:11 MST | First attempt reset mid-transfer (NWError 54), second succeeded. Force-quit from the app switcher before judging anything. |
 
 ## Verified matrix
 
 | Change | Unit tests | Installed | Hardware-verified |
 |---|---|---|---|
-| `baee33d` enabled-window memory | QuipMac suite 1236/0 green (gate + pre-commit) | no | no |
+| `baee33d` enabled-window memory | QuipMac suite 1236/0 green (gate + pre-commit) | yes (Mac) | no — owner: enable a window with Mirror off, quit + reopen Quip, grid keeps it |
+| `75838b5` Q-83/Q-84 (Codex session) | its own gate | yes (Mac + iPhone) | no |
 
 ## Open threads
 
-1. Install the Mac build (recipe: `reference_quip_install_recipe` memory; ditto
-   into /Applications, never `rm -rf`; delete stale build copies after).
-   Then verify on hardware: enable a window with Mirror off, quit + reopen
-   Quip, phone grid still shows it.
+1. Hardware-verify `baee33d`: enable a window with Mirror off, quit + reopen
+   Quip, phone grid still shows it. (Installed 19:09 MST.)
 2. "Settings are very confusing" — Phone section of General mixes mirroring,
    any-app dictation and Whisper status. A pass that leads with "what the phone
    shows". Wishlist entry written 2026-10-27.
@@ -52,10 +51,10 @@ Earlier today, other sessions (VibeCut sync Q-74..Q-82, board docs):
 
 ## Shared checkout warning
 
-A Codex desktop session has UNCOMMITTED work in the main checkout (tunnel
-detection in `WebSocketServer.swift`, `Shared/ProjectName.swift`, VibeCut
-mapper, `PreferencesSyncService.swift`, 12 modified + 3 untracked files). Do not
-stage, stash or reset it. `baee33d` was staged by path and by hunk around it.
+A Codex desktop session was editing the main checkout alongside this one; it
+committed its work as `75838b5` (Q-83/Q-84) at ~19:05 MST. Tree clean after
+that. `baee33d` had been staged by path and by hunk around its edits. Check
+`git status` before touching anything: that session may still be active.
 
 ## Resume
 
