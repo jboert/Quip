@@ -399,6 +399,25 @@ struct PromptAckMsg: Encodable {
     let error: String?
 }
 
+/// Q-85: the ack to `sync_vibecut`; the fake "syncs" its fixture prompts.
+struct SyncVibeCutAckMsg: Encodable {
+    let type = "sync_vibecut_ack"
+    let messageId: String
+    let syncedCount: Int
+    let skippedCount = 0
+    let skippedPacks = 0
+    let freshness: String
+}
+
+/// Q-85: the answer to `vibecut_status_request`, to that phone only.
+struct VibeCutStatusMsg: Encodable {
+    let type = "vibecut_status"
+    let freshness: String
+    let lastSyncAt: Double?
+    let syncedCount: Int?
+    let error: String? = nil
+}
+
 struct ImageUploadErrorMsg: Encodable {
     let type = "image_upload_error"
     let imageId: String
@@ -491,6 +510,10 @@ final class FakeMac: @unchecked Sendable {
     /// a stale backup can be replayed against newer edits (Q-63).
     private var storedPrefs: [String: Data] = [:]
     private var prefsFrozen = false
+    /// Q-85: false until a phone syncs, so a fresh pairing shows the orange
+    /// "VibeCut changed" line; `vibecut changed` on the console flips it back.
+    private var vibecutFresh = false
+    private var vibecutSyncedAt: Date?
     /// Windows pinned through `set_pin` (Q-58); the fixture's own
     /// `isPinned` flags seed nothing here, they stay as the base state.
     private var pinned: Set<String> = []
@@ -825,6 +848,17 @@ final class FakeMac: @unchecked Sendable {
         case "close_window": handleCloseWindow(m, head)
         case "put_prompt": handlePutPrompt(m, head)
         case "delete_prompt": handleDeletePrompt(m, head)
+        case "sync_vibecut":
+            let messageId = m["messageId"] as? String ?? UUID().uuidString
+            vibecutFresh = true
+            vibecutSyncedAt = Date()
+            let n = broadcast(SyncVibeCutAckMsg(messageId: messageId, syncedCount: prompts.count,
+                                                freshness: "current"))
+            log.line(head + " -> sync_vibecut_ack (\(prompts.count) synced, freshness current) to \(n) phone(s)")
+        case "vibecut_status_request":
+            let status = vibecutStatusMessage()
+            send(status, to: client)
+            log.line(head + " -> vibecut_status (\(status.freshness), to this phone only)")
         case "image_upload":
             let imageId = m["imageId"] as? String ?? ""
             log.line(head + " image=\(Self.short(imageId)) window=\(m["windowId"] as? String ?? "") "
@@ -882,6 +916,12 @@ final class FakeMac: @unchecked Sendable {
     /// What `onClientAuthenticated` sends on the real Mac, in its order. The
     /// real Mac broadcasts these to every phone; the fake sends them to the
     /// phone that just authenticated.
+    private func vibecutStatusMessage() -> VibeCutStatusMsg {
+        VibeCutStatusMsg(freshness: vibecutFresh ? "current" : "changed",
+                         lastSyncAt: vibecutSyncedAt?.timeIntervalSince1970,
+                         syncedCount: vibecutSyncedAt == nil ? nil : prompts.count)
+    }
+
     private func sendWelcome(to client: Client) {
         send(layoutMessage(), to: client)
         log.line("\(client.tag) sent layout_update: \(windows.count) windows on \(Self.quoted(fixture.monitor)) "
@@ -1246,6 +1286,7 @@ final class FakeMac: @unchecked Sendable {
               status          phones, windows (dead or not) and prompts
               layout          resend layout_update to every phone
               library         resend prompt_library to every phone
+              vibecut changed mark VibeCut as changed since the last sync (the hub's orange line)
               close <window>  drop a window from the layout and resend it
               dead <window>   stop answering send_text for a window (no ack, no error)
               alive <window>  answer it again
@@ -1276,6 +1317,13 @@ final class FakeMac: @unchecked Sendable {
         case "library":
             let n = broadcast(PromptLibraryMsg(prompts: prompts))
             log.line("cmd library -> prompt_library (\(prompts.count) prompts) to \(n) phone(s)")
+        case "vibecut":
+            guard arg == "changed" else {
+                log.line("usage: vibecut changed")
+                return
+            }
+            vibecutFresh = false
+            log.line("cmd vibecut changed -> the next vibecut_status_request answers changed (reopen the hub)")
         case "close", "dead", "alive":
             guard let window = resolveWindow(arg, verb: verb) else { return }
             switch verb {

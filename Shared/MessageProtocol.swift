@@ -1085,15 +1085,69 @@ struct SyncVibeCutAckMessage: Codable, Sendable {
     /// Mac omits it (decodes as nil) and an older phone ignores it.
     let skippedPacks: Int?
     let error: String?
+    /// Whether VibeCut still matches what this sync read (Q-85): a
+    /// `VibeCutFreshnessWire` raw value. Optional for wire back-compat: an
+    /// older Mac omits it (nil) and the phone shows no freshness line.
+    let freshness: String?
 
     init(messageId: UUID, syncedCount: Int, skippedCount: Int,
-         skippedPacks: Int? = nil, error: String? = nil) {
+         skippedPacks: Int? = nil, error: String? = nil, freshness: String? = nil) {
         self.type = "sync_vibecut_ack"
         self.messageId = messageId
         self.syncedCount = syncedCount
         self.skippedCount = skippedCount
         self.skippedPacks = skippedPacks
         self.error = error
+        self.freshness = freshness
+    }
+}
+
+/// Whether VibeCut changed since the Mac last synced it (Q-85), as it travels
+/// on the wire. The Mac maps its `VibeCutSyncService.Freshness` onto this; the
+/// phone decodes with `VibeCutFreshnessWire(rawValue:) ?? .unknown`, so a value
+/// from a newer Mac reads Unknown — never a crash, and never Current.
+enum VibeCutFreshnessWire: String, Codable, Sendable {
+    case unknown
+    case neverSynced = "never_synced"
+    case current
+    case changed
+}
+
+/// iPhone → Mac. Ask for the Mac's VibeCut sync state (Q-85). Sent when the
+/// Prompts hub appears, once after each sync ack, and once when the phone
+/// re-authenticates while the hub is open. No polling. The Mac answers the
+/// requesting phone only with `VibeCutStatusMessage`; an older Mac ignores it.
+struct VibeCutStatusRequestMessage: Codable, Sendable {
+    let type: String
+
+    init() {
+        self.type = "vibecut_status_request"
+    }
+}
+
+/// Mac → the requesting iPhone. The Mac's own `VibeCutSyncService` state, never
+/// a guess made on the phone. `lastSyncAt` is epoch seconds of the last
+/// outcome (nil when never synced); `syncedCount` is nil when never synced or
+/// the last attempt failed; `error` is the last attempt's error (nil on success).
+struct VibeCutStatusMessage: Codable, Sendable, Equatable {
+    let type: String
+    let freshness: String
+    let lastSyncAt: Double?
+    let syncedCount: Int?
+    let error: String?
+
+    init(freshness: VibeCutFreshnessWire, lastSyncAt: Double? = nil,
+         syncedCount: Int? = nil, error: String? = nil) {
+        self.type = "vibecut_status"
+        self.freshness = freshness.rawValue
+        self.lastSyncAt = lastSyncAt
+        self.syncedCount = syncedCount
+        self.error = error
+    }
+
+    /// Decoded freshness; an unrecognised value reads Unknown.
+    var wireFreshness: VibeCutFreshnessWire {
+        VibeCutFreshnessWire(rawValue: freshness) ?? .unknown
     }
 }
 

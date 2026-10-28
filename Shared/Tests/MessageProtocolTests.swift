@@ -1556,4 +1556,59 @@ final class BroadcastWireFieldsTests: XCTestCase {
         XCTAssertNil(decodedPaste.raiseWindow)
         XCTAssertEqual(decodedPaste.id, "p")
     }
+
+    // MARK: - VibeCut status (Q-85)
+
+    func testVibeCutStatusRequestRoundTrip() throws {
+        let data = try XCTUnwrap(MessageCoder.encode(VibeCutStatusRequestMessage()))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["type"] as? String, "vibecut_status_request")
+        XCTAssertEqual(json.count, 1)
+        XCTAssertEqual(MessageCoder.decode(VibeCutStatusRequestMessage.self, from: data)?.type,
+                       "vibecut_status_request")
+    }
+
+    func testVibeCutStatusRoundTripWithEveryField() throws {
+        let msg = VibeCutStatusMessage(freshness: .changed, lastSyncAt: 1_793_150_000.5,
+                                       syncedCount: 49, error: nil)
+        let data = try XCTUnwrap(MessageCoder.encode(msg))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["type"] as? String, "vibecut_status")
+        XCTAssertEqual(json["freshness"] as? String, "changed")
+        let decoded = try XCTUnwrap(MessageCoder.decode(VibeCutStatusMessage.self, from: data))
+        XCTAssertEqual(decoded, msg)
+        XCTAssertEqual(decoded.wireFreshness, .changed)
+        XCTAssertEqual(decoded.syncedCount, 49)
+    }
+
+    func testVibeCutStatusDecodesWithoutTheOptionals() throws {
+        let data = Data(#"{"type":"vibecut_status","freshness":"never_synced"}"#.utf8)
+        let decoded = try XCTUnwrap(MessageCoder.decode(VibeCutStatusMessage.self, from: data))
+        XCTAssertEqual(decoded.wireFreshness, .neverSynced)
+        XCTAssertNil(decoded.lastSyncAt)
+        XCTAssertNil(decoded.syncedCount)
+        XCTAssertNil(decoded.error)
+    }
+
+    func testVibeCutStatusFromANewerMacReadsUnknownNeverCurrent() throws {
+        let data = Data(#"{"type":"vibecut_status","freshness":"stale"}"#.utf8)
+        let decoded = try XCTUnwrap(MessageCoder.decode(VibeCutStatusMessage.self, from: data))
+        XCTAssertEqual(decoded.wireFreshness, .unknown)
+        XCTAssertNil(VibeCutFreshnessWire(rawValue: "stale"))
+    }
+
+    func testSyncVibeCutAckFromAnOlderMacHasNoFreshness() throws {
+        let data = Data(#"{"type":"sync_vibecut_ack","messageId":"6BA7B810-9DAD-11D1-80B4-00C04FD430C8","syncedCount":3,"skippedCount":0}"#.utf8)
+        let decoded = try XCTUnwrap(MessageCoder.decode(SyncVibeCutAckMessage.self, from: data))
+        XCTAssertNil(decoded.freshness)
+        XCTAssertEqual(decoded.syncedCount, 3)
+    }
+
+    func testSyncVibeCutAckCarriesFreshness() throws {
+        let ack = SyncVibeCutAckMessage(messageId: UUID(), syncedCount: 3, skippedCount: 0,
+                                        freshness: VibeCutFreshnessWire.current.rawValue)
+        let data = try XCTUnwrap(MessageCoder.encode(ack))
+        let decoded = try XCTUnwrap(MessageCoder.decode(SyncVibeCutAckMessage.self, from: data))
+        XCTAssertEqual(decoded.freshness, "current")
+    }
 }

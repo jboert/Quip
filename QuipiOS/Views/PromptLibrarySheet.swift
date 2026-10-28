@@ -66,9 +66,19 @@ struct PromptLibrarySheet: View {
     @State private var syncResult: String?
     @State private var syncTimeout: Task<Void, Never>?
     @State private var syncResultClear: Task<Void, Never>?
+    /// The Mac's answer to `vibecut_status_request` (Q-85). nil until it
+    /// answers; cleared on a re-auth because the old Mac's answer is stale.
+    @State private var vibecutStatus: VibeCutStatusMessage?
 
     var body: some View {
         List {
+            // Q-85: its own Section, in every state of the hub — the empty
+            // library is exactly where "Never synced from VibeCut" must show.
+            if let line = vibecutStatusLine {
+                Section {
+                    vibecutStatusRow(line)
+                }
+            }
             if client.promptLibrary.isEmpty {
                 Section {
                     Text("No prompts yet. Tap + above to create one, or drop .txt files into ~/Library/Application Support/Quip/prompts/ on the Mac.")
@@ -315,6 +325,19 @@ struct PromptLibrarySheet: View {
             client.onSyncVibeCutAck = { ack in
                 handleSyncAck(ack)
             }
+            client.onVibeCutStatus = { status in
+                vibecutStatus = status
+            }
+            if client.isConnected && client.isAuthenticated {
+                client.requestVibeCutStatus()
+            }
+        }
+        .onChange(of: client.isAuthenticated) { wasAuthenticated, isAuthenticated in
+            // A Mac restart with the hub open is the "is this outdated?"
+            // moment: the old answer is stale, ask the new Mac.
+            guard !wasAuthenticated, isAuthenticated else { return }
+            vibecutStatus = nil
+            client.requestVibeCutStatus()
         }
         .onDisappear {
             deleteTimeouts.values.forEach { $0.cancel() }
@@ -324,6 +347,46 @@ struct PromptLibrarySheet: View {
             client.onPutPromptAck = nil
             client.onDeletePromptAck = nil
             client.onSyncVibeCutAck = nil
+            client.onVibeCutStatus = nil
+        }
+    }
+
+    // MARK: VibeCut status line (Q-85)
+
+    private var vibecutStatusLine: VibeCutStatusText.Line? {
+        guard let vibecutStatus else { return nil }
+        return VibeCutStatusText.line(
+            freshness: vibecutStatus.wireFreshness,
+            lastSyncAt: vibecutStatus.lastSyncAt.map { Date(timeIntervalSince1970: $0) },
+            syncedCount: vibecutStatus.syncedCount,
+            error: vibecutStatus.error)
+    }
+
+    @ViewBuilder
+    private func vibecutStatusRow(_ line: VibeCutStatusText.Line) -> some View {
+        let text = Text(line.text)
+            .font(.caption)
+            .foregroundStyle(vibecutStatusColor(line.tone))
+        if line.tone == .due {
+            Button { syncFromVibeCut() } label: {
+                HStack {
+                    text
+                    Spacer()
+                    if syncing { ProgressView().controlSize(.small) }
+                }
+            }
+            .disabled(syncing || !(client.isConnected && client.isAuthenticated))
+            .accessibilityLabel("Sync from VibeCut now")
+        } else {
+            text
+        }
+    }
+
+    private func vibecutStatusColor(_ tone: VibeCutStatusText.Tone) -> Color {
+        switch tone {
+        case .neutral: return .secondary
+        case .due: return .orange
+        case .failed: return .red
         }
     }
 
@@ -370,6 +433,11 @@ struct PromptLibrarySheet: View {
             showSyncResult("\(ack.syncedCount) synced · \(badPacks) pack file\(badPacks == 1 ? "" : "s") skipped")
         } else {
             showSyncResult("\(ack.syncedCount) synced")
+        }
+        // Q-85: a Mac that stamps the ack has the fresh outcome; one round
+        // trip refreshes the status line. An older Mac would never answer.
+        if ack.freshness != nil {
+            client.requestVibeCutStatus()
         }
     }
 

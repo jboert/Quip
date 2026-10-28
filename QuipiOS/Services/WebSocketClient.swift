@@ -430,6 +430,10 @@ final class WebSocketClient {
     /// Mac confirms a VibeCut prompt sync completed (with the synced/skipped
     /// counts), or reports why it could not run.
     var onSyncVibeCutAck: ((SyncVibeCutAckMessage) -> Void)?
+    /// Mac answered `vibecut_status_request` (Q-85): whether VibeCut changed
+    /// since the last sync. The Prompts hub sets this directly, as it does
+    /// `onSyncVibeCutAck`; no manager bridge.
+    var onVibeCutStatus: ((VibeCutStatusMessage) -> Void)?
     /// Every URL in the list failed and the client wrapped back to the first.
     /// Fires once per exhausted pass, before the first URL is dialed again,
     /// so the connection manager can re-run Bonjour and rebuild the list from
@@ -1032,6 +1036,13 @@ final class WebSocketClient {
               transport.rawValue, currentNetworkClass.rawValue, variance, host)
     }
 
+    /// Q-85: ask the Mac whether VibeCut changed since the last sync. The
+    /// answer arrives on `onVibeCutStatus`; an older Mac never answers.
+    @discardableResult
+    func requestVibeCutStatus() -> Bool {
+        send(VibeCutStatusRequestMessage())
+    }
+
     @discardableResult
     func send<T: Codable>(_ message: T) -> Bool {
         guard let task = webSocketTask else {
@@ -1583,6 +1594,13 @@ final class WebSocketClient {
                 NSLog("[WebSocketClient] sync_vibecut_ack: synced=%d skipped=%d err=%@",
                       msg.syncedCount, msg.skippedCount, msg.error ?? "none")
                 onSyncVibeCutAck?(msg)
+            }
+        case "vibecut_status":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(VibeCutStatusMessage.self, from: data, msgType: peek.type) {
+                NSLog("[WebSocketClient] vibecut_status: freshness=%@ synced=%d err=%@",
+                      msg.freshness, msg.syncedCount ?? -1, msg.error ?? "none")
+                onVibeCutStatus?(msg)
             }
         case "whisper_status":
             guard isAuthenticated else { return }

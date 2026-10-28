@@ -91,24 +91,83 @@ final class VibeCutSyncService {
     /// and stat its catalog file off the main thread. Cheap, but Settings calls
     /// this on every pane appearance — and a stat can block on a dead network
     /// volume, which is exactly the class of main-thread work that has hung this
-    /// app before.
+    /// app before. Fire-and-forget face of `probeFreshness()`.
     func refreshRepoProbe() {
+        Task { @MainActor in _ = await self.probeFreshness() }
+    }
+
+    /// How long the stat may take before the probe gives up and answers
+    /// Unknown. A dead network volume can block a stat indefinitely; the phone
+    /// asking for status (Q-85) must never wait on it.
+    nonisolated static let probeTimeout: TimeInterval = 3
+
+    /// The repo probe, awaited: resolves the root, stats the catalog and
+    /// recomputes `freshness`, returning what it set. On a timeout or a path
+    /// change mid-flight the stored state is left as it was and the answer is
+    /// Unknown — never Current on a guess.
+    func probeFreshness() async -> Freshness {
         let root = VibeCutPromptReader.defaultRoot()
         repoPath = root.path
         let reader = VibeCutPromptReader(root: root)
         let url = reader.promptsFileURL
-        Task { @MainActor in
-            let (found, fingerprint) = await Task.detached(priority: .utility) {
+        let timeout = Self.probeTimeout
+        let probed: (found: Bool, fingerprint: String?)? = await withTaskGroup(
+            of: (found: Bool, fingerprint: String?)?.self
+        ) { group in
+            group.addTask(priority: .utility) {
                 (FileManager.default.fileExists(atPath: url.path), reader.sourceFingerprint())
-            }.value
-            // The user may have changed the path while the stat was in flight.
-            guard VibeCutPromptReader.defaultRoot().path == root.path else { return }
-            self.repoFound = found
-            self.freshness = Self.freshness(
-                syncedFingerprint: UserDefaults.standard.string(forKey: Self.syncedFingerprintKey),
-                currentFingerprint: fingerprint,
-                hasSynced: self.lastOutcome.map { $0.error == nil } ?? false)
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
+        guard let probed else {
+            QuipLog.write(severity: .warn, subsystem: "vibecut",
+                          message: "repo probe timed out after \(Int(timeout))s at \(root.path); freshness unknown",
+                          to: LogPaths.webSocketPath)
+            return .unknown
+        }
+        // The user may have changed the path while the stat was in flight.
+        guard VibeCutPromptReader.defaultRoot().path == root.path else { return .unknown }
+        repoFound = probed.found
+        freshness = Self.freshness(
+            syncedFingerprint: UserDefaults.standard.string(forKey: Self.syncedFingerprintKey),
+            currentFingerprint: probed.fingerprint,
+            hasSynced: lastOutcome.map { $0.error == nil } ?? false)
+        return freshness
+    }
+
+    // MARK: Wire (Q-85)
+
+    /// Pure: `Freshness` → its wire name. Static so tests never touch
+    /// `UserDefaults.standard`.
+    static func wire(_ freshness: Freshness) -> VibeCutFreshnessWire {
+        switch freshness {
+        case .unknown: return .unknown
+        case .neverSynced: return .neverSynced
+        case .current: return .current
+        case .changed: return .changed
+        }
+    }
+
+    /// Pure: the reply to a phone's `vibecut_status_request`. A failed last
+    /// attempt carries its error and no count; never synced carries neither.
+    static func statusMessage(freshness: Freshness, lastOutcome: Outcome?) -> VibeCutStatusMessage {
+        VibeCutStatusMessage(
+            freshness: wire(freshness),
+            lastSyncAt: lastOutcome.map { $0.date.timeIntervalSince1970 },
+            syncedCount: lastOutcome.flatMap { $0.error == nil ? $0.synced : nil },
+            error: lastOutcome?.error)
+    }
+
+    var wireFreshness: VibeCutFreshnessWire { Self.wire(freshness) }
+
+    func statusMessage() -> VibeCutStatusMessage {
+        Self.statusMessage(freshness: freshness, lastOutcome: lastOutcome)
     }
 
     /// Run one sync into `library` and record the outcome. Mirrors the original
@@ -161,9 +220,13 @@ final class VibeCutSyncService {
         }
         // What this sync read, so the probe below can answer Current / Changed.
         UserDefaults.standard.set(readResult.fingerprint, forKey: Self.syncedFingerprintKey)
-        refreshRepoProbe()
-        return record(synced: written, skipped: mapped.skipped,
-                      skippedPacks: readResult.skippedPacks, error: nil)
+        let outcome = record(synced: written, skipped: mapped.skipped,
+                             skippedPacks: readResult.skippedPacks, error: nil)
+        // Awaited, not fired: the phone's ack carries `freshness`, so it must
+        // be the post-sync answer, not whatever the Settings pane last saw.
+        // After `record`, so `hasSynced` sees this outcome.
+        _ = await probeFreshness()
+        return outcome
     }
 
     private func record(synced: Int, skipped: Int, skippedPacks: Int, error: String?) -> Outcome {

@@ -565,6 +565,16 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         self.applyPreferencesRequest(msg, connection: connection)
                     }
                 }
+            // Q-85: the phone's Prompts hub asks whether VibeCut changed since
+            // the last sync. Per connection: only the asker wants the answer.
+            case "vibecut_status_request":
+                DispatchQueue.main.async {
+                    Task { @MainActor in
+                        _ = await self.vibeCutSyncService.probeFreshness()
+                        self.webSocketServer.sendToClient(
+                            self.vibeCutSyncService.statusMessage(), connection: connection)
+                    }
+                }
             default:
                 break
             }
@@ -2857,7 +2867,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             self.webSocketServer.broadcast(SyncVibeCutAckMessage(
                 messageId: messageId, syncedCount: outcome.synced,
                 skippedCount: outcome.skipped, skippedPacks: outcome.skippedPacks,
-                error: outcome.error))
+                error: outcome.error,
+                freshness: self.vibeCutSyncService.wireFreshness.rawValue))
         }
     }
 

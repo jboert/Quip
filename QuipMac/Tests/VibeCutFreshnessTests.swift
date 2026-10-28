@@ -85,4 +85,38 @@ final class VibeCutFreshnessTests: XCTestCase {
         XCTAssertEqual(S.freshness(syncedFingerprint: nil, currentFingerprint: "y", hasSynced: true), .unknown)
         XCTAssertEqual(S.freshness(syncedFingerprint: "x", currentFingerprint: nil, hasSynced: true), .unknown)
     }
+
+    // MARK: Wire (Q-85) — through the pure statics, never UserDefaults.standard
+
+    func testWireFreshnessMapsEveryCase() {
+        XCTAssertEqual(VibeCutSyncService.wire(.unknown), .unknown)
+        XCTAssertEqual(VibeCutSyncService.wire(.neverSynced), .neverSynced)
+        XCTAssertEqual(VibeCutSyncService.wire(.current), .current)
+        XCTAssertEqual(VibeCutSyncService.wire(.changed), .changed)
+        XCTAssertEqual(VibeCutSyncService.wire(.neverSynced).rawValue, "never_synced")
+    }
+
+    func testStatusMessageCarriesLastOutcome() {
+        let never = VibeCutSyncService.statusMessage(freshness: .neverSynced, lastOutcome: nil)
+        XCTAssertEqual(never.wireFreshness, .neverSynced)
+        XCTAssertNil(never.lastSyncAt)
+        XCTAssertNil(never.syncedCount)
+        XCTAssertNil(never.error)
+
+        let when = Date(timeIntervalSince1970: 1_793_150_000)
+        let failed = VibeCutSyncService.Outcome(date: when, synced: 0, skipped: 2, skippedPacks: 0,
+                                                error: "VibeCut repo not found")
+        let failedMsg = VibeCutSyncService.statusMessage(freshness: .unknown, lastOutcome: failed)
+        XCTAssertEqual(failedMsg.wireFreshness, .unknown)
+        XCTAssertEqual(failedMsg.error, "VibeCut repo not found")
+        XCTAssertNil(failedMsg.syncedCount, "a failed attempt landed nothing; no count")
+        XCTAssertEqual(failedMsg.lastSyncAt, when.timeIntervalSince1970)
+
+        let good = VibeCutSyncService.Outcome(date: when, synced: 49, skipped: 2, skippedPacks: 1, error: nil)
+        let goodMsg = VibeCutSyncService.statusMessage(freshness: .current, lastOutcome: good)
+        XCTAssertEqual(goodMsg.wireFreshness, .current)
+        XCTAssertEqual(goodMsg.syncedCount, 49)
+        XCTAssertEqual(goodMsg.lastSyncAt, when.timeIntervalSince1970)
+        XCTAssertNil(goodMsg.error)
+    }
 }
