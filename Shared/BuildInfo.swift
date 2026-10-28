@@ -11,6 +11,9 @@ enum BuildInfo {
         var build: String
         var commit: String?
         var date: String?
+        /// The commit count at build time (`QuipBuildNumber`): the number that
+        /// advances with every commit while the marketing version sits still.
+        var number: String?
     }
 
     /// Read from `Bundle.main` once per launch.
@@ -20,23 +23,27 @@ enum BuildInfo {
         Stamp(short: info["CFBundleShortVersionString"] as? String ?? "?",
               build: info["CFBundleVersion"] as? String ?? "?",
               commit: nonEmpty(info["QuipBuildCommit"] as? String),
-              date: nonEmpty(info["QuipBuildDate"] as? String))
+              date: nonEmpty(info["QuipBuildDate"] as? String),
+              number: nonEmpty(info["QuipBuildNumber"] as? String))
     }
 
-    /// The full line: "1.5.7 (a8f2308, 2026-10-08 08:30)". Without a stamp
-    /// (a build that skipped the phase) it is the old "1.5.7 (1)".
+    /// The full line: "1.5.7 (1234, a8f2308, 2026-10-08 08:30)" — version,
+    /// build number, commit, build time, each only when stamped. Without a
+    /// stamp (a build that skipped the phase) it is the old "1.5.7 (1)".
     static func display(_ stamp: Stamp) -> String {
         guard let commit = stamp.commit else {
+            if let number = stamp.number { return "\(stamp.short) (\(number))" }
             return stamp.short == stamp.build ? stamp.short : "\(stamp.short) (\(stamp.build))"
         }
-        if let date = stamp.date { return "\(stamp.short) (\(commit), \(date))" }
-        return "\(stamp.short) (\(commit))"
+        let parts = [stamp.number, commit, stamp.date].compactMap { $0 }
+        return "\(stamp.short) (\(parts.joined(separator: ", ")))"
     }
 
-    /// The short form for a status line: "1.5.7 a8f2308".
+    /// The short form for a status line: "1.5.7 (1234) a8f2308".
     static func shortDisplay(_ stamp: Stamp) -> String {
-        guard let commit = stamp.commit else { return stamp.short }
-        return "\(stamp.short) \(commit)"
+        let version = stamp.number.map { "\(stamp.short) (\($0))" } ?? stamp.short
+        guard let commit = stamp.commit else { return version }
+        return "\(version) \(commit)"
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

@@ -11,6 +11,11 @@
 #   QuipBuildCommit  short hash, "-dirty" when tracked files differ from HEAD
 #                    (the regenerated project.pbxproj never counts, US-005)
 #   QuipBuildDate    local build time, "YYYY-MM-DD HH:MM"
+#   QuipBuildNumber  commit count at HEAD: the number that advances with
+#                    every commit while the marketing version sits still.
+#                    CFBundleVersion is left alone — the watch app and the
+#                    extensions must match it, and they are not stamped.
+#                    Absent when there is no history to count.
 set -euo pipefail
 
 plist="${SRCROOT:-}/${INFOPLIST_FILE:-}"
@@ -29,12 +34,19 @@ if git -C "$repo" rev-parse --short=7 HEAD >/dev/null 2>&1; then
     commit="${commit}-dirty"
   fi
 fi
+number=""
+if [ "$commit" != "unknown" ]; then
+  number="$(git -C "$repo" rev-list --count HEAD 2>/dev/null || true)"
+fi
 date="$(date '+%Y-%m-%d %H:%M')"
 
 pb=/usr/libexec/PlistBuddy
-for key in QuipBuildCommit QuipBuildDate; do
+for key in QuipBuildCommit QuipBuildDate QuipBuildNumber; do
   "$pb" -c "Delete :$key" "$plist" >/dev/null 2>&1 || true
 done
 "$pb" -c "Add :QuipBuildCommit string $commit" "$plist"
 "$pb" -c "Add :QuipBuildDate string $date" "$plist"
-echo "stamp-build-info: $commit $date -> $plist"
+if [ -n "$number" ]; then
+  "$pb" -c "Add :QuipBuildNumber string $number" "$plist"
+fi
+echo "stamp-build-info: $commit build=${number:-?} $date -> $plist"
