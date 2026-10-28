@@ -101,29 +101,58 @@ final class VibeCutSyncService {
     /// asking for status (Q-85) must never wait on it.
     nonisolated static let probeTimeout: TimeInterval = 3
 
+    private struct ProbeResult: Sendable {
+        let found: Bool
+        let fingerprint: String?
+    }
+
+    /// Runs blocking `work` off the MainActor and gives up after `seconds`,
+    /// answering nil. A task group cannot do this: it waits for every child
+    /// before returning, and a blocked stat never sees cancellation. Here the
+    /// work runs unstructured and whichever finishes first resumes the caller;
+    /// a stuck stat keeps one detached thread, never the caller.
+    nonisolated static func raceTimeout<T: Sendable>(
+        _ seconds: TimeInterval, _ work: @escaping @Sendable () -> T
+    ) async -> T? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            let once = ResumeOnce(continuation)
+            Task.detached(priority: .utility) { once.resume(work()) }
+            Task.detached {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                once.resume(nil)
+            }
+        }
+    }
+
+    /// Resumes a continuation exactly once, from whichever racer gets there first.
+    private final class ResumeOnce<T: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T?, Never>?
+        init(_ continuation: CheckedContinuation<T?, Never>) { self.continuation = continuation }
+        func resume(_ value: T?) {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: value)
+        }
+    }
+
     /// The repo probe, awaited: resolves the root, stats the catalog and
-    /// recomputes `freshness`, returning what it set. On a timeout or a path
+    /// recomputes `freshness`, returning what it found. Callers that answer a
+    /// phone must send THIS value, not the stored one: on a timeout or a path
     /// change mid-flight the stored state is left as it was and the answer is
     /// Unknown — never Current on a guess.
     func probeFreshness() async -> Freshness {
         let root = VibeCutPromptReader.defaultRoot()
         repoPath = root.path
-        let reader = VibeCutPromptReader(root: root)
-        let url = reader.promptsFileURL
         let timeout = Self.probeTimeout
-        let probed: (found: Bool, fingerprint: String?)? = await withTaskGroup(
-            of: (found: Bool, fingerprint: String?)?.self
-        ) { group in
-            group.addTask(priority: .utility) {
-                (FileManager.default.fileExists(atPath: url.path), reader.sourceFingerprint())
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+        // Everything that can touch the disk, including building the reader's
+        // URLs, happens inside the raced work, off the MainActor.
+        let probed = await Self.raceTimeout(timeout) { () -> ProbeResult in
+            let reader = VibeCutPromptReader(root: root)
+            return ProbeResult(found: FileManager.default.fileExists(atPath: reader.promptsFileURL.path),
+                               fingerprint: reader.sourceFingerprint())
         }
         guard let probed else {
             QuipLog.write(severity: .warn, subsystem: "vibecut",
@@ -164,10 +193,10 @@ final class VibeCutSyncService {
             error: lastOutcome?.error)
     }
 
-    var wireFreshness: VibeCutFreshnessWire { Self.wire(freshness) }
-
-    func statusMessage() -> VibeCutStatusMessage {
-        Self.statusMessage(freshness: freshness, lastOutcome: lastOutcome)
+    /// The reply to a phone, built from the freshness the probe just
+    /// answered (never the stored value, which a timed-out probe leaves stale).
+    func statusMessage(freshness answered: Freshness) -> VibeCutStatusMessage {
+        Self.statusMessage(freshness: answered, lastOutcome: lastOutcome)
     }
 
     /// Run one sync into `library` and record the outcome. Mirrors the original
@@ -180,7 +209,8 @@ final class VibeCutSyncService {
     /// `trigger` names the entry point ("phone" / "settings-button") in the
     /// websocket.log line — every sync rewrites the whole inherited set on
     /// disk, so an unattributed one must be traceable to its caller.
-    func sync(into library: PromptLibrary, trigger: String) async -> Outcome {
+    @discardableResult
+    func sync(into library: PromptLibrary, trigger: String) async -> (outcome: Outcome, freshness: Freshness) {
         QuipLog.write(severity: .info, subsystem: "vibecut",
                       message: "sync started (trigger=\(trigger))",
                       to: LogPaths.webSocketPath)
@@ -191,9 +221,10 @@ final class VibeCutSyncService {
         // `freshness`, so it must be the post-sync answer. A failed sync used
         // to return before this and ack whatever the previous sync had left
         // (seen on hardware 2026-10-28: a refused v4 catalog acked "current").
-        // After `record`, so `hasSynced` sees this outcome.
-        _ = await probeFreshness()
-        return outcome
+        // After `record`, so `hasSynced` sees this outcome. The value goes
+        // back to the caller so the ack carries what this probe answered.
+        let answered = await probeFreshness()
+        return (outcome, answered)
     }
 
     /// The read/map/replace pipeline behind `sync`. Every exit records its

@@ -34,7 +34,10 @@ final class VibeCutFreshnessTests: XCTestCase {
     }
 
     private var reader: VibeCutPromptReader {
-        VibeCutPromptReader(root: root, packsDirectory: packs, actionsDirectory: actions)
+        // All four paths: a default privateStoreURL reads the owner's real
+        // VibeCut private store (the leak class c5003fe removed elsewhere).
+        VibeCutPromptReader(root: root, packsDirectory: packs, actionsDirectory: actions,
+                            privateStoreURL: tmp.appendingPathComponent("no-such-private/projects.json"))
     }
 
     func testFingerprintIsStableWhileNothingChanges() {
@@ -118,5 +121,25 @@ final class VibeCutFreshnessTests: XCTestCase {
         XCTAssertEqual(goodMsg.syncedCount, 49)
         XCTAssertEqual(goodMsg.lastSyncAt, when.timeIntervalSince1970)
         XCTAssertNil(goodMsg.error)
+    }
+
+    // MARK: Probe timeout (fan-out review, 2026-10-28)
+
+    /// A blocked stat must not hold the caller past the timeout. The first
+    /// version used a task group, which waits for every child, so a stat that
+    /// never returned made the "timeout" wait forever.
+    func testRaceTimeoutReturnsNilWhileTheWorkIsStillBlocked() async {
+        let start = Date()
+        let result = await VibeCutSyncService.raceTimeout(0.2) { () -> Int in
+            Thread.sleep(forTimeInterval: 2)
+            return 1
+        }
+        XCTAssertNil(result)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.0, "the caller waited on the blocked work")
+    }
+
+    func testRaceTimeoutReturnsTheWorkWhenItFinishesFirst() async {
+        let result = await VibeCutSyncService.raceTimeout(2) { 42 }
+        XCTAssertEqual(result, 42)
     }
 }

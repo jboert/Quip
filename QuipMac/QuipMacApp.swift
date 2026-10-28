@@ -570,9 +570,10 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             case "vibecut_status_request":
                 DispatchQueue.main.async {
                     Task { @MainActor in
-                        _ = await self.vibeCutSyncService.probeFreshness()
+                        let answered = await self.vibeCutSyncService.probeFreshness()
                         self.webSocketServer.sendToClient(
-                            self.vibeCutSyncService.statusMessage(), connection: connection)
+                            self.vibeCutSyncService.statusMessage(freshness: answered),
+                            connection: connection)
                     }
                 }
             default:
@@ -2862,7 +2863,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
     private func handleSyncVibeCut(_ msg: SyncVibeCutMessage) {
         let messageId = msg.messageId ?? UUID()
         Task { @MainActor in
-            let outcome = await vibeCutSyncService.sync(into: promptLibrary, trigger: "phone")
+            let (outcome, answered) = await vibeCutSyncService.sync(into: promptLibrary, trigger: "phone")
             if let error = outcome.error {
                 print("[Quip] sync_vibecut: \(error) (\(outcome.skipped) skipped)")
             } else {
@@ -2872,7 +2873,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 messageId: messageId, syncedCount: outcome.synced,
                 skippedCount: outcome.skipped, skippedPacks: outcome.skippedPacks,
                 error: outcome.error,
-                freshness: self.vibeCutSyncService.wireFreshness.rawValue))
+                freshness: VibeCutSyncService.wire(answered).rawValue))
         }
     }
 

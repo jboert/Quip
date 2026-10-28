@@ -118,7 +118,7 @@ struct PromptsTab: View {
                     ProgressView().controlSize(.small)
                 }
                 Button("Sync Now") {
-                    Task { _ = await vibeCutSync.sync(into: library, trigger: "settings-button") }
+                    Task { await vibeCutSync.sync(into: library, trigger: "settings-button") }
                 }
                 .disabled(vibeCutSync.isSyncing)
             }

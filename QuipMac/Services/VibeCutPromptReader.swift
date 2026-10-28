@@ -79,7 +79,9 @@ struct VibeCutPromptReader {
     static func defaultRoot() -> URL {
         let raw = UserDefaults.standard.string(forKey: "vibecutRepoPath")
             .flatMap { $0.isEmpty ? nil : $0 } ?? "~/Projects/vibecut"
-        return URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
+        // isDirectory: without it Foundation stats the path to decide, and this
+        // runs on the MainActor — a dead network volume would hang the app.
+        return URL(fileURLWithPath: (raw as NSString).expandingTildeInPath, isDirectory: true)
     }
 
     /// Merged catalog plus the number of `.json` pack files that could not be
