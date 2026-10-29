@@ -153,8 +153,11 @@ final class ITermVerbSmokeTests: XCTestCase {
         // KeystrokeInjector.swift:495 + WindowManager.swift:668 use this exact
         // shape to look up a window by its iTerm-internal id. If iTerm ever
         // breaks the `whose` clause on windows, those paths silently no-op.
+        // Count first: `id of first window` with no windows is an AppleScript
+        // error, which `run` reports as a failure before any skip can happen.
+        let count = runAndExtractInt("tell application \"iTerm2\" to count windows") ?? 0
+        try XCTSkipUnless(count > 0, "no windows to probe")
         let firstId = runAndExtractInt("tell application \"iTerm2\" to get id of first window")
-        try XCTSkipUnless(firstId != nil, "no windows to probe")
         guard let wid = firstId else { return }
         let result = run("tell application \"iTerm2\" to get name of (first window whose id is \(wid))")
         XCTAssertNotNil(result?.stringValue,
