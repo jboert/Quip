@@ -29,11 +29,19 @@ targets:
           - "build/**"
           - ".claude-flow/**"
           - "Tests/**"
+          - "ClaudeHookTool/**"
       - path: ../Shared
         excludes:
           - "Tests/**"
     dependencies:
       - package: WhisperKit
+      # Q-87: Claude Code hook helper, shipped at Contents/MacOS/quip-claude-hook
+      # so the Settings switch can point Claude at it.
+      - target: QuipClaudeHook
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
     preBuildScripts:
       - script: |
           # cloudflared is not committed (issue #16) — fetch + checksum-verify
@@ -89,6 +97,25 @@ targets:
           - _quip._tcp.
           - _quip._tcp
         NSLocalNetworkUsageDescription: Quip uses your local network to connect with the iPhone remote controller app.
+  # Q-87: the Claude Code PostToolUse hook. A compiled helper rather than a
+  # script: starts in a few ms and needs no python3/jq on the user's Mac. It
+  # shares the parser and report code with the app (and its tests).
+  QuipClaudeHook:
+    type: tool
+    platform: macOS
+    sources:
+      - path: ClaudeHookTool
+      - path: Services/ClaudeHook/OpenCommandParser.swift
+      - path: Services/ClaudeHook/ClaudeHookReport.swift
+    settings:
+      base:
+        PRODUCT_NAME: quip-claude-hook
+        PRODUCT_BUNDLE_IDENTIFIER: com.quip.mac.claude-hook
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: D2PM6R797Q
+        ENABLE_HARDENED_RUNTIME: true
+        SKIP_INSTALL: true
   QuipMacTests:
     type: bundle.unit-test
     platform: macOS

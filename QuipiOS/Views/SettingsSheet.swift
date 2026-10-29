@@ -69,6 +69,11 @@ struct SettingsSheet: View {
                 // for the 99% of sessions where everything's fine.
                 macPermsSection
 
+                // Q-87: hidden until the Mac says it supports the switch.
+                if client.claudePreviewsState != nil {
+                    claudePreviewsSection
+                }
+
                 // Appearance — common visual preferences stay inline so the
                 // user can tune the main screen without drilling through
                 // another detail page.
@@ -251,6 +256,38 @@ struct SettingsSheet: View {
     /// The "tap a red row to open System Settings" pattern depends on the
     /// detail rows being visible, which is why we only expand when needed.
     @ViewBuilder
+    /// Q-87: the phone's copy of the Mac's "Show Claude's previews on phone"
+    /// switch. The Mac does the work (adds/removes its Claude Code hook) and
+    /// answers with the new state, which is what this row shows.
+    private var claudePreviewsSection: some View {
+        let state = client.claudePreviewsState ?? "off"
+        return Section {
+            Toggle(isOn: Binding(
+                get: { state == "on" || state == "stale" },
+                set: { client.send(SetClaudePreviewsMessage(enabled: $0)) }
+            )) {
+                HStack(spacing: 10) {
+                    settingsIcon("photo.on.rectangle", tint: .purple)
+                    Text("Show Claude's previews")
+                }
+            }
+            .disabled(state == "remote" || state == "unreadable")
+        } header: {
+            Text("Claude Previews")
+        } footer: {
+            switch state {
+            case "remote":
+                Text("Available when connected over your home network or Tailscale.")
+            case "unreadable":
+                Text("Claude's settings file on the Mac isn't valid JSON, so Quip won't change it.")
+            case "stale":
+                Text("Claude is set up to use an older copy of Quip. Turn this off and on to repair it.")
+            default:
+                Text("When Claude opens an image or PDF on the Mac, it shows on that terminal here. Only files Claude opens are sent — never Preview windows you open yourself.")
+            }
+        }
+    }
+
     private var macPermsSection: some View {
         Section {
             if let perms = macPermissions {

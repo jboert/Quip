@@ -221,6 +221,9 @@ struct QuipMacApp: App {
     @State private var connectionLog = ConnectionLog()
     @State private var promptLibrary = PromptLibrary()
     @State private var vibeCutSyncService = VibeCutSyncService()
+    /// Q-87: files Claude opened (reported by `quip-claude-hook`), sent to phones.
+    @State private var claudePreviewService = ClaudePreviewService()
+    @State private var claudeHookSwitch = ClaudeHookSwitch()
     @State private var pushNotificationService = PushNotificationService()
     @State private var swrmProjectStore = SwrmProjectStore()
     @State private var swrmStoryCoordinator = SwrmStoryCoordinator()
@@ -402,6 +405,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 .environment(promptLibrary)
                 .environment(vibeCutSyncService)
                 .environment(swrmProjectStore)
+                .environment(claudeHookSwitch)
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 600)
@@ -576,6 +580,14 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                             connection: connection)
                     }
                 }
+            // Q-87: the full image goes to the phone that asked, not everyone.
+            // (Tunnel clients never reach here: WebSocketServer refuses the type.)
+            case "claude_preview_request":
+                if let msg = MessageCoder.decode(ClaudePreviewRequestMessage.self, from: data) {
+                    DispatchQueue.main.async {
+                        self.sendClaudePreviewImage(id: msg.id, connection: connection)
+                    }
+                }
             default:
                 break
             }
@@ -594,6 +606,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 self.webSocketServer.broadcast(MacBuildMessage(
                     stamp: BuildInfo.current, deviceID: WebSocketServer.deviceID()))
                 self.broadcastWhisperStatus()
+                self.broadcastClaudePreviews()
                 // Push the prompt-library catalog so a fresh phone sees
                 // the user's saved prompts without waiting for the next
                 // file-system change. (wishlist §57)
@@ -610,6 +623,14 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         }
 
         webSocketServer.start()
+
+        // Q-87: files Claude opens on the Mac, reported by the Claude Code hook
+        // the Settings switch installs. Reports wait in the inbox until read.
+        claudePreviewService.windowsProvider = { [windowManager] in windowManager.windows }
+        claudePreviewService.onChange = { [self] in broadcastClaudePreviews() }
+        claudeHookSwitch.onChange = { [self] in broadcastClaudePreviews() }
+        claudePreviewService.start()
+        claudeHookSwitch.applyDefault()
 
         // Prompt library — watch ~/Library/Application Support/Quip/prompts/
         // and broadcast catalog changes to every authenticated client.
@@ -878,6 +899,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                         self.syncTrackedWindows()
                         validateQAPairs()
                         broadcastLayout()
+                        claudePreviewService.refreshDesktopWindows(windowManager.windows)
                     }
                 }
             }
@@ -978,6 +1000,32 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         if !force, snapshot == lastPermissionsSnapshot { return }
         lastPermissionsSnapshot = snapshot
         webSocketServer.broadcast(snapshot)
+    }
+
+    /// Q-87: the list of files Claude opened, plus the switch state, to every
+    /// phone. Tunnel clients get an empty list with state "remote": the files
+    /// stay on the owner's own network.
+    @MainActor
+    private func broadcastClaudePreviews() {
+        webSocketServer.broadcast(
+            ClaudePreviewsMessage(state: claudeHookSwitch.wireValue, items: claudePreviewService.items),
+            tunnelVersion: ClaudePreviewsMessage(state: "remote", items: []))
+    }
+
+    @MainActor
+    private func sendClaudePreviewImage(id: String, connection: NWConnection) {
+        guard !webSocketServer.isTunnelClient(connection) else { return }
+        let path = claudePreviewService.path(for: id)
+        Task {
+            let message = await Task.detached {
+                guard let path else {
+                    return ClaudePreviewImageMessage(id: id, format: "jpeg", data: "", pixelWidth: 0, pixelHeight: 0,
+                                                     error: "This preview is no longer on the Mac")
+                }
+                return ClaudePreviewImages.fullImage(path: path, id: id)
+            }.value
+            webSocketServer.sendToClient(message, connection: connection)
+        }
     }
 
     /// Open the right `x-apple.systempreferences:` URL for the requested pane.
@@ -2445,6 +2493,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
         // "preferences_request" is handled in `onMessageWithConnection`: the
         // reply is addressed to the one connection that asked (US-014).
+
+        case "claude_preview_dismiss":
+            if let msg = MessageCoder.decode(ClaudePreviewDismissMessage.self, from: data),
+               let id = UUID(uuidString: msg.id) {
+                claudePreviewService.dismiss(id: id, closeOnDesktop: msg.closeOnDesktop)
+            }
+
+        case "set_claude_previews":
+            if let msg = MessageCoder.decode(SetClaudePreviewsMessage.self, from: data) {
+                claudeHookSwitch.set(msg.enabled, source: "phone")
+            }
 
         case "open_mac_settings_pane":
             if let msg = MessageCoder.decode(OpenMacSettingsPaneMessage.self, from: data) {

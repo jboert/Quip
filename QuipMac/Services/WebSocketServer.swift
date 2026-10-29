@@ -207,6 +207,21 @@ final class WebSocketServer {
         return id
     }
 
+    /// Message types a tunnel client may not send (Q-87): reading the files
+    /// Claude opened, closing Mac windows, and installing a Claude Code hook
+    /// stay with the owner's LAN / Tailscale phones.
+    nonisolated static let localOnlyMessageTypes: Set<String> = [
+        "claude_preview_request", "claude_preview_dismiss", "set_claude_previews",
+    ]
+
+    /// The type of `data` if a tunnel client may not send it, else nil. Pure.
+    nonisolated static func refusedTunnelType(in data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String,
+              localOnlyMessageTypes.contains(type) else { return nil }
+        return type
+    }
+
     /// Which prompt ids are local-only right now; set by the app from the library.
     var localOnlyPromptIDs: () -> Set<String> = { [] }
 
@@ -216,6 +231,10 @@ final class WebSocketServer {
     func receiveFromTunnel(_ data: Data) {
         if let id = Self.refusedTunnelPromptID(in: data, localOnly: localOnlyPromptIDs()) {
             Self.wslog("tunnel client refused: prompt id=\(id) is local-only", severity: .warn)
+            return
+        }
+        if let type = Self.refusedTunnelType(in: data) {
+            Self.wslog("tunnel client refused: \(type) is local-only", severity: .warn)
             return
         }
         onMessageReceived?(data)
@@ -900,6 +919,30 @@ final class WebSocketServer {
         }
     }
 
+    /// Broadcast `message` to the owner's LAN / Tailscale / loopback clients
+    /// and `tunnelVersion` to every tunnel client (Q-87: Claude's previews
+    /// never leave over the tunnel).
+    func broadcast<T: Encodable & Sendable>(_ message: T, tunnelVersion: T) {
+        encodeQueue.async { [weak self] in
+            let full: Data, restricted: Data
+            do {
+                full = try JSONEncoder().encode(message)
+                restricted = try JSONEncoder().encode(tunnelVersion)
+            } catch {
+                print("[WebSocketServer] broadcast(tunnelVersion:) encode FAILED kind=\(String(describing: T.self)) err=\(error)")
+                return
+            }
+            DispatchQueue.main.async {
+                self?.deliverBroadcast(full, restricted: restricted)
+            }
+        }
+    }
+
+    /// Whether `connection` is a direct client classified as tunnel.
+    func isTunnelClient(_ connection: NWConnection) -> Bool {
+        clients.first(where: { $0.connection === connection })?.isTunnel ?? true
+    }
+
     /// Send a message to authenticated tunnel clients ONLY — does not touch
     /// direct `clients`. Used by `broadcastLayout` when at least one direct
     /// client is in QA mode: direct clients get per-client filtered updates
@@ -1293,6 +1336,10 @@ final class WebSocketServer {
                     if self.clients[clientIndex].isTunnel,
                        let id = Self.refusedTunnelPromptID(in: receivedData, localOnly: self.localOnlyPromptIDs()) {
                         Self.wslog("tunnel client refused: prompt id=\(id) is local-only", severity: .warn)
+                        return
+                    }
+                    if self.clients[clientIndex].isTunnel, let type = Self.refusedTunnelType(in: receivedData) {
+                        Self.wslog("tunnel client refused: \(type) is local-only", severity: .warn)
                         return
                     }
                     self.touchActivity(for: connection)

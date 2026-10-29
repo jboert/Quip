@@ -150,6 +150,13 @@ enum LogPaths {
         return directory.appendingPathComponent("phone.log").path
     }
 
+    /// Q-87: files Claude opened, their terminal and Preview-window matches,
+    /// and the Settings switch's hook install/uninstall results.
+    static var claudePreviewsPath: String {
+        ensureDirectoryExists()
+        return directory.appendingPathComponent("claude-previews.log").path
+    }
+
     static var classifyPath: String {
         ensureDirectoryExists()
         return directory.appendingPathComponent("classify.log").path

@@ -1866,3 +1866,104 @@ enum MessageCoder {
         return envelope.type
     }
 }
+
+// MARK: - Claude Previews (Q-87)
+
+/// One file Claude opened on the Mac, as the phone lists it.
+struct ClaudePreviewItem: Codable, Sendable, Equatable, Identifiable {
+    let id: String
+    /// File name only; the Mac never sends the full path.
+    let name: String
+    /// The terminal window whose Claude session opened it; nil = unattached.
+    let terminalWindowId: String?
+    /// Epoch seconds.
+    let openedAt: Double
+    /// A Preview window on the Mac shows it, so ✕ can close it there.
+    let hasDesktopWindow: Bool
+    /// Base64 JPEG, about 240 px on the long edge. nil until the Mac has made it.
+    let thumb: String?
+    let isPDF: Bool
+}
+
+/// Mac → phone (LAN/Tailscale only; tunnel clients get an empty list). The
+/// whole list every time it changes, plus the switch state, so the phone
+/// never merges. Sent on auth, on each change, and after `set_claude_previews`.
+struct ClaudePreviewsMessage: Codable, Sendable, Equatable {
+    let type: String
+    /// The Settings switch: "off", "on", "stale" (points at an old Quip),
+    /// "unreadable" (Claude's settings file is not valid JSON).
+    let state: String
+    let items: [ClaudePreviewItem]
+
+    init(state: String, items: [ClaudePreviewItem]) {
+        self.type = "claude_previews"
+        self.state = state
+        self.items = items
+    }
+}
+
+/// Phone → Mac. Asks for one preview's full image.
+struct ClaudePreviewRequestMessage: Codable, Sendable, Equatable {
+    let type: String
+    let id: String
+
+    init(id: String) {
+        self.type = "claude_preview_request"
+        self.id = id
+    }
+}
+
+/// Mac → the phone that asked. The file's own bytes when it is a PNG or JPEG
+/// that fits; otherwise a JPEG made from it (PDF: page 1). `error` set and
+/// `data` empty when the file can't be read any more.
+struct ClaudePreviewImageMessage: Codable, Sendable, Equatable {
+    let type: String
+    let id: String
+    /// "png" or "jpeg".
+    let format: String
+    /// Base64.
+    let data: String
+    let pixelWidth: Int
+    let pixelHeight: Int
+    /// PDF only: total pages (page 1 is shown).
+    let pageCount: Int?
+    let error: String?
+
+    init(id: String, format: String, data: String, pixelWidth: Int, pixelHeight: Int,
+         pageCount: Int? = nil, error: String? = nil) {
+        self.type = "claude_preview_image"
+        self.id = id
+        self.format = format
+        self.data = data
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.pageCount = pageCount
+        self.error = error
+    }
+}
+
+/// Phone → Mac. Removes a preview from the list; with `closeOnDesktop`, also
+/// closes its Preview window on the Mac.
+struct ClaudePreviewDismissMessage: Codable, Sendable, Equatable {
+    let type: String
+    let id: String
+    let closeOnDesktop: Bool
+
+    init(id: String, closeOnDesktop: Bool) {
+        self.type = "claude_preview_dismiss"
+        self.id = id
+        self.closeOnDesktop = closeOnDesktop
+    }
+}
+
+/// Phone → Mac. The phone's copy of the Mac's "Show Claude's previews on
+/// phone" switch. The Mac answers with `claude_previews`.
+struct SetClaudePreviewsMessage: Codable, Sendable, Equatable {
+    let type: String
+    let enabled: Bool
+
+    init(enabled: Bool) {
+        self.type = "set_claude_previews"
+        self.enabled = enabled
+    }
+}

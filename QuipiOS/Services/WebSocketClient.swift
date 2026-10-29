@@ -447,6 +447,15 @@ final class WebSocketClient {
     /// shows the old one's row.
     var macBuild: MacBuildMessage?
     var onMacBuild: ((MacBuildMessage) -> Void)?
+    /// Q-87: files Claude opened on the Mac, newest first. Replaced whole on
+    /// every `claude_previews`.
+    var claudePreviews: [ClaudePreviewItem] = []
+    /// Q-87: the Mac's "Show Claude's previews on phone" switch — "off", "on",
+    /// "stale", "unreadable", or "remote" (tunnel: not available). nil until a
+    /// Mac that supports it says so; the Settings row stays hidden.
+    var claudePreviewsState: String?
+    /// Q-87: the full image the viewer asked for.
+    var onClaudePreviewImage: ((ClaudePreviewImageMessage) -> Void)?
 
     /// Cached PIN for the current session — used for auto-auth on reconnect
     private(set) var sessionPIN: String?
@@ -844,6 +853,9 @@ final class WebSocketClient {
 
     func disconnect() {
         intentionalDisconnect = true
+        // Another Mac (or none) next: its previews are its own.
+        claudePreviews = []
+        claudePreviewsState = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
         reconnectTask?.cancel()
@@ -1600,6 +1612,17 @@ final class WebSocketClient {
                 NSLog("[WebSocketClient] delete_prompt_ack: id=%@ success=%d err=%@",
                       msg.id, msg.success ? 1 : 0, msg.error ?? "none")
                 onDeletePromptAck?(msg)
+            }
+        case "claude_previews":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(ClaudePreviewsMessage.self, from: data, msgType: peek.type) {
+                claudePreviews = msg.items
+                claudePreviewsState = msg.state
+            }
+        case "claude_preview_image":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(ClaudePreviewImageMessage.self, from: data, msgType: peek.type) {
+                onClaudePreviewImage?(msg)
             }
         case "sync_vibecut_ack":
             guard isAuthenticated else { return }

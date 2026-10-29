@@ -1404,6 +1404,8 @@ enum LatencySummary: Equatable {
 
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
+    /// Q-87: the Claude preview open full screen, if any.
+    @State private var openClaudePreview: ClaudePreviewItem?
     @Bindable var manager: BackendConnectionManager
     var speech: SpeechService
     var bonjourBrowser: BonjourBrowser
@@ -4399,7 +4401,28 @@ struct MainiOSView: View {
         }
     }
 
+    /// Q-87: Claude's previews for the selected terminal sit above its content.
     private var terminalContentView: some View {
+        let previews = ClaudePreviewLogic.visible(client.claudePreviews, selectedWindowId: selectedWindowId,
+                                                  knownWindowIds: Set(windows.map(\.id)))
+        return VStack(spacing: 4) {
+            if !previews.isEmpty {
+                ClaudePreviewStrip(
+                    items: previews,
+                    onOpen: { openClaudePreview = $0 },
+                    onDismiss: { item in
+                        client.send(ClaudePreviewDismissMessage(id: item.id, closeOnDesktop: item.hasDesktopWindow))
+                        client.claudePreviews.removeAll { $0.id == item.id }
+                    })
+            }
+            terminalTextContentView
+        }
+        .fullScreenCover(item: $openClaudePreview) { item in
+            ClaudePreviewViewer(item: item, client: client)
+        }
+    }
+
+    private var terminalTextContentView: some View {
         let wid = selectedWindowId ?? ""
         let text = terminalContentTextById[wid] ?? terminalContentText ?? ""
         let screenshot = terminalContentScreenshotById[wid] ?? terminalContentScreenshot

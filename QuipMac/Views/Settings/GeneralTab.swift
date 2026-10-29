@@ -73,6 +73,8 @@ struct GeneralTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                ClaudePreviewsRow()
+
                 whisperStatusRow()
                 Text("The phone uses Mac Whisper for dictation when the model is ready, otherwise falls back to on-device SFSpeech.")
                     .font(.caption)
