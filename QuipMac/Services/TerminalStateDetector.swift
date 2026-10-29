@@ -13,14 +13,7 @@ fileprivate func appendClassifyLog(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     guard let data = line.data(using: .utf8) else { return }
     let path = LogPaths.classifyPath
-    LogPaths.rotateIfNeeded(path: path)
-    if let handle = FileHandle(forWritingAtPath: path) {
-        handle.seekToEndOfFile()
-        handle.write(data)
-        try? handle.close()
-    } else {
-        try? data.write(to: URL(fileURLWithPath: path))
-    }
+    QuipLog.append(data, to: path)
 }
 
 /// Append one line per Q-21 prompt-gate decision to `push.log`, alongside the
@@ -34,14 +27,7 @@ fileprivate func appendPushLog(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     guard let data = line.data(using: .utf8) else { return }
     let path = LogPaths.pushPath
-    LogPaths.rotateIfNeeded(path: path)
-    if let handle = FileHandle(forWritingAtPath: path) {
-        handle.seekToEndOfFile()
-        handle.write(data)
-        try? handle.close()
-    } else {
-        try? data.write(to: URL(fileURLWithPath: path))
-    }
+    QuipLog.append(data, to: path)
 }
 
 // MARK: - TerminalStateDetector

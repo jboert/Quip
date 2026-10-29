@@ -46,8 +46,15 @@ enum QuipLog {
     /// survive.
     static func write(severity: Severity, subsystem: String, message: String, to path: String) {
         let text = line(severity: severity, subsystem: subsystem, message: message)
-        let data = Data(text.utf8)
+        append(Data(text.utf8), to: path)
+    }
 
+    /// Append raw bytes to `path` with the same never-crash contract as
+    /// `write`. Every per-file appender (`push.log`, `phone.log`,
+    /// `injection.log`, …) goes through here: on 2026-10-29 a full disk made
+    /// `appendPhoneLog`'s legacy `handle.write(_:)` raise and abort the app
+    /// twice in one morning.
+    static func append(_ data: Data, to path: String) {
         LogPaths.rotateIfNeeded(path: path)
 
         writeLock.lock()

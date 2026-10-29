@@ -544,14 +544,7 @@ final class SwrmEventTailer {
         let ts = ISO8601DateFormatter().string(from: Date())
         let line = "[\(ts)] \(msg)\n"
         let path = LogPaths.swrmPath
-        LogPaths.rotateIfNeeded(path: path)
-        if let fh = FileHandle(forWritingAtPath: path) {
-            fh.seekToEndOfFile()
-            fh.write(Data(line.utf8))
-            fh.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
-        }
+        QuipLog.append(Data(line.utf8), to: path)
         print("[SwrmEventTailer] \(msg)")
     }
 }

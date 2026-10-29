@@ -16,14 +16,7 @@ fileprivate func appendPushDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.pushPath
-        LogPaths.rotateIfNeeded(path: path)
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: URL(fileURLWithPath: path))
-        }
+        QuipLog.append(data, to: path)
     }
 }
 
@@ -36,14 +29,7 @@ fileprivate func appendLatency(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.latencyPath
-        LogPaths.rotateIfNeeded(path: path)
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: URL(fileURLWithPath: path))
-        }
+        QuipLog.append(data, to: path)
     }
 }
 
@@ -56,14 +42,7 @@ fileprivate func appendWhisperDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.whisperPath
-        LogPaths.rotateIfNeeded(path: path)
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: URL(fileURLWithPath: path))
-        }
+        QuipLog.append(data, to: path)
     }
 }
 
@@ -73,14 +52,7 @@ fileprivate func appendPhoneLog(_ lines: [String]) {
     let text = PhoneLogSink.format(lines, at: Date())
     guard !text.isEmpty, let data = text.data(using: .utf8) else { return }
     let path = LogPaths.phonePath
-    LogPaths.rotateIfNeeded(path: path)
-    if let handle = FileHandle(forWritingAtPath: path) {
-        handle.seekToEndOfFile()
-        handle.write(data)
-        try? handle.close()
-    } else {
-        try? data.write(to: URL(fileURLWithPath: path))
-    }
+    QuipLog.append(data, to: path)
 }
 
 /// Append one structured line per image upload pipeline event. This is the
@@ -89,14 +61,7 @@ fileprivate func appendImageUploadDiagnostic(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     if let data = line.data(using: .utf8) {
         let path = LogPaths.imageUploadPath
-        LogPaths.rotateIfNeeded(path: path)
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: URL(fileURLWithPath: path))
-        }
+        QuipLog.append(data, to: path)
     }
 }
 
@@ -1367,14 +1332,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let ts = ISO8601DateFormatter().string(from: Date())
         let line = "[\(ts)] \(msg)\n"
         let path = LogPaths.qaModePath
-        LogPaths.rotateIfNeeded(path: path)
-        if let fh = FileHandle(forWritingAtPath: path) {
-            fh.seekToEndOfFile()
-            fh.write(Data(line.utf8))
-            fh.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: path, contents: Data(line.utf8))
-        }
+        QuipLog.append(Data(line.utf8), to: path)
         print("[QAMode] \(msg)")
     }
 

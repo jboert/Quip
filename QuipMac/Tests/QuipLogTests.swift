@@ -131,4 +131,28 @@ final class QuipLogTests: XCTestCase {
         // process before it ever gets here.
         XCTAssertTrue(true, "process survived a write to a full disk")
     }
+
+    /// Every per-file appender used to carry its own copy of the legacy
+    /// `seekToEndOfFile()` + `write(_:)` pair; `appendPhoneLog`'s copy aborted
+    /// the app twice on a full disk (2026-10-29). They all go through
+    /// `QuipLog.append` now, and this keeps a new copy from creeping back.
+    func test_noSourceUsesTheRaisingFileHandleAPIs() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" && !$0.path.contains("/Tests/") } ?? []
+        XCTAssertFalse(files.isEmpty, "found no QuipMac sources under \(root.path)")
+        var offenders: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (n, line) in text.components(separatedBy: "\n").enumerated() {
+                let code = line.components(separatedBy: "//").first ?? ""
+                if code.contains(".seekToEndOfFile()") || code.contains(".closeFile()") {
+                    offenders.append("\(file.lastPathComponent):\(n + 1)")
+                }
+            }
+        }
+        XCTAssertEqual(offenders, [], "use QuipLog.append (throwing FileHandle APIs) instead")
+    }
 }

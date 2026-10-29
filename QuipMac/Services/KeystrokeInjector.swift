@@ -32,14 +32,7 @@ fileprivate func appendInjectionLog(_ message: String) {
     let line = "\(Date().ISO8601Format()) \(message)\n"
     guard let data = line.data(using: .utf8) else { return }
     let path = LogPaths.injectionPath
-    LogPaths.rotateIfNeeded(path: path)
-    if let handle = FileHandle(forWritingAtPath: path) {
-        handle.seekToEndOfFile()
-        handle.write(data)
-        try? handle.close()
-    } else {
-        try? data.write(to: URL(fileURLWithPath: path))
-    }
+    QuipLog.append(data, to: path)
 }
 
 @MainActor
