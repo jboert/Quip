@@ -332,6 +332,24 @@ struct MacBuildMsg: Encodable {
     let deviceID = "fake-mac"
 }
 
+/// Q-90 `reliability_status` (Shared/MessageProtocol.swift ReliabilityStatusMessage).
+struct ReliabilityStatusMsg: Encodable {
+    struct LastRestart: Encodable {
+        let reason: String
+        let at: Double
+    }
+    let type = "reliability_status"
+    let watching: Bool
+    let afterQuit: Bool
+    let watchdog: Bool
+    let lastRestart: LastRestart?
+
+    var summary: String {
+        "watching=\(watching) afterQuit=\(afterQuit) watchdog=\(watchdog)"
+            + (lastRestart.map { " lastRestart=\($0.reason)@\(Int($0.at))" } ?? "")
+    }
+}
+
 struct MacPermissionsMsg: Encodable {
     let type = "mac_permissions"
     let accessibility = true
@@ -541,6 +559,9 @@ final class FakeMac: @unchecked Sendable {
     /// The window the Mac last reported frontmost: the fixture's at start,
     /// then whatever `front` named. Sent on auth.
     private var frontmost: String?
+    /// `reliability` (Q-90): the restart protection the fake reports; nil
+    /// until the first command, then sent after every auth.
+    private var reliability: ReliabilityStatusMsg?
     private var prompts: [PromptEntry]
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: Client] = [:]
@@ -639,7 +660,7 @@ final class FakeMac: @unchecked Sendable {
             + (options.ackPaste ? "; --ack-paste" : "") + (options.errorIDs ? "; --error-ids" : ""))
         log.line("  pair a booted simulator: xcrun simctl openurl <udid> '\(pairingLink)'")
         log.line("  commands: help status layout library close open dead alive wait idle front lines "
-            + "freeze thaw reload quit")
+            + "reliability freeze thaw reload quit")
         announced = true
         if stdinClosedEarly { stdinClosed() }
     }
@@ -967,6 +988,10 @@ final class FakeMac: @unchecked Sendable {
         send(MacPermissionsMsg(), to: client)
         send(MacBuildMsg(), to: client)
         send(WhisperStatusMsg(), to: client)
+        if let reliability {
+            send(reliability, to: client)
+            rest.append("reliability_status(\(reliability.summary))")
+        }
         rest.append("mac_permissions(all granted)")
         rest.append("mac_build(0.0.0 (0) fake000)")
         rest.append("whisper_status(preparing)")
@@ -1331,6 +1356,9 @@ final class FakeMac: @unchecked Sendable {
               wait <window>   mark it waiting_for_input and resend the layout
               idle <window>   mark it neutral (the fixture's state if that is not waiting) and resend
               front <window>  send frontmost_changed for it, as when it is raised on the Mac
+              reliability on|off|notwatching [crash|hang|crash_loop]
+                              store the Mac's restart protection and send reliability_status to every
+                              phone (and after each auth); a reason adds lastRestart at the current time
               lines <window> <N>  serve N numbered lines (line 0001 …) as its terminal content; 0 restores
               reload          re-read the fixture: restores closed windows, states, content and edited prompts
               quit            close every connection and exit
@@ -1391,6 +1419,25 @@ final class FakeMac: @unchecked Sendable {
             frontmost = window.id
             let n = broadcast(FrontmostChangedMsg(windowId: window.id))
             log.line("cmd front \(window.id) -> frontmost_changed to \(n) phone(s)")
+        case "reliability":
+            let parts = arg.split(whereSeparator: \.isWhitespace).map { $0.lowercased() }
+            let reasons = ["crash", "hang", "crash_loop"]
+            guard (1...2).contains(parts.count), ["on", "off", "notwatching"].contains(parts[0]),
+                  parts.count == 1 || reasons.contains(parts[1]) else {
+                log.line("usage: reliability on|off|notwatching [crash|hang|crash_loop]")
+                return
+            }
+            // notwatching: the switches are on, but the agent is not the
+            // process that launched this Quip.
+            let installed = parts[0] != "off"
+            let status = ReliabilityStatusMsg(
+                watching: parts[0] == "on", afterQuit: installed, watchdog: installed,
+                lastRestart: parts.count == 2
+                    ? .init(reason: parts[1], at: Date().timeIntervalSince1970.rounded()) : nil)
+            reliability = status
+            let n = broadcast(status)
+            log.line("cmd reliability \(parts.joined(separator: " ")) -> reliability_status(\(status.summary)) "
+                + "to \(n) phone(s)")
         case "lines":
             var words = arg.split(whereSeparator: \.isWhitespace).map(String.init)
             guard words.count >= 2, let count = Int(words.removeLast()), (0...100_000).contains(count) else {

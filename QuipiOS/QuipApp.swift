@@ -2346,7 +2346,8 @@ struct MainiOSView: View {
                 promptContextProvider: { selectedPromptContext },
                 projectProvider: { selectedProject },
                 windowsProvider: { windows },
-                remoteInBackend: manager.paired.first { $0.id == manager.activeBackendID }
+                remoteInBackend: manager.paired.first { $0.id == manager.activeBackendID },
+                activeBackendID: manager.activeBackendID
             )
         }
         .sheet(isPresented: $showPromptsPickerSheet) {

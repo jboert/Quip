@@ -51,8 +51,8 @@
         "`tools/check.sh --all` passes"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "PASS 2026-10-30. Shared/MessageProtocol.swift ReliabilityStatusMessage (+nested LastRestart, Equatable; missing lastRestart decodes nil). tools/fake-mac: `reliability on|off|notwatching [crash|hang|crash_loop]` stores + broadcasts, resent in the post-auth welcome; help + banner list it; tools/run-fake-mac-tests.sh +14 checks (nothing before first command, each mode/reason on the wire, 3 rejected forms send nothing, a 2nd phone gets the stored status after auth_result success). QuipiOS WebSocketClient case reliability_status -> onReliabilityStatus; BackendConnectionManager.wire() bridge saves via ReliabilityStatusStore (key reliability.v1.<backendID>) then fires manager.onReliabilityStatus. SettingsSheet Mac Permissions section: Auto-restart row from ReliabilityStatusStore.summary for the active backend, orange when warn. QuipiOS/Tests/ReliabilityStatusTests.swift 10 tests incl. strict XCTExpectFailure broken summary. Gate tools/check.sh --all exit 0 (harness 62/0, fake-mac 48/0, Mac 1329/0, iOS 1553/0; Linux/Android skipped, not built here). Mutants all exit 1: summary not-watching->On (2 asserts), store key ignores backendID (3 asserts), broken fixture repaired (strict 'none recorded'), fake-mac post-auth send removed (1 check). Not done: no simulator screenshot of the Settings row (the row's text/warn come from the tested summary; the Mac app does not send reliability_status yet, US-007 + owner wiring)."
     },
     {
       "id": "US-004",

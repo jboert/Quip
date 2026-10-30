@@ -102,6 +102,8 @@ final class BackendConnectionManager {
     var onPreferencesRestore: ((BackendSession, PreferencesSnapshot) -> Void)?
     var onMacPermissions: ((BackendSession, MacPermissionsMessage) -> Void)?
     var onMacBuild: ((BackendSession, MacBuildMessage) -> Void)?
+    /// Q-90: fired after the status is saved to `ReliabilityStatusStore`.
+    var onReliabilityStatus: ((BackendSession, ReliabilityStatusMessage) -> Void)?
     var onImageUploadAck: ((BackendSession, String) -> Void)?
     var onImageUploadError: ((BackendSession, String) -> Void)?
     /// A `send_text_ack`'s message id, for broadcast delivery (US-111).
@@ -1603,6 +1605,12 @@ final class BackendConnectionManager {
             guard let self, let session else { return }
             session.macPermissions = snapshot
             self.onMacPermissions?(session, snapshot)
+        }
+
+        c.onReliabilityStatus = { [weak self, weak session] status in
+            guard let self, let session else { return }
+            ReliabilityStatusStore.save(status, backendID: session.backendID)
+            self.onReliabilityStatus?(session, status)
         }
 
         c.onMacBuild = { [weak self, weak session] build in
