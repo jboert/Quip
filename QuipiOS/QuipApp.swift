@@ -146,6 +146,11 @@ struct QuipApp: App {
     // transcription into the field for review instead of auto-sending.
     @State private var showTextInput = false
     @State private var textInputValue = ""
+    /// The terminal panel filling the screen (the window grid collapsed).
+    /// Owned here, not in MainiOSView, so the saved place (Q-88 US-005) can
+    /// read it and US-006 can put it back.
+    @State private var isTerminalExpanded = false
+    @State private var placeRecorder = PhonePlaceRecorder()
     @State private var terminalContentText: String?
     @State private var terminalContentScreenshot: String?
     /// URLs extracted Mac-side from the scraped text, for the tap-to-open
@@ -272,6 +277,7 @@ struct QuipApp: App {
                 selectedDisplayID: $selectedDisplayID,
                 showTextInput: $showTextInput,
                 textInputValue: $textInputValue,
+                isTerminalExpanded: $isTerminalExpanded,
                 onStartRecording: { DispatchQueue.main.async { startRecording() } },
                 onStopRecording: { DispatchQueue.main.async { stopRecording() } },
                 onRequestContent: { windowId in
@@ -336,6 +342,13 @@ struct QuipApp: App {
                 // surface for any push whose `aps.category` matches.
                 // Idempotent; safe to call on every cold start.
                 WaitingNotificationCategory.register()
+            }
+            .onChange(of: currentPlace(savedAt: .distantPast)) { _, place in
+                // Q-88 US-005: keep "where I was" for this Mac, at most one
+                // write a second; going to the background writes it at once.
+                var stamped = place
+                stamped.savedAt = Date()
+                placeRecorder.record(stamped, forBackendId: manager.activeBackendID)
             }
             .onChange(of: selectedWindowId) { _, newId in
                 // User engaged with a window — clear its attention flag so
@@ -508,6 +521,12 @@ struct QuipApp: App {
                 // pauseMonitoring path drops just the KVO observer; the next
                 // foreground hook re-arms with the cached windowCount.
                 volumeHandler.pauseMonitoring()
+                // Q-88 US-005: the place as it is now, written before iOS
+                // may end the app, and when the user left (for `awayFor`).
+                let now = Date()
+                placeRecorder.record(currentPlace(savedAt: now), forBackendId: manager.activeBackendID)
+                placeRecorder.flushAll()
+                PhonePlaceStore.markBackgrounded(at: now)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Probe every paired backend's socket on return; force-reconnect
@@ -515,6 +534,14 @@ struct QuipApp: App {
                 manager.resumeAll()
             }
         }
+    }
+
+    /// Where the user is right now (Q-88 US-005). Scroll anchors come with
+    /// US-008.
+    private func currentPlace(savedAt: Date) -> PhonePlace {
+        PhonePlace(selectedWindowId: selectedWindowId, selectedDisplayID: selectedDisplayID,
+                   selectedSpaceID: selectedSpaceID, textInputOpen: showTextInput,
+                   terminalExpanded: isTerminalExpanded, savedAt: savedAt)
     }
 
     /// True when the current wall-clock hour falls inside the user's
@@ -1456,6 +1483,9 @@ struct MainiOSView: View {
     @Binding var selectedDisplayID: String?
     @Binding var showTextInput: Bool
     @Binding var textInputValue: String
+    // When true, the window-picker layout card collapses and InlineTerminalContent
+    // expands to fill its space — gives the terminal more vertical room for reading.
+    @Binding var isTerminalExpanded: Bool
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
@@ -1670,9 +1700,6 @@ struct MainiOSView: View {
     private var windowOrderMode: PhoneWindowOrder.Mode {
         PhoneWindowOrder.Mode(rawValue: windowOrderModeRaw) ?? .manual
     }
-    // When true, the window-picker layout card collapses and InlineTerminalContent
-    // expands to fill its space — gives the terminal more vertical room for reading.
-    @State private var isTerminalExpanded = false
     // Draggable split between windowLayout (top) and InlineTerminalContent (bottom).
     // Stored as the terminal's share of the split area; clamped to [0.1, 0.9] so
     // the windowLayout can't be squeezed to zero and the terminal can't take 100%

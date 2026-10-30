@@ -112,11 +112,11 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] S4 scripted: `tools/qa/q88-s4.sh` (guess Recent; picks and Mac focus give the Recent order, pin first; drag → Manual, dragged order, toast; Use Recent → Recent order back; a Mac focus change leaves the backup stamp alone, and a build without the sync fix fails that check). Covers S3's "W4 first in Recent order" half.
 
 ### US-005: `PhonePlace` — what "my place" is, saved on background
-- [ ] `Codable` `PhonePlace` per backend (`phonePlace.v1.<backendID>`): `selectedWindowId`, `selectedDisplayID`, `selectedSpaceID`, `textInputOpen: Bool`, `terminalExpanded: Bool`, `scrollAnchorByWindow: [String: ScrollAnchor]`, `savedAt: Date`.
-- [ ] Saved on `didEnterBackground` (hook already exists, `QuipApp.swift` 497) and on selection change, debounced 1 s. `backgroundedAt` stored separately to compute `awayFor`.
-- [ ] Device-local: **not** in `PreferencesSnapshot`, not in iCloud KVS, never sent to the Mac. A test asserts `PreferencesSnapshot`'s coding keys contain none of these names.
-- [ ] Tests `PhonePlaceTests.swift`: round trip; unknown future keys ignored; corrupt data → nil, not a crash (and one `phone.log` line, matching the `PersistenceLoudDropTests` convention).
-- [ ] Gate.
+- [x] `Codable` `PhonePlace` per backend (`phonePlace.v1.<backendID>`): `selectedWindowId`, `selectedDisplayID`, `selectedSpaceID`, `textInputOpen: Bool`, `terminalExpanded: Bool`, `scrollAnchorByWindow: [String: ScrollAnchor]`, `savedAt: Date`.
+- [x] Saved on `didEnterBackground` (hook already exists, `QuipApp.swift` 497) and on selection change, debounced 1 s. `backgroundedAt` stored separately to compute `awayFor`. *As built:* `PhonePlaceRecorder` writes at most once a second per Mac (any field change, not only selection) and `flushAll` on `didEnterBackground`; `backgroundedAt` is one key for the app (`phonePlace.v1.backgroundedAt`). `isTerminalExpanded` moved from MainiOSView to QuipApp (a binding) so the place can read it and US-006 can set it. Sim: select dotfiles, expand, Home → saved place has the window, `textInputOpen`, `terminalExpanded`; the fake Mac saw no `preferences_snapshot`.
+- [x] Device-local: **not** in `PreferencesSnapshot`, not in iCloud KVS, never sent to the Mac. A test asserts `PreferencesSnapshot`'s coding keys contain none of these names.
+- [x] Tests `PhonePlaceTests.swift`: round trip; unknown future keys ignored; corrupt data → nil, not a crash (and one `phone.log` line, matching the `PersistenceLoudDropTests` convention).
+- [x] Gate.
 
 ### US-006: Restore the place
 - [ ] `LandingPolicy` step 4 enabled: saved place, same backend, `now - savedAt ≤ PlaceRestorePolicy.freshness` (30 min, one constant).
