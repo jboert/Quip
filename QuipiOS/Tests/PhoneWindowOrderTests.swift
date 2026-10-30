@@ -77,4 +77,19 @@ final class PhoneWindowOrderTests: XCTestCase {
     func test_initialMode_draggedOrder_staysManual() {
         XCTAssertEqual(PhoneWindowOrder.initialMode(savedOrder: ["b", "a"], macOrder: ["a", "b"]), .manual)
     }
+
+    // The mode in force: the user's choice, then the phone-only guess.
+
+    func test_resolve_choiceWinsOverTheGuess() {
+        XCTAssertEqual(PhoneWindowOrder.Mode.resolve(chosen: "manual", guess: "recent"), .manual)
+    }
+
+    func test_resolve_noChoice_usesTheGuess() {
+        XCTAssertEqual(PhoneWindowOrder.Mode.resolve(chosen: "", guess: "recent"), .recent)
+    }
+
+    func test_resolve_neither_isManual() {
+        XCTAssertEqual(PhoneWindowOrder.Mode.resolve(chosen: "", guess: ""), .manual)
+        XCTAssertEqual(PhoneWindowOrder.Mode.resolve(chosen: "junk", guess: "junk"), .manual)
+    }
 }

@@ -1715,10 +1715,11 @@ struct MainiOSView: View {
     /// In-memory decoded order — same JSON-cache pattern as phoneFrameOverrides.
     @State private var phoneWindowOrder: [String] = []
     /// Q-88 US-004: Recent (most recently used first) or Manual (the drag
-    /// order above). Empty until the first layout picks a default
-    /// (`PhoneWindowOrder.initialMode`); until then the grid shows Manual,
-    /// the order it has always shown.
+    /// order above), as the user chose it. Empty until they choose; the
+    /// first layout's guess goes in `windowOrderModeGuessRaw` instead.
     @AppStorage(PhoneWindowOrder.Mode.storageKey) private var windowOrderModeRaw: String = ""
+    /// The phone-only default (`PhoneWindowOrder.initialMode`), not backed up.
+    @AppStorage(PhoneWindowOrder.Mode.guessKey) private var windowOrderModeGuessRaw: String = ""
     /// The recency stack the grid is drawn from in Recent mode. A copy, not
     /// a live read, so a card never moves under the finger: it is refreshed
     /// 300 ms after the stack changes, and not while a card is dragged.
@@ -1751,7 +1752,7 @@ struct MainiOSView: View {
     }
 
     private var windowOrderMode: PhoneWindowOrder.Mode {
-        PhoneWindowOrder.Mode(rawValue: windowOrderModeRaw) ?? .manual
+        PhoneWindowOrder.Mode.resolve(chosen: windowOrderModeRaw, guess: windowOrderModeGuessRaw)
     }
     // Draggable split between windowLayout (top) and InlineTerminalContent (bottom).
     // Stored as the terminal's share of the split area; clamped to [0.1, 0.9] so
@@ -5413,14 +5414,16 @@ struct MainiOSView: View {
         }
     }
 
-    /// Picks Recent or Manual once, at the first layout with windows, for a
-    /// phone that has never chosen. Must run before `reconcileWindowOrder`
-    /// can change the saved order it compares.
+    /// Guesses Recent or Manual once, at the first layout with windows, for
+    /// a phone that has never chosen. Must run before `reconcileWindowOrder`
+    /// can change the saved order it compares. Stored as the guess, so it is
+    /// not a settings edit and a restored choice still wins.
     private func resolveWindowOrderMode(activeWindows: [WindowState]) {
-        guard windowOrderModeRaw.isEmpty, !activeWindows.isEmpty else { return }
+        guard windowOrderModeRaw.isEmpty, windowOrderModeGuessRaw.isEmpty,
+              !activeWindows.isEmpty else { return }
         let mode = PhoneWindowOrder.initialMode(savedOrder: phoneWindowOrder,
                                                 macOrder: activeWindows.map(\.id))
-        windowOrderModeRaw = mode.rawValue
+        windowOrderModeGuessRaw = mode.rawValue
         PhoneLog.log("window order default=\(mode.rawValue)")
     }
 

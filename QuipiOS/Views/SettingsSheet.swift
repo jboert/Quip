@@ -33,6 +33,7 @@ struct SettingsSheet: View {
     /// Q-88 US-004. Empty until the first layout picks the default, so
     /// read it as Manual like the grid does.
     @AppStorage(PhoneWindowOrder.Mode.storageKey) private var windowOrderModeRaw: String = ""
+    @AppStorage(PhoneWindowOrder.Mode.guessKey) private var windowOrderModeGuessRaw: String = ""
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -88,7 +89,8 @@ struct SettingsSheet: View {
                     }
                     .pickerStyle(.segmented)
                     Picker("Window order", selection: Binding(
-                        get: { PhoneWindowOrder.Mode(rawValue: windowOrderModeRaw) ?? .manual },
+                        get: { PhoneWindowOrder.Mode.resolve(chosen: windowOrderModeRaw,
+                                                              guess: windowOrderModeGuessRaw) },
                         set: { windowOrderModeRaw = $0.rawValue })) {
                         Text("Recent").tag(PhoneWindowOrder.Mode.recent)
                         Text("Manual").tag(PhoneWindowOrder.Mode.manual)

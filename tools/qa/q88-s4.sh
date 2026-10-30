@@ -82,18 +82,21 @@ check() {  # label, want, got
 
 # "Fresh install" for the grid order: no pick, no guess, no saved order, no stack.
 xcrun simctl terminate "$UDID" "$APP" >/dev/null 2>&1
-for k in windowOrderMode phoneWindowOrderJSON; do
+for k in windowOrderMode windowOrderModeGuess phoneWindowOrderJSON; do
     xcrun simctl spawn "$UDID" defaults delete "$PREFS" "$k" >/dev/null 2>&1
 done
 for k in $(xcrun simctl spawn "$UDID" defaults export "$PREFS" - 2>/dev/null \
         | python3 -c 'import plistlib,sys; [print(k) for k in plistlib.loads(sys.stdin.buffer.read()) if k.startswith("lastSelectedWindow.")]'); do
     xcrun simctl spawn "$UDID" defaults delete "$PREFS" "$k" >/dev/null 2>&1
 done
+launch_stamp="$(stamp)"
 xcrun simctl launch "$UDID" "$APP" >/dev/null || { echo "FAIL: could not launch Quip"; exit 1; }
 wait_for "$LOG" "AUTHENTICATED" 20 || { echo "FAIL: the phone never authenticated (not paired with port $PORT?)"; exit 1; }
 sleep 3
 
-check "fresh install guesses Recent" "recent" "$(pref windowOrderMode)"
+check "fresh install guesses Recent" "recent" "$(pref windowOrderModeGuess)"
+check "the guess is not a choice" "" "$(pref windowOrderMode)"
+check "the guess is not a settings edit" "$launch_stamp" "$(stamp)"
 
 xcrun simctl openurl "$UDID" "quip://window/$SAFARI"
 wait_for "$LOG" "frontmost now $SAFARI" 5 || { echo "FAIL: selecting Safari never reached the Mac"; exit 1; }
@@ -117,7 +120,13 @@ idb ui swipe --udid "$UDID" "$fx" "$fy" "$tx" "$ty" --duration 1.0 --delta 8 >/d
 sleep 1
 check "drag switches to Manual" "manual" "$(pref windowOrderMode)"
 check "the dragged order holds" "$PINNED $DOTFILES $SAFARI $LANTERN" "$(order)"
-read -r bx by <<<"$(button "Use Recent")"
+# The accessibility tree can lag the toast by a moment; look for up to 2 s.
+bx=""; by=""
+for _ in 1 2 3 4; do
+    read -r bx by <<<"$(button "Use Recent")"
+    [ -n "${bx:-}" ] && break
+    sleep 0.5
+done
 check "toast offers Use Recent" "yes" "$([ -n "${bx:-}" ] && echo yes || echo no)"
 xcrun simctl io "$UDID" screenshot "$SHOTS/q88-s4-manual.png" >/dev/null 2>&1
 

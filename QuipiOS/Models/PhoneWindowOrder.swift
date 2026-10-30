@@ -2,8 +2,10 @@ import Foundation
 
 enum PhoneWindowOrder {
 
-    /// Q-88 US-004: how the window grid is ordered. Stored as
-    /// `windowOrderMode`; empty means not chosen yet (see `initialMode`).
+    /// Q-88 US-004: how the window grid is ordered. The user's choice is
+    /// stored as `windowOrderMode` (backed up); empty means not chosen yet.
+    /// Until then the first layout's guess (`initialMode`) is stored on the
+    /// phone only, as `windowOrderModeGuess`.
     enum Mode: String, CaseIterable {
         /// The windows used last come first (the recency stack).
         case recent
@@ -11,6 +13,15 @@ enum PhoneWindowOrder {
         case manual
 
         static let storageKey = "windowOrderMode"
+        /// Device-local, never in `PreferencesSnapshot`: a guess is not an
+        /// edit, so it must not move the backup stamp or override a restore.
+        static let guessKey = "windowOrderModeGuess"
+
+        /// The mode in force: the user's choice, else the guess, else Manual
+        /// (the order the grid always showed before a guess is made).
+        static func resolve(chosen: String, guess: String) -> Mode {
+            Mode(rawValue: chosen) ?? Mode(rawValue: guess) ?? .manual
+        }
     }
 
     /// The mode for a phone that has never chosen one. `phoneWindowOrderJSON`

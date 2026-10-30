@@ -24,6 +24,7 @@ final class PreferencesTrackedChangeTests: XCTestCase {
         let before = PreferencesSyncService.trackedPreferences(in: d)
         d.set(#"["a","b"]"#, forKey: "phoneWindowOrderJSON")
         d.set(["w1", "w2"], forKey: WindowSelectionMemory.key(forBackendId: "mac"))
+        d.set("recent", forKey: PhoneWindowOrder.Mode.guessKey)
         XCTAssertEqual(PreferencesSyncService.trackedPreferences(in: d), before)
     }
 
