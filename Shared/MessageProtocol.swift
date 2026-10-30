@@ -1382,6 +1382,9 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// Window grid order, `recent` or `manual` (Q-88 US-004). Optional so a
     /// backup from before the field decodes as nil and the phone keeps its own.
     var windowOrderMode: String?
+    /// "Jump to waiting windows" (Q-88 US-009). Optional: an older backup
+    /// decodes as nil and the phone keeps its own.
+    var smartLandingEnabled: Bool?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -1412,7 +1415,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         promptUsageJSON: String? = nil,
         savedAt: Double? = nil,
         mainRowOrderJSON: String? = nil,
-        windowOrderMode: String? = nil
+        windowOrderMode: String? = nil,
+        smartLandingEnabled: Bool? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -1443,6 +1447,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.savedAt = savedAt
         self.mainRowOrderJSON = mainRowOrderJSON
         self.windowOrderMode = windowOrderMode
+        self.smartLandingEnabled = smartLandingEnabled
     }
 }
 

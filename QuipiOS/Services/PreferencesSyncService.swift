@@ -187,6 +187,7 @@ final class PreferencesSyncService {
         if let v = snapshot.customButtonsJSON { d.set(v, forKey: "customButtonsJSON") }
         if let v = snapshot.quickSlotColorsJSON { d.set(v, forKey: KeyColors.storageKey) }
         if let v = snapshot.followFrontmost { d.set(v, forKey: "followFrontmost") }
+        if let v = snapshot.smartLandingEnabled { d.set(v, forKey: SmartLanding.enabledKey) }
         if let v = snapshot.windowOrderMode, PhoneWindowOrder.Mode(rawValue: v) != nil {
             d.set(v, forKey: PhoneWindowOrder.Mode.storageKey)
         }
@@ -349,7 +350,8 @@ final class PreferencesSyncService {
             savedAt: savedAt,
             mainRowOrderJSON: d.string(forKey: "mainRowOrderJSON"),
             windowOrderMode: d.string(forKey: PhoneWindowOrder.Mode.storageKey)
-                .flatMap { PhoneWindowOrder.Mode(rawValue: $0)?.rawValue }
+                .flatMap { PhoneWindowOrder.Mode(rawValue: $0)?.rawValue },
+            smartLandingEnabled: d.object(forKey: SmartLanding.enabledKey) as? Bool
         )
     }
 }

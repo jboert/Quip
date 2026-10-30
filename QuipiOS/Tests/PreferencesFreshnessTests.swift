@@ -48,4 +48,13 @@ final class PreferencesFreshnessTests: XCTestCase {
         d.set("sideways", forKey: PhoneWindowOrder.Mode.storageKey)
         XCTAssertNil(PreferencesSyncService.snapshot(from: d, savedAt: 1).windowOrderMode)
     }
+
+    func test_smartLandingSettingIsBackedUp_onlyOnceTouched() throws {
+        // Q-88 US-009.
+        let d = try XCTUnwrap(UserDefaults(suiteName: "PreferencesFreshnessTests.smartLanding"))
+        defer { d.removePersistentDomain(forName: "PreferencesFreshnessTests.smartLanding") }
+        XCTAssertNil(PreferencesSyncService.snapshot(from: d, savedAt: 1).smartLandingEnabled)
+        d.set(false, forKey: SmartLanding.enabledKey)
+        XCTAssertEqual(PreferencesSyncService.snapshot(from: d, savedAt: 1).smartLandingEnabled, false)
+    }
 }

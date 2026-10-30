@@ -25,6 +25,8 @@ struct NotificationsSettingsSheet: View {
     /// name. Off by default: prompts can quote your own files.
     @AppStorage("pushShowPromptText") private var pushShowPromptText = true
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
+    /// Q-88 US-009.
+    @AppStorage(SmartLanding.enabledKey) private var smartLandingOn = true
     /// Lock-screen answers still waiting for a socket (Q-57).
     private var answerQueue: PushAnswerQueue { .shared }
 
@@ -114,6 +116,13 @@ struct NotificationsSettingsSheet: View {
                     Text("Answer From the Alert")
                 } footer: {
                     Text("An answer given while the app was closed is sent as soon as the Mac is reachable, for up to 10 minutes.")
+                }
+
+                // MARK: Q-88 US-009 — what the app opens on after time away
+                Section {
+                    Toggle("Jump to waiting windows", isOn: $smartLandingOn)
+                } footer: {
+                    Text("Back after two minutes or more: open on a window that is asking you something, with a Back button. Never when you tapped a notification or follow the Mac.")
                 }
 
                 // MARK: Live Activities — own section since it bypasses APNs

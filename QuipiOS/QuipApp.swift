@@ -919,16 +919,21 @@ struct QuipApp: App {
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 let receivedAt = Date()
-                terminalContentWindowId = windowId
-                terminalContentText = content
-                terminalContentUpdatedAt = receivedAt
                 terminalContentUpdatedAtById[windowId] = receivedAt
                 terminalAutosuggestById[windowId] = autosuggest
-                if let screenshot, !screenshot.isEmpty {
-                    terminalContentScreenshot = screenshot
-                }
-                if let urls {
-                    terminalContentURLs = urls
+                // The single "current content" fields are the selected
+                // window's fallback; another window's screen (US-009 asks for
+                // the waiting ones) only goes in the per-window maps below.
+                if windowId == selectedWindowId || selectedWindowId == nil {
+                    terminalContentWindowId = windowId
+                    terminalContentText = content
+                    terminalContentUpdatedAt = receivedAt
+                    if let screenshot, !screenshot.isEmpty {
+                        terminalContentScreenshot = screenshot
+                    }
+                    if let urls {
+                        terminalContentURLs = urls
+                    }
                 }
                 // Per-windowId map writes (dual-state: single-state reads still active
                 // in Task 4; Task 5 migrates read sites to use these maps instead).
@@ -1740,6 +1745,11 @@ struct MainiOSView: View {
     /// next tap landed on whichever card had slid into its place.
     @State private var recentOrder: [String] = []
     @State private var orderToast = ActionToastModel()
+    /// Q-88 US-009: "Jump to waiting windows" (Settings → Notifications).
+    @AppStorage(SmartLanding.enabledKey) private var smartLandingOn = true
+    /// Time away, held until the grid has windows to look at.
+    @State private var smartLandingAway: TimeInterval?
+    @State private var smartLandingTask: Task<Void, Never>?
     /// Active drag state: which window is being dragged + accumulated
     /// translation. Nil when no drag is in flight.
     @State private var draggingWindowId: String? = nil
@@ -2074,9 +2084,11 @@ struct MainiOSView: View {
             resolveWindowOrderMode(activeWindows: newValue)
             reconcileWindowOrder(activeWindows: newValue)
             runAutoChooser(count: newValue.count)
+            runSmartLandingIfReady()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             refreshRecentOrder()
+            considerSmartLanding()
         }
         // Turning Recent on (Settings, or the toast's Use Recent) is asked
         // for, so it shows the order as it is now.
@@ -5459,6 +5471,54 @@ struct MainiOSView: View {
                                      kept: { Set(manager.recency.recent(forBackendId: $0)) }) else { return }
         textInputValue = text
         if !text.isEmpty { showTextInput = true }
+    }
+
+    /// Q-88 US-009: after time away, look for a waiting window that asks
+    /// something. Runs once the grid has windows (at launch they come later).
+    private func considerSmartLanding() {
+        let away = PhonePlaceStore.awayFor(now: Date())
+        guard SmartLanding.shouldTry(away: away, enabled: smartLandingOn, followFrontmost: followFrontmost,
+                                     explicit: false) else { return }
+        smartLandingAway = away
+        runSmartLandingIfReady()
+    }
+
+    /// Asks the Mac for the waiting windows' screens, waits briefly, then
+    /// jumps to one that asks something — unless the selection moved in the
+    /// meantime (a tap, a link, a push tap: the user's choice wins).
+    private func runSmartLandingIfReady() {
+        guard let away = smartLandingAway, !windows.isEmpty, client.isConnected else { return }
+        smartLandingAway = nil
+        let start = selectedWindowId
+        let backendId = manager.activeBackendID
+        let recency = manager.recency.recent(forBackendId: backendId)
+        func candidates() -> [SmartLanding.Candidate] {
+            windows.map { SmartLanding.Candidate(id: $0.id, isWaiting: $0.state == "waiting_for_input",
+                                                 isAgent: $0.cliKind.map { $0 != .shell } ?? false,
+                                                 content: terminalContentTextById[$0.id]) }
+        }
+        let probes = SmartLanding.probes(current: start, windows: candidates(), recency: recency)
+        guard !probes.isEmpty else { return }
+        for id in probes {
+            terminalContentTextById[id] = nil   // judge the fresh screen, not an old one
+            client.send(RequestContentMessage(windowId: id))
+        }
+        smartLandingTask?.cancel()
+        smartLandingTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(SmartLanding.probeWait))
+            guard !Task.isCancelled, selectedWindowId == start, manager.activeBackendID == backendId,
+                  let target = SmartLanding.pick(current: start, windows: candidates(), recency: recency)
+            else { return }
+            selectedWindowId = target
+            client.send(SelectWindowMessage(windowId: target))
+            PhoneLog.log("landing reason=waiting away=\(Int(away))s")
+            let name = windows.first { $0.id == target }?.displayTitle ?? "window"
+            orderToast.show("Jumped to \(name) — waiting for you", actionTitle: "Back") {
+                guard let start, windows.contains(where: { $0.id == start }) else { return }
+                selectedWindowId = start
+                client.send(SelectWindowMessage(windowId: start))
+            }
+        }
     }
 
     private func refreshRecentOrder() {

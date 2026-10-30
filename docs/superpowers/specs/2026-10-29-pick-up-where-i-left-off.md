@@ -146,12 +146,12 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Gate.
 
 ### US-009: Smart landing on a waiting window
-- [ ] `LandingPolicy` step 3 enabled. Threshold 2 min (constant). Setting "Jump to waiting windows" (default on) in Settings → Notifications, in `PreferencesSnapshot`.
-- [ ] `ActionToast`: "Jumped to <window name> — waiting for you" with **Back** (reselects the window step 4/5 would have chosen).
-- [ ] Never fires on explicit intent or with `followFrontmost` on (§3).
-- [ ] Tests in `LandingPolicyTests` — table in §5.
-- [ ] Sim scenario S9 (threshold overridden by a `#if DEBUG` launch argument `-QuipSmartLandingAfter 5`).
-- [ ] Gate.
+- [x] `LandingPolicy` step 3 enabled. Threshold 2 min (constant). *As built (owner's call 2026-10-30):* a window qualifies only when it is waiting AND its screen asks something (numbered/bracketed options, a Yes/No arrow menu, `(y/n)`; a last line ending `?` outside agents) — an idle agent is `waiting_for_input` too. `SmartLanding` runs after the normal landing: on return after ≥ 2 min it asks the Mac for up to 4 waiting screens, waits 1.2 s, and jumps only if the selection has not moved meanwhile (a tap, link or push tap wins). Probe replies fill only the per-window content maps, never the selected window's fallback fields. Setting "Jump to waiting windows" (default on) in Settings → Notifications, in `PreferencesSnapshot`.
+- [x] `ActionToast`: "Jumped to <window name> — waiting for you" with **Back** (reselects the window step 4/5 would have chosen).
+- [x] Never fires on explicit intent or with `followFrontmost` on (§3).
+- [x] Tests in `LandingPolicyTests` — table in §5.
+- [x] Sim scenario S9 (by hand: dotfiles selected, lantern-web waiting but idle, Home 8 s → jumped to orchard-api with the toast, `landing reason=waiting away=7s`; Back → dotfiles) (threshold overridden by a `#if DEBUG` launch argument `-QuipSmartLandingAfter 5`).
+- [x] Gate.
 
 ### US-010: Remote-in settings
 - [ ] Settings → Connection → "Remote in" (per backend, in `PreferencesSnapshot`): app preset, host, Mac name.
