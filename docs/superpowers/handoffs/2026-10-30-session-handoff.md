@@ -1,17 +1,20 @@
 # Session handoff — 2026-10-30
 
-To resume in a fresh session, say: "Read docs/superpowers/handoffs/2026-10-30-session-handoff.md, then build Q-88 US-010."
+To resume in a fresh session, say: "Read docs/superpowers/handoffs/2026-10-30-session-handoff.md, then pick up Q-88 after US-011 (US-012 is in the Berriscope repo)."
 
 ## Where things are
 
-Branch `eb-branch`, pushed, clean (only untracked `agentdb.rvf*` / `ruvector.db`, not ours). Spec: `docs/superpowers/specs/2026-10-29-pick-up-where-i-left-off.md` — US-000 … US-008 ticked, with *As built* notes where the build differs from the text.
+Branch `eb-branch`, pushed, clean (only untracked `agentdb.rvf*` / `ruvector.db`, not ours). Spec: `docs/superpowers/specs/2026-10-29-pick-up-where-i-left-off.md` — US-000 … US-011 ticked, with *As built* notes where the build differs from the text.
 
-Installed: iPhone at `1f729cd` (Release, devicectl). Mac app at `1505be7` (Q-89); not rebuilt since — every change after it is phone-only. The Mac decodes the prefs snapshot into the struct, so it drops `windowOrderMode` until its next rebuild (iCloud carries it meanwhile).
+Installed: iPhone at `9b07c1d` (Release, devicectl). Mac app at `1505be7` (Q-89); not rebuilt since — every change after it is phone-only. The Mac decodes the prefs snapshot into the struct, so it drops `windowOrderMode` until its next rebuild (iCloud carries it meanwhile).
 
 ## Shipped this session (newest first)
 
 | Commit | What |
 |---|---|
+| `9b07c1d` | US-011: long-press a window → "Remote in here" (select, wait ≤ 500 ms for the Mac's echo, open the link); Backends row → "Remote in". No host opens the setting; no app → toast with Settings. Berriscope preset shown only where Berriscope is installed (owner-only app). |
+| `cd25dcc` | Fix: launch crash when the mic input has no format (0 Hz) — every `installTap` now checks `SpeechService.canTapInput`. Seen on the QA sim after a boot. |
+| `101cdc0` | US-010: Settings → Connection → Remote in (presets with cited schemes, Custom link, host defaults to Tailscale name, live preview). `PreferencesSnapshot.remoteInJSON` (Shared). |
 | `1f729cd` | US-009: after ≥ 2 min away, jump to a waiting window that ASKS something (owner chose "question on screen"); probes up to 4 screens, 1.2 s, Back toast; setting in Notifications. |
 | `8b8e0e1` | US-008: terminal text opens where it was left scrolled (relaunch + switching back). Anchor = SHA-256 prefix of the line + distance from end, never the text. Text mode only. |
 | `cbf5d1c` | US-004 fix: the Recent order is taken on launch / return / Mac switch / turning Recent on, never while tapping (the tapped card used to slide away under the next tap). `q88-s4.sh` updated. |
@@ -26,8 +29,8 @@ Another session (Claude-Session …MDytKdm) landed `d3090c3` (only tracked prefs
 
 ## Next
 
-1. **US-010 / US-011** remote-in (settings, one-tap); US-012 is the Berriscope repo.
-2. Mac rebuild some time (carries `windowOrderMode` in the backup); costs TCC re-grants.
+1. Owner hardware check for Remote in (spec §7 item 5 needs Berriscope US-012, which lives in the Berriscope repo and is owner-only).
+2. Mac rebuild some time (carries `windowOrderMode` and `remoteInJSON` in the backup); costs TCC re-grants.
 
 ## Open risks / not verified
 
