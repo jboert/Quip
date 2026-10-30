@@ -129,12 +129,12 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Gate.
 
 ### US-007: Unsent text kept per window
-- [ ] `DraftStore`: draft per window id, replacing the single shared `textInputValue`. Switching windows saves the old window's draft and loads the new one's; send clears only that window's draft.
-- [ ] Persisted to a file in Application Support, `drafts.v1.<backendID>.json`, with `FileProtectionType.complete` and `isExcludedFromBackup = true` — **not** `UserDefaults` (drafts can hold secrets; `UserDefaults` is backed up). Cap 4 KB per draft, 50 drafts per backend; drafts for ids pruned from the recency stack are dropped.
-- [ ] Draft text never reaches `phone.log`, the Mac, or `PreferencesSnapshot`.
-- [ ] Tests `DraftStoreTests.swift` (in-memory file backing): switch-save-load, send clears one, prune drops, 4 KB cap truncates on a character boundary (emoji safe), file attributes set.
-- [ ] Sim scenario S7.
-- [ ] Gate.
+- [x] `DraftStore`: draft per window id, replacing the single shared `textInputValue`. Switching windows saves the old window's draft and loads the new one's; send clears only that window's draft. *As built:* `DraftBook` tracks which Mac and window own the field, so a backend switch files the text under the Mac it was typed for; the swap runs after the line-echo drop, so text the Mac already holds is never kept. A window with a draft opens the input (closing the input still clears the field, as before). The field is also saved on `didEnterBackground`.
+- [x] Persisted to a file in Application Support, `drafts.v1.<backendID>.json`, with `FileProtectionType.complete` and `isExcludedFromBackup = true` — **not** `UserDefaults` (drafts can hold secrets; `UserDefaults` is backed up). Cap 4 KB per draft, 50 drafts per backend; drafts for ids pruned from the recency stack are dropped.
+- [x] Draft text never reaches `phone.log`, the Mac, or `PreferencesSnapshot`.
+- [x] Tests `DraftStoreTests.swift` (in-memory file backing): switch-save-load, send clears one, prune drops, 4 KB cap truncates on a character boundary (emoji safe), file attributes set.
+- [x] Sim scenario S7 by hand (idb): "hello" in dotfiles, lantern-web empty, back to dotfiles shows "hello"; then Home, kill, relaunch: dotfiles restored (US-006) with the input open and "hello". The file held one entry; the prefs plist and the fake Mac's log had no "hello". File protection is checked on device only: the simulator reports none.
+- [x] Gate.
 
 ### US-008: Terminal scroll position comes back
 - [ ] `ScrollAnchor` = text of the first visible line + its distance from the end. Saved only when `isPinnedToBottom == false`.

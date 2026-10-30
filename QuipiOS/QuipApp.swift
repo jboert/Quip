@@ -151,6 +151,8 @@ struct QuipApp: App {
     /// read it and US-006 can put it back.
     @State private var isTerminalExpanded = false
     @State private var placeRecorder = PhonePlaceRecorder()
+    /// Q-88 US-007: unsent text per window, in its own protected file.
+    @State private var drafts = DraftBook()
     /// Q-88 US-006: put the saved place back on the next layout with
     /// windows. Set at launch and when a switch lands on a Mac with none yet.
     @State private var placeRestorePending = true
@@ -281,6 +283,7 @@ struct QuipApp: App {
                 showTextInput: $showTextInput,
                 textInputValue: $textInputValue,
                 isTerminalExpanded: $isTerminalExpanded,
+                drafts: drafts,
                 onStartRecording: { DispatchQueue.main.async { startRecording() } },
                 onStopRecording: { DispatchQueue.main.async { stopRecording() } },
                 onRequestContent: { windowId in
@@ -537,6 +540,8 @@ struct QuipApp: App {
                 placeRecorder.record(currentPlace(savedAt: now), forBackendId: manager.activeBackendID)
                 placeRecorder.flushAll()
                 PhonePlaceStore.markBackgrounded(at: now)
+                // Q-88 US-007: the text in the field now, in case iOS ends the app.
+                drafts.stash(textInputValue) { Set(manager.recency.recent(forBackendId: $0)) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 // Probe every paired backend's socket on return; force-reconnect
@@ -1532,6 +1537,8 @@ struct MainiOSView: View {
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.
     @Binding var isTerminalExpanded: Bool
+    /// Q-88 US-007: the field's text is the selected window's draft.
+    let drafts: DraftBook
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
@@ -2054,7 +2061,10 @@ struct MainiOSView: View {
             runAutoChooser(count: newValue.count)
         }
         .onChange(of: manager.recency.revision) { _, _ in scheduleRecentOrderRefresh() }
-        .onChange(of: manager.activeBackendID) { _, _ in refreshRecentOrder() }
+        .onChange(of: manager.activeBackendID) { _, _ in
+            refreshRecentOrder()
+            swapDraft()
+        }
         .onAppear {
             // Companion onAppear for the rest of the legacy hookup below.
             // Register image upload result callbacks. These are idempotent
@@ -2175,6 +2185,7 @@ struct MainiOSView: View {
                 if textInputValue == lineEcho?.text { textInputValue = "" }
                 lineEcho = nil
             }
+            swapDraft()
             // Auto-fetch terminal output for the inline view in portrait.
             if isPortrait, newId != nil { requestActiveContent() }
         }
@@ -5411,6 +5422,19 @@ struct MainiOSView: View {
                                                 macOrder: activeWindows.map(\.id))
         windowOrderModeRaw = mode.rawValue
         PhoneLog.log("window order default=\(mode.rawValue)")
+    }
+
+    /// Q-88 US-007: file the field's text under the window it was typed for
+    /// and load the newly selected window's draft. Runs after the echo is
+    /// dropped, so text the Mac already holds is never kept as a draft. A
+    /// draft only exists while the input was open (closing it clears the
+    /// field), so a window with one opens the input to show it.
+    private func swapDraft() {
+        guard let text = drafts.swap(fieldText: textInputValue, toBackend: manager.activeBackendID,
+                                     window: selectedWindowId,
+                                     kept: { Set(manager.recency.recent(forBackendId: $0)) }) else { return }
+        textInputValue = text
+        if !text.isEmpty { showTextInput = true }
     }
 
     private func refreshRecentOrder() {
