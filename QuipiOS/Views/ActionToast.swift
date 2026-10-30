@@ -51,9 +51,14 @@ final class ActionToastModel {
 
 /// The capsule for `ActionToastModel.current`: text, then the action as a
 /// button. VoiceOver reads them as one element ("Order: Manual, Use Recent")
-/// whose activation runs the action.
+/// whose activation runs the action. The label is spelled out:
+/// `.combine` kept only the text and dropped the button's title.
 struct ActionToastView: View {
     let model: ActionToastModel
+
+    static func accessibilityLabel(_ toast: ActionToastModel.Toast) -> String {
+        "\(toast.text), \(toast.actionTitle)"
+    }
 
     var body: some View {
         if let toast = model.current {
@@ -70,7 +75,10 @@ struct ActionToastView: View {
             .padding(.vertical, 8)
             .background(Color.black.opacity(0.78))
             .clipShape(Capsule())
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.accessibilityLabel(toast))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model.performAction() }
             .id(toast.id)
         }
     }

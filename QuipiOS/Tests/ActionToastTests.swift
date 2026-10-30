@@ -46,4 +46,10 @@ final class ActionToastTests: XCTestCase {
         model.performAction()
         XCTAssertEqual(ran, ["B"])
     }
+
+    func test_voiceOverReadsTheTextAndTheAction() {
+        let model = makeModel()
+        model.show("Order: Manual", actionTitle: "Use Recent") {}
+        XCTAssertEqual(ActionToastView.accessibilityLabel(model.current!), "Order: Manual, Use Recent")
+    }
 }
