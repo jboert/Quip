@@ -34,13 +34,14 @@ Order is the build order. Stories 1–4 change QuipMac: build them together and 
 - [ ] Guard against a loop: if the kickstart fails (agent not loaded, launchctl error), log it and keep running as the unsupervised copy (fail open, same as the lock).
 - [ ] The login item is removed when the agent is turned on (the agent's `RunAtLoad` covers login), and put back when it is turned off.
 - [ ] `docs/` install recipe and `reference_quip_install_recipe` memory: relaunch with `launchctl kickstart -k gui/$(id -u)/com.quip.QuipMac.crash-recovery`, not `open`.
+- [ ] `KeepAlive` = `true` (§6.1). Menu-bar Quit is replaced by **Stop Quip…** (confirm → `launchctl bootout gui/<uid>/<label>`, then exit). Opening Quip again re-bootstraps the agent.
 - [ ] Settings → Reliability shows the true state: "Watching Quip (pid N)" / "Installed, but not watching — Fix" (Fix = kickstart).
 - [ ] Pure `LaunchOwnership.decide(agentInstalled:launchedByAgent:) -> .run | .handOff` + tests.
 - [ ] Check after install: `launchctl print …` shows `state = running` with Quip's pid.
 
 ### US-002: A hung Quip is restarted
 - [ ] Quip writes a heartbeat (Unix time) to `~/Library/Application Support/Quip/heartbeat` every 10 s **from the main actor**, so a blocked main thread stops it.
-- [ ] A second LaunchAgent `com.quip.QuipMac.watchdog` (`StartInterval 30`, runs `/bin/sh` on a script inside the app bundle: no TCC, no new binary) checks: Quip's pid is alive and the heartbeat is older than 90 s → `sample <pid> 3` to `~/Library/Logs/Quip/hang-<time>.txt` → `kill -9`. The `-9` counts as a crash, so US-001's agent restarts Quip.
+- [ ] A second LaunchAgent `com.quip.QuipMac.watchdog` (`StartInterval 30`, runs `/bin/sh` on a script inside the app bundle: no TCC, no new binary) checks: Quip's pid is alive and the heartbeat is older than 60 s (§6.2) → `sample <pid> 3` to `~/Library/Logs/Quip/hang-<time>.txt` → `kill -9`. The `-9` counts as a crash, so US-001's agent restarts Quip.
 - [ ] Never kill during the first 120 s after Quip starts (launch can be slow), and never more than 3 times in 30 min (then log and leave it up, so a hang loop is visible, not hidden).
 - [ ] Installed and removed with the same Reliability toggle.
 - [ ] `~/Library/Logs/Quip/watchdog.log`: one line per check that acts (`hang pid=N heartbeat_age=Ns action=killed sample=hang-….txt`), plus a throttled `ok` line every 30 min.
@@ -75,16 +76,17 @@ Order is the build order. Stories 1–4 change QuipMac: build them together and 
 
 ## 5. Tests and checks
 
-- Unit: `LaunchOwnership`, the watchdog decision (age 89 s → ok, 91 s → kill, uptime 100 s → wait, 3 kills in 30 min → leave up), clean-shutdown marker read/write, `MacDownClassifier`.
+- Unit: `LaunchOwnership`, the watchdog decision (age 59 s → ok, 61 s → kill, uptime 100 s → wait, 3 kills in 30 min → leave up), clean-shutdown marker read/write, `MacDownClassifier`.
 - Mutation check per pure type, results in the commit message.
 - Mac hardware check (owner present, after the one rebuild):
   1. `launchctl print gui/501/com.quip.QuipMac.crash-recovery` → `running`, Quip's pid.
   2. `kill -9 <pid>` → back within 30 s; the phone toasts "restarted after a crash".
-  3. Simulate a hang: `kill -STOP <pid>` → the watchdog samples and kills within 2 min; the agent restarts it; the phone toasts "after a hang".
-  4. Quit from the menu bar → stays quit (a normal quit must not restart).
+  3. Simulate a hang: `kill -STOP <pid>` → the watchdog samples and kills within 90 s; the agent restarts it; the phone toasts "after a hang".
+  4. `osascript -e 'quit app "Quip"'` → back within 30 s (any exit comes back, §6.1).
+  5. Menu bar → Stop Quip… → confirm → stays stopped; `launchctl print` shows the agent gone. Open Quip → the agent is back and running.
 - Phone hardware check (remote, on cellular): quit Quip on the Mac → the phone shows "Quip isn't running on your Mac" → Remote in → Screen Sharing → open Quip → the phone reconnects.
 
-## 6. Open questions for the owner
+## 6. Decisions (owner, 2026-10-30: "what's best")
 
-1. Should a normal **Quit** from the menu bar also come back? (Today: no, on purpose. If "turned off" in your message meant an accidental quit, `KeepAlive` can be `true`, so only turning the toggle off stops it.)
-2. Watchdog threshold: 90 s without a heartbeat. A shorter threshold restarts sooner but risks killing a slow but healthy Quip.
+1. **Any exit comes back.** From the phone an accidental quit and a crash look the same: you are locked out. The agent's `KeepAlive` becomes `true` (restart after any exit). The menu-bar **Quit** becomes **Stop Quip…**: it asks to confirm, then runs `launchctl bootout` on the agent so Quip stays stopped until the next login or until it is opened again. The single-instance loser now hands off (US-001) instead of exiting, so `SuccessfulExit` no longer carries the loop guard; `ThrottleInterval 30` still does.
+2. **Hang threshold 60 s.** The watchdog checks every 30 s and launchd waits up to 30 s to relaunch, so the worst case is about 2 min down (90 s would be about 2.5 min). A healthy Quip never blocks its main thread for 60 s.
