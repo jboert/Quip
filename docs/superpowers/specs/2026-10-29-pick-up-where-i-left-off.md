@@ -71,16 +71,18 @@ Order is the build order. Each is sized for one focused session (Ralph-compatibl
 - [x] Gate.
 
 ### US-001: Recency stack of windows per Mac
-- [ ] New pure `WindowRecency` (`QuipiOS/Services/WindowRecency.swift`): ids most recent first, cap 20, no duplicates. `touch(id)`, `prune(keeping:)`, `best(available:excluding:)`.
-- [ ] Storage behind a `RecencyStore` protocol with a `UserDefaults` implementation (`recentWindows.<backendID>`, string array) and an in-memory one for tests — tests never touch `UserDefaults.standard`.
-- [ ] Migration: no `recentWindows.<id>` but `lastSelectedWindow.<id>` exists → seed with it, then delete the old key.
-- [ ] `WindowSelectionMemory` is removed; its call sites move to `WindowRecency`. `WindowSelectionMemoryTests` is ported, not deleted (its cases still hold).
-- [ ] Tests `QuipiOS/Tests/WindowRecencyTests.swift` — table in §5.
-- [ ] Gate.
+Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rather than replace it.
+
+- [x] `WindowSelectionMemory` (`QuipiOS/Services/WindowSelectionMemory.swift`) keeps a list, most recent first, cap 20, no duplicates, under its existing key `lastSelectedWindow.<backendID>` (now a string array). Pure helpers `touched(_:with:)`, `pruned(_:keeping:)`, `best(recent:available:excluding:)`, `initialSelection(recent:available:)`; `recent(forBackendId:)`; `remember` pushes onto the list; `remembered` is its top.
+- [x] Migration: none needed. A single id stored by an earlier build reads as a list of one; the next `remember` writes the array.
+- [x] Storage stays `UserDefaults` with the `defaults:` parameter JB's API already had; tests pass a throwaway suite and never touch `UserDefaults.standard`. (No `RecencyStore` protocol: the parameter covers it.)
+- [x] Initial pick (`QuipApp.swift` ~668) uses `initialSelection(recent:available:)`: when the last window has closed, the one before it, not `windows.first`. The vanished-window path (~652) moves in US-002.
+- [x] JB's `WindowSelectionMemoryTests` cases unchanged; the §5 table added to the same file.
+- [x] Gate.
 
 ### US-002: One landing decision, with recency fallback
 - [ ] New pure `LandingPolicy` (`QuipiOS/Services/LandingPolicy.swift`) implementing §3 steps 1, 2, 5, 6 (3 and 4 stubbed as "no candidate" until US-006/US-009).
-- [ ] `QuipApp.swift` ~652 (vanished window) and ~668 (initial pick) both call it; the two separate `select_window` sends collapse into one call site.
+- [ ] `QuipApp.swift` ~652 (vanished window) and ~668 (initial pick) both call it, using `WindowSelectionMemory.recent` for step 5; the two separate `select_window` sends collapse into one call site.
 - [ ] Every phone selection path calls `touch` (tap, deep link, `onSelectWindow` echo, push tap, backend switch).
 - [ ] Tests `LandingPolicyTests.swift` — table in §5, including "stack [C,B,A], layout [A,B] → B".
 - [ ] Wiring test (pattern: `BroadcastWiringTests`): a `layout_update` without the selected window produces exactly one `SelectWindowMessage` for the recency pick.
@@ -180,7 +182,7 @@ Today `berriscope://` is registered (`apple/Resources/IOS-Info.plist`) but only 
 
 Every pure type gets table-driven tests. Each row is one `XCTAssert`.
 
-**WindowRecency** — touch A,B,C → [C,B,A]; touch B again → [B,C,A]; 21 touches → 20 kept, oldest dropped; prune keeping {A} → [A]; best(available [A,B], excluding B) → A; best with nothing available → nil; migration seeds from `lastSelectedWindow` and deletes it; migration skipped when new key exists.
+**WindowSelectionMemory (recent list)** — touch A,B,C → [C,B,A]; touch B again → [B,C,A]; 21 touches → 20 kept, oldest dropped; prune keeping {A} → [A]; best(available [A,B], excluding B) → A; best with nothing available → nil; recent [C,B,A], layout [A,B] → B; a single id from an earlier build reads as a list of one; stored list deduped and capped.
 
 **LandingPolicy** — explicit beats everything (incl. waiting window); `followFrontmost` on → Mac frontmost, no smart landing; away 1 min + other window waiting → restore, not jump; away 3 min + other waiting → jump, reason `.waiting`; restored window itself waiting → stay; two waiting → higher in recency; setting off → no jump; place 29 min → restored; place 31 min → recency; place from another backend → ignored; saved window gone → recency excluding it; empty layout → nil; decision sends one `select_window`.
 
@@ -190,7 +192,7 @@ Every pure type gets table-driven tests. Each row is one `XCTAssert`.
 
 **RemoteInURLBuilder** — each preset with MagicDNS host; IPv4 Tailscale host; name with spaces → `%20`; custom `myapp://x?h={host}&n={name}`; unknown placeholder → error; empty host for a `{host}` preset → `.noHost`; empty name for Berriscope → `.noHost`.
 
-**Mutation check** (repo convention, record results in the commit message): for each pure type, break the key line and confirm a test fails — e.g. drop the cap in `WindowRecency`, swap steps 3/4 in `LandingPolicy`, use `>` for `≤` on freshness, skip percent-encoding, drop the `excluding` filter. A mutation that no test catches means a missing test, added before commit.
+**Mutation check** (repo convention, record results in the commit message): for each pure type, break the key line and confirm a test fails — e.g. drop the cap in `WindowSelectionMemory.touched`, swap steps 3/4 in `LandingPolicy`, use `>` for `≤` on freshness, skip percent-encoding, drop the `excluding` filter. A mutation that no test catches means a missing test, added before commit.
 
 ## 6. Simulator scenarios (fake Mac)
 

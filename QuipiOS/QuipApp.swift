@@ -665,9 +665,10 @@ struct QuipApp: App {
                 // both paths. Prefer the window the user last had selected:
                 // a reconnect after backgrounding clears the selection, and
                 // landing on windows.first put them in a different terminal.
+                // If that one has closed, the one they were in before it.
                 if selectedWindowId == nil,
                    let pick = WindowSelectionMemory.initialSelection(
-                       remembered: WindowSelectionMemory.remembered(forBackendId: session.backendID),
+                       recent: WindowSelectionMemory.recent(forBackendId: session.backendID),
                        available: update.windows.map(\.id)) {
                     selectedWindowId = pick
                     session.client.send(SelectWindowMessage(windowId: pick))
