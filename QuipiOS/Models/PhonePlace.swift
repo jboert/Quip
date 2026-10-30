@@ -1,9 +1,11 @@
 import Foundation
 
-/// Q-88 US-008 fills these: the first visible terminal line and how far it
-/// was from the end, so a scrolled-up window comes back at the same text.
+/// Q-88 US-008: the first visible terminal line and how far it was from the
+/// end, so a scrolled-up window comes back at the same text. The line is
+/// kept as a hash, never as text: the place sits in UserDefaults, which a
+/// device backup copies, and a terminal line can hold a secret.
 struct ScrollAnchor: Codable, Equatable {
-    var line: String
+    var lineHash: String
     var fromEnd: Int
 }
 

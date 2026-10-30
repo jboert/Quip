@@ -153,6 +153,9 @@ struct QuipApp: App {
     @State private var placeRecorder = PhonePlaceRecorder()
     /// Q-88 US-007: unsent text per window, in its own protected file.
     @State private var drafts = DraftBook()
+    /// Q-88 US-008: where each window's terminal text was scrolled to (only
+    /// windows left scrolled up). Part of the saved place.
+    @State private var scrollAnchors: [String: ScrollAnchor] = [:]
     /// Q-88 US-006: put the saved place back on the next layout with
     /// windows. Set at launch and when a switch lands on a Mac with none yet.
     @State private var placeRestorePending = true
@@ -284,6 +287,7 @@ struct QuipApp: App {
                 textInputValue: $textInputValue,
                 isTerminalExpanded: $isTerminalExpanded,
                 drafts: drafts,
+                scrollAnchors: $scrollAnchors,
                 onStartRecording: { DispatchQueue.main.async { startRecording() } },
                 onStopRecording: { DispatchQueue.main.async { stopRecording() } },
                 onRequestContent: { windowId in
@@ -575,6 +579,10 @@ struct QuipApp: App {
         }
         if restoringPlace {
             placeRestorePending = false
+            // Scroll positions come back with a fresh place only (US-008).
+            scrollAnchors = place.flatMap {
+                PlaceRestorePolicy.isFresh($0, now: now) ? $0.scrollAnchorByWindow : nil
+            } ?? [:]
             let steps = PlaceRestorePolicy.steps(place: place, now: now, window: outcome.selected,
                                                  displays: displays.map(\.id), spaces: spaces.map(\.id))
             applyPlace(steps)
@@ -599,12 +607,15 @@ struct QuipApp: App {
         }
     }
 
-    /// Where the user is right now (Q-88 US-005). Scroll anchors come with
-    /// US-008.
+    /// Where the user is right now (Q-88 US-005), with the scroll position
+    /// of each open window left scrolled up (US-008).
     private func currentPlace(savedAt: Date) -> PhonePlace {
-        PhonePlace(selectedWindowId: selectedWindowId, selectedDisplayID: selectedDisplayID,
-                   selectedSpaceID: selectedSpaceID, textInputOpen: showTextInput,
-                   terminalExpanded: isTerminalExpanded, savedAt: savedAt)
+        let open = Set(windows.map(\.id))
+        return PhonePlace(selectedWindowId: selectedWindowId, selectedDisplayID: selectedDisplayID,
+                          selectedSpaceID: selectedSpaceID, textInputOpen: showTextInput,
+                          terminalExpanded: isTerminalExpanded,
+                          scrollAnchorByWindow: scrollAnchors.filter { open.contains($0.key) },
+                          savedAt: savedAt)
     }
 
     /// True when the current wall-clock hour falls inside the user's
@@ -1539,6 +1550,7 @@ struct MainiOSView: View {
     @Binding var isTerminalExpanded: Bool
     /// Q-88 US-007: the field's text is the selected window's draft.
     let drafts: DraftBook
+    @Binding var scrollAnchors: [String: ScrollAnchor]
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
@@ -4559,6 +4571,10 @@ struct MainiOSView: View {
             lastUpdate: terminalContentUpdatedAtById[wid],
             isWaiting: windows.first(where: { $0.id == selectedWindowId })?.state == "waiting_for_input",
             isAgent: windows.first(where: { $0.id == selectedWindowId })?.cliKind.map { $0 != .shell } ?? false,
+            scrollAnchor: selectedWindowId.flatMap { scrollAnchors[$0] },
+            onScrollAnchorChange: { anchor in
+                if let wid = selectedWindowId { scrollAnchors[wid] = anchor }
+            },
             isExpanded: $isTerminalExpanded,
             onRefresh: {
                 if let wid = selectedWindowId { onRequestContent(wid) }

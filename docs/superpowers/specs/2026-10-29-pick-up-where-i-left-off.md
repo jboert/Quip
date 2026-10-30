@@ -138,12 +138,12 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Gate.
 
 ### US-008: Terminal scroll position comes back
-- [ ] `ScrollAnchor` = text of the first visible line + its distance from the end. Saved only when `isPinnedToBottom == false`.
-- [ ] New pure `TerminalScrollPolicy.resolve(anchor:lines:)`: search outward from the saved distance for an exact line match; found → that line index; not found → nil (bottom, follow-tail on).
-- [ ] `InlineTerminalContent` uses it on appear when an anchor exists for the window; `isPinnedToBottom` stays the source of truth afterwards.
-- [ ] Tests: extend `TerminalScrollPolicyTests` — exact, shifted by 40 new lines, duplicate lines (nearest to the saved distance wins), line gone, empty buffer.
-- [ ] Sim scenario S8 (needs US-000 `lines`).
-- [ ] Gate.
+- [x] `ScrollAnchor` = text of the first visible line + its distance from the end. Saved only when `isPinnedToBottom == false`. *As built:* a SHA-256 prefix of the line, not its text (the place is in UserDefaults, which device backups copy; a terminal line can hold a secret). Reported when a scroll ends; back at the bottom clears it.
+- [x] New pure `TerminalScrollPolicy.resolve(anchor:lines:)`: search outward from the saved distance for an exact line match; found → that line index; not found → nil (bottom, follow-tail on).
+- [x] `InlineTerminalContent` uses it on appear when an anchor exists for the window; `isPinnedToBottom` stays the source of truth afterwards. *As built:* text mode only (`LinkableTerminalText`); the screenshot view still opens at the bottom. Anchors also bring a window back to its spot on a switch within the session.
+- [x] Tests: extend `TerminalScrollPolicyTests` — exact, shifted by 40 new lines, duplicate lines (nearest to the saved distance wins), line gone, empty buffer.
+- [x] Sim scenario S8 (needs US-000 `lines`), by hand: `lines dotfiles 500`, scroll to line ~235, Home, kill, relaunch → line 0235 at the top; switch away and back → same.
+- [x] Gate.
 
 ### US-009: Smart landing on a waiting window
 - [ ] `LandingPolicy` step 3 enabled. Threshold 2 min (constant). Setting "Jump to waiting windows" (default on) in Settings → Notifications, in `PreferencesSnapshot`.

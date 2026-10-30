@@ -28,19 +28,54 @@ struct AttentionPulseDot: View {
 /// request is held until `layoutSubviews` sees a non-zero height.
 final class BottomFollowingTextView: UITextView {
     private var pendingScrollToBottom = false
+    /// Q-88 US-008: a line to put at the top once laid out.
+    private var pendingTopLine: Int?
 
     func scrollToBottomAfterLayout() {
+        pendingTopLine = nil
         pendingScrollToBottom = true
         setNeedsLayout()
     }
 
+    func scrollToLineAfterLayout(_ line: Int) {
+        pendingScrollToBottom = false
+        pendingTopLine = line
+        setNeedsLayout()
+    }
+
+    /// The `\n`-separated line at the top of the view.
+    var firstVisibleLine: Int? {
+        let probe = CGPoint(x: textContainerInset.left + 1, y: contentOffset.y + textContainerInset.top + 1)
+        guard let position = closestPosition(to: probe) else { return nil }
+        let offset = self.offset(from: beginningOfDocument, to: position)
+        let text = textStorage.string as NSString
+        guard offset >= 0, offset <= text.length else { return nil }
+        return text.substring(to: offset).reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        if let line = pendingTopLine, bounds.height > 0 {
+            pendingTopLine = nil
+            scrollLineToTop(line)
+            return
+        }
         guard pendingScrollToBottom, bounds.height > 0 else { return }
         pendingScrollToBottom = false
         // By character, not contentSize: TextKit 2 lays long text out lazily,
         // so contentSize is only an estimate until the tail is laid out.
         scrollRangeToVisible(NSRange(location: max(0, textStorage.length - 1), length: 1))
+    }
+
+    private func scrollLineToTop(_ line: Int) {
+        let lines = textStorage.string.components(separatedBy: "\n")
+        guard lines.indices.contains(line) else { return }
+        let location = lines[..<line].reduce(0) { $0 + ($1 as NSString).length + 1 }
+        guard let start = position(from: beginningOfDocument, offset: location),
+              let range = textRange(from: start, to: start) else { return }
+        let top = firstRect(for: range).minY - textContainerInset.top
+        let maxY = max(0, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        setContentOffset(CGPoint(x: contentOffset.x, y: min(max(0, top), maxY)), animated: false)
     }
 }
 
@@ -66,6 +101,12 @@ struct LinkableTerminalText: UIViewRepresentable {
     var scrollKey: String? = nil
     /// Receives the new size when a pinch ends.
     var onFontSizeChange: ((Double) -> Void)? = nil
+    /// Q-88 US-008: where this window was left. Used when the window is first
+    /// shown (a new `scrollKey`); after that the reader's own scrolling rules.
+    var restoreAnchor: ScrollAnchor? = nil
+    /// Called when a scroll ends: the anchor while scrolled up, nil when
+    /// back at the bottom (following).
+    var onAnchorChange: ((ScrollAnchor?) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -96,6 +137,7 @@ struct LinkableTerminalText: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.fontSize = fontSize
         coordinator.onFontSizeChange = onFontSizeChange
+        coordinator.onAnchorChange = onAnchorChange
         let keyChanged = coordinator.renderedScrollKey != scrollKey
         // Same text at the same size: leave the view alone so a refresh never
         // moves the reader.
@@ -107,6 +149,9 @@ struct LinkableTerminalText: UIViewRepresentable {
         // (`TerminalScrollPolicy`, same rule as the screenshot view). Scrolled
         // up reading history, they stay where they are. A new window starts
         // at the bottom regardless.
+        let restoreLine = keyChanged ? restoreAnchor.flatMap {
+            TerminalScrollPolicy.resolve(anchor: $0, lines: content.components(separatedBy: "\n"))
+        } : nil
         let pinned = keyChanged || TerminalScrollPolicy.isPinnedToBottom(
             contentHeight: tv.contentSize.height,
             offsetY: tv.contentOffset.y,
@@ -120,7 +165,9 @@ struct LinkableTerminalText: UIViewRepresentable {
             .foregroundColor: UIColor.white.withAlphaComponent(0.85),
         ])
         tv.attributedText = attr
-        if pinned {
+        if let restoreLine {
+            tv.scrollToLineAfterLayout(restoreLine)
+        } else if pinned {
             // Not `scrollRangeToVisible` here: on first show the view has no
             // size yet, the scroll is a no-op, and the reader was left at the
             // TOP — where every later refresh read as "scrolled up" and stopped
@@ -141,6 +188,26 @@ struct LinkableTerminalText: UIViewRepresentable {
         /// a new key, even when the window id itself is nil.
         var renderedScrollKey: String??
         var onFontSizeChange: ((Double) -> Void)?
+        var onAnchorChange: ((ScrollAnchor?) -> Void)?
+
+        // Q-88 US-008: report where the reader stopped.
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { reportAnchor(scrollView) }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            reportAnchor(scrollView)
+        }
+
+        private func reportAnchor(_ scrollView: UIScrollView) {
+            guard let tv = scrollView as? BottomFollowingTextView, let onAnchorChange else { return }
+            let pinned = TerminalScrollPolicy.isPinnedToBottom(
+                contentHeight: tv.contentSize.height, offsetY: tv.contentOffset.y,
+                visibleHeight: tv.bounds.height - tv.adjustedContentInset.bottom)
+            guard !pinned, let line = tv.firstVisibleLine else { return onAnchorChange(nil) }
+            onAnchorChange(TerminalScrollPolicy.anchor(lines: tv.textStorage.string.components(separatedBy: "\n"),
+                                                       firstVisible: line))
+        }
 
         @objc func handlePinch(_ pinch: UIPinchGestureRecognizer) {
             guard let tv = pinch.view else { return }
@@ -472,6 +539,9 @@ struct InlineTerminalContent: View {
     var isWaiting: Bool = false
     /// The window runs an agent CLI, not a plain shell (Q-89).
     var isAgent: Bool = false
+    /// Q-88 US-008: where this window's text was left, and where it is now.
+    var scrollAnchor: ScrollAnchor? = nil
+    var onScrollAnchorChange: ((ScrollAnchor?) -> Void)? = nil
     @Binding var isExpanded: Bool
     var onRefresh: () -> Void
     /// (action, promptFingerprint?) — fingerprint is non-nil only for one-tap
@@ -987,9 +1057,10 @@ struct InlineTerminalContent: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             case .text:
-                LinkableTerminalText(content: content, fontSize: terminalTextSize, scrollKey: windowId) { size in
-                    terminalTextSize = size
-                }
+                LinkableTerminalText(content: content, fontSize: terminalTextSize, scrollKey: windowId,
+                                     onFontSizeChange: { size in terminalTextSize = size },
+                                     restoreAnchor: scrollAnchor,
+                                     onAnchorChange: onScrollAnchorChange)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loading:
                 Text(TerminalPanelFreshness.loadingText(base: loadingPlaceholder,

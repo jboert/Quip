@@ -20,7 +20,7 @@ final class PhonePlaceTests: XCTestCase {
 
     private let place = PhonePlace(selectedWindowId: "com.googlecode.iterm2.4117", selectedDisplayID: "2",
                                    selectedSpaceID: "s3", textInputOpen: true, terminalExpanded: true,
-                                   scrollAnchorByWindow: ["w": ScrollAnchor(line: "$ make test", fromEnd: 40)],
+                                   scrollAnchorByWindow: ["w": ScrollAnchor(lineHash: TerminalScrollPolicy.hash("$ make test"), fromEnd: 40)],
                                    savedAt: Date(timeIntervalSince1970: 1_800_000_000))
 
     // MARK: Store
