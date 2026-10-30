@@ -1721,10 +1721,12 @@ struct MainiOSView: View {
     /// The phone-only default (`PhoneWindowOrder.initialMode`), not backed up.
     @AppStorage(PhoneWindowOrder.Mode.guessKey) private var windowOrderModeGuessRaw: String = ""
     /// The recency stack the grid is drawn from in Recent mode. A copy, not
-    /// a live read, so a card never moves under the finger: it is refreshed
-    /// 300 ms after the stack changes, and not while a card is dragged.
+    /// a live read: it is taken on launch, on coming back to the app, on a
+    /// Mac switch and when Recent is turned on, never while the user is
+    /// tapping around. Re-sorting on
+    /// every pick moved the tapped card to the front a moment later, so the
+    /// next tap landed on whichever card had slid into its place.
     @State private var recentOrder: [String] = []
-    @State private var recentOrderRefresh: Task<Void, Never>?
     @State private var orderToast = ActionToastModel()
     /// Active drag state: which window is being dragged + accumulated
     /// translation. Nil when no drag is in flight.
@@ -2061,7 +2063,12 @@ struct MainiOSView: View {
             reconcileWindowOrder(activeWindows: newValue)
             runAutoChooser(count: newValue.count)
         }
-        .onChange(of: manager.recency.revision) { _, _ in scheduleRecentOrderRefresh() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            refreshRecentOrder()
+        }
+        // Turning Recent on (Settings, or the toast's Use Recent) is asked
+        // for, so it shows the order as it is now.
+        .onChange(of: windowOrderMode) { _, _ in refreshRecentOrder() }
         .onChange(of: manager.activeBackendID) { _, _ in
             refreshRecentOrder()
             swapDraft()
@@ -5172,8 +5179,6 @@ struct MainiOSView: View {
                                         handleDrop(windowId: window.id, dropCenter: dropCenter)
                                         draggingWindowId = nil
                                         dragTranslation = .zero
-                                        // A Recent reorder held back for the drag.
-                                        scheduleRecentOrderRefresh()
                                     }
                             )
                         }
@@ -5442,19 +5447,6 @@ struct MainiOSView: View {
 
     private func refreshRecentOrder() {
         recentOrder = manager.recency.recent(forBackendId: manager.activeBackendID)
-    }
-
-    /// Redraws the Recent order 300 ms after the stack last changed, never
-    /// mid-drag: a drag's end calls this again.
-    private func scheduleRecentOrderRefresh() {
-        recentOrderRefresh?.cancel()
-        recentOrderRefresh = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, draggingWindowId == nil else { return }
-            let next = manager.recency.recent(forBackendId: manager.activeBackendID)
-            guard next != recentOrder else { return }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { recentOrder = next }
-        }
     }
 
     /// Pure move: `order` with `id` pulled from its current position and

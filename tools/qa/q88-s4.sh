@@ -64,6 +64,14 @@ for y, x, i, cx, cy in sorted(rows):
     print(i, round(cx), round(cy))'
 }
 order() { tiles | awk '{print $1}' | paste -sd' ' -; }
+# The Recent order is taken when the user comes back to the app, never while
+# they tap around (a card must not slide away under the next tap).
+come_back() {
+    idb ui button --udid "$UDID" HOME >/dev/null 2>&1
+    sleep 1.5
+    xcrun simctl launch "$UDID" "$APP" >/dev/null
+    sleep 2
+}
 center() { tiles | awk -v id="$1" '$1 == id {print $2, $3}'; }
 button() {  # the toast's action: right end of the element whose label names $1
     # The toast is one VoiceOver element (text + button), so its button is
@@ -104,12 +112,15 @@ sleep 1
 xcrun simctl openurl "$UDID" "quip://window/$LANTERN"
 wait_for "$LOG" "frontmost now $LANTERN" 5 || { echo "FAIL: selecting lantern-web never reached the Mac"; exit 1; }
 sleep 2
+check "no re-sort while tapping around" "$PINNED $LANTERN $DOTFILES $SAFARI" "$(order)"
+come_back
 check "Recent order after picking Safari, then lantern-web" "$PINNED $LANTERN $SAFARI $DOTFILES" "$(order)"
 
 before="$(stamp)"
 echo "front $SAFARI" >"$WORK/fm.in"
 wait_for "$LOG" "cmd front $SAFARI" 5 || { echo "FAIL: the fake Mac did not take 'front'"; exit 1; }
 sleep 2
+come_back
 check "Mac focus moves Safari up" "$PINNED $SAFARI $LANTERN $DOTFILES" "$(order)"
 check "a recency write is not a settings edit" "$before" "$(stamp)"
 
@@ -117,18 +128,19 @@ read -r fx fy <<<"$(center "$DOTFILES")"
 read -r tx ty <<<"$(center "$SAFARI")"
 [ -n "${fx:-}" ] && [ -n "${tx:-}" ] || { echo "FAIL: tiles not found on screen"; exit 1; }
 idb ui swipe --udid "$UDID" "$fx" "$fy" "$tx" "$ty" --duration 1.0 --delta 8 >/dev/null
-sleep 1
-check "drag switches to Manual" "manual" "$(pref windowOrderMode)"
-check "the dragged order holds" "$PINNED $DOTFILES $SAFARI $LANTERN" "$(order)"
-# The accessibility tree can lag the toast by a moment; look for up to 2 s.
+# The toast lives 4 s and an accessibility dump takes about 1 s, so look for
+# it first and read the rest from the saved prefs (fast, and still true
+# after Use Recent).
 bx=""; by=""
 for _ in 1 2 3 4; do
     read -r bx by <<<"$(button "Use Recent")"
     [ -n "${bx:-}" ] && break
-    sleep 0.5
+    sleep 0.3
 done
-check "toast offers Use Recent" "yes" "$([ -n "${bx:-}" ] && echo yes || echo no)"
 xcrun simctl io "$UDID" screenshot "$SHOTS/q88-s4-manual.png" >/dev/null 2>&1
+check "toast offers Use Recent" "yes" "$([ -n "${bx:-}" ] && echo yes || echo no)"
+check "drag switches to Manual" "manual" "$(pref windowOrderMode)"
+check "the dragged order is saved" "[\"$PINNED\",\"$DOTFILES\",\"$SAFARI\",\"$LANTERN\"]" "$(pref phoneWindowOrderJSON)"
 
 if [ -n "${bx:-}" ]; then
     idb ui tap --udid "$UDID" "$bx" "$by" >/dev/null
