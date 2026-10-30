@@ -1756,6 +1756,13 @@ struct MainiOSView: View {
     @State private var orderToast = ActionToastModel()
     /// The Mac whose Remote-in setting is open (Q-88 US-011).
     @State private var remoteInSettingsBackend: PairedBackend?
+    /// Q-90 US-002: when the active Mac dropped, and what the probe says is
+    /// down. Both nil while connected.
+    @State private var macDownSince: Date?
+    @State private var macDownKind: MacDown?
+    @State private var macDownProbe = MacDownProbe()
+    /// Last Screen Sharing answer per host, used while the probe is rate-limited.
+    @State private var macDownScreenSharing: [String: Bool] = [:]
     /// Q-88 US-009: "Jump to waiting windows" (Settings → Notifications).
     @AppStorage(SmartLanding.enabledKey) private var smartLandingOn = true
     /// Time away, held until the grid has windows to look at.
@@ -1902,6 +1909,12 @@ struct MainiOSView: View {
                             .padding(.top, 2)
                     }
 
+                    if let content = macDownContent {
+                        MacDownBannerView(content: content, onAction: performMacDownAction)
+                            .padding(.horizontal, 6)
+                            .padding(.top, 4)
+                    }
+
                     if isPortrait {
                         portraitContentSection
                     } else {
@@ -1957,6 +1970,76 @@ struct MainiOSView: View {
         }
         .sensoryFeedback(.warning, trigger: broadcastWarningTick)
         .environment(\.quipColors, colors)
+        .task(id: "\(client.isConnected)|\(manager.activeBackendID)") { await watchMacDown() }
+    }
+
+    /// Q-90 US-002: the banner, once the active Mac has been gone 15 s and
+    /// the probe has said what is down. Gone as soon as the client reconnects.
+    private var macDownContent: MacDownBanner.Content? {
+        guard !client.isConnected, let kind = macDownKind, let since = macDownSince else { return nil }
+        return MacDownBanner.content(kind: kind, downFor: Date().timeIntervalSince(since),
+                                     remoteInHostSet: activeRemoteInHost != nil)
+    }
+
+    private var activePairedBackend: PairedBackend? {
+        manager.paired.first { $0.id == manager.activeBackendID }
+    }
+
+    /// The host Remote in would open for the active Mac, as `startRemoteIn`
+    /// resolves it; nil sends the action to the setting instead.
+    private var activeRemoteInHost: String? {
+        guard let backend = activePairedBackend else { return nil }
+        let host = RemoteInStore.settings(for: backend.id).host
+            ?? RemoteInURLBuilder.defaultHost(urls: backend.urlsInOrder)
+        return host?.isEmpty == false ? host : nil
+    }
+
+    /// Runs while the active client is down: waits out a blip, then probes
+    /// the dialed host's Screen Sharing port once a minute. phone.log gets a
+    /// line only when the kind changes. Cancelled (and the banner cleared)
+    /// by a reconnect or a Mac switch.
+    private func watchMacDown() async {
+        macDownKind = nil
+        guard !client.isConnected, activePairedBackend != nil else {
+            macDownSince = nil
+            return
+        }
+        macDownSince = Date()
+        try? await Task.sleep(for: .seconds(MacDownBanner.delay))
+        var logged: MacDown?
+        while !Task.isCancelled {
+            let host = client.serverURL?.host
+            let start = ContinuousClock.now
+            var screenSharing: Bool?
+            if let host {
+                if let answer = await macDownProbe.probe(host: host) {
+                    macDownScreenSharing[host] = answer
+                }
+                screenSharing = macDownScreenSharing[host]
+            }
+            guard !Task.isCancelled,
+                  let kind = MacDown.classify(quipReachable: client.isConnected,
+                                              screenSharingReachable: screenSharing)
+            else { return }
+            let ms = Int((ContinuousClock.now - start) / .milliseconds(1))
+            if let line = MacDownBanner.logLine(previous: logged, next: kind, probeMs: ms) {
+                PhoneLog.log(line)
+            }
+            logged = kind
+            macDownKind = kind
+            try? await Task.sleep(for: MacDownProbe.minInterval)
+        }
+    }
+
+    private func performMacDownAction(_ action: MacDownBanner.Action) {
+        switch action {
+        case .remoteIn:
+            if let backend = activePairedBackend { startRemoteIn(backend, windowId: nil) }
+        case .setUpRemoteIn:
+            remoteInSettingsBackend = activePairedBackend
+        case .checkTailscale:
+            if let url = URL(string: "tailscale://") { UIApplication.shared.open(url) }
+        }
     }
 
     @ViewBuilder

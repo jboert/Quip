@@ -14,3 +14,30 @@ Started: Fri Oct 30 14:42:11 MST 2026
 - Runtime note: direct `xcodebuild` and `xcrun simctl` were permission-blocked; all verification went through tools/check.sh (default sim D8C5154B).
 - Not wired into the UI yet (US-002 shows the banner and consumes MacDownProbe).
 - Next: US-002 plain-words "Mac is down" banner with Remote in.
+
+## 2026-10-30 — US-002 Plain-words "Mac is down" banner (IMPLEMENTED, NOT PASSED — final QA run blocked)
+- Files (uncommitted in the worktree): QuipiOS/Views/MacDownBanner.swift (new), QuipiOS/Tests/MacDownBannerTests.swift (new),
+  tools/qa/q90-down.sh (new, +x), QuipiOS/QuipApp.swift (banner + watchMacDown task + actions), QuipiOS/Services/PhoneLog.swift (fflush(stdout))
+- Gate: `tools/check.sh --all` exit 0 (clean control, final source): harness 62/0, QuipMac 1329/0, QuipiOS 1543/0 (+9 new); QuipLinux + QuipAndroid SKIPPED (not built here)
+- Mutations (each `printf '<file>\n' | tools/check.sh --files -`, expected exit 1, got exit 1):
+  1. content() without the 15 s guard → test_hiddenUnder15SecondsShownFrom15 fails 12 asserts
+  2. logLine logs on every probe → both log-rule tests fail
+  3. broken fixture repaired (honours downFor) → strict XCTExpectFailure "Expected failure … but none recorded"
+  4. remoteInHostSet ignored → test_quipDown_withoutHost_offersSetUp fails
+- QA: `bash tools/qa/q90-down.sh D8C5154B-… 8799 <worktree>/.q90-shots` → PASS `[Quip][phone-log] mac_down kind=quip_down probe_ms=2`
+  after the clean gate; the screenshot shows the banner "Quip isn't running on your Mac" + "Remote in" above the grid (this Mac's Screen Sharing answers on 5900).
+- Found on the way: stdout redirected by `simctl launch --stdout` was block-buffered, so phone-log prints never reached the file → PhoneLog.log now fflushes.
+- Blocker: the bare criterion command (no $3, so files under $TMPDIR) never got its stdout file created in this sandboxed shell; the script now writes the capture
+  to gitignored build/qa/. Re-running the final script then failed on every try with "The request was denied by service delegate (SBMainWorkspace)" from
+  `simctl launch`. Direct `xcrun simctl` and XcodeBuildMCP are permission-blocked, so the simulator could not be inspected, unlocked or rebooted.
+- Next: free/reboot D8C5154B (check no other session holds it), `tools/check.sh --all`, then `bash tools/qa/q90-down.sh D8C5154B-7030-40BA-8443-F4F9EB27C725`;
+  on PASS commit the five files above + prd/progress and set US-002 passes:true.
+
+## 2026-10-30 — US-002 Plain-words "Mac is down" banner (PASS)
+- Files: QuipiOS/Views/MacDownBanner.swift, QuipiOS/Tests/MacDownBannerTests.swift, tools/qa/q90-down.sh, QuipiOS/QuipApp.swift, QuipiOS/Services/PhoneLog.swift
+- Unblocked: q90-down.sh now hands simctl an absolute stdout path ($PWD/build/qa/…); the SBMainWorkspace denial did not recur.
+- Gate: `tools/check.sh --all` exit 0 — harness 62/0, QuipMac 1329/0, QuipiOS 1543/0; QuipLinux + QuipAndroid SKIPPED (not built here, unverified)
+- Mutations: the 4 mutants in the entry above (each exit 1); this gate run is the clean control.
+- QA: `bash tools/qa/q90-down.sh D8C5154B-7030-40BA-8443-F4F9EB27C725` → PASS `mac_down kind=quip_down probe_ms=4`; screenshot shows
+  "Quip isn't running on your Mac" + "Remote in" banner under the status bar.
+- Next: US-003 carry the Mac's restart protection to the phone (reliability_status).

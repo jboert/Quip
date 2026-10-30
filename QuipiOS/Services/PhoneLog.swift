@@ -54,9 +54,11 @@ final class PhoneLog {
     private weak var client: WebSocketClient?
 
     /// Logs `message` from any thread. Also printed, so a cabled console still
-    /// sees it.
+    /// sees it. Flushed, because stdout redirected to a file (`simctl launch
+    /// --stdout`, the QA scripts) is block-buffered and would hold the line.
     nonisolated static func log(_ message: String) {
         print("[Quip][phone-log] \(message)")
+        fflush(stdout)
         let line = "\(Date().ISO8601Format()) \(message)"
         Task { @MainActor in shared.enqueue(line) }
     }
