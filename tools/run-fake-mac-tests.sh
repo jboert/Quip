@@ -242,6 +242,11 @@ sync_log
 checks=$((checks + 1))
 grep -qE "^.* +$DOTFILES .* frontmost" "$LOG" || fail "status marks the frontmost window"
 
+# select_window from the phone: the Mac raises it and reports it frontmost.
+phone "{\"type\":\"select_window\",\"windowId\":\"$LANTERN\"}"
+expect_probe "^frontmost_changed $LANTERN$" "select_window is echoed as frontmost_changed"
+expect_log "frontmost now $LANTERN \(raised by select_window\)" "the echo is logged"
+
 # open: brings back a closed window in the fixture's order.
 cmd "close lantern"
 expect_layout "^layout_update $ORCHARD=neutral $DOTFILES=" "close drops the window (setup for open)"

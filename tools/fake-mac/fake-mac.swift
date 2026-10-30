@@ -865,6 +865,16 @@ final class FakeMac: @unchecked Sendable {
                 let n = broadcast(layoutMessage())
                 log.line(head + " -> restored \(id) from the Dock, layout_update to \(n) phone(s)")
             }
+            // The Mac raises the window, and its 400 ms frontmost poll then
+            // reports it, which is the echo the phone's follow-the-Mac reads.
+            if windows.contains(where: { $0.id == id }), frontmost != id {
+                frontmost = id
+                queue.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in
+                    guard let self, self.frontmost == id else { return }
+                    let n = self.broadcast(FrontmostChangedMsg(windowId: id))
+                    self.log.line("frontmost now \(id) (raised by select_window) -> frontmost_changed to \(n) phone(s)")
+                }
+            }
         case "minimize_window": handleMinimizeWindow(m, head)
         case "set_color": handleSetColor(m, head)
         case "set_pin": handleSetPin(m, head)

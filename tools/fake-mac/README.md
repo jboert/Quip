@@ -155,7 +155,8 @@ the handlers in `QuipMac/QuipMacApp.swift`.
 | `close_window` | Same as the `close` command. |
 | `minimize_window` | The window stays in the layout with `isMinimized: true` until a `select_window` restores it (Q-53); unknown ids get `Window no longer exists`. `reload` forgets every minimized window. |
 | `image_upload` | `image_upload_error`, so the phone's spinner stops. |
-| `heartbeat_ack`, `device_identity`, `phone_log`, `select_window`, push registration, anything else | Logged. |
+| `select_window` | Logged; restores a minimized window; and, like the Mac's 400 ms frontmost poll after it raises the window, `frontmost_changed` for it 400 ms later. |
+| `heartbeat_ack`, `device_identity`, `phone_log`, push registration, anything else | Logged. |
 
 The fake also sends a `heartbeat` every 15 s, and the phone's WebSocket pings
 are answered by the network stack. Acks and errors go to every connected phone,
