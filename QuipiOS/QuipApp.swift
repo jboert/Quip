@@ -153,6 +153,9 @@ struct QuipApp: App {
     @State private var placeRecorder = PhonePlaceRecorder()
     /// Q-88 US-007: unsent text per window, in its own protected file.
     @State private var drafts = DraftBook()
+    /// Q-88 US-011: one tap to a remote-desktop app; hears the Mac's
+    /// frontmost echo below.
+    @State private var remoteIn = RemoteInFlow(opener: SystemURLOpener())
     /// Q-88 US-008: where each window's terminal text was scrolled to (only
     /// windows left scrolled up). Part of the saved place.
     @State private var scrollAnchors: [String: ScrollAnchor] = [:]
@@ -288,6 +291,8 @@ struct QuipApp: App {
                 isTerminalExpanded: $isTerminalExpanded,
                 drafts: drafts,
                 scrollAnchors: $scrollAnchors,
+                remoteIn: remoteIn,
+                macFrontmostId: macFrontmostId,
                 onStartRecording: { DispatchQueue.main.async { startRecording() } },
                 onStopRecording: { DispatchQueue.main.async { stopRecording() } },
                 onRequestContent: { windowId in
@@ -789,6 +794,7 @@ struct QuipApp: App {
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
                 macFrontmostId = windowId
+                remoteIn.frontmostChanged(windowId)
                 // QA mode owns selection between the pair halves — frontmost autonomy here would yank selection out of the pane.
                 guard manager.active.qaPair == nil else { return }
                 guard followFrontmost else { return }
@@ -1556,6 +1562,9 @@ struct MainiOSView: View {
     /// Q-88 US-007: the field's text is the selected window's draft.
     let drafts: DraftBook
     @Binding var scrollAnchors: [String: ScrollAnchor]
+    let remoteIn: RemoteInFlow
+    /// The Mac's last frontmost window: no echo will come for it.
+    var macFrontmostId: String?
     var onStartRecording: () -> Void
     var onStopRecording: () -> Void
     var onRequestContent: (String) -> Void
@@ -1745,6 +1754,8 @@ struct MainiOSView: View {
     /// next tap landed on whichever card had slid into its place.
     @State private var recentOrder: [String] = []
     @State private var orderToast = ActionToastModel()
+    /// The Mac whose Remote-in setting is open (Q-88 US-011).
+    @State private var remoteInSettingsBackend: PairedBackend?
     /// Q-88 US-009: "Jump to waiting windows" (Settings → Notifications).
     @AppStorage(SmartLanding.enabledKey) private var smartLandingOn = true
     /// Time away, held until the grid has windows to look at.
@@ -2309,14 +2320,19 @@ struct MainiOSView: View {
             BackendPickerSheet(
                 manager: manager,
                 isActiveConnected: client.isConnected,
-                isPresented: $showBackendPicker
-            ) {
-                // "Add backend" tapped: disconnect to surface the URL entry
-                // so the user can paste/scan/Bonjour-pick a new daemon. The
-                // existing connect path will append the new entry to
-                // `paired` via `ensureImplicitDefault`.
-                client.disconnect()
-            }
+                isPresented: $showBackendPicker,
+                onAdd: {
+                    // "Add backend" tapped: disconnect to surface the URL entry
+                    // so the user can paste/scan/Bonjour-pick a new daemon. The
+                    // existing connect path will append the new entry to
+                    // `paired` via `ensureImplicitDefault`.
+                    client.disconnect()
+                },
+                onRemoteIn: { backend in startRemoteIn(backend, windowId: nil) }
+            )
+        }
+        .sheet(item: $remoteInSettingsBackend) { backend in
+            NavigationStack { RemoteInSettingsView(backend: backend) }
         }
         .sheet(isPresented: $showDiagnosticsSheet) {
             DiagnosticsSheet(
@@ -5522,6 +5538,34 @@ struct MainiOSView: View {
         }
     }
 
+    /// Q-88 US-011: bring `windowId` forward (when given), then open this
+    /// Mac in the Remote-in app. No host opens the setting; no app says so.
+    private func startRemoteIn(_ backend: PairedBackend, windowId: String?) {
+        let settings = RemoteInStore.settings(for: backend.id)
+        let host = settings.host ?? RemoteInURLBuilder.defaultHost(urls: backend.urlsInOrder) ?? ""
+        let name = settings.name ?? backend.name
+        let client = client
+        Task { @MainActor in
+            let o = await remoteIn.run(settings: settings, host: host, name: name, windowId: windowId,
+                                       alreadyFront: windowId != nil && windowId == macFrontmostId) { id in
+                // From a card's menu the card's own tap has already selected
+                // it and sent select_window; send only when it has not.
+                guard selectedWindowId != id else { return }
+                selectedWindowId = id
+                client.send(SelectWindowMessage(windowId: id))
+            }
+            PhoneLog.log(o.logLine)
+            switch o.result {
+            case .opened: break
+            case .noHost: remoteInSettingsBackend = backend
+            case .noApp:
+                orderToast.show("No app opens \(o.url?.scheme ?? "this link"):", actionTitle: "Settings") {
+                    remoteInSettingsBackend = backend
+                }
+            }
+        }
+    }
+
     private func refreshRecentOrder() {
         recentOrder = manager.recency.recent(forBackendId: manager.activeBackendID)
     }
@@ -5910,6 +5954,12 @@ struct MainiOSView: View {
             onRequestContent(windowId)
             return
         }
+        if action == .remoteIn {
+            if let backend = manager.paired.first(where: { $0.id == manager.activeBackendID }) {
+                startRemoteIn(backend, windowId: windowId)
+            }
+            return
+        }
         // Duplicate and closeWindow send different message types than
         // QuickActionMessage, so they're early-return branches.
         if action == .duplicate {
@@ -5964,6 +6014,7 @@ struct MainiOSView: View {
             colorSheetWindowId = windowId
             return
         case .setColor: return   // handled above
+        case .remoteIn: return    // handled above
         case .pairForQA:
             qaPickerSourceWindow = windowId
             showQAPicker = true

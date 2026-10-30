@@ -46,6 +46,12 @@ enum RemoteInPreset: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// The presets to offer. Berriscope is the owner's own app, not a public
+    /// one, so it is listed only where it is installed (or already chosen).
+    static func choices(berriscopeInstalled: Bool, current: RemoteInPreset) -> [RemoteInPreset] {
+        allCases.filter { $0 != .berriscope || berriscopeInstalled || current == .berriscope }
+    }
+
     /// Every preset's scheme, for `LSApplicationQueriesSchemes` (project.yml).
     static var querySchemes: [String] {
         allCases.compactMap { $0.template.flatMap(RemoteInURLBuilder.scheme(of:)) }

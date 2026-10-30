@@ -258,6 +258,12 @@ struct WindowRectangle: View {
             }
 
             Button {
+                triggerAction(.remoteIn)
+            } label: {
+                Label("Remote in here", systemImage: "display")
+            }
+
+            Button {
                 triggerAction(.pressReturn)
             } label: {
                 Label("Press Return", systemImage: "return")
@@ -407,6 +413,9 @@ enum WindowAction: Equatable {
     /// Bring a minimized window back: `select_window`, which un-minimizes
     /// before it raises (Q-23).
     case restore
+    /// Bring this window forward on the Mac, then open the Remote-in app
+    /// (Q-88 US-011).
+    case remoteIn
 }
 
 #Preview {

@@ -12,6 +12,9 @@ struct RemoteInSettingsView: View {
         _draft = State(initialValue: RemoteInStore.settings(for: backend.id))
     }
 
+    private var berriscopeInstalled: Bool {
+        URL(string: "berriscope://").map { UIApplication.shared.canOpenURL($0) } ?? false
+    }
     private var defaultHost: String? { RemoteInURLBuilder.defaultHost(urls: backend.urlsInOrder) }
     private var host: String { draft.host ?? defaultHost ?? "" }
     private var name: String { draft.name ?? backend.name }
@@ -24,7 +27,9 @@ struct RemoteInSettingsView: View {
         Form {
             Section {
                 Picker("App", selection: $draft.preset) {
-                    ForEach(RemoteInPreset.allCases) { Text($0.title).tag($0) }
+                    ForEach(RemoteInPreset.choices(berriscopeInstalled: berriscopeInstalled, current: draft.preset)) {
+                        Text($0.title).tag($0)
+                    }
                 }
                 if draft.preset == .custom {
                     TextField("myapp://connect?host={host}", text: $draft.customTemplate)

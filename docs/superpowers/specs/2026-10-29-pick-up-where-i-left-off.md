@@ -166,13 +166,14 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - *As built:* `QuipiOS/Models/RemoteIn.swift` (`RemoteInPreset`, `RemoteInSettings`, `RemoteInStore` key `remoteIn.v1` = JSON `{backendID: settings}`, `RemoteInURLBuilder`); `QuipiOS/Views/RemoteInSettingsView.swift`. Settings shows a **Connection → Remote in** row for the active Mac. Schemes checked 2026-10-30: Screens `screens://{host}` (help.edovia.com Screens 5 URL schemes), Jump `jump://?host={host}&protocol=vnc` (Jump support article 216423723; protocol defaults to rdp, so vnc is named), RealVNC `com.realvnc.vncviewer.connect://{host}` (RealVNC help 6449870411037). A missing host shows a grey hint and does not block Save; only template faults (unknown `{x}`, no scheme) do. The snapshot field is `remoteInJSON` (Shared): the Mac keeps it only after its next rebuild, iCloud carries it until then. S10 run by hand on the QA sim (Jump preview, `{hots}` blocks Save, Berriscope saved and read back from the container plist).
 
 ### US-011: One-tap Remote in
-- [ ] "Remote in here" in the window long-press menu (`WindowRectangle.swift` 208); "Remote in" in the backend row menu (`QuipApp.swift` ~2778). No always-visible button.
-- [ ] "Remote in here": send `select_window` (Mac focuses it), wait up to 500 ms for the Mac's `frontmost_changed` echo for that id (proceed anyway on timeout), then open the URL.
-- [ ] No app for the scheme → `ActionToast` "No app opens <scheme>:" with **Settings** action. No host/name configured → opens the Remote-in setting directly.
-- [ ] `phone.log`: `remote_in preset=<p> host_kind=tailscale|lan|name|custom result=opened|no_app|no_host waited_ms=N` — never the host value.
-- [ ] Tests: `RemoteInFlowTests.swift` with an injected `URLOpener` and clock: select-then-open order; timeout still opens; no-app path; no-host path; log line contains no host.
-- [ ] Sim scenario S11 (`no_app` expected — the simulator has no VNC app).
-- [ ] Gate.
+- [x] "Remote in here" in the window long-press menu (`WindowRectangle.swift` 208); "Remote in" in the backend row menu (`QuipApp.swift` ~2778). No always-visible button.
+- [x] "Remote in here": send `select_window` (Mac focuses it), wait up to 500 ms for the Mac's `frontmost_changed` echo for that id (proceed anyway on timeout), then open the URL.
+- [x] No app for the scheme → `ActionToast` "No app opens <scheme>:" with **Settings** action. No host/name configured → opens the Remote-in setting directly.
+- [x] `phone.log`: `remote_in preset=<p> host_kind=tailscale|lan|name|custom result=opened|no_app|no_host waited_ms=N` — never the host value.
+- [x] Tests: `RemoteInFlowTests.swift` with an injected `URLOpener` and clock: select-then-open order; timeout still opens; no-app path; no-host path; log line contains no host.
+- [x] Sim scenario S11 (`no_app` expected — the simulator has no VNC app).
+- [x] Gate.
+- *As built:* `QuipiOS/Services/RemoteInFlow.swift` (`URLOpener`, `SystemURLOpener`, `RemoteInFlow.run`, `hostKind`). "No app" comes from `UIApplication.open`'s answer, not `canOpenURL`, so a Custom scheme missing from `LSApplicationQueriesSchemes` still works. The backend row menu is in `BackendPickerSheet` (the picker rows had no menu; the `QuipApp.swift` ~2778 menu is the connect screen's recents). A template that cannot make a link takes the `no_host` path too (opens the setting). No wait when the Mac already reports the window frontmost. `select_window` is sent once: the card's tap already sends it. **Berriscope is owner-only** (owner, 2026-10-30): the preset is listed only where `berriscope://` can open, or when already chosen. S11 on the QA sim: `select_window` → `frontmost_changed` echo → `remote_in preset=vnc host_kind=tailscale result=no_app waited_ms=406`, toast "No app opens vnc:", Settings opens the Remote-in setting.
 
 ### US-012 (Berriscope repo): Berriscope iOS opens a saved host from a link
 Today `berriscope://` is registered (`apple/Resources/IOS-Info.plist`) but only parsed from a scanned QR (`apple/Sources/BerriscopeIOS/ConnectView.swift` 1173); there is no `onOpenURL`, so a link launches the app and stops. Saved hosts are `SavedHost`, keyed by `code`, with a user-editable name.

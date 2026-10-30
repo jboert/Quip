@@ -18,6 +18,8 @@ struct BackendPickerSheet: View {
     @Binding var isPresented: Bool
     /// Tapped "Add backend". Host pops the existing connect-by-URL UI.
     var onAdd: () -> Void
+    /// Long-press → Remote in (Q-88 US-011).
+    var onRemoteIn: (PairedBackend) -> Void = { _ in }
 
     @Environment(\.colorScheme) private var colorScheme
     private var colors: QuipColors { QuipColors(scheme: colorScheme) }
@@ -127,6 +129,14 @@ struct BackendPickerSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button {
+                    isPresented = false
+                    onRemoteIn(backend)
+                } label: {
+                    Label("Remote in", systemImage: "display")
+                }
+            }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(backend.name.isEmpty ? "Backend" : backend.name), \(status.caption)")
             .accessibilityHint(isActive ? "Currently selected" : "Tap to switch to this backend")
