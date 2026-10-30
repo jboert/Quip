@@ -1,0 +1,122 @@
+{
+  "project": "Quip",
+  "branchName": "ralph/q90-mac-stays-up",
+  "description": "Q-90 (docs/superpowers/specs/2026-10-30-q90-mac-app-stays-up.md): the phone says in plain words what is down when the Mac's Quip is gone and offers Remote in; the Mac gets a tested hang/crash-loop watchdog script and the pure launch/settings/status logic. Out of scope (needs the owner at the Mac for a rebuild + TCC re-grant): wiring into the running Mac app (heartbeat writer, App Nap opt-out, launch hand-off, Stop Quip menu, Reliability settings UI, agent install).",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Classify why the Mac is unreachable with a Screen Sharing probe",
+      "description": "As the owner away from my Mac, I want the phone to tell 'Quip is down but the Mac is up' apart from 'the Mac is offline' so that I know which fix to reach for.",
+      "acceptanceCriteria": [
+        "New file QuipiOS/Services/MacDown.swift defines `enum MacDown: String { case quipDown = \"quip_down\", offline, unknown }` and a pure `static func classify(quipReachable: Bool, screenSharingReachable: Bool?) -> MacDown?`: returns nil when quipReachable is true, .quipDown when screenSharingReachable is true, .offline when it is false, .unknown when it is nil",
+        "Same file defines `@MainActor final class MacDownProbe` initialised with an injected `connect: (_ host: String, _ port: UInt16, _ timeout: Duration) async -> Bool`, an injected clock, and a `func probe(host: String) async -> Bool?` that calls connect with port 5900 and a 3 s timeout, and returns nil without calling connect when the previous probe for the same host was less than 60 s ago",
+        "A production connector `MacDownProbe.networkConnect` uses Network.framework NWConnection and calls `cancel()` on every exit path (ready, failed, waiting, timeout); its source has exactly one `NWConnection(` and every return path follows a `cancel()` (reviewer reads the function)",
+        "`static func logLine(_ kind: MacDown, probeMs: Int) -> String` returns exactly `mac_down kind=<rawValue> probe_ms=<N>` and never includes a host (asserted in a test with a host string present in scope)",
+        "New QuipiOS/Tests/MacDownTests.swift covers: all four classify cases; probe rate limit (second probe at +59 s returns nil and makes no connect call, at +61 s calls connect); port 5900 and 3 s passed to connect; log line format",
+        "MacDownTests includes a deliberately broken fixture: a test runs the same classify assertions against a local closure that swaps .quipDown and .offline, wrapped in `XCTExpectFailure(strict: true)`, so the suite fails if those assertions stop catching the swap",
+        "`tools/check.sh --all` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "QuipiOS/Services/MacDown.swift: MacDown enum + classify + logLine; @MainActor MacDownProbe with injected connect/now, 5900/3 s, 60 s per-host rate limit; networkConnect has one NWConnection(, every exit goes through finish() which cancel()s, plus a task-cancellation cancel(). QuipiOS/Tests/MacDownTests.swift: 8 tests incl. the strict XCTExpectFailure swapped fixture and a loopback NWListener test of networkConnect (true on a listener, false on a closed port). Gate: tools/check.sh --all exit 0 (harness 62/0, Mac 1329/0, iOS 1534/0; Linux + Android skipped, not built here). Mutants via `printf 'QuipiOS/Services/MacDown.swift\\n' | tools/check.sh --files -` all exit 1: classify swap, fixture un-swapped (strict 'none recorded'), rate limit removed, port 5901."
+    },
+    {
+      "id": "US-002",
+      "title": "Show a plain-words 'Mac is down' banner with Remote in",
+      "description": "As the owner away from my Mac, I want a banner that says what is down and gives me the one action that helps so that I can get back in without guessing.",
+      "acceptanceCriteria": [
+        "New pure `MacDownBanner.content(kind: MacDown, downFor: TimeInterval, remoteInHostSet: Bool) -> MacDownBanner.Content?` in QuipiOS/Views/MacDownBanner.swift: nil when downFor < 15; .quipDown -> title \"Quip isn't running on your Mac\" with action .remoteIn when remoteInHostSet else .setUpRemoteIn; .offline -> title \"Can't reach your Mac\" with action .checkTailscale; .unknown -> title \"Can't reach your Mac\" with no action",
+        "MainiOSView shows the banner above the window grid when the active backend's client has not been connected for at least 15 s; it runs MacDownProbe on the active backend's dialed host once the 15 s pass, and the banner disappears without a tap when the client reconnects",
+        "Action .remoteIn calls the existing `startRemoteIn(backend, windowId: nil)`; .setUpRemoteIn opens RemoteInSettingsView for the active backend; .checkTailscale opens the URL `tailscale://` via UIApplication.open",
+        "phone.log gets `MacDown.logLine` once per change of kind (not on every probe); a unit test drives the change-only rule through a pure helper",
+        "New QuipiOS/Tests/MacDownBannerTests.swift covers every row above (14 s nil, 15 s shown, each kind, both remoteInHostSet values) and includes a deliberately broken fixture under `XCTExpectFailure(strict: true)` (a content function that ignores downFor) proving the 15 s assertion can fail",
+        "New executable script tools/qa/q90-down.sh <simulator-udid>: with nothing listening on 127.0.0.1:8799, it terminates and relaunches com.fintechadventures.quip with `xcrun simctl launch --terminate-running-process --stdout=<file>`, waits up to 45 s for a line containing `mac_down kind=quip_down` in that file, saves a screenshot to the path in $3 or $TMPDIR, prints PASS and exits 0, else prints FAIL and exits 1; it never writes defaults and never touches another simulator",
+        "`bash tools/qa/q90-down.sh D8C5154B-7030-40BA-8443-F4F9EB27C725` prints PASS after `tools/check.sh --all` has installed the working-tree app (the app on that simulator is paired with a fake Mac on 127.0.0.1:8799, PIN 11112222); the worker opens the saved screenshot and states in notes that the banner text \"Quip isn't running on your Mac\" is visible",
+        "`tools/check.sh --all` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Carry the Mac's restart protection to the phone (reliability_status)",
+      "description": "As the owner, I want my phone to know whether my Mac will restart Quip on its own so that I can fix protection before I leave and the phone can say 'restarting' instead of guessing.",
+      "acceptanceCriteria": [
+        "Shared/MessageProtocol.swift adds `ReliabilityStatusMessage: Codable, Sendable` with type \"reliability_status\", `watching: Bool`, `afterQuit: Bool`, `watchdog: Bool`, `lastRestart: LastRestart?` where `LastRestart { reason: String; at: Double }`; decoding tolerates a missing lastRestart",
+        "tools/fake-mac/fake-mac.swift gains a stdin command `reliability on|off|notwatching [crash|hang|crash_loop]` that stores the status and sends it to every authenticated phone, and sends the stored status right after each successful auth; `help` lists it; tools/run-fake-mac-tests.sh gains assertions for the command and stays green",
+        "QuipiOS WebSocketClient decodes reliability_status into `onReliabilityStatus`, and BackendConnectionManager.wire() bridges it (the multi-backend bridge rule); the phone stores the latest status per backend in UserDefaults key `reliability.v1.<backendID>` as JSON via a pure `ReliabilityStatusStore` with load/save that takes a UserDefaults",
+        "Phone Settings, in the Mac permissions section, shows a row \"Auto-restart\" whose trailing text comes from pure `ReliabilityStatusStore.summary(_ status: ReliabilityStatusMessage?) -> (text: String, warn: Bool)`: nil -> (\"Unknown\", false); watching -> (\"On\", false); installed but not watching or off -> (\"Off — turn on in Quip on your Mac\", true); warn renders orange",
+        "New QuipiOS/Tests/ReliabilityStatusTests.swift: round-trip encode/decode with and without lastRestart, store save/load per backend id (two ids stay separate), every summary row, plus a deliberately broken fixture under `XCTExpectFailure(strict: true)` (a summary that maps not-watching to \"On\") proving the warn assertion can fail",
+        "`tools/check.sh --all` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Banner says 'Restarting…' when the Mac is protected, and toasts the restart reason",
+      "description": "As the owner, I want the phone to say Quip is restarting when my Mac will bring it back, and tell me why it went down once it is back, so that I wait instead of reaching for Screen Sharing.",
+      "acceptanceCriteria": [
+        "MacDownBanner.content gains a `reliability: ReliabilityStatusMessage?` parameter: for .quipDown with watching == true it returns title \"Quip on your Mac stopped. Restarting… usually under a minute\" and no action until downFor >= 90, then the Remote in / Set up Remote in action; with watching false or nil it behaves exactly as US-002",
+        "When a reliability_status arrives whose lastRestart.at is newer than the last one shown for that backend (stored per backend), the phone shows an ActionToast \"Quip on your Mac restarted after a crash (<time>)\" (\"after it froze\" for hang, \"after crashing repeatedly\" for crash_loop) with action \"Details\" that opens ConnectionDiagnosticsSheet, once per restart; a pure `RestartToast.text(reason:at:)` and `RestartToast.isNew(lastShown:incoming:)` back this",
+        "phone.log gets `mac_restarted reason=<reason>` once per new restart",
+        "Tests extend MacDownBannerTests (watching at 89 s: no action; at 90 s: Remote in; not watching: US-002 behaviour) and add RestartToastTests (each reason's text, isNew true/false/nil cases), each with a deliberately broken fixture under `XCTExpectFailure(strict: true)` proving the 90 s and isNew assertions can fail",
+        "New executable script tools/qa/q90-restart.sh <simulator-udid>: compiles tools/fake-mac to a temp dir, starts it on 127.0.0.1:8799 (`--pin 11112222 --fixture tools/fake-mac/fixture.json --log <tmp>/fm.log`, stdin from a FIFO opened read-write), relaunches com.fintechadventures.quip on that simulator, waits for the phone to authenticate, sends `reliability on crash`, waits up to 20 s for `mac_restarted reason=crash` in fm.log (phone_log lines), prints PASS and exits 0, else FAIL and exits 1; a trap kills the fake Mac on every exit path",
+        "`bash tools/qa/q90-restart.sh D8C5154B-7030-40BA-8443-F4F9EB27C725` prints PASS after `tools/check.sh --all` has installed the working-tree app; the worker records the matching fm.log line in notes",
+        "`tools/check.sh --all` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Watchdog script restarts a hung Quip without false alarms",
+      "description": "As the owner, I want a hung Quip killed and sampled so that launchd brings it back, while sleep, a slow launch or an install never count as a hang.",
+      "acceptanceCriteria": [
+        "New executable QuipMac/Resources/quip-watchdog.sh (POSIX sh + standard macOS tools only) with a pure function `wd_decide` that reads env inputs NOW, HEARTBEAT_AT, PREV_STALE (0/1), UPTIME, PREV_CHECK_AT, INSTALLING_AT and prints exactly one of `ok`, `stale_once`, `skip_sleep`, `skip_launch`, `skip_install`, `kill`: kill only when NOW-HEARTBEAT_AT > 60 AND PREV_STALE=1 AND UPTIME > 120 AND NOW-PREV_CHECK_AT < 90 AND (INSTALLING_AT empty or NOW-INSTALLING_AT >= 300)",
+        "Sourcing the script with QUIP_WD_SOURCE_ONLY=1 defines the functions and runs nothing; the main path reads state from $QUIP_WD_STATE_DIR (default ~/Library/Application Support/Quip), logs to $QUIP_WD_LOG_DIR/watchdog.log (default ~/Library/Logs/Quip), finds the pid via $QUIP_WD_PID or `pgrep -x Quip`, and on kill runs $QUIP_WD_SAMPLE (default `sample`) `<pid> 3` into hang-<time>.txt then `kill -9 <pid>`, writing one log line `hang pid=N heartbeat_age=Ns action=killed sample=hang-<time>.txt`",
+        "New tools/run-watchdog-tests.sh: table tests of wd_decide covering each guard on both sides (age 59/61, PREV_STALE 0/1, UPTIME 100/130, check gap 60/120, installing 240/360 s ago) and an integration test that starts a real `sleep 300` process, writes a heartbeat 100 s old, runs the script twice with QUIP_WD_PID set and QUIP_WD_SAMPLE=/usr/bin/true, and asserts the process is gone after the second run but alive after the first",
+        "The runner also sources a deliberately broken fixture tools/tests/fixtures/quip-watchdog-broken.sh (kills on the first stale check) through the same table and FAILS (exit 1) if the broken fixture passes every assertion",
+        "tools/check.sh runs `bash tools/run-watchdog-tests.sh` in the harness block (counted in failures), and the harness is also triggered when QuipMac/Resources/quip-watchdog.sh changes",
+        "`tools/check.sh --all` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Watchdog stops a crash loop and refuses to restart on a full disk",
+      "description": "As the owner, I don't want Quip restarted forever when it is clearly broken, so that a crash loop stops, retries once later, and tells me why.",
+      "acceptanceCriteria": [
+        "quip-watchdog.sh keeps restart times in $QUIP_WD_STATE_DIR/restarts.json (one JSON array of {at, reason}) and adds pure `wd_loop_decide` (inputs NOW, RESTART_TIMES space-separated, STOPPED_AT, RETRIED, FREE_MB) printing one of `ok`, `stop`, `retry`, `stay_stopped`, `disk_full`: stop when 3 restarts fall within 600 s; retry once when STOPPED_AT is set, NOW-STOPPED_AT >= 1800 and RETRIED=0; stay_stopped otherwise while stopped; disk_full when FREE_MB < 500 (checked first)",
+        "On stop the script runs `$QUIP_WD_LAUNCHCTL bootout gui/<uid>/com.quip.QuipMac.crash-recovery` (default /bin/launchctl), writes marker $QUIP_WD_STATE_DIR/stoppedForCrashLoop, and logs `crash_loop restarts=3 window=10m action=stopped retry_at=<epoch>`; on retry it runs `bootstrap` with the agent plist path and logs `crash_loop action=retry`; on disk_full it logs `disk_full free_mb=N action=no_restart` and bootouts the agent",
+        "tools/run-watchdog-tests.sh adds table tests for wd_loop_decide (2 vs 3 restarts in 10 min, 3 restarts spread over 11 min, retry at 1799/1801 s, second stop after retry stays stopped, 400 vs 1000 MB) and an integration test with a stub launchctl script that records its arguments, asserting the bootout and bootstrap calls",
+        "The broken fixture tools/tests/fixtures/quip-watchdog-broken.sh also carries a wd_loop_decide that stops at 4 restarts, and the runner fails if it passes every loop assertion",
+        "`tools/check.sh --all` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Pure Mac logic for launch ownership, agent plists, settings and status",
+      "description": "As the developer who will wire this into the running Mac app with the owner present, I want the decisions tested now so that the one Mac rebuild only connects tested pieces.",
+      "acceptanceCriteria": [
+        "New QuipMac/Services/Reliability.swift (Foundation only) with: `LaunchOwnership.decide(agentInstalled: Bool, launchedByAgent: Bool) -> .run | .handOff` (handOff only when installed and not launched by the agent); `ReliabilitySettings.agents(keepRunning: Bool, afterQuit: Bool, frozen: Bool) -> (crashAgent: Bool, keepAliveAlways: Bool, watchdog: Bool)` (everything false when keepRunning is false); `ReliabilityStatus.build(agentLoaded: Bool, agentPid: Int?, quipPid: Int, afterQuit: Bool, watchdog: Bool, lastRestart: ReliabilityStatusMessage.LastRestart?) -> ReliabilityStatusMessage` (watching only when agentLoaded and agentPid == quipPid)",
+        "CrashRecoveryAgent.plistContent gains a `keepAliveAlways: Bool` parameter: true -> `KeepAlive` is the boolean true; false -> today's dict {Crashed: true, SuccessfulExit: false}; existing callers keep today's behaviour (false); new `WatchdogAgent.plistContent(scriptPath:)` returns Label com.quip.QuipMac.watchdog, ProgramArguments [/bin/sh, scriptPath], StartInterval 30, RunAtLoad true",
+        "New QuipMac/Tests/ReliabilityTests.swift covers every LaunchOwnership case, every ReliabilitySettings combination (8), ReliabilityStatus watching true/false (pid match, mismatch, nil, not loaded), both KeepAlive shapes and the watchdog plist keys; existing CrashRecoveryAgentTests stay green",
+        "ReliabilityTests includes a deliberately broken fixture under `XCTExpectFailure(strict: true)` (a decide that hands off when not installed) proving the hand-off assertion can fail",
+        "No change to QuipMacApp.swift, menus or Settings views in this story (wiring needs the owner present)",
+        "`tools/check.sh --all` passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

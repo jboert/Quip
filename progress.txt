@@ -1,0 +1,16 @@
+# Ralph Progress Log
+Started: Fri Oct 30 14:42:11 MST 2026
+---
+
+## 2026-10-30 — US-001 Classify why the Mac is unreachable (PASS)
+- Files: QuipiOS/Services/MacDown.swift (new), QuipiOS/Tests/MacDownTests.swift (new)
+- Gate: `tools/check.sh --all` exit 0 — swiftc harness 62 checks/0 failures, QuipMac 1329 tests/0 failures, QuipiOS 1534 tests/0 failures; QuipLinux + QuipAndroid SKIPPED (not built on this machine, unverified)
+- Mutations (each `printf 'QuipiOS/Services/MacDown.swift\n' | tools/check.sh --files -`, expected exit 1, got exit 1):
+  1. classify swaps .quipDown/.offline → test_classify_allCases fails 2 asserts; the strict swapped-fixture test reports "Expected failure … but none recorded"
+  2. test fixture made identity (no swap) → strict XCTExpectFailure fails ("none recorded")
+  3. rate-limit check removed → test_probe_rateLimitedToOncePerMinutePerHost fails 4 asserts
+  4. port 5901 → test_probe_usesScreenSharingPortAndThreeSecondTimeout fails
+  Clean control: final source, `tools/check.sh --all` exit 0.
+- Runtime note: direct `xcodebuild` and `xcrun simctl` were permission-blocked; all verification went through tools/check.sh (default sim D8C5154B).
+- Not wired into the UI yet (US-002 shows the banner and consumes MacDownProbe).
+- Next: US-002 plain-words "Mac is down" banner with Remote in.
