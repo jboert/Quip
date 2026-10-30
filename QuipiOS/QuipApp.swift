@@ -4438,6 +4438,7 @@ struct MainiOSView: View {
             windowColor: windows.first(where: { $0.id == selectedWindowId }).map { Color(hex: $0.color) } ?? colors.textSecondary,
             windowId: selectedWindowId,
             lastUpdate: terminalContentUpdatedAtById[wid],
+            isWaiting: windows.first(where: { $0.id == selectedWindowId })?.state == "waiting_for_input",
             isExpanded: $isTerminalExpanded,
             onRefresh: {
                 if let wid = selectedWindowId { onRequestContent(wid) }

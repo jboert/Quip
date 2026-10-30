@@ -19,6 +19,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
     case yes, no, one, two, three
     case esc, ctrlC, ctrlD, tab, backspace, clearInput
     case shiftTab
+    // Q-89: walk a menu that has no numbers to type.
+    case arrowUp, arrowDown
     // Accepts shell/agent inline autocomplete. The legacy wire action remains
     // `press_right`; the Mac re-scrapes and chooses Tab or Right-arrow.
     case acceptAutocomplete
@@ -64,6 +66,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .backspace: return "Backspace"
         case .clearInput: return "Clear input"
         case .shiftTab: return "Shift+Tab"
+        case .arrowUp: return "Up arrow"
+        case .arrowDown: return "Down arrow"
         case .acceptAutocomplete: return "Accept autocomplete"
         case .broadcast: return "Broadcast"
         }
@@ -112,6 +116,7 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .backspace: return ""
         case .clearInput: return ""
         case .shiftTab: return ""
+        case .arrowUp, .arrowDown: return ""
         case .acceptAutocomplete: return ""
         case .broadcast: return ""
         }
@@ -126,6 +131,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .tab: return "arrow.right.to.line"
         case .clearInput: return "delete.left.fill"
         case .shiftTab: return "arrow.left.to.line"
+        case .arrowUp: return "arrow.up"
+        case .arrowDown: return "arrow.down"
         case .acceptAutocomplete: return "text.append"
         // The Broadcast bar's icon, so the two entry points look alike.
         case .broadcast: return "dot.radiowaves.left.and.right"
@@ -156,7 +163,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
              .brainstorm, .writePlan, .executePlan, .resume, .model, .context,
              .initProject, .status, .permissions, .mcp, .newChat, .diff, .review, .side: return .slash
         case .yes, .no, .one, .two, .three: return .answer
-        case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab, .acceptAutocomplete: return .keystroke
+        case .esc, .ctrlC, .ctrlD, .tab, .backspace, .clearInput, .shiftTab, .arrowUp, .arrowDown,
+             .acceptAutocomplete: return .keystroke
         case .broadcast: return .app
         }
     }
@@ -213,6 +221,8 @@ enum QuickButton: String, CaseIterable, Identifiable {
         case .clearInput: return .quickAction("clear_input")
         // Raw Shift+Tab — cycles Claude mode (normal → autoAccept → plan).
         case .shiftTab: return .quickAction("press_shift_tab")
+        case .arrowUp: return .quickAction("press_up")
+        case .arrowDown: return .quickAction("press_down")
         // Accepts the live inline suggestion; Mac chooses Tab or Right-arrow.
         case .acceptAutocomplete: return .quickAction("press_right")
         case .broadcast: return .openBroadcast

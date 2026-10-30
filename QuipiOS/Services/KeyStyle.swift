@@ -95,6 +95,8 @@ enum KeyStyles {
         case .backspace: return KeyStyle(symbol: "delete.left", hue: .gray, showsLabel: false)
         case .clearInput: return KeyStyle(symbol: "delete.left.fill", hue: .gray, showsLabel: false)
         case .shiftTab: return KeyStyle(symbol: "arrow.left.to.line", hue: .indigo, showsLabel: false)
+        case .arrowUp: return KeyStyle(symbol: "arrow.up", hue: .gray, showsLabel: false)
+        case .arrowDown: return KeyStyle(symbol: "arrow.down", hue: .gray, showsLabel: false)
         case .acceptAutocomplete: return KeyStyle(symbol: "text.append", hue: .teal, showsLabel: false)
         case .broadcast: return KeyStyle(symbol: "dot.radiowaves.left.and.right", hue: .blue, showsLabel: false)
         }

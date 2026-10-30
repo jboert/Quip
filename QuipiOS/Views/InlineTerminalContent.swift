@@ -348,6 +348,57 @@ private struct MultiSelectAnswerBar: View {
     }
 }
 
+/// Q-89 — Yes / No (and ↑ / ↓) when the window waits but no numbered or
+/// bracketed options were found: an unnumbered arrow menu, or a prompt the
+/// detectors do not know. The Mac reads the screen before acting: a menu row
+/// is reached with arrows + Return, otherwise `y` / `n` is typed.
+struct YesNoFallbackBar: View {
+    let onSend: (String, String?) -> Void
+
+    static let actions: [(action: String, label: String, symbol: String?)] = [
+        ("press_y", "Yes", nil), ("press_n", "No", nil),
+        ("press_up", "Up", "arrow.up"), ("press_down", "Down", "arrow.down"),
+    ]
+
+    /// No numbered or bracketed chips, and either the Mac says the window is
+    /// waiting or a Yes/No menu is on screen.
+    static func shows(content: String, isWaiting: Bool) -> Bool {
+        if let options = NumberedPromptDetector.answerableOptions(in: content), options.count >= 2 { return false }
+        if let tokens = NumberedPromptDetector.detectInlineOptions(in: content), tokens.count >= 2 { return false }
+        return isWaiting || ArrowMenu.isYesNoMenu(in: content)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.actions, id: \.action) { item in
+                Button {
+                    onSend(item.action, nil)
+                } label: {
+                    Group {
+                        if let symbol = item.symbol {
+                            Image(systemName: symbol)
+                        } else {
+                            Text(item.label)
+                        }
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white)
+                    .frame(minWidth: 36)
+                    .frame(height: 24)
+                    .background(Color.accentColor.opacity(item.symbol == nil ? 0.85 : 0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .accessibilityLabel(item.symbol == nil ? "Answer \(item.label)" : "\(item.label) arrow")
+                .accessibilityAddTraits(.isButton)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+    }
+}
+
 /// §18.3 — Answer bar for a single-line INLINE bracketed prompt
 /// (`Approve which to delete? [all / 1 / 2 / 3 / none / pick]`). Single-select:
 /// one tap = one answer. A digit token reuses the proven `select_N` path; a word
@@ -408,6 +459,8 @@ struct InlineTerminalContent: View {
     /// When the Mac last answered for this window. Drives the "N s old" chip
     /// and the slow-loading text (`TerminalPanelFreshness`); nil hides both.
     var lastUpdate: Date? = nil
+    /// The Mac reports this window `waiting_for_input` (Q-89 Yes/No fallback).
+    var isWaiting: Bool = false
     @Binding var isExpanded: Bool
     var onRefresh: () -> Void
     /// (action, promptFingerprint?) — fingerprint is non-nil only for one-tap
@@ -847,6 +900,8 @@ struct InlineTerminalContent: View {
                 InlineAnswerBar(tokens: tokens,
                                 fingerprint: NumberedPromptDetector.fingerprint(in: content),
                                 onSubmit: onSendAction)
+            } else if YesNoFallbackBar.shows(content: content, isWaiting: isWaiting) {
+                YesNoFallbackBar(onSend: onSendAction)
             }
 
             // URL tray above the content area so users can open URLs from

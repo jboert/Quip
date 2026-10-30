@@ -3393,6 +3393,14 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                     }
                     return
                 }
+                // Q-89: Yes / No into an arrow menu — walk to the row.
+                if action == "press_y" || action == "press_n" {
+                    let answer: ArrowMenu.Answer = action == "press_y" ? .yes : .no
+                    self.applyYesNoPlan(ArrowMenu.plan(answer, content: content), answer: answer, windowId: wid,
+                                        windowName: wname, sessionId: sessionId, termApp: termApp,
+                                        cgWindowNumber: wn)
+                    return
+                }
                 windowManager.focusWindow(wid)
                 let delay = KeystrokeInjector.focusDelay(path: .quickAction, terminalApp: termApp,
                                                          iterm2SessionId: sessionId)
@@ -3552,10 +3560,61 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             let r = await keystrokeInjector.sendKeystroke(key, to: windowId, terminalApp: termApp,
                                                           cgWindowNumber: cgWindowNumber, iterm2SessionId: sessionId)
             guard r.success else {
-                webSocketServer.broadcast(ErrorMessage(reason: "Multi-select key '\(key)' failed: \(r.error ?? "unknown")"))
+                webSocketServer.broadcast(ErrorMessage(reason: "Key '\(key)' failed: \(r.error ?? "unknown")"))
                 return
             }
         }
+    }
+
+    /// Q-89: Yes / No without a prompt fingerprint. Reads the window first: a
+    /// menu with a Yes/No row is answered with arrows + Return (a typed `y`
+    /// does nothing there); a menu without the asked-for row gets nothing and
+    /// an error; anything else gets `y` / `n` + Return, as before.
+    @MainActor
+    private func answerYesNo(_ answer: ArrowMenu.Answer, for window: ManagedWindow) {
+        let termApp = terminalAppForWindow(window)
+        let wn = window.windowNumber
+        let wname = window.name
+        let wid = window.id
+        let sessionId = window.iterm2SessionId
+        let isTerminal = window.isTerminal
+        DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
+            let read: KeystrokeInjector.ContentRead = isTerminal
+                ? keystrokeInjector.readContentDetailed(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
+                : .ok("")
+            let content: String = { if case .ok(let c) = read { return c } else { return "" } }()
+            let plan = ArrowMenu.plan(answer, content: content)
+            DispatchQueue.main.async {
+                self.applyYesNoPlan(plan, answer: answer, windowId: wid, windowName: wname,
+                                    sessionId: sessionId, termApp: termApp, cgWindowNumber: wn)
+            }
+        }
+    }
+
+    @MainActor
+    private func applyYesNoPlan(_ plan: ArrowMenu.Plan, answer: ArrowMenu.Answer, windowId wid: String,
+                                windowName wname: String, sessionId: String?,
+                                termApp: TerminalApp, cgWindowNumber wn: CGWindowID) {
+        let word = answer == .yes ? "Yes" : "No"
+        if case .noMatchingRow = plan {
+            webSocketServer.broadcast(ErrorMessage(reason: "No \"\(word)\" on screen — not sent"))
+            return
+        }
+        windowManager.focusWindow(wid)
+        let delay = KeystrokeInjector.focusDelay(path: .quickAction, terminalApp: termApp, iterm2SessionId: sessionId)
+        let fire: () -> Void = {
+            Task { @MainActor in
+                if case .keys(let keys) = plan {
+                    await self.injectKeystrokeSequence(keys, to: wid, sessionId: sessionId,
+                                                       termApp: termApp, cgWindowNumber: wn)
+                } else {
+                    await self.injectQuickActionSendText(answer == .yes ? "y" : "n", to: wid, pressReturn: true,
+                                                         terminalApp: termApp, windowName: wname,
+                                                         cgWindowNumber: wn, iterm2SessionId: sessionId)
+                }
+            }
+        }
+        if delay == 0 { fire() } else { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { fire() } }
     }
 
     @MainActor
@@ -3654,6 +3713,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             runAfterDelay {
                 await keystrokeInjector.sendKeystroke("tab", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
+        // Q-89: walk a menu that has no numbers to type.
+        case "press_up", "press_down":
+            let key = action == "press_up" ? "up" : "down"
+            runAfterDelay {
+                await keystrokeInjector.sendKeystroke(key, to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
+            }
         case "press_right":
             // Legacy wire name, current semantics: re-scrape the live buffer,
             // then use Tab for a marker-only agent placeholder (for example
@@ -3720,9 +3785,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 await keystrokeInjector.sendKeystroke("ctrl+u", to: wid, terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_y":
-            runAfterDelay {
-                await self.injectQuickActionSendText("y", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
-            }
+            answerYesNo(.yes, for: window)
         // §38 scrollback navigation (iTerm2-only). Phone scrolls; Mac
         // sends the iTerm2 menu shortcut for the corresponding action.
         // Scrollback state lives on the Mac side — the next screenshot
@@ -3744,9 +3807,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 await keystrokeInjector.iterm2Scroll(dir, to: wid, iterm2SessionId: window.iterm2SessionId)
             }
         case "press_n":
-            runAfterDelay {
-                await self.injectQuickActionSendText("n", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)
-            }
+            answerYesNo(.no, for: window)
         case "clear_terminal":
             runAfterDelay {
                 await self.injectQuickActionSendText("/clear", to: wid, pressReturn: true, terminalApp: termApp, windowName: wname, cgWindowNumber: wn, iterm2SessionId: window.iterm2SessionId)

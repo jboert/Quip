@@ -46,6 +46,8 @@ final class KeyStyleTests: XCTestCase {
             .backspace: ("delete.left", .gray, false),
             .clearInput: ("delete.left.fill", .gray, false),
             .shiftTab: ("arrow.left.to.line", .indigo, false),
+            .arrowUp: ("arrow.up", .gray, false),
+            .arrowDown: ("arrow.down", .gray, false),
             .acceptAutocomplete: ("text.append", .teal, false),
             .broadcast: ("dot.radiowaves.left.and.right", .blue, false),
         ]
