@@ -970,6 +970,23 @@ struct QuipApp: App {
             }
         }
 
+        // Q-90 US-004: the first status after a restart carries lastRestart;
+        // say why once per restart. Another Mac's restart waits until that
+        // Mac is the active one, so "your Mac" is never the wrong one.
+        manager.onReliabilityStatus = { session, status in
+            DispatchQueue.main.async {
+                let backendID = session.backendID
+                guard backendID == manager.activeBackendID,
+                      let restart = status.lastRestart,
+                      RestartToast.isNew(lastShown: RestartToast.lastShown(backendID: backendID), incoming: restart)
+                else { return }
+                RestartToast.markShown(restart.at, backendID: backendID)
+                PhoneLog.log(RestartToast.logLine(reason: restart.reason))
+                NotificationCenter.default.post(name: .quipMacRestarted,
+                                                object: RestartToast.text(reason: restart.reason, at: restart.at))
+            }
+        }
+
         manager.onOutputDelta = { session, windowId, windowName, text, isFinal in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
@@ -1688,6 +1705,8 @@ struct MainiOSView: View {
     /// captured at present time so values don't churn while the user
     /// is reading.
     @State private var showDiagnosticsSheet = false
+    /// Q-90 US-004: the restart toast's "Details".
+    @State private var showConnectionDiagnostics = false
     @State private var diagnosticsSnapshot: String = ""
     /// Multi-backend picker sheet trigger.
     @State private var showBackendPicker = false
@@ -1909,10 +1928,16 @@ struct MainiOSView: View {
                             .padding(.top, 2)
                     }
 
-                    if let content = macDownContent {
-                        MacDownBannerView(content: content, onAction: performMacDownAction)
-                            .padding(.horizontal, 6)
-                            .padding(.top, 4)
+                    if !client.isConnected, macDownKind != nil {
+                        // Re-read the clock: probes are a minute apart, and
+                        // "Restarting…" gains Remote in at 90 s.
+                        TimelineView(.periodic(from: .now, by: 5)) { timeline in
+                            if let content = macDownContent(at: timeline.date) {
+                                MacDownBannerView(content: content, onAction: performMacDownAction)
+                                    .padding(.horizontal, 6)
+                                    .padding(.top, 4)
+                            }
+                        }
                     }
 
                     if isPortrait {
@@ -1975,10 +2000,13 @@ struct MainiOSView: View {
 
     /// Q-90 US-002: the banner, once the active Mac has been gone 15 s and
     /// the probe has said what is down. Gone as soon as the client reconnects.
-    private var macDownContent: MacDownBanner.Content? {
+    /// US-004: the Mac's last reliability_status, kept while it is away,
+    /// turns "isn't running" into "Restarting…".
+    private func macDownContent(at now: Date) -> MacDownBanner.Content? {
         guard !client.isConnected, let kind = macDownKind, let since = macDownSince else { return nil }
-        return MacDownBanner.content(kind: kind, downFor: Date().timeIntervalSince(since),
-                                     remoteInHostSet: activeRemoteInHost != nil)
+        return MacDownBanner.content(kind: kind, downFor: now.timeIntervalSince(since),
+                                     remoteInHostSet: activeRemoteInHost != nil,
+                                     reliability: ReliabilityStatusStore.load(backendID: manager.activeBackendID))
     }
 
     private var activePairedBackend: PairedBackend? {
@@ -2261,6 +2289,10 @@ struct MainiOSView: View {
             guard let payload = note.object as? PairingPayload else { return }
             applyPairingPayload(payload)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .quipMacRestarted)) { note in
+            guard let text = note.object as? String else { return }
+            orderToast.show(text, actionTitle: "Details") { showConnectionDiagnostics = true }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .quipOpenBroadcast)) { note in
             // The Prompts hub's "Broadcast…" (US-108) and quip://broadcast (US-114).
             guard let link = note.object as? BroadcastLink.Request else { return }
@@ -2417,6 +2449,9 @@ struct MainiOSView: View {
         }
         .sheet(item: $remoteInSettingsBackend) { backend in
             NavigationStack { RemoteInSettingsView(backend: backend) }
+        }
+        .sheet(isPresented: $showConnectionDiagnostics) {
+            NavigationStack { ConnectionDiagnosticsSheet(client: client) }
         }
         .sheet(isPresented: $showDiagnosticsSheet) {
             DiagnosticsSheet(

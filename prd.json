@@ -68,8 +68,8 @@
         "`tools/check.sh --all` passes"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "PASS 2026-10-30. MacDownBanner.content(reliability:) -> .quipDown+watching says \"Quip on your Mac stopped. Restarting… usually under a minute\", no action until 90 s (restartGrace), then Remote in / Set up Remote in; not watching or nil = US-002. Banner wrapped in TimelineView(5 s) so the 90 s action appears between probes. QuipiOS/Services/RestartToast.swift: text(reason:at:timeZone:) (crash/hang/crash_loop, plus quit and an unknown-reason fallback), isNew(lastShown:incoming:), lastShown/markShown per backend (reliability.lastShownRestart.v1.<backendID>), logLine. QuipApp manager.onReliabilityStatus: active backend only, isNew -> markShown, PhoneLog mac_restarted reason=…, posts .quipMacRestarted; MainiOSView shows ActionToast with Details -> NavigationStack{ConnectionDiagnosticsSheet}. Tests: MacDownBannerTests +4 (89 s none / 90 s Remote in, not-watching = US-002, offline/unknown unchanged, strict broken fixture), RestartToastTests 6 (each reason, am time, isNew true/false/nil, log line, per-backend store, strict broken fixture). tools/qa/q90-restart.sh (new, +x). Gate tools/check.sh --all exit 0 (harness 62/0, fake-mac 48/0, Mac 1329/0, iOS 1563/0; Linux/Android skipped, not built here). QA: bash tools/qa/q90-restart.sh D8C5154B-7030-40BA-8443-F4F9EB27C725 -> PASS, fm.log line: recv phone_log lines=1: \"2026-10-30T23:17:56Z mac_restarted reason=crash\"; port 8799 free afterwards (trap). Mutants all caught: grace removed (89 s assert fails), isNew >= (test_isNew 'already shown' fails), both broken fixtures repaired (strict 'none recorded'). Not done: toast/banner not screenshotted (direct simctl screenshot permission-denied in this shell)."
     },
     {
       "id": "US-005",

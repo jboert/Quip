@@ -57,3 +57,19 @@ Started: Fri Oct 30 14:42:11 MST 2026
 - Not verified visually: the Settings row was not screenshotted on a simulator (no Mac sends reliability_status yet; the fake does).
 - Runtime: builds were slow (~10 min per iOS run) while another session's Berriscope xcodebuild test ran; left it alone.
 - Next: US-004 "Restarting…" banner + restart toast.
+
+## 2026-10-30 — US-004 "Restarting…" banner + restart toast (PASS)
+- Files: QuipiOS/Views/MacDownBanner.swift (reliability param, 90 s restartGrace), QuipiOS/Services/RestartToast.swift (new),
+  QuipiOS/QuipApp.swift (onReliabilityStatus -> once-per-restart log + toast, Details -> ConnectionDiagnosticsSheet, banner in a 5 s TimelineView),
+  QuipiOS/Tests/MacDownBannerTests.swift (+4), QuipiOS/Tests/RestartToastTests.swift (new, 6), tools/qa/q90-restart.sh (new, +x)
+- Gate: `tools/check.sh --all` exit 0 — harness 62/0, fake-mac 48/0, QuipMac 1329/0, QuipiOS 1563/0; QuipLinux + QuipAndroid SKIPPED (not built here, unverified)
+- First gate run failed 5 asserts on my own test fixture (21:04 UTC is 9:04 pm, not 2:04 pm); fixed the epoch to 14:04 UTC.
+- Mutations (iOS via `printf '<file>\n' | tools/check.sh --files -`, each expected and got TEST FAILED):
+  A. grace removed (action always Remote in) → test_watching_saysRestarting_remoteInOnlyFrom90Seconds fails (Remote in at 89 s);
+     isNew `>` → `>=` → test_isNew fails "the one already shown: not new"
+  B. both broken fixtures repaired → strict XCTExpectFailure "Expected failure … but none recorded" in both test files
+  Clean control: the final gate above.
+- QA: `bash tools/qa/q90-restart.sh D8C5154B-7030-40BA-8443-F4F9EB27C725` → PASS
+  `recv phone_log lines=1: "2026-10-30T23:17:56Z mac_restarted reason=crash`; 127.0.0.1:8799 free afterwards (trap killed the fake).
+- Not verified visually: the toast and the "Restarting…" banner were not screenshotted (direct `xcrun simctl io … screenshot` permission-denied).
+- Next: US-005 watchdog script restarts a hung Quip without false alarms.

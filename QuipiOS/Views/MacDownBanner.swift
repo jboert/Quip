@@ -29,12 +29,20 @@ enum MacDownBanner {
     /// A blip shorter than this is a reconnect, not an outage.
     static let delay: TimeInterval = 15
 
-    static func content(kind: MacDown, downFor: TimeInterval, remoteInHostSet: Bool) -> Content? {
+    /// US-004: a Mac that will bring Quip back gets this long before the
+    /// banner offers Remote in; by then the restart has failed.
+    static let restartGrace: TimeInterval = 90
+
+    static func content(kind: MacDown, downFor: TimeInterval, remoteInHostSet: Bool,
+                        reliability: ReliabilityStatusMessage? = nil) -> Content? {
         guard downFor >= delay else { return nil }
+        let remoteIn: Action = remoteInHostSet ? .remoteIn : .setUpRemoteIn
         switch kind {
+        case .quipDown where reliability?.watching == true:
+            return Content(title: "Quip on your Mac stopped. Restarting… usually under a minute",
+                           action: downFor >= restartGrace ? remoteIn : nil)
         case .quipDown:
-            return Content(title: "Quip isn't running on your Mac",
-                           action: remoteInHostSet ? .remoteIn : .setUpRemoteIn)
+            return Content(title: "Quip isn't running on your Mac", action: remoteIn)
         case .offline:
             return Content(title: "Can't reach your Mac", action: .checkTailscale)
         case .unknown:
