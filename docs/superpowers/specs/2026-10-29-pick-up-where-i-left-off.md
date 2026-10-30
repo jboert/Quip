@@ -119,14 +119,14 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Gate.
 
 ### US-006: Restore the place
-- [ ] `LandingPolicy` step 4 enabled: saved place, same backend, `now - savedAt ≤ PlaceRestorePolicy.freshness` (30 min, one constant).
-- [ ] Restore runs after the first `layout_update` with windows; order: display/desktop chip → window (via `LandingPolicy`) → `terminalExpanded` → `textInputOpen`. Panel flags restore only if the chosen window is the saved window.
-- [ ] Stale (> 30 min): only the window (recency); panels closed.
-- [ ] Switching backends in-app restores that backend's place (same function).
-- [ ] Sheets (Settings, Prompts, Slash, QA picker, scanner, camera) are **not** restored — see Non-goals.
-- [ ] Tests `PlaceRestorePolicyTests.swift` — table in §5.
-- [ ] Sim scenario S6.
-- [ ] Gate.
+- [x] `LandingPolicy` step 4 enabled: saved place, same backend, `now - savedAt ≤ PlaceRestorePolicy.freshness` (30 min, one constant).
+- [x] Restore runs after the first `layout_update` with windows; order: display/desktop chip → window (via `LandingPolicy`) → `terminalExpanded` → `textInputOpen`. Panel flags restore only if the chosen window is the saved window.
+- [x] Stale (> 30 min): only the window (recency); panels closed.
+- [x] Switching backends in-app restores that backend's place (same function). *As built:* `land(session:wasEmpty:restoringPlace:)` runs on the switch when that Mac already has windows, else on its first layout. Not run on a simulator: the fake Mac is one backend.
+- [x] Sheets (Settings, Prompts, Slash, QA picker, scanner, camera) are **not** restored — see Non-goals.
+- [x] Tests `PlaceRestorePolicyTests.swift` — table in §5.
+- [x] Sim scenario S6 + S6b: `tools/qa/q88-s6.sh` (seeds the place, so it tests the restore alone; US-005 covered saving). `-QuipNowOffset` is read by `PlaceRestorePolicy.now` in DEBUG only.
+- [x] Gate.
 
 ### US-007: Unsent text kept per window
 - [ ] `DraftStore`: draft per window id, replacing the single shared `textInputValue`. Switching windows saves the old window's draft and loads the new one's; send clears only that window's draft.

@@ -8,7 +8,7 @@ import Foundation
 /// 2. follow the Mac, when `followFrontmost` is on and its frontmost window is
 ///    in the layout;
 /// 3. smart landing on a waiting window — US-009, not built yet;
-/// 4. the saved place, ≤ 30 min old — US-006, not built yet;
+/// 4. the saved place, ≤ 30 min old (`PlaceRestorePolicy.freshness`);
 /// 5. the most recent window still open (`WindowSelectionMemory.recent`);
 /// 6. the Mac's first window; nothing when the layout is empty.
 enum LandingPolicy {
@@ -25,6 +25,9 @@ enum LandingPolicy {
         var explicit: String? = nil
         var followFrontmost = false
         var macFrontmost: String? = nil
+        /// This Mac's saved place (Q-88 US-006) and the time to judge it by.
+        var place: PhonePlace? = nil
+        var now = Date()
         /// Most recent first.
         var recency: [String] = []
         /// The layout's window ids, in the Mac's order.
@@ -42,6 +45,10 @@ enum LandingPolicy {
         if let id = usable(input.explicit) { return Decision(windowId: id, reason: .explicit) }
         if input.followFrontmost, let id = usable(input.macFrontmost) {
             return Decision(windowId: id, reason: .follow)
+        }
+        if let place = input.place, PlaceRestorePolicy.isFresh(place, now: input.now),
+           let id = usable(place.selectedWindowId) {
+            return Decision(windowId: id, reason: .restored)
         }
         if let id = WindowSelectionMemory.best(recent: input.recency, available: input.windows,
                                                excluding: input.excluding) {

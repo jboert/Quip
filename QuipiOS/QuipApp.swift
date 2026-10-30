@@ -151,6 +151,9 @@ struct QuipApp: App {
     /// read it and US-006 can put it back.
     @State private var isTerminalExpanded = false
     @State private var placeRecorder = PhonePlaceRecorder()
+    /// Q-88 US-006: put the saved place back on the next layout with
+    /// windows. Set at launch and when a switch lands on a Mac with none yet.
+    @State private var placeRestorePending = true
     @State private var terminalContentText: String?
     @State private var terminalContentScreenshot: String?
     /// URLs extracted Mac-side from the scraped text, for the tap-to-open
@@ -399,6 +402,13 @@ struct QuipApp: App {
                 // resolver closure itself always returns manager.active.client
                 // so it stays correct across swaps.
                 speech.attachWebSocketResolver { [manager] in manager.active.client }
+                // Q-88 US-006: that Mac's saved place, now or on its first
+                // layout with windows.
+                if windows.isEmpty {
+                    placeRestorePending = true
+                } else {
+                    land(session: s, wasEmpty: false, restoringPlace: true)
+                }
             }
             .onChange(of: liveActivitiesEnabled) { _, enabled in
                 // Flipping Live Activities off in Settings should drop any
@@ -532,6 +542,54 @@ struct QuipApp: App {
                 // Probe every paired backend's socket on return; force-reconnect
                 // with reset backoff if the probe doesn't pong within 2s.
                 manager.resumeAll()
+            }
+        }
+    }
+
+    /// Picks the window after a layout or a switch (LandingPolicy, Q-88 §3)
+    /// and sends at most one `select_window`. With `restoringPlace`, the
+    /// saved place takes part (step 4) and its chips and panels come back
+    /// (PlaceRestorePolicy), once.
+    private func land(session: BackendSession, wasEmpty: Bool, restoringPlace: Bool) {
+        let ids = windows.map(\.id)
+        let now = PlaceRestorePolicy.now
+        let place = restoringPlace ? PhonePlaceStore.load(forBackendId: session.backendID) : nil
+        let outcome = LandingPolicy.afterLayout(
+            selected: selectedWindowId, wasEmpty: wasEmpty,
+            LandingPolicy.Input(
+                followFrontmost: followFrontmost && manager.active.qaPair == nil,
+                macFrontmost: macFrontmostId,
+                place: place,
+                now: now,
+                recency: manager.recency.recent(forBackendId: session.backendID),
+                windows: ids))
+        selectedWindowId = outcome.selected
+        let away = PhonePlaceStore.awayFor(now: now).map { " away=\(Int($0))s" } ?? ""
+        if let reason = outcome.reason {
+            PhoneLog.log("landing reason=\(reason.rawValue)\(away)")
+        }
+        if restoringPlace {
+            placeRestorePending = false
+            let steps = PlaceRestorePolicy.steps(place: place, now: now, window: outcome.selected,
+                                                 displays: displays.map(\.id), spaces: spaces.map(\.id))
+            applyPlace(steps)
+            PhoneLog.log("place restore saved=\(place != nil) fresh=\(place.map { PlaceRestorePolicy.isFresh($0, now: now) } ?? false) steps=\(steps.map(\.name).joined(separator: ","))\(away)")
+        }
+        if let wid = outcome.send {
+            session.client.send(SelectWindowMessage(windowId: wid))
+        }
+    }
+
+    private func applyPlace(_ steps: [PlaceRestorePolicy.Step]) {
+        for step in steps {
+            switch step {
+            case .display(let id):
+                selectedDisplayID = id
+                manager.active.updateSelectedDisplay(id)
+            case .space(let id): selectedSpaceID = id
+            case .window(let id): selectedWindowId = id
+            case .terminalExpanded(let on): isTerminalExpanded = on
+            case .textInputOpen(let on): showTextInput = on
             }
         }
     }
@@ -692,20 +750,8 @@ struct QuipApp: App {
                 // window is LandingPolicy's call (Q-88 §3): follow the Mac,
                 // else the window the user was last in, else the one before
                 // it, else windows.first. One select_window at most.
-                let outcome = LandingPolicy.afterLayout(
-                    selected: selectedWindowId, wasEmpty: wasEmpty,
-                    LandingPolicy.Input(
-                        followFrontmost: followFrontmost && manager.active.qaPair == nil,
-                        macFrontmost: macFrontmostId,
-                        recency: manager.recency.recent(forBackendId: session.backendID),
-                        windows: update.windows.map(\.id)))
-                selectedWindowId = outcome.selected
-                if let reason = outcome.reason {
-                    PhoneLog.log("landing reason=\(reason.rawValue)")
-                }
-                if let wid = outcome.send {
-                    session.client.send(SelectWindowMessage(windowId: wid))
-                }
+                land(session: session, wasEmpty: wasEmpty,
+                     restoringPlace: placeRestorePending && !update.windows.isEmpty)
             }
         }
 

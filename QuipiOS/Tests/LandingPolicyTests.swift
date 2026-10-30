@@ -64,6 +64,45 @@ final class LandingPolicyTests: XCTestCase {
                        .init(windowId: nil, reason: .none))
     }
 
+    // MARK: step 4 — the saved place (US-006)
+
+    private func placed(_ window: String, minutesAgo: Double) -> (PhonePlace, Date) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        return (PhonePlace(selectedWindowId: window, savedAt: now.addingTimeInterval(-minutesAgo * 60)), now)
+    }
+
+    func test_place29MinutesOld_isRestored_overRecency() {
+        let (p, now) = placed("B", minutesAgo: 29)
+        XCTAssertEqual(decide(Input(place: p, now: now, recency: ["A"], windows: ["A", "B"])),
+                       .init(windowId: "B", reason: .restored))
+    }
+
+    func test_place31MinutesOld_fallsToRecency() {
+        let (p, now) = placed("B", minutesAgo: 31)
+        XCTAssertEqual(decide(Input(place: p, now: now, recency: ["A"], windows: ["A", "B"])),
+                       .init(windowId: "A", reason: .recent))
+    }
+
+    func test_placesWindowClosed_fallsToRecency() {
+        let (p, now) = placed("Z", minutesAgo: 1)
+        XCTAssertEqual(decide(Input(place: p, now: now, recency: ["Z", "A"], windows: ["A", "B"])),
+                       .init(windowId: "A", reason: .recent))
+    }
+
+    func test_explicitAndFollow_beatThePlace() {
+        let (p, now) = placed("B", minutesAgo: 1)
+        XCTAssertEqual(decide(Input(explicit: "A", place: p, now: now, windows: ["A", "B"])).reason, .explicit)
+        XCTAssertEqual(decide(Input(followFrontmost: true, macFrontmost: "A", place: p, now: now,
+                                    windows: ["A", "B"])),
+                       .init(windowId: "A", reason: .follow))
+    }
+
+    func test_restoredWindowThatJustVanished_isNotChosen() {
+        let (p, now) = placed("B", minutesAgo: 1)
+        XCTAssertEqual(decide(Input(place: p, now: now, recency: ["A"], windows: ["A", "B"], excluding: "B")),
+                       .init(windowId: "A", reason: .recent))
+    }
+
     // MARK: afterLayout — the one select_window per layout_update
 
     func test_selectedWindowVanished_sendsExactlyOneSelectForTheRecencyPick() {
