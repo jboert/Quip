@@ -76,6 +76,18 @@ final class RecencyWriteCoalescerTests: XCTestCase {
         XCTAssertEqual(rig.stored, ["one": ["A"], "two": ["X"]])
     }
 
+    func test_revision_bumpsOnEveryOrderChange_notOnANoOp() {
+        // US-004: the grid re-reads the Recent order when this moves.
+        let rig = Rig()
+        rig.stored["mac"] = ["A"]
+        rig.coalescer.touch("A", forBackendId: "mac")
+        XCTAssertEqual(rig.coalescer.revision, 0, "already on top: nothing to redraw")
+        rig.coalescer.touch("B", forBackendId: "mac")
+        XCTAssertEqual(rig.coalescer.revision, 1)
+        rig.coalescer.remember("A", forBackendId: "mac")
+        XCTAssertEqual(rig.coalescer.revision, 2)
+    }
+
     func test_rememberWritesAtOnceOnTopOfThePendingOrder() {
         // A phone tap is the user's own choice: written now, and it must not be
         // overwritten by the older frontmost order when the timer fires.

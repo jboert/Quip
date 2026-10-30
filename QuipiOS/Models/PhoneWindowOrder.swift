@@ -1,18 +1,38 @@
 import Foundation
 
-/// The order the phone's grid shows windows in: the user's persisted
-/// drag-reorder sequence, with pinned windows floated to the front.
-///
-/// The drag order used to be the whole story, so a pin made on either peer
-/// changed nothing on the phone: the Mac floated the window to the front of
-/// its list, the phone re-sorted it straight back into its saved slot. Pins
-/// now win, the same way they do on the Mac (`WindowPinOrder`), so a pinned
-/// card is the first cell, top left, like a pinned browser tab (Q-58).
 enum PhoneWindowOrder {
 
-    /// PURE: known ids sort by saved position; ids not in `savedOrder` keep
-    /// their incoming position after the known ones; then pinned windows move
-    /// to the front, keeping their relative order.
+    /// Q-88 US-004: how the window grid is ordered. Stored as
+    /// `windowOrderMode`; empty means not chosen yet (see `initialMode`).
+    enum Mode: String, CaseIterable {
+        /// The windows used last come first (the recency stack).
+        case recent
+        /// The order the user dragged the cards into (`phoneWindowOrderJSON`).
+        case manual
+
+        static let storageKey = "windowOrderMode"
+    }
+
+    /// The mode for a phone that has never chosen one. `phoneWindowOrderJSON`
+    /// is filled for everyone (each layout appends new ids), so "non-empty"
+    /// does not mean "dragged". A drag is what makes the saved order differ
+    /// from the Mac's: then keep Manual, else start in Recent.
+    static func initialMode(savedOrder: [String], macOrder: [String]) -> Mode {
+        let live = Set(macOrder)
+        let saved = savedOrder.filter { live.contains($0) }
+        let known = Set(saved)
+        return saved == macOrder.filter { known.contains($0) } ? .recent : .manual
+    }
+
+    /// `windows` in the grid's order for `mode`. Recent sorts by position in
+    /// `recency` (most recent first); Manual by `savedOrder`. Ids in neither
+    /// list keep the Mac's order after the known ones. Pins come first in
+    /// both modes (Q-58).
+    static func display(_ windows: [WindowState], mode: Mode,
+                        savedOrder: [String], recency: [String]) -> [WindowState] {
+        display(windows, savedOrder: mode == .recent ? recency : savedOrder)
+    }
+
     static func display(_ windows: [WindowState], savedOrder: [String]) -> [WindowState] {
         let ordered: [WindowState]
         if savedOrder.isEmpty {

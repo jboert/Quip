@@ -178,6 +178,9 @@ final class PreferencesSyncService {
         if let v = snapshot.customButtonsJSON { d.set(v, forKey: "customButtonsJSON") }
         if let v = snapshot.quickSlotColorsJSON { d.set(v, forKey: KeyColors.storageKey) }
         if let v = snapshot.followFrontmost { d.set(v, forKey: "followFrontmost") }
+        if let v = snapshot.windowOrderMode, PhoneWindowOrder.Mode(rawValue: v) != nil {
+            d.set(v, forKey: PhoneWindowOrder.Mode.storageKey)
+        }
         // Connection memory: hand to the merge hooks rather than writing the
         // blob directly (a direct write would clobber the live, overwrite-only
         // paired/recents lists). The hooks union restored rows into running
@@ -292,8 +295,12 @@ final class PreferencesSyncService {
     /// only stores values the user actually set, and a restore won't
     /// stomp on a default that may have changed in a later app version.
     private func currentSnapshot() -> PreferencesSnapshot {
-        let d = UserDefaults.standard
-        return PreferencesSnapshot(
+        Self.snapshot(from: .standard, savedAt: localModifiedAt ?? Date().timeIntervalSince1970)
+    }
+
+    /// The capture itself, on any defaults, so a test can read it back.
+    nonisolated static func snapshot(from d: UserDefaults, savedAt: Double) -> PreferencesSnapshot {
+        PreferencesSnapshot(
             enabledQuickButtons: d.string(forKey: "enabledQuickButtons"),
             tintContentBorder: d.object(forKey: "tintContentBorder") as? Bool,
             contentZoomLevel: d.object(forKey: "contentZoomLevel") as? Int,
@@ -320,8 +327,10 @@ final class PreferencesSyncService {
             recentConnectionsJSON: d.data(forKey: "recentConnectionsData").flatMap { String(data: $0, encoding: .utf8) },
             activeBackendID: d.string(forKey: "activeBackendID"),
             promptUsageJSON: d.string(forKey: "promptUsageJSON"),
-            savedAt: localModifiedAt ?? Date().timeIntervalSince1970,
-            mainRowOrderJSON: d.string(forKey: "mainRowOrderJSON")
+            savedAt: savedAt,
+            mainRowOrderJSON: d.string(forKey: "mainRowOrderJSON"),
+            windowOrderMode: d.string(forKey: PhoneWindowOrder.Mode.storageKey)
+                .flatMap { PhoneWindowOrder.Mode(rawValue: $0)?.rawValue }
         )
     }
 }

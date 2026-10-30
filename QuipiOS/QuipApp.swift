@@ -1631,6 +1631,17 @@ struct MainiOSView: View {
     @AppStorage("phoneWindowOrderJSON") private var phoneWindowOrderJSON: String = "[]"
     /// In-memory decoded order — same JSON-cache pattern as phoneFrameOverrides.
     @State private var phoneWindowOrder: [String] = []
+    /// Q-88 US-004: Recent (most recently used first) or Manual (the drag
+    /// order above). Empty until the first layout picks a default
+    /// (`PhoneWindowOrder.initialMode`); until then the grid shows Manual,
+    /// the order it has always shown.
+    @AppStorage(PhoneWindowOrder.Mode.storageKey) private var windowOrderModeRaw: String = ""
+    /// The recency stack the grid is drawn from in Recent mode. A copy, not
+    /// a live read, so a card never moves under the finger: it is refreshed
+    /// 300 ms after the stack changes, and not while a card is dragged.
+    @State private var recentOrder: [String] = []
+    @State private var recentOrderRefresh: Task<Void, Never>?
+    @State private var orderToast = ActionToastModel()
     /// Active drag state: which window is being dragged + accumulated
     /// translation. Nil when no drag is in flight.
     @State private var draggingWindowId: String? = nil
@@ -1652,7 +1663,12 @@ struct MainiOSView: View {
     /// safe to read from `body`. Reconciling the saved order to the live id set
     /// happens in `.onChange(of: windows)` via `reconcileWindowOrder`.
     private var displayWindows: [WindowState] {
-        PhoneWindowOrder.display(windows, savedOrder: phoneWindowOrder)
+        PhoneWindowOrder.display(windows, mode: windowOrderMode,
+                                 savedOrder: phoneWindowOrder, recency: recentOrder)
+    }
+
+    private var windowOrderMode: PhoneWindowOrder.Mode {
+        PhoneWindowOrder.Mode(rawValue: windowOrderModeRaw) ?? .manual
     }
     // When true, the window-picker layout card collapses and InlineTerminalContent
     // expands to fill its space — gives the terminal more vertical room for reading.
@@ -1815,10 +1831,13 @@ struct MainiOSView: View {
                 }
                 broadcastResultLine
                 rowNoteLine
+                ActionToastView(model: orderToast)
+                    .transition(toastTransition)
             }
             .padding(.top, 50)
             .animation(.easeInOut(duration: 0.3), value: broadcastDelivery?.startedAt)
             .animation(.easeInOut(duration: 0.3), value: rowNote?.id)
+            .animation(.easeInOut(duration: 0.3), value: orderToast.current?.id)
         }
         .sensoryFeedback(.warning, trigger: broadcastWarningTick)
         .environment(\.quipColors, colors)
@@ -1939,11 +1958,13 @@ struct MainiOSView: View {
             // Restore the persisted drag-reorder sequence too, so a returning
             // user's order is in place before the first windows-list arrives.
             loadWindowOrder()
+            refreshRecentOrder()
             // Initial chooser pass for the case where windows already
             // populated before this view appeared (rare but possible on
             // reconnect). Real subsequent fires happen via .onChange below.
             if !windows.isEmpty {
                 pruneOverrides(activeWindowIds: Set(windows.map(\.id)))
+                resolveWindowOrderMode(activeWindows: windows)
                 reconcileWindowOrder(activeWindows: windows)
                 runAutoChooser(count: windows.count)
             }
@@ -1955,9 +1976,12 @@ struct MainiOSView: View {
             pruneOverrides(activeWindowIds: Set(newValue.map(\.id)))
             // Keep the drag-reorder sequence in step: append new windows,
             // drop closed ones, so displayWindows stays well-defined.
+            resolveWindowOrderMode(activeWindows: newValue)
             reconcileWindowOrder(activeWindows: newValue)
             runAutoChooser(count: newValue.count)
         }
+        .onChange(of: manager.recency.revision) { _, _ in scheduleRecentOrderRefresh() }
+        .onChange(of: manager.activeBackendID) { _, _ in refreshRecentOrder() }
         .onAppear {
             // Companion onAppear for the rest of the legacy hookup below.
             // Register image upload result callbacks. These are idempotent
@@ -5063,6 +5087,8 @@ struct MainiOSView: View {
                                         handleDrop(windowId: window.id, dropCenter: dropCenter)
                                         draggingWindowId = nil
                                         dragTranslation = .zero
+                                        // A Recent reorder held back for the drag.
+                                        scheduleRecentOrderRefresh()
                                     }
                             )
                         }
@@ -5293,6 +5319,42 @@ struct MainiOSView: View {
         guard next != current else { return }
         phoneWindowOrder = next
         persistWindowOrder()
+        // Q-88 US-004: a drag is a manual order. Saved above from what was on
+        // screen, so the grid does not jump when the mode changes.
+        if windowOrderMode == .recent {
+            windowOrderModeRaw = PhoneWindowOrder.Mode.manual.rawValue
+            orderToast.show("Order: Manual", actionTitle: "Use Recent") {
+                windowOrderModeRaw = PhoneWindowOrder.Mode.recent.rawValue
+            }
+        }
+    }
+
+    /// Picks Recent or Manual once, at the first layout with windows, for a
+    /// phone that has never chosen. Must run before `reconcileWindowOrder`
+    /// can change the saved order it compares.
+    private func resolveWindowOrderMode(activeWindows: [WindowState]) {
+        guard windowOrderModeRaw.isEmpty, !activeWindows.isEmpty else { return }
+        let mode = PhoneWindowOrder.initialMode(savedOrder: phoneWindowOrder,
+                                                macOrder: activeWindows.map(\.id))
+        windowOrderModeRaw = mode.rawValue
+        PhoneLog.log("window order default=\(mode.rawValue)")
+    }
+
+    private func refreshRecentOrder() {
+        recentOrder = manager.recency.recent(forBackendId: manager.activeBackendID)
+    }
+
+    /// Redraws the Recent order 300 ms after the stack last changed, never
+    /// mid-drag: a drag's end calls this again.
+    private func scheduleRecentOrderRefresh() {
+        recentOrderRefresh?.cancel()
+        recentOrderRefresh = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, draggingWindowId == nil else { return }
+            let next = manager.recency.recent(forBackendId: manager.activeBackendID)
+            guard next != recentOrder else { return }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { recentOrder = next }
+        }
     }
 
     /// Pure move: `order` with `id` pulled from its current position and

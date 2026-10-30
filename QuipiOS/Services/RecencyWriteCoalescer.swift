@@ -8,14 +8,19 @@ import Foundation
 /// timer can never put an older order back. `recent` reads the pending order,
 /// so a landing decision inside the interval already sees it.
 @MainActor
+@Observable
 final class RecencyWriteCoalescer {
     static let interval: TimeInterval = 1
 
-    private let load: (String) -> [String]
-    private let persist: ([String], String) -> Void
-    private let schedule: (TimeInterval, @escaping () -> Void) -> Void
-    private var pending: [String: [String]] = [:]
-    private var flushScheduled: Set<String> = []
+    /// Bumped whenever any backend's order changes, so a view showing the
+    /// Recent order (Q-88 US-004) knows to read it again.
+    private(set) var revision = 0
+
+    @ObservationIgnored private let load: (String) -> [String]
+    @ObservationIgnored private let persist: ([String], String) -> Void
+    @ObservationIgnored private let schedule: (TimeInterval, @escaping () -> Void) -> Void
+    @ObservationIgnored private var pending: [String: [String]] = [:]
+    @ObservationIgnored private var flushScheduled: Set<String> = []
 
     /// `schedule` is the clock: it runs the flush after the delay. Tests pass
     /// one that collects the flushes and fires them on demand.
@@ -48,6 +53,7 @@ final class RecencyWriteCoalescer {
         let next = WindowSelectionMemory.touched(base, with: windowId)
         guard next != base else { return }
         pending[backendId] = next
+        revision += 1
         guard flushScheduled.insert(backendId).inserted else { return }
         schedule(Self.interval) { [weak self] in self?.flush(backendId) }
     }
@@ -57,6 +63,7 @@ final class RecencyWriteCoalescer {
         let next = WindowSelectionMemory.touched(recent(forBackendId: backendId), with: windowId)
         pending[backendId] = nil
         persist(next, backendId)
+        revision += 1
     }
 
     /// Writes every pending order, e.g. before the app leaves the foreground.

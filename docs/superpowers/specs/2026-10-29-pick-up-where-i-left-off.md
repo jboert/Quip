@@ -98,16 +98,16 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Gate.
 
 ### US-004: "Recent" grid order (default) and "Manual"
-- [ ] New pref `windowOrderMode` (`recent` | `manual`), `@AppStorage`, in `PreferencesSnapshot` with apply/snapshot wiring and the `savedAt` freshness gate.
-- [ ] Default when unset: `manual` if `phoneWindowOrderJSON` is non-empty (the user has dragged before — keep their choice), else `recent`.
-- [ ] `PhoneWindowOrder.display` gains a `mode` + `recency` input. Recent: sort by recency position; ids not in the stack keep the Mac's order after them. Pins first in both modes (Q-58).
-- [ ] Dragging a card in Recent mode switches to Manual and saves the drag. A toast says "Order: Manual" with a **Use Recent** action.
-- [ ] Settings → existing windows section gets a two-option picker "Window order: Recent / Manual". No new main-screen control (compact UI).
-- [ ] No reshuffle under the finger: in Recent mode, reorders are deferred while a drag or press is active and applied 300 ms after it ends.
-- [ ] Tests: extend `PhoneWindowOrderTests` (recent order, pins first, unknown ids, mode default migration); `PreferencesFreshnessTests` covers the new field.
-- [ ] New tiny `ActionToast` view (text + one button, 4 s auto-dismiss, VoiceOver reads both) — reused by US-004/US-009/US-011. Unit test on its dismiss timer with an injected clock.
-- [ ] Sim scenario S4.
-- [ ] Gate.
+- [x] New pref `windowOrderMode` (`recent` | `manual`), `@AppStorage`, in `PreferencesSnapshot` with apply/snapshot wiring and the `savedAt` freshness gate.
+- [x] Default when unset: `manual` if the user has dragged before (keep their choice), else `recent`. *As built:* `phoneWindowOrderJSON` is non-empty for anyone who ever connected (each layout appends new ids), so the test is "saved order differs from the Mac's" (`PhoneWindowOrder.initialMode`), decided once at the first layout with windows.
+- [x] `PhoneWindowOrder.display` gains a `mode` + `recency` input. Recent: sort by recency position; ids not in the stack keep the Mac's order after them. Pins first in both modes (Q-58).
+- [x] Dragging a card in Recent mode switches to Manual and saves the drag. A toast says "Order: Manual" with a **Use Recent** action.
+- [x] Settings gets a two-option picker "Window order: Recent / Manual". No new main-screen control (compact UI). *As built:* Settings has no windows section, so it sits in Appearance.
+- [x] No reshuffle under the finger: in Recent mode, reorders are deferred while a drag or press is active and applied 300 ms after it ends. *As built:* the grid draws from a copy of the stack, refreshed 300 ms after `RecencyWriteCoalescer.revision` last moved, never mid-drag.
+- [x] Tests: extend `PhoneWindowOrderTests` (recent order, pins first, unknown ids, mode default migration); `PreferencesFreshnessTests` covers the new field.
+- [x] New tiny `ActionToast` view (text + one button, 4 s auto-dismiss, VoiceOver reads both) — reused by US-004/US-009/US-011. Unit test on its dismiss timer with an injected clock.
+- [x] Sim scenario S4 (by hand with idb on the QA sim: default=recent logged; drag → toast, mode manual, drag saved; Use Recent → recency order back). The Mac stores the snapshot as the struct, so it carries `windowOrderMode` only after the next Mac rebuild; iCloud carries it now.
+- [x] Gate.
 
 ### US-005: `PhonePlace` — what "my place" is, saved on background
 - [ ] `Codable` `PhonePlace` per backend (`phonePlace.v1.<backendID>`): `selectedWindowId`, `selectedDisplayID`, `selectedSpaceID`, `textInputOpen: Bool`, `terminalExpanded: Bool`, `scrollAnchorByWindow: [String: ScrollAnchor]`, `savedAt: Date`.

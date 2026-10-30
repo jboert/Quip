@@ -1379,6 +1379,9 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     var savedAt: Double?
     /// JSON `[String]` of the main button row's user-arranged order (Q-65).
     var mainRowOrderJSON: String?
+    /// Window grid order, `recent` or `manual` (Q-88 US-004). Optional so a
+    /// backup from before the field decodes as nil and the phone keeps its own.
+    var windowOrderMode: String?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -1408,7 +1411,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         activeBackendID: String? = nil,
         promptUsageJSON: String? = nil,
         savedAt: Double? = nil,
-        mainRowOrderJSON: String? = nil
+        mainRowOrderJSON: String? = nil,
+        windowOrderMode: String? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -1438,6 +1442,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.promptUsageJSON = promptUsageJSON
         self.savedAt = savedAt
         self.mainRowOrderJSON = mainRowOrderJSON
+        self.windowOrderMode = windowOrderMode
     }
 }
 

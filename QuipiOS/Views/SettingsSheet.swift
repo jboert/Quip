@@ -30,6 +30,9 @@ struct SettingsSheet: View {
     /// Appearance picker; QuipApp's root view reads the same key and
     /// applies `.preferredColorScheme(...)` accordingly.
     @AppStorage("appearance.mode") private var appearanceModeRaw: String = "auto"
+    /// Q-88 US-004. Empty until the first layout picks the default, so
+    /// read it as Manual like the grid does.
+    @AppStorage(PhoneWindowOrder.Mode.storageKey) private var windowOrderModeRaw: String = ""
     @AppStorage("pushPaused") private var pushPaused = false
     @AppStorage("pushBannerEnabled") private var pushBannerEnabled = true
     @AppStorage("pushSound") private var pushSound = true
@@ -84,6 +87,12 @@ struct SettingsSheet: View {
                         Text("Dark").tag("dark")
                     }
                     .pickerStyle(.segmented)
+                    Picker("Window order", selection: Binding(
+                        get: { PhoneWindowOrder.Mode(rawValue: windowOrderModeRaw) ?? .manual },
+                        set: { windowOrderModeRaw = $0.rawValue })) {
+                        Text("Recent").tag(PhoneWindowOrder.Mode.recent)
+                        Text("Manual").tag(PhoneWindowOrder.Mode.manual)
+                    }
                     Toggle("Tint content panel border", isOn: $tintContentBorder)
                     HStack {
                         Toggle("URL tray", isOn: $urlTrayEnabled)
@@ -103,7 +112,7 @@ struct SettingsSheet: View {
                 } header: {
                     Text("Appearance")
                 } footer: {
-                    Text("Auto content mode uses images when available and falls back to text.")
+                    Text("Auto content mode uses images when available and falls back to text. Recent window order puts the windows you used last first; dragging a card switches to Manual.")
                 }
 
                 // Prompts — Mac-managed library of paste-and-run prompts,
