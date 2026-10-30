@@ -84,8 +84,8 @@
         "`tools/check.sh --all` passes"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "QuipMac/Resources/quip-watchdog.sh (POSIX sh, wd_decide + wd_main), tools/run-watchdog-tests.sh (12-row wd_decide table under dash, helper tables, integration: real detached sleep 300 alive after run 1, gone after run 2, kill line + sample file; source-only runs nothing; no heartbeat file never kills), broken fixture tools/tests/fixtures/quip-watchdog-broken.sh must fail the table. check.sh harness runs it and counts failures; QuipMac/Resources/quip-watchdog.sh alone triggers the harness (verified via --files: harness=true). Gate `tools/check.sh --all` all green: harness 62/0, check-script 17/0, fake-mac 48/0, watchdog 33/0, QuipMac 1329/0, QuipiOS 1563/0; Linux/Android skipped. 8 script mutants + 2 check.sh mutants all failed; clean controls green. Test seam QUIP_WD_UPTIME added (a fresh sleep cannot be 120 s old)."
     },
     {
       "id": "US-006",

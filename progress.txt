@@ -73,3 +73,21 @@ Started: Fri Oct 30 14:42:11 MST 2026
   `recv phone_log lines=1: "2026-10-30T23:17:56Z mac_restarted reason=crash`; 127.0.0.1:8799 free afterwards (trap killed the fake).
 - Not verified visually: the toast and the "Restarting…" banner were not screenshotted (direct `xcrun simctl io … screenshot` permission-denied).
 - Next: US-005 watchdog script restarts a hung Quip without false alarms.
+
+## 2026-10-30 — US-005 Watchdog script restarts a hung Quip without false alarms (PASS)
+- Files: QuipMac/Resources/quip-watchdog.sh (new, +x: wd_decide, wd_counts_as_stale, wd_etime_secs, wd_main), tools/run-watchdog-tests.sh (new, +x),
+  tools/tests/fixtures/quip-watchdog-broken.sh (new: kills on the first stale check), tools/check.sh (harness runs it + counts failure;
+  the script path alone triggers the harness), tools/run-check-script-tests.sh (+2 assertions for that wiring)
+- Decisions: a skipped sleep/install round resets the stale count (two fresh stale checks needed after); empty PREV_CHECK_AT (first-ever
+  check) is not a sleep; no heartbeat file (today's app writes none) never kills; `pgrep -x Quip` skips CoreSimulator copies;
+  QUIP_WD_UPTIME is a test seam (a fresh `sleep 300` cannot be 120 s old). The table runs under /bin/dash to catch bashisms.
+- Gate: `tools/check.sh --all` "3 suite(s) ran, all green" (exit 0) — harness 62/0, check-script 17/0, fake-mac 48/0, watchdog 33/0,
+  QuipMac 1329/0, QuipiOS 1563/0; QuipLinux + QuipAndroid SKIPPED (not built here, unverified).
+  `printf 'QuipMac/Resources/quip-watchdog.sh\n' | tools/check.sh --files -` → "suites: harness=true mac=true ios=false", all green.
+- Mutations (`python3 build/q90-wd-mutants.py`, gitignored driver; each expected and got runner exit 1): two-checks rule removed (6 fails),
+  hang threshold 100 (15), uptime guard removed (1), sleep guard removed (1), install guard removed (1), kill removed (1),
+  source-only ignored (12), stale_once not remembered (4). check.sh (`build/q90-check-mutants.py`): watchdog failure not counted → exit 1,
+  trigger removed → exit 1. The broken fixture fails the table on every run (built in). Clean controls: exit 0.
+- Fixed on the way: the first-run log grep expected exactly heartbeat_age=100s and flaked when a second ticked over (now 10[01]);
+  test calls are fenced (dummy pid, $TMPDIR state) so a mutant that runs the main path can never `pgrep` the real Quip.
+- Next: US-006 crash-loop stop / retry / disk_full in the same script.

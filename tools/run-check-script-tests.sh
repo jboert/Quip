@@ -121,6 +121,16 @@ expect_present 'run_bounded .*xcodebuild -project QuipMac/QuipMac\.xcodeproj' to
 expect_present 'run_bounded .*ios_suite' tools/check.sh \
     "the QuipiOS suite must run under run_bounded"
 
+# Q-90 — the watchdog tests run in the harness and count toward its failures,
+# and an edit to the bundled script alone still triggers the harness.
+checks=$((checks + 1))
+if ! grep -A1 '^    bash tools/run-watchdog-tests.sh$' tools/check.sh | grep -q 'failures=\$((failures + 1))'; then
+    echo "FAIL: the harness must run tools/run-watchdog-tests.sh and count its failure"
+    failures=$((failures + 1))
+fi
+expect_present "touched '\^QuipMac/Resources/quip-watchdog.*run_harness=true" tools/check.sh \
+    "a change to QuipMac/Resources/quip-watchdog.sh must trigger the harness"
+
 if [ "$failures" -ne 0 ]; then
     echo "$checks check-script assertions, $failures failures"
     exit 1
