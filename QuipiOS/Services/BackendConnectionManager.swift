@@ -91,6 +91,9 @@ final class BackendConnectionManager {
     /// untracked). Host uses it for the "follow Mac frontmost" feature.
     /// (wishlist §B16.)
     var onFrontmostChanged: ((BackendSession, String?) -> Void)?
+    /// Per-Mac recency stacks (Q-88). Every Mac's `frontmost_changed` feeds
+    /// its own stack here, whichever Mac is active; tests swap in their own.
+    var recency = RecencyWriteCoalescer()
     var onProjectDirectories: ((BackendSession, [String]) -> Void)?
     var onITermWindowList: ((BackendSession, [ITermWindowInfo]) -> Void)?
     var onError: ((BackendSession, String) -> Void)?
@@ -1574,6 +1577,13 @@ final class BackendConnectionManager {
 
         c.onFrontmostChanged = { [weak self, weak session] windowId in
             guard let self, let session else { return }
+            // Q-88 US-003: order only, even with followFrontmost off; selection
+            // stays the UI handler's call. A window this Mac does not track
+            // (Finder, Mail: nil, or an id not in its layout) changes nothing.
+            if let wid = windowId, !session.backendID.isEmpty,
+               session.windows.contains(where: { $0.id == wid }) {
+                self.recency.touch(wid, forBackendId: session.backendID)
+            }
             self.onFrontmostChanged?(session, windowId)
         }
 

@@ -90,12 +90,12 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Sim scenario S2 scripted as `tools/qa/q88-s2.sh` (passes). The fake Mac now echoes `select_window` as `frontmost_changed` after 400 ms, as the real Mac's poll does; without it the default "follow the Mac" would land on the fixture's stale frontmost.
 
 ### US-003: Mac frontmost feeds the recency stack
-- [ ] `frontmost_changed` with a tracked id → `touch` on that backend's stack, even with `followFrontmost` off (order only; selection unchanged).
-- [ ] Writes coalesced: at most one persisted write per backend per second (`RecencyWriteCoalescer`, injectable clock).
-- [ ] Bridged in `BackendConnectionManager.wire()` if not already (check: every `onFoo` needs a `c.onFoo` bridge or it silently no-ops on non-active backends).
-- [ ] Tests: two events 100 ms apart → one write, latest order; event for an untracked id → no change; inactive backend's event updates that backend's stack only.
-- [ ] Sim scenario S3 (§6).
-- [ ] Gate.
+- [x] `frontmost_changed` with a tracked id → `touch` on that backend's stack, even with `followFrontmost` off (order only; selection unchanged). Done in the manager's `c.onFrontmostChanged` bridge, before the UI handler, so it runs for every paired Mac; "tracked" = in that session's `windows`.
+- [x] Writes coalesced: at most one persisted write per backend per second (`RecencyWriteCoalescer`, injectable `schedule`, which is its clock). A phone selection (`remember`) is written at once on top of the pending order; `recent` reads the pending order; `willResignActive` calls `flushAll()`.
+- [x] Bridged in `BackendConnectionManager.wire()` if not already: it already was (`c.onFrontmostChanged`).
+- [x] Tests (`RecencyWriteCoalescerTests.swift`): two events 100 ms apart → one write, latest order; event for an untracked id → no change; inactive backend's event updates that backend's stack only; plus the echo of the window already on top writes nothing, `remember` beats a pending flush, `flushAll`. Mutations, each caught: write at once 2 tests, `remember` keeps pending 1, no tracked check 1, active backend only 1, `flushAll` no-op 1, no on-top skip 1.
+- [x] Sim scenario S3 (§6), US-003 half: `tools/qa/q88-s3.sh` (follow off; `front` Safari → stored stack Safari, lantern-web; no `select_window`). A control run with follow on fails the selection check, so it can see a selection. "W4 first in Recent order" waits for US-004.
+- [x] Gate.
 
 ### US-004: "Recent" grid order (default) and "Manual"
 - [ ] New pref `windowOrderMode` (`recent` | `manual`), `@AppStorage`, in `PreferencesSnapshot` with apply/snapshot wiring and the `savedAt` freshness gate.

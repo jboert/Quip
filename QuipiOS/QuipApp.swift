@@ -345,7 +345,7 @@ struct QuipApp: App {
                 // Remember it so a reconnect (e.g. after backgrounding) comes
                 // back to this window instead of windows.first.
                 if let newId, !manager.activeBackendID.isEmpty {
-                    WindowSelectionMemory.remember(newId, forBackendId: manager.activeBackendID)
+                    manager.recency.remember(newId, forBackendId: manager.activeBackendID)
                 }
             }
             .onChange(of: manager.activeBackendID) { _, _ in
@@ -497,6 +497,9 @@ struct QuipApp: App {
                 // suspend the network stack and stale the WebSocket. Hot model
                 // means every paired backend's socket gets the same grace.
                 manager.suspendAll()
+                // Q-88 US-003: the Mac's frontmost order is written up to 1 s
+                // late; write it now in case the app is not coming back.
+                manager.recency.flushAll()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                 // Pause (not stopMonitoring) so windowCount survives. Full
@@ -667,7 +670,7 @@ struct QuipApp: App {
                     LandingPolicy.Input(
                         followFrontmost: followFrontmost && manager.active.qaPair == nil,
                         macFrontmost: macFrontmostId,
-                        recency: WindowSelectionMemory.recent(forBackendId: session.backendID),
+                        recency: manager.recency.recent(forBackendId: session.backendID),
                         windows: update.windows.map(\.id)))
                 selectedWindowId = outcome.selected
                 if let reason = outcome.reason {
