@@ -43,17 +43,22 @@ Order is the build order. Stories 1–4 change QuipMac: build them together and 
 - [ ] Quip writes a heartbeat (Unix time) to `~/Library/Application Support/Quip/heartbeat` every 10 s **from the main actor**, so a blocked main thread stops it.
 - [ ] A second LaunchAgent `com.quip.QuipMac.watchdog` (`StartInterval 30`, runs `/bin/sh` on a script inside the app bundle: no TCC, no new binary) checks: Quip's pid is alive and the heartbeat is older than 60 s (§6.2) → `sample <pid> 3` to `~/Library/Logs/Quip/hang-<time>.txt` → `kill -9`. The `-9` counts as a crash, so US-001's agent restarts Quip.
 - [ ] Never kill during the first 120 s after Quip starts (launch can be slow), and never more than 3 times in 30 min (then log and leave it up, so a hang loop is visible, not hidden).
+- [ ] **Crash-loop stop** (owner: "don't let it keep crashing"). The watchdog also counts the crash agent's restarts (`launchctl print` `runs` plus its own kills, kept in `~/Library/Application Support/Quip/restarts.json`). **3 restarts within 10 min → `launchctl bootout` the crash agent and leave Quip down**, write `crash_loop restarts=3 window=10m action=stopped` to `watchdog.log`, and drop a `stoppedForCrashLoop` marker. It lives in the watchdog, not in Quip, so it still works when Quip dies before its own code runs. Opening Quip by hand clears the marker and re-bootstraps the agent.
 - [ ] Installed and removed with the same Reliability toggle.
 - [ ] `~/Library/Logs/Quip/watchdog.log`: one line per check that acts (`hang pid=N heartbeat_age=Ns action=killed sample=hang-….txt`), plus a throttled `ok` line every 30 min.
 - [ ] The decision (`age`, `uptime`, `recentKills`) is a pure function in the script, tested by `tools/check.sh`'s harness with fixed inputs.
 
 ### US-003: The Mac tells the phone it restarted
 - [ ] On launch Quip reads a `cleanShutdown` marker (written on normal quit, cleared at start). Missing → the last run crashed or was killed.
-- [ ] After auth, the Mac sends `mac_restarted {reason: crash|hang|unknown, at}` once per restart (hang = a fresh `hang-*.txt` from the watchdog). New message type in `Shared/MessageProtocol.swift`; an older phone ignores it.
+- [ ] After auth, the Mac sends `mac_restarted {reason: crash|hang|crash_loop|unknown, at}` once per restart (hang = a fresh `hang-*.txt` from the watchdog). New message type in `Shared/MessageProtocol.swift`; an older phone ignores it.
 - [ ] The phone shows an `ActionToast`: "Quip on your Mac restarted after a crash (2:04 pm)" with **Details**, which opens the Connection diagnostics. `phone.log`: `mac_restarted reason=…`.
 
-### US-004: What the Mac logs, in one place
-- [ ] Settings → Reliability lists the last 5 restarts (time, reason) from `watchdog.log` + crash reports, so "it crashes frequently" becomes a count and a cause.
+### US-004: Every restart is a bug to fix, not a fix
+Restarting is the net; a healthy Quip is the goal (owner: "healthy quip is good").
+- [ ] Settings → Reliability lists the last 5 restarts: time, reason, and for each the **top three Quip frames** (from the `.ips` crash report, or the `sample` the watchdog took for a hang). "It crashes frequently" becomes a count and a place in the code.
+- [ ] **Copy for a ticket** on each row: the frames, build commit, uptime and reason as plain text, no paths under the home folder, no window titles.
+- [ ] The Diagnostics bundle (phone → Request Mac bundle) includes `watchdog.log` and the last 3 `hang-*.txt`.
+- [ ] After a crash-loop stop, the first launch by hand shows a one-time banner on the Mac ("Quip was stopped after 3 crashes in 10 minutes") with the same frames, and the phone gets `mac_restarted reason=crash_loop`.
 
 ### US-005 (phone): Say what is down
 - [ ] When the active Mac has been unreachable for 15 s, the phone probes the Mac's Tailscale host on TCP 5900 (Screen Sharing) with a 3 s timeout.
