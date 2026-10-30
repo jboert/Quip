@@ -106,32 +106,47 @@ final class PermissionProbeService: @unchecked Sendable {
         }
     }
 
+    /// Ask macOS for Automation access to iTerm, showing the consent dialog if
+    /// no decision is stored. The silent probe below never asks, and System
+    /// Settings cannot add an Automation entry by hand, so after a grant goes
+    /// stale (an iTerm update, `tccutil reset AppleEvents`) this is the only way
+    /// back short of waiting for some script to trigger the prompt. Returns
+    /// true when access is granted. Blocking — call off main.
+    nonisolated static func requestAppleEventsAccess() -> Bool {
+        appleEventsPermission(askUserIfNeeded: true) == noErr
+    }
+
     /// Returns false ONLY when the user has explicitly denied Apple Events for
     /// the target. `procNotFound` (target not running) is treated as granted —
     /// we can't tell, and the alternative is permanent red until iTerm
     /// launches. Blocking: only ever called from `queue`.
     private static func systemAppleEventsProbe() -> Bool {
-        guard let bundleData = iTermBundleID.data(using: .utf8) else { return true }
+        switch appleEventsPermission(askUserIfNeeded: false) {  // silent probe
+        case noErr: return true
+        case OSStatus(procNotFound): return true
+        case OSStatus(errAEEventNotPermitted): return false
+        default: return true
+        }
+    }
+
+    /// `AEDeterminePermissionToAutomateTarget` for iTerm. `noErr` when the
+    /// address cannot even be built, matching the probe's can't-tell default.
+    private static func appleEventsPermission(askUserIfNeeded: Bool) -> OSStatus {
+        guard let bundleData = iTermBundleID.data(using: .utf8) else { return noErr }
 
         var addressDesc = AEAddressDesc()
         let createStatus: OSStatus = bundleData.withUnsafeBytes { bytes -> OSStatus in
             guard let base = bytes.baseAddress else { return OSStatus(Int(errAEWrongDataType)) }
             return OSStatus(AECreateDesc(typeApplicationBundleID, base, bundleData.count, &addressDesc))
         }
-        guard createStatus == noErr else { return true }
+        guard createStatus == noErr else { return noErr }
         defer { AEDisposeDesc(&addressDesc) }
 
-        let result = AEDeterminePermissionToAutomateTarget(
+        return AEDeterminePermissionToAutomateTarget(
             &addressDesc,
             typeWildCard,
             typeWildCard,
-            false  // askUserIfNeeded — silent probe
+            askUserIfNeeded
         )
-        switch result {
-        case noErr: return true
-        case OSStatus(procNotFound): return true
-        case OSStatus(errAEEventNotPermitted): return false
-        default: return true
-        }
     }
 }

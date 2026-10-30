@@ -198,6 +198,16 @@ struct GeneralTab: View {
 
     private func openSettingsPane(_ pane: MacSettingsPane) {
         guard let url = pane.systemSettingsURL else { return }
+        // Automation has no "+" in System Settings: an entry only appears once
+        // macOS has asked. Ask first (off main, it blocks on tccd and the
+        // dialog); open the pane only when macOS already holds a denial.
+        if pane == .automation {
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard !PermissionProbeService.requestAppleEventsAccess() else { return }
+                DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+            }
+            return
+        }
         NSWorkspace.shared.open(url)
     }
 }
