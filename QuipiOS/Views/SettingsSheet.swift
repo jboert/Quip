@@ -19,6 +19,8 @@ struct SettingsSheet: View {
     var projectProvider: () -> String? = { nil }
     /// The current windows, for Send to… in the Prompts hub (US-209).
     var windowsProvider: () -> [WindowState] = { [] }
+    /// The active Mac, for Remote in (Q-88 US-010); nil hides the row.
+    var remoteInBackend: PairedBackend? = nil
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     /// Same key the PTT path reads in QuipApp; @AppStorage keeps the two in
     /// step without threading a binding through the settings hierarchy.
@@ -163,6 +165,24 @@ struct SettingsSheet: View {
                     Text("Input")
                 } footer: {
                     Text("Presses Return as soon as you stop speaking. Off leaves the transcript in the prompt so you can read it back first.")
+                }
+
+                if let backend = remoteInBackend {
+                    Section {
+                        NavigationLink {
+                            RemoteInSettingsView(backend: backend)
+                        } label: {
+                            settingsLinkRow(
+                                title: "Remote in",
+                                subtitle: backend.name,
+                                systemImage: "display",
+                                tint: .green,
+                                trailing: RemoteInStore.settings(for: backend.id).preset.title
+                            )
+                        }
+                    } header: {
+                        Text("Connection")
+                    }
                 }
 
                 Section {

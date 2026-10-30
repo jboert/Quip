@@ -1385,6 +1385,9 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
     /// "Jump to waiting windows" (Q-88 US-009). Optional: an older backup
     /// decodes as nil and the phone keeps its own.
     var smartLandingEnabled: Bool?
+    /// JSON `{backendID: RemoteInSettings}` (Q-88 US-010). Optional: an
+    /// older backup decodes as nil and the phone keeps its own.
+    var remoteInJSON: String?
 
     init(
         enabledQuickButtons: String? = nil,
@@ -1416,7 +1419,8 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         savedAt: Double? = nil,
         mainRowOrderJSON: String? = nil,
         windowOrderMode: String? = nil,
-        smartLandingEnabled: Bool? = nil
+        smartLandingEnabled: Bool? = nil,
+        remoteInJSON: String? = nil
     ) {
         self.enabledQuickButtons = enabledQuickButtons
         self.tintContentBorder = tintContentBorder
@@ -1448,6 +1452,7 @@ struct PreferencesSnapshot: Codable, Sendable, Equatable {
         self.mainRowOrderJSON = mainRowOrderJSON
         self.windowOrderMode = windowOrderMode
         self.smartLandingEnabled = smartLandingEnabled
+        self.remoteInJSON = remoteInJSON
     }
 }
 

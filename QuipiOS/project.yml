@@ -117,6 +117,15 @@ targets:
         NSLocalNetworkUsageDescription: Quip connects to your Mac over the local network to control Claude Code sessions.
         UIBackgroundModes:
           - audio
+        # Q-88 US-010: canOpenURL answers false for a scheme not listed here,
+        # so every Remote-in preset's scheme is (RemoteInPreset.querySchemes;
+        # a test pins that list).
+        LSApplicationQueriesSchemes:
+          - vnc
+          - berriscope
+          - screens
+          - jump
+          - com.realvnc.vncviewer.connect
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

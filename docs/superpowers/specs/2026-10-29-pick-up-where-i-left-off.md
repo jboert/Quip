@@ -154,15 +154,16 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Gate.
 
 ### US-010: Remote-in settings
-- [ ] Settings → Connection → "Remote in" (per backend, in `PreferencesSnapshot`): app preset, host, Mac name.
-- [ ] Presets (no hard-wired default app): **Any VNC app** `vnc://{host}` (fresh-install default; also opens Apple Screen Sharing where installed), **Berriscope** `berriscope://open?saved={name}` (needs US-012), **Screens**, **Jump Desktop**, **RealVNC Viewer** (each with its documented scheme, verified against the app's docs at build time and cited in a code comment), **Custom** (free template).
-- [ ] Host default: the backend's Tailscale host (MagicDNS name if any, else 100.64/10 address) via the existing `urlPriority`. None → empty with hint "Add this Mac's Tailscale name".
-- [ ] Mac name default: `PairedBackend.name`.
-- [ ] Templates: `{host}` and `{name}`, percent-encoded; unknown `{x}` placeholder or unparsable URL → inline error, Save disabled.
-- [ ] `LSApplicationQueriesSchemes` in `QuipiOS/project.yml` lists every preset scheme (`canOpenURL` returns false for unlisted schemes); `xcodegen generate` then restore the pbxproj per US-005 protocol.
-- [ ] Pure `RemoteInURLBuilder` + tests `RemoteInURLBuilderTests.swift` — table in §5.
-- [ ] Sim scenario S10.
-- [ ] Gate.
+- [x] Settings → Connection → "Remote in" (per backend, in `PreferencesSnapshot`): app preset, host, Mac name.
+- [x] Presets (no hard-wired default app): **Any VNC app** `vnc://{host}` (fresh-install default; also opens Apple Screen Sharing where installed), **Berriscope** `berriscope://open?saved={name}` (needs US-012), **Screens**, **Jump Desktop**, **RealVNC Viewer** (each with its documented scheme, verified against the app's docs at build time and cited in a code comment), **Custom** (free template).
+- [x] Host default: the backend's Tailscale host (MagicDNS name if any, else 100.64/10 address) via the existing `urlPriority`. None → empty with hint "Add this Mac's Tailscale name".
+- [x] Mac name default: `PairedBackend.name`.
+- [x] Templates: `{host}` and `{name}`, percent-encoded; unknown `{x}` placeholder or unparsable URL → inline error, Save disabled.
+- [x] `LSApplicationQueriesSchemes` in `QuipiOS/project.yml` lists every preset scheme (`canOpenURL` returns false for unlisted schemes); `xcodegen generate` then restore the pbxproj per US-005 protocol.
+- [x] Pure `RemoteInURLBuilder` + tests `RemoteInURLBuilderTests.swift` — table in §5.
+- [x] Sim scenario S10.
+- [x] Gate.
+- *As built:* `QuipiOS/Models/RemoteIn.swift` (`RemoteInPreset`, `RemoteInSettings`, `RemoteInStore` key `remoteIn.v1` = JSON `{backendID: settings}`, `RemoteInURLBuilder`); `QuipiOS/Views/RemoteInSettingsView.swift`. Settings shows a **Connection → Remote in** row for the active Mac. Schemes checked 2026-10-30: Screens `screens://{host}` (help.edovia.com Screens 5 URL schemes), Jump `jump://?host={host}&protocol=vnc` (Jump support article 216423723; protocol defaults to rdp, so vnc is named), RealVNC `com.realvnc.vncviewer.connect://{host}` (RealVNC help 6449870411037). A missing host shows a grey hint and does not block Save; only template faults (unknown `{x}`, no scheme) do. The snapshot field is `remoteInJSON` (Shared): the Mac keeps it only after its next rebuild, iCloud carries it until then. S10 run by hand on the QA sim (Jump preview, `{hots}` blocks Save, Berriscope saved and read back from the container plist).
 
 ### US-011: One-tap Remote in
 - [ ] "Remote in here" in the window long-press menu (`WindowRectangle.swift` 208); "Remote in" in the backend row menu (`QuipApp.swift` ~2778). No always-visible button.
