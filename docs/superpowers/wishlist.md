@@ -4,6 +4,13 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-10-30, later (Q-88 US-009…US-011 shipped; Q-90 specced)
+
+- **Shipped:** US-009 smart landing (`1f729cd`), US-010 Remote-in settings (`101cdc0`), US-011 Remote in here (`9b07c1d`), mic launch-crash fix (`cd25dcc`). iPhone at `9b07c1d`.
+- **Q-90 (spec):** `docs/superpowers/specs/2026-10-30-q90-mac-app-stays-up.md`. The crash-restart agent is installed but not watching the running Quip (its copy lost the single-instance race and exited 0), and hangs are never restarted. Stories: launchd owns the running Quip, a hang watchdog, the Mac tells the phone it restarted, the phone says "Quip isn't running" vs "Mac offline" and offers Remote in. Two owner questions in §6.
+- **Owner rules:** Berriscope is owner-only (preset shown only where installed); Tailscale is the only remote path.
+- **Mac rebuild pending:** carries `windowOrderMode` and `remoteInJSON`; do it together with Q-90 US-001…US-004.
+
 ## Session log — 2026-10-30 (Q-88 US-004…US-008 shipped; Q-89 tightened)
 
 Handoff: `docs/superpowers/handoffs/2026-10-30-session-handoff.md`.
