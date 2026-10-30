@@ -1,17 +1,18 @@
 # Session handoff — 2026-10-30
 
-To resume in a fresh session, say: "Read docs/superpowers/handoffs/2026-10-30-session-handoff.md, then build Q-88 US-009."
+To resume in a fresh session, say: "Read docs/superpowers/handoffs/2026-10-30-session-handoff.md, then build Q-88 US-010."
 
 ## Where things are
 
 Branch `eb-branch`, pushed, clean (only untracked `agentdb.rvf*` / `ruvector.db`, not ours). Spec: `docs/superpowers/specs/2026-10-29-pick-up-where-i-left-off.md` — US-000 … US-008 ticked, with *As built* notes where the build differs from the text.
 
-Installed: iPhone at `cbf5d1c` (Release, devicectl). Mac app at `1505be7` (Q-89); not rebuilt since — every change after it is phone-only. The Mac decodes the prefs snapshot into the struct, so it drops `windowOrderMode` until its next rebuild (iCloud carries it meanwhile).
+Installed: iPhone at `1f729cd` (Release, devicectl). Mac app at `1505be7` (Q-89); not rebuilt since — every change after it is phone-only. The Mac decodes the prefs snapshot into the struct, so it drops `windowOrderMode` until its next rebuild (iCloud carries it meanwhile).
 
 ## Shipped this session (newest first)
 
 | Commit | What |
 |---|---|
+| `1f729cd` | US-009: after ≥ 2 min away, jump to a waiting window that ASKS something (owner chose "question on screen"); probes up to 4 screens, 1.2 s, Back toast; setting in Notifications. |
 | `8b8e0e1` | US-008: terminal text opens where it was left scrolled (relaunch + switching back). Anchor = SHA-256 prefix of the line + distance from end, never the text. Text mode only. |
 | `cbf5d1c` | US-004 fix: the Recent order is taken on launch / return / Mac switch / turning Recent on, never while tapping (the tapped card used to slide away under the next tap). `q88-s4.sh` updated. |
 | `8a51cfb` | ActionToast: VoiceOver reads "Order: Manual, Use Recent" (`.combine` had dropped the button). |
@@ -25,9 +26,8 @@ Another session (Claude-Session …MDytKdm) landed `d3090c3` (only tracked prefs
 
 ## Next
 
-1. **US-009** smart landing on a waiting window (LandingPolicy step 3, Back toast via `ActionToast`, setting in Notifications, `-QuipSmartLandingAfter` DEBUG arg, S9). Note: "waiting" alone is weak — an agent idle at its prompt is `waiting_for_input` too (see the Q-89 fix); smart landing will jump to idle agents unless it also needs a question on screen or a fresh transition into waiting. Decide before building.
-2. US-010 / US-011 remote-in, US-012 is the Berriscope repo.
-3. Mac rebuild some time (carries `windowOrderMode` in the backup); costs TCC re-grants.
+1. **US-010 / US-011** remote-in (settings, one-tap); US-012 is the Berriscope repo.
+2. Mac rebuild some time (carries `windowOrderMode` in the backup); costs TCC re-grants.
 
 ## Open risks / not verified
 
