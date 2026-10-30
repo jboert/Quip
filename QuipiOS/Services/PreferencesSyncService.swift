@@ -60,8 +60,17 @@ final class PreferencesSyncService {
     /// restore don't immediately echo back to the Mac as a "new" snapshot.
     private var suppressUntil: Date = .distantPast
 
+    /// The backed-up settings as last seen, stamp left out. `UserDefaults`
+    /// posts a change for every key, and the app writes untracked keys all
+    /// the time (window order on each layout, the recency stack on each Mac
+    /// focus change). Only a change here is the user's edit; anything else
+    /// must neither push a snapshot nor move `localModifiedAt`, or a backup
+    /// restore after a reinstall is refused as "older than the local edit".
+    private var lastTracked: PreferencesSnapshot?
+
     func start() {
         guard observer == nil else { return }
+        lastTracked = Self.trackedPreferences(in: .standard)
         observer = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: UserDefaults.standard,
@@ -197,7 +206,11 @@ final class PreferencesSyncService {
     }
 
     private func scheduleSync() {
-        guard Date() >= suppressUntil else { return }
+        let tracked = Self.trackedPreferences(in: .standard)
+        // Writes from a restore become the new baseline, not an edit.
+        guard Date() >= suppressUntil else { lastTracked = tracked; return }
+        guard tracked != lastTracked else { return }
+        lastTracked = tracked
         // A change outside the restore window is the user's own edit.
         localModifiedAt = Date().timeIntervalSince1970
         debounceWorkItem?.cancel()
@@ -296,6 +309,12 @@ final class PreferencesSyncService {
     /// stomp on a default that may have changed in a later app version.
     private func currentSnapshot() -> PreferencesSnapshot {
         Self.snapshot(from: .standard, savedAt: localModifiedAt ?? Date().timeIntervalSince1970)
+    }
+
+    /// The backed-up settings in `d` with a fixed stamp: two reads compare
+    /// equal exactly when no tracked setting changed between them.
+    nonisolated static func trackedPreferences(in d: UserDefaults) -> PreferencesSnapshot {
+        snapshot(from: d, savedAt: 0)
     }
 
     /// The capture itself, on any defaults, so a test can read it back.

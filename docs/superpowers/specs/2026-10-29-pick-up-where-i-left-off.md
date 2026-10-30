@@ -108,6 +108,8 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] New tiny `ActionToast` view (text + one button, 4 s auto-dismiss, VoiceOver reads both) — reused by US-004/US-009/US-011. Unit test on its dismiss timer with an injected clock.
 - [x] Sim scenario S4 (by hand with idb on the QA sim: default=recent logged; drag → toast, mode manual, drag saved; Use Recent → recency order back). The Mac stores the snapshot as the struct, so it carries `windowOrderMode` only after the next Mac rebuild; iCloud carries it now.
 - [x] Gate.
+- [x] *Found on the way (2026-10-30):* `PreferencesSyncService` treated any `UserDefaults` change as the user's edit. Window order (each layout) and the recency stack (each Mac focus change, US-003) pushed a snapshot to the Mac and iCloud and moved `localModifiedAt`, which makes a reinstall refuse the Mac's backup as "older". Now only a change to a backed-up key counts (`trackedPreferences`, `PreferencesTrackedChangeTests`).
+- [x] S4 scripted: `tools/qa/q88-s4.sh` (guess Recent; picks and Mac focus give the Recent order, pin first; drag → Manual, dragged order, toast; Use Recent → Recent order back; a Mac focus change leaves the backup stamp alone, and a build without the sync fix fails that check). Covers S3's "W4 first in Recent order" half.
 
 ### US-005: `PhonePlace` — what "my place" is, saved on background
 - [ ] `Codable` `PhonePlace` per backend (`phonePlace.v1.<backendID>`): `selectedWindowId`, `selectedDisplayID`, `selectedSpaceID`, `textInputOpen: Bool`, `terminalExpanded: Bool`, `scrollAnchorByWindow: [String: ScrollAnchor]`, `savedAt: Date`.
