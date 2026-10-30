@@ -44,3 +44,9 @@ Another session (Claude-Session …MDytKdm) landed `d3090c3` (only tracked prefs
 - D8C5154B: a stray sim-level plist (`data/Library/Preferences/com.fintechadventures.quip.plist`, from a bundle-id `defaults write`) fed old values to every "fresh install" run; deleted. Never write by bundle id (memory updated).
 - Scripts: `tools/qa/q88-s2.sh`, `q88-s3.sh`, `q88-s4.sh`, `q88-s6.sh`. S4/S6 pass at `8b8e0e1`'s parent; S5/S7/S8 were run by hand.
 - `pkill -f "fake-mac --port 8799"` stops a fake (a `./fake-mac` command line does not match a path pattern).
+
+## Q-90 Ralph run (night)
+
+PRD (7 stories) ran in `../Quip-ralph-q90` on `ralph/q90-mac-stays-up`, 8 of 10 iterations, all passing. Verified by reading the diff; 7 watchdog mutants and 6 Swift mutants all killed; `tools/qa/q90-down.sh` and `q90-restart.sh` PASS on D8C5154B with screenshots checked. Gate `--all` green on the branch and on eb-branch after the merge (QuipMac 1345, QuipiOS 1563, harness 62, fake-mac 48, watchdog 71; QuipLinux / QuipAndroid skipped, not built here). Merged `df5ff35`, scaffolding untracked `dc7bdd5`, pushed; branch and worktree removed.
+
+Open: iPhone install (device was unavailable), the Mac wiring (owner present), and the watchdog's "any new pid is a crash" rule (see wishlist).

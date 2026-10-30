@@ -4,6 +4,14 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-10-30, night (Q-90 PRD run through Ralph, merged `df5ff35`)
+
+- **Shipped (phone, live now):** after 15 s without its Mac the phone probes Screen Sharing (TCP 5900, once a minute) and says "Quip isn't running on your Mac" + Remote in, or "Can't reach your Mac" + Check Tailscale. A Mac that reports restart protection gets "Restarting… usually under a minute", with Remote in from 90 s. Settings shows an Auto-restart row (reads Unknown until the Mac sends `reliability_status`). A once-per-restart toast says why Quip restarted.
+- **Built, not wired (Mac):** `QuipMac/Resources/quip-watchdog.sh` (hang kill on two stale checks; sleep, launch and install guards; 3-in-10-min crash-loop stop, one retry at 30 min; full-disk hold), `QuipMac/Services/Reliability.swift` (launch hand-off, settings → agents, status, watchdog plist), `CrashRecoveryAgent keepAliveAlways`.
+- **Next, owner at the Mac:** heartbeat writer, App Nap opt-out, launch hand-off, Stop Quip…, Reliability settings, agent install, send `reliability_status`, clear `stoppedForCrashLoop` on a manual open, then one Mac rebuild (also carries `windowOrderMode` and `remoteInJSON`).
+- **Fix before wiring the watchdog:** it counts ANY new Quip pid as a crash, so a manual quit-and-reopen or a reboot is recorded as one; three in 10 min would boot the crash agent out. Have the Mac app mark a clean quit / clean launch (like the `installing` marker) so only unexpected exits count.
+- **iPhone install pending:** the primary iPhone was unavailable at merge time; the phone runs `9b07c1d`.
+
 ## Session log — 2026-10-30, later (Q-88 US-009…US-011 shipped; Q-90 specced)
 
 - **Shipped:** US-009 smart landing (`1f729cd`), US-010 Remote-in settings (`101cdc0`), US-011 Remote in here (`9b07c1d`), mic launch-crash fix (`cd25dcc`). iPhone at `9b07c1d`.
