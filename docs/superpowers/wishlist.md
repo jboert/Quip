@@ -4,6 +4,15 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-10-30 (Q-88 US-004…US-008 shipped; Q-89 tightened)
+
+Handoff: `docs/superpowers/handoffs/2026-10-30-session-handoff.md`.
+
+- **WIP / next:** Q-88 US-009 smart landing. Open design question first: an idle agent is `waiting_for_input` too, so "jump to a waiting window" needs a question on screen or a fresh transition into waiting, or it will jump to idle agents.
+- **Acceptance flows to try on the phone:** relaunch within 30 min → same window, panels, draft text and terminal scroll; Recent grid order holds still while tapping, re-sorts on return; Yes / No bar only under a real Yes/No question.
+- **Blocked on hardware:** Q-89 arrow walk in a live Claude/Codex menu; draft file protection (device only); backend-switch restore with two real Macs.
+- **Mac rebuild pending:** carries `windowOrderMode` in the Mac backup; phone-only work since `1505be7`.
+
 ## Tickets opened 2026-09-18 — window focus, and the wand
 
 Q-22 / Q-22a / Q-23 come out of one read-only inspection of the focus path plus
