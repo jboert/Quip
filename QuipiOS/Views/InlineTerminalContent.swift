@@ -360,13 +360,21 @@ struct YesNoFallbackBar: View {
         ("press_up", "Up", "arrow.up"), ("press_down", "Down", "arrow.down"),
     ]
 
-    /// No numbered or bracketed chips, and either the Mac says the window is
-    /// waiting or an agent CLI shows a Yes/No menu (a menu-looking screen in a
-    /// plain shell is not enough).
+    /// Only when a Yes/No question is on screen and no numbered or bracketed
+    /// chips answer it (`(y/n)` and `[Y/n]` get their own chips). "Waiting"
+    /// alone is not a question: an agent idle at its prompt is waiting too,
+    /// and showed Yes / No on every idle window. An agent needs a Yes/No
+    /// arrow menu; any other window needs to be waiting with a last line
+    /// that asks something (a menu-looking screen in a plain shell is not
+    /// enough).
     static func shows(content: String, isWaiting: Bool, isAgent: Bool) -> Bool {
         if let options = NumberedPromptDetector.answerableOptions(in: content), options.count >= 2 { return false }
         if let tokens = NumberedPromptDetector.detectInlineOptions(in: content), tokens.count >= 2 { return false }
-        return isWaiting || (isAgent && ArrowMenu.isYesNoMenu(in: content))
+        if isAgent { return ArrowMenu.isYesNoMenu(in: content) }
+        let last = content.components(separatedBy: "\n")
+            .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }?
+            .trimmingCharacters(in: .whitespaces)
+        return isWaiting && (last?.hasSuffix("?") ?? false)
     }
 
     var body: some View {
