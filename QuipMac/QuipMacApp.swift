@@ -3396,7 +3396,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 // Q-89: Yes / No into an arrow menu — walk to the row.
                 if action == "press_y" || action == "press_n" {
                     let answer: ArrowMenu.Answer = action == "press_y" ? .yes : .no
-                    self.applyYesNoPlan(ArrowMenu.plan(answer, content: content), answer: answer, windowId: wid,
+                    let plan = ArrowMenu.plan(answer, content: content, agentCLI: self.isAgentCLI(wid))
+                    self.applyYesNoPlan(plan, answer: answer, windowId: wid,
                                         windowName: wname, sessionId: sessionId, termApp: termApp,
                                         cgWindowNumber: wn)
                     return
@@ -3578,17 +3579,25 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         let wid = window.id
         let sessionId = window.iterm2SessionId
         let isTerminal = window.isTerminal
+        let agentCLI = isAgentCLI(wid)
         DispatchQueue.global(qos: .userInitiated).async { [keystrokeInjector] in
             let read: KeystrokeInjector.ContentRead = isTerminal
                 ? keystrokeInjector.readContentDetailed(terminalApp: termApp, cgWindowNumber: wn, iterm2SessionId: sessionId)
                 : .ok("")
             let content: String = { if case .ok(let c) = read { return c } else { return "" } }()
-            let plan = ArrowMenu.plan(answer, content: content)
+            let plan = ArrowMenu.plan(answer, content: content, agentCLI: agentCLI)
             DispatchQueue.main.async {
                 self.applyYesNoPlan(plan, answer: answer, windowId: wid, windowName: wname,
                                     sessionId: sessionId, termApp: termApp, cgWindowNumber: wn)
             }
         }
+    }
+
+    /// Arrows are only for agent CLIs: in a shell, ↑ + Return re-runs history.
+    @MainActor
+    private func isAgentCLI(_ windowId: String) -> Bool {
+        guard let kind = terminalStateDetector.windowCLIKind[windowId] else { return false }
+        return kind != .shell
     }
 
     @MainActor

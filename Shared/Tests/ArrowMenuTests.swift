@@ -3,8 +3,8 @@ import XCTest
 
 /// Q-89: Yes/No answers for arrow-key menus, numbered or not.
 final class ArrowMenuTests: XCTestCase {
-    private func plan(_ answer: ArrowMenu.Answer, _ lines: [String]) -> ArrowMenu.Plan {
-        ArrowMenu.plan(answer, content: lines.joined(separator: "\n"))
+    private func plan(_ answer: ArrowMenu.Answer, _ lines: [String], agentCLI: Bool = true) -> ArrowMenu.Plan {
+        ArrowMenu.plan(answer, content: lines.joined(separator: "\n"), agentCLI: agentCLI)
     }
 
     // MARK: Menus that get arrow keys
@@ -69,6 +69,16 @@ final class ArrowMenuTests: XCTestCase {
 
     func test_singleCursorRow_isNotAMenu() {
         XCTAssertNil(ArrowMenu.detect(in: "❯ Yes"))
+    }
+
+    func test_shellWindow_neverGetsArrows() {
+        // ↑ + Return at a shell prompt re-runs the last history command.
+        XCTAssertEqual(plan(.no, ["❯ Yes", "  No", "$ "], agentCLI: false), .typeLetter)
+    }
+
+    func test_oneTimeRowBeatsAPersistentOne() {
+        XCTAssertEqual(plan(.yes, ["❯ Allow always", "  Allow once", "  Deny"]), .keys(["down", "return"]))
+        XCTAssertEqual(plan(.yes, ["❯ Yes, and don't ask again", "  Yes", "  No"]), .keys(["down", "return"]))
     }
 
     // MARK: Refusals

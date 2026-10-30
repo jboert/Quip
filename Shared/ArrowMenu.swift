@@ -40,6 +40,10 @@ enum ArrowMenu {
     static let yesWords: Set<String> = ["allow", "approve", "accept", "confirm", "continue", "proceed", "trust", "ok", "okay"]
     static let noWords: Set<String> = ["deny", "reject", "decline", "cancel", "back", "skip", "exit", "quit", "dont", "don't"]
 
+    /// A row that grants more than this one answer ("Yes, and don't ask
+    /// again", "Allow always") loses to a one-time row that means the same.
+    static let persistentMarkers = ["always", "don't ask", "dont ask", "do not ask", "this session", "remember", "forever"]
+
     /// Only the screen's last lines can hold a live menu.
     static let tailLines = 30
 
@@ -64,14 +68,18 @@ enum ArrowMenu {
         return Menu(labels: labels, cursor: index - top)
     }
 
-    /// The row meaning `answer`: an exact "yes"/"no" first, then a synonym.
+    /// The row meaning `answer`: an exact "yes"/"no" first, then a synonym;
+    /// within either, a one-time row before a persistent one.
     static func row(for answer: Answer, in menu: Menu) -> Int? {
         let exact = answer == .yes ? "yes" : "no"
         let words = answer == .yes ? yesWords : noWords
         let firsts = menu.labels.map(firstWord)
-        if let i = firsts.firstIndex(of: exact) { return i }
+        func pick(_ rows: [Int]) -> Int? {
+            rows.first { i in !persistentMarkers.contains { menu.labels[i].lowercased().contains($0) } } ?? rows.first
+        }
+        if let i = pick(firsts.indices.filter { firsts[$0] == exact }) { return i }
         if answer == .no, let i = menu.labels.firstIndex(where: { $0.lowercased().hasPrefix("do not") }) { return i }
-        return firsts.firstIndex { words.contains($0) }
+        return pick(firsts.indices.filter { words.contains(firsts[$0]) })
     }
 
     /// True when a menu with a Yes or a No row is on screen.
@@ -80,8 +88,11 @@ enum ArrowMenu {
         return row(for: .yes, in: menu) != nil || row(for: .no, in: menu) != nil
     }
 
-    static func plan(_ answer: Answer, content: String) -> Plan {
-        guard let menu = detect(in: content),
+    /// `agentCLI` false (a shell, or not known to be an agent) always types
+    /// the letter: under a shell prompt, ↑ + Return would re-run the last
+    /// history command.
+    static func plan(_ answer: Answer, content: String, agentCLI: Bool) -> Plan {
+        guard agentCLI, let menu = detect(in: content),
               row(for: .yes, in: menu) != nil || row(for: .no, in: menu) != nil else { return .typeLetter }
         guard let target = row(for: answer, in: menu) else { return .noMatchingRow }
         let step = target - menu.cursor

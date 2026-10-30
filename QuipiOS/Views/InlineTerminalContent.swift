@@ -361,11 +361,12 @@ struct YesNoFallbackBar: View {
     ]
 
     /// No numbered or bracketed chips, and either the Mac says the window is
-    /// waiting or a Yes/No menu is on screen.
-    static func shows(content: String, isWaiting: Bool) -> Bool {
+    /// waiting or an agent CLI shows a Yes/No menu (a menu-looking screen in a
+    /// plain shell is not enough).
+    static func shows(content: String, isWaiting: Bool, isAgent: Bool) -> Bool {
         if let options = NumberedPromptDetector.answerableOptions(in: content), options.count >= 2 { return false }
         if let tokens = NumberedPromptDetector.detectInlineOptions(in: content), tokens.count >= 2 { return false }
-        return isWaiting || ArrowMenu.isYesNoMenu(in: content)
+        return isWaiting || (isAgent && ArrowMenu.isYesNoMenu(in: content))
     }
 
     var body: some View {
@@ -461,6 +462,8 @@ struct InlineTerminalContent: View {
     var lastUpdate: Date? = nil
     /// The Mac reports this window `waiting_for_input` (Q-89 Yes/No fallback).
     var isWaiting: Bool = false
+    /// The window runs an agent CLI, not a plain shell (Q-89).
+    var isAgent: Bool = false
     @Binding var isExpanded: Bool
     var onRefresh: () -> Void
     /// (action, promptFingerprint?) — fingerprint is non-nil only for one-tap
@@ -900,7 +903,7 @@ struct InlineTerminalContent: View {
                 InlineAnswerBar(tokens: tokens,
                                 fingerprint: NumberedPromptDetector.fingerprint(in: content),
                                 onSubmit: onSendAction)
-            } else if YesNoFallbackBar.shows(content: content, isWaiting: isWaiting) {
+            } else if YesNoFallbackBar.shows(content: content, isWaiting: isWaiting, isAgent: isAgent) {
                 YesNoFallbackBar(onSend: onSendAction)
             }
 

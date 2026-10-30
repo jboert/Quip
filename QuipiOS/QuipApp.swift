@@ -4439,6 +4439,7 @@ struct MainiOSView: View {
             windowId: selectedWindowId,
             lastUpdate: terminalContentUpdatedAtById[wid],
             isWaiting: windows.first(where: { $0.id == selectedWindowId })?.state == "waiting_for_input",
+            isAgent: windows.first(where: { $0.id == selectedWindowId })?.cliKind.map { $0 != .shell } ?? false,
             isExpanded: $isTerminalExpanded,
             onRefresh: {
                 if let wid = selectedWindowId { onRequestContent(wid) }
