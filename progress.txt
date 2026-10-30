@@ -114,3 +114,21 @@ Started: Fri Oct 30 14:42:11 MST 2026
   retry 10 s (a real crash after a retry is >= launchd's 30 s throttle later). 3 consecutive clean runs after the fix.
 - Open (out of scope): clearing stoppedForCrashLoop when the owner opens Quip belongs to the Mac app wiring.
 - Next: US-007 pure Mac logic for launch ownership, agent plists, settings and status.
+
+## 2026-10-30 — US-007 Pure Mac logic for launch ownership, agent plists, settings and status (PASS)
+- Files: QuipMac/Services/Reliability.swift (new, Foundation only: LaunchOwnership.decide, ReliabilitySettings.agents,
+  ReliabilityStatus.build, WatchdogAgent.plistContent), QuipMac/Services/CrashRecoveryAgent.swift (plistContent gains
+  keepAliveAlways: Bool = false; true -> KeepAlive boolean true), QuipMac/Tests/ReliabilityTests.swift (new, 16 tests)
+- Decisions (spec §5): crashAgent = keepRunning; keepAliveAlways = keepRunning && afterQuit; watchdog = keepRunning && frozen.
+  afterQuit/watchdog/lastRestart pass through to the message unchanged; watching = agentLoaded && agentPid == quipPid.
+- No change to QuipMacApp.swift, menus or Settings views. Existing CrashRecoveryAgentTests unchanged and green (default = today's dict).
+- Gate: `tools/check.sh --all` "3 suite(s) ran, all green" (exit 0) — harness 62/0, fake-mac 48/0, watchdog 71/0,
+  QuipMac 1345/0 (was 1329, +16), QuipiOS 1563/0; QuipLinux + QuipAndroid SKIPPED (not built here, unverified).
+- Mutations (`python3 -I build/q90-us7-mutants.py [name]`, gitignored; each runs `tools/check.sh --files -` on the Mac scope,
+  expected and got exit 1): hand off when not installed, watching ignores pid, watching ignores loaded, keepAliveAlways ignores
+  keepRunning, watchdog ignores keepRunning, crashAgent always on, status drops lastRestart, keepAliveAlways ignored in the plist,
+  StartInterval 60, ProgramArguments without /bin/sh, broken fixture repaired (strict XCTExpectFailure "none recorded").
+  The first fixture-repair mutant was itself wrong (hardcoded agentInstalled:false, still failing) and survived; corrected to pass
+  both args to the real decide -> killed. Clean control: the full gate above.
+- Next: none — all 7 stories pass. Wiring into the running Mac app (heartbeat writer, launch hand-off, Stop Quip menu, Reliability
+  settings UI, agent install, clearing stoppedForCrashLoop on manual open) is out of scope and needs the owner at the Mac.

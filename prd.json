@@ -115,8 +115,8 @@
         "`tools/check.sh --all` passes"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "QuipMac/Services/Reliability.swift (LaunchOwnership, ReliabilitySettings, ReliabilityStatus, WatchdogAgent), CrashRecoveryAgent.plistContent(keepAliveAlways:) default false, QuipMac/Tests/ReliabilityTests.swift (16 tests incl. strict XCTExpectFailure broken hand-off fixture). tools/check.sh --all: 3 suites green (harness 62/0, fake-mac 48/0, watchdog 71/0, QuipMac 1345/0, QuipiOS 1563/0; Linux/Android SKIPPED). 11/11 mutants killed via build/q90-us7-mutants.py. No QuipMacApp/menu/Settings changes."
     }
   ]
 }
