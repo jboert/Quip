@@ -8,3 +8,16 @@ wd_decide() {
     if [ "$UPTIME" -le 120 ]; then echo skip_launch; return; fi
     echo kill
 }
+
+# Deliberately broken wd_loop_decide: it stops at FOUR restarts in 10 min,
+# not three. The runner fails if this passes every loop assertion.
+wd_loop_decide() {
+    if [ "${FREE_MB:-500}" -lt 500 ]; then echo disk_full; return; fi
+    if [ -n "${STOPPED_AT:-}" ]; then
+        if [ "${RETRIED:-0}" != 1 ] && [ $((NOW - STOPPED_AT)) -ge 1800 ]; then echo retry; else echo stay_stopped; fi
+        return
+    fi
+    n=0
+    for t in ${RESTART_TIMES:-}; do [ $((NOW - t)) -le 600 ] && n=$((n + 1)); done
+    if [ "$n" -ge 4 ]; then echo stop; else echo ok; fi
+}

@@ -91,3 +91,26 @@ Started: Fri Oct 30 14:42:11 MST 2026
 - Fixed on the way: the first-run log grep expected exactly heartbeat_age=100s and flaked when a second ticked over (now 10[01]);
   test calls are fenced (dummy pid, $TMPDIR state) so a mutant that runs the main path can never `pgrep` the real Quip.
 - Next: US-006 crash-loop stop / retry / disk_full in the same script.
+
+## 2026-10-30 — US-006 Watchdog stops a crash loop and refuses to restart on a full disk (PASS)
+- Files: QuipMac/Resources/quip-watchdog.sh (wd_loop_decide, wd_restarts_in_window, wd_restart_times, wd_record_restart,
+  wd_bootout_agent/wd_bootstrap_agent, wd_hang_step + wd_loop_step split out of wd_main, state now carries pid=),
+  tools/run-watchdog-tests.sh (+38 checks), tools/tests/fixtures/quip-watchdog-broken.sh (+wd_loop_decide that stops at 4)
+- Decisions: a restart = a hang kill (reason hang) or a new Quip pid after a known one (reason crash); the pid is remembered across
+  checks where Quip is down (launchd's 30 s throttle), and is cleared after a kill/stop/disk_full so the relaunch is not counted twice.
+  A pid change inside the 5 min `installing` window is not a restart. A crash after the one retry boots out again (`crash_loop
+  action=stopped_again`), once. disk_full logs + bootouts once per episode (marker stoppedForDiskFull) and re-bootstraps when space
+  returns unless a crash loop also holds it. bootstrap never runs when the opt-in plist is absent. Seams: QUIP_WD_LAUNCHCTL,
+  QUIP_WD_AGENT_PLIST, QUIP_WD_FREE_MB. Every main-path test run is fenced with a recording stub launchctl and a $TMP plist.
+- Gate: `tools/check.sh --all` "3 suite(s) ran, all green" (exit 0) — harness 62/0, check-script 17/0, fake-mac 48/0, watchdog 71/0,
+  QuipMac 1329/0, QuipiOS 1563/0; QuipLinux + QuipAndroid SKIPPED (not built here, unverified).
+- Mutations (`python3 -I build/q90-wd-loop-mutants.py`, gitignored; each expected and got runner exit 1): the 8 US-005 mutants re-run
+  against the restructured main path, plus 16 new — stop at 4, window 700 s, retry at 1799 s, retry more than once, disk 300 MB,
+  disk check removed, stop without bootout, retry without bootstrap, pid change not recorded, install relaunch counted, hang kill not
+  recorded, bootstrap without a plist, disk_full logged every check, no resume after disk_full, no stop after the retry, pid not
+  remembered across a down check (survived at first; added the stub-pgrep gap test, now fails). Clean control: 71/0.
+  The broken fixture fails the loop table on every run (built in).
+- Fixed on the way: the stopped_again check flaked when the 4th crash landed in the same second as retried_at; the test now ages the
+  retry 10 s (a real crash after a retry is >= launchd's 30 s throttle later). 3 consecutive clean runs after the fix.
+- Open (out of scope): clearing stoppedForCrashLoop when the owner opens Quip belongs to the Mac app wiring.
+- Next: US-007 pure Mac logic for launch ownership, agent plists, settings and status.

@@ -99,8 +99,8 @@
         "`tools/check.sh --all` passes"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "QuipMac/Resources/quip-watchdog.sh: pure wd_loop_decide (disk_full first, then stopped -> retry once at >=1800 s / stay_stopped, then 3 restarts within 600 s -> stop), restarts.json as one JSON array of {at, reason} (hang kills + new pid after a known one outside an install; newest 10 kept), stop = bootout gui/<uid>/com.quip.QuipMac.crash-recovery + marker stoppedForCrashLoop + `crash_loop restarts=3 window=10m action=stopped retry_at=<epoch>`, retry = bootstrap gui/<uid> <plist> + `crash_loop action=retry` (never when the opt-in plist is absent), a crash after the retry boots out again (stopped_again), disk_full logs `disk_full free_mb=N action=no_restart` + bootout once per episode and resumes when space is back. Seams QUIP_WD_LAUNCHCTL / QUIP_WD_AGENT_PLIST / QUIP_WD_FREE_MB. tools/run-watchdog-tests.sh: 13-row loop table under dash, broken fixture (stops at 4) must fail it, integration with a recording stub launchctl asserting bootout + bootstrap args; every main-path run fenced from the real agent. Gate `tools/check.sh --all`: exit 0, harness 62/0, check-script 17/0, fake-mac 48/0, watchdog 71/0, QuipMac 1329/0, QuipiOS 1563/0; QuipLinux + QuipAndroid SKIPPED (not built here, unverified). 24 script mutants all failed (python3 -I build/q90-wd-loop-mutants.py), clean control 71/0. Clearing stoppedForCrashLoop on a manual open is the Mac app's job (out of scope)."
     },
     {
       "id": "US-007",
