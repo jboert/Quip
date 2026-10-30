@@ -114,6 +114,8 @@ if [ "$run_harness" = "true" ]; then
     [ "${PIPESTATUS[0]}" -eq 0 ] || failures=$((failures + 1))
     bash tools/run-check-script-tests.sh
     [ "$?" -eq 0 ] || failures=$((failures + 1))
+    bash tools/run-fake-mac-tests.sh
+    [ "$?" -eq 0 ] || failures=$((failures + 1))
     echo ""
 else
     note_skip "swiftc harness" "no Shared/ or tools/ change"

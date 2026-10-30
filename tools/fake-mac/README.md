@@ -110,14 +110,27 @@ unique part of an id, name or folder (`dead lantern`, `close 2290`).
 | `layout` | Resend `layout_update` to every phone. |
 | `library` | Resend `prompt_library` to every phone. |
 | `close <window>` | Drop the window from the layout and resend it. Later sends to it get `error` "Window no longer exists". |
+| `open <window>` | Bring back a window removed by `close` (or `close_window`), in the fixture's order, and resend the layout. Matches closed windows only. |
 | `dead <window>` | Keep the window, but answer nothing to sends to it: no ack, no error. |
 | `alive <window>` | Ack sends to it again. |
-| `reload` | Re-read the fixture: closed windows return, dead flags and in-memory prompt edits reset. |
+| `wait <window>` | Report the window `waiting_for_input` and resend the layout. |
+| `idle <window>` | Report it `neutral` and resend the layout. A window the fixture starts waiting turns neutral too. |
+| `front <window>` | Send `frontmost_changed` for it, as when it is raised on the Mac. Phones that authenticate later get it too. |
+| `lines <window> <N>` | Serve N numbered lines (`line 0001` … `line 00N`) as its `terminal_content` on the next `request_content`. `0` restores the fixture's `content`. |
+| `reload` | Re-read the fixture: closed windows return; dead flags, `wait`/`idle` states, `lines` content, the frontmost window and in-memory prompt edits reset. |
 | `quit` | Close every connection and exit (Ctrl-C works too). |
 
 To drive it from a script, give it a FIFO as stdin:
 `mkfifo /tmp/fm.in; xcrun swift tools/fake-mac/fake-mac.swift 0<>/tmp/fm.in &`,
 then `echo 'dead lantern' > /tmp/fm.in`. With stdin closed, commands are off.
+
+An unknown or ambiguous `<window>` logs `no such window` (or the matches) and
+sends nothing. `status` shows each window's state, `frontmost`, `lines=N` and
+the closed windows.
+
+`tools/run-fake-mac-tests.sh` (run by `tools/check.sh` with the harness) drives
+these commands through a FIFO with a small WebSocket client standing in for the
+phone, and checks both the log and what the phone receives.
 
 ## What it answers
 
@@ -135,7 +148,7 @@ the handlers in `QuipMac/QuipMacApp.swift`.
 | repeated `messageId` within 30 s | No reply (the Mac's dedupe table). |
 | `paste_prompt` | Logged with the body filled for the target window (`{{folder}}`, `{{window}}`, `{{agent}}`, `{{cwd}}`, `{{date}}`). No ack, as a Mac from before US-115; with `--ack-paste`, acked like `send_text`, and an unknown prompt id gets `error` "Prompt paste failed: no prompt … on this Mac" (with the `messageId` under `--error-ids`), as the Mac since US-115. Without `--ack-paste` an unknown id is ignored. |
 | `quick_action` | Logged; never acked, as on the Mac. A missing window gets `error`. |
-| `request_content` | `terminal_content` from the window's fixture `content`, at most twice a second per window. |
+| `request_content` | `terminal_content` from the window's `lines` content, else its fixture `content`, at most twice a second per window. |
 | `preferences_request` | `preferences_restore` with the requester's `deviceID` and an empty snapshot, to that phone only: the Mac's "no backup" reply. |
 | `preferences_snapshot` | Key names logged; nothing stored. |
 | `put_prompt` / `delete_prompt` | Applied in memory only (the fixture file is never written), then `prompt_library` and the ack. |

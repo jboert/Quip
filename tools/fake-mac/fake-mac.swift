@@ -286,9 +286,10 @@ struct WireWindow: Encodable {
     /// Minimized through `minimize_window` and not restored since (Q-53).
     let isMinimized: Bool
 
-    init(_ w: FixtureWindow, isMinimized: Bool = false, color: String? = nil, isPinned: Bool? = nil) {
+    init(_ w: FixtureWindow, isMinimized: Bool = false, color: String? = nil, isPinned: Bool? = nil,
+         state: String? = nil) {
         id = w.id; name = w.name; app = w.app; folder = w.folder; enabled = w.enabled
-        frame = w.frame; state = w.state; self.color = color ?? w.color; isThinking = w.isThinking ?? false
+        frame = w.frame; self.state = state ?? w.state; self.color = color ?? w.color; isThinking = w.isThinking ?? false
         claudeMode = w.claudeMode; cliKind = w.cliKind; targetKind = w.targetKind
         displayID = w.displayID; spaceID = w.spaceID; self.isPinned = isPinned ?? (w.isPinned ?? false)
         self.isMinimized = isMinimized
@@ -531,6 +532,15 @@ final class FakeMac: @unchecked Sendable {
     private var unpinned: Set<String> = []
     /// Colors set through `set_color` (Q-44); nil resets to the fixture's.
     private var colorOverrides: [String: String] = [:]
+    /// `wait` / `idle` (Q-88): a window's state when it differs from the
+    /// fixture's. `reload` forgets them.
+    private var stateOverrides: [String: String] = [:]
+    /// `lines` (Q-88): numbered terminal content served instead of the
+    /// fixture's `content`. `reload` forgets them.
+    private var contentOverrides: [String: (lines: Int, text: String)] = [:]
+    /// The window the Mac last reported frontmost: the fixture's at start,
+    /// then whatever `front` named. Sent on auth.
+    private var frontmost: String?
     private var prompts: [PromptEntry]
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: Client] = [:]
@@ -568,6 +578,7 @@ final class FakeMac: @unchecked Sendable {
         windows = fixture.windows
         dead = Set(fixture.windows.filter { $0.dead == true }.map(\.id))
         prompts = fixture.prompts
+        frontmost = fixture.frontmostWindowId
     }
 
     // MARK: Listening
@@ -627,7 +638,8 @@ final class FakeMac: @unchecked Sendable {
             + "PIN \(options.pin); log \(log.path)"
             + (options.ackPaste ? "; --ack-paste" : "") + (options.errorIDs ? "; --error-ids" : ""))
         log.line("  pair a booted simulator: xcrun simctl openurl <udid> '\(pairingLink)'")
-        log.line("  commands: help status layout library close dead alive freeze thaw reload quit")
+        log.line("  commands: help status layout library close open dead alive wait idle front lines "
+            + "freeze thaw reload quit")
         announced = true
         if stdinClosedEarly { stdinClosed() }
     }
@@ -950,7 +962,7 @@ final class FakeMac: @unchecked Sendable {
         rest.append("whisper_status(preparing)")
         send(PromptLibraryMsg(prompts: prompts), to: client)
         log.line("\(client.tag) sent prompt_library: \(prompts.count) prompts")
-        let front = fixture.frontmostWindowId.flatMap { id in windows.contains { $0.id == id } ? id : nil }
+        let front = frontmost.flatMap { id in windows.contains { $0.id == id } ? id : nil }
         send(FrontmostChangedMsg(windowId: front), to: client)
         rest.append("frontmost_changed(\(front ?? "none"))")
         log.line("\(client.tag) sent " + rest.joined(separator: ", "))
@@ -966,7 +978,8 @@ final class FakeMac: @unchecked Sendable {
         return LayoutUpdateMsg(monitor: fixture.monitor, screenAspect: fixture.screenAspect,
                                windows: ordered.map { WireWindow($0, isMinimized: minimized.contains($0.id),
                                                                    color: colorOverrides[$0.id],
-                                                                   isPinned: isPinnedNow($0)) },
+                                                                   isPinned: isPinnedNow($0),
+                                                                   state: stateOverrides[$0.id]) },
                                displays: fixture.displays,
                                spanAspect: fixture.spanAspect, spaces: fixture.spaces)
     }
@@ -1136,11 +1149,12 @@ final class FakeMac: @unchecked Sendable {
             log.line(head + " window=\(windowId) -> no such window: nothing sent (as the real Mac)")
             return
         }
-        let content = window.content ?? (window.isTerminal
+        let content = contentOverrides[windowId]?.text ?? window.content ?? (window.isTerminal
             ? "~/dev/\(window.folder ?? "project") $ "
             : "[non-terminal window — screenshot requires Screen Recording permission for Quip]")
         let urls = Self.urls(in: content)
-        log.line(head + " window=\(windowId) -> terminal_content (\(content.count) chars, \(urls.count) urls)")
+        log.line(head + " window=\(windowId) -> terminal_content (\(content.count) chars, \(urls.count) urls"
+            + (contentOverrides[windowId].map { ", \($0.lines) numbered lines" } ?? "") + ")")
         broadcast(TerminalContentMsg(windowId: windowId, content: content, urls: urls))
     }
 
@@ -1301,11 +1315,17 @@ final class FakeMac: @unchecked Sendable {
               library         resend prompt_library to every phone
               vibecut changed mark VibeCut as changed since the last sync (the hub's orange line)
               close <window>  drop a window from the layout and resend it
+              open <window>   bring back a window removed by close, and resend the layout
               dead <window>   stop answering send_text for a window (no ack, no error)
               alive <window>  answer it again
-              reload          re-read the fixture: restores closed windows and edited prompts
+              wait <window>   mark it waiting_for_input and resend the layout
+              idle <window>   mark it neutral (the fixture's state if that is not waiting) and resend
+              front <window>  send frontmost_changed for it, as when it is raised on the Mac
+              lines <window> <N>  serve N numbered lines (line 0001 …) as its terminal content; 0 restores
+              reload          re-read the fixture: restores closed windows, states, content and edited prompts
               quit            close every connection and exit
             <window> is an id, or any unique part of an id, name or folder.
+            open matches only closed windows; the others only windows in the layout.
             """)
         case "status":
             let phones = clients.values.filter(\.handshakeDone).sorted { $0.number < $1.number }
@@ -1314,8 +1334,13 @@ final class FakeMac: @unchecked Sendable {
                     .joined(separator: ", ")))
             for w in windows {
                 log.line("  \(w.id)  \(w.app)  \(w.folder ?? "-")  \(dead.contains(w.id) ? "DEAD" : "acking")"
-                    + (minimized.contains(w.id) ? "  minimized" : ""))
+                    + "  \(stateOverrides[w.id] ?? w.state)"
+                    + (minimized.contains(w.id) ? "  minimized" : "")
+                    + (frontmost == w.id ? "  frontmost" : "")
+                    + (contentOverrides[w.id].map { "  lines=\($0.lines)" } ?? ""))
             }
+            let closed = closedWindows()
+            if !closed.isEmpty { log.line("  closed: \(closed.map(\.id).joined(separator: ", "))") }
             log.line("  \(prompts.count) prompts; paste acks \(options.ackPaste ? "on" : "off"); "
                 + "error ids \(options.errorIDs ? "on" : "off")")
         case "layout":
@@ -1337,6 +1362,42 @@ final class FakeMac: @unchecked Sendable {
             }
             vibecutFresh = false
             log.line("cmd vibecut changed -> the next vibecut_status_request answers changed (reopen the hub)")
+        case "open":
+            guard let window = resolveWindow(arg, verb: verb, among: closedWindows()) else { return }
+            // Back in the fixture's order, not at the end.
+            let open = Set(windows.map(\.id)).union([window.id])
+            windows = fixture.windows.filter { open.contains($0.id) }
+            let n = broadcast(layoutMessage())
+            log.line("cmd open \(window.id) -> layout_update (\(windows.count) windows) to \(n) phone(s)")
+        case "wait", "idle":
+            guard let window = resolveWindow(arg, verb: verb) else { return }
+            let state = verb == "wait" ? "waiting_for_input" : "neutral"
+            if window.state == state { stateOverrides.removeValue(forKey: window.id) }
+            else { stateOverrides[window.id] = state }
+            let n = broadcast(layoutMessage())
+            log.line("cmd \(verb) \(window.id) -> state \(state), layout_update to \(n) phone(s)")
+        case "front":
+            guard let window = resolveWindow(arg, verb: verb) else { return }
+            frontmost = window.id
+            let n = broadcast(FrontmostChangedMsg(windowId: window.id))
+            log.line("cmd front \(window.id) -> frontmost_changed to \(n) phone(s)")
+        case "lines":
+            var words = arg.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard words.count >= 2, let count = Int(words.removeLast()), (0...100_000).contains(count) else {
+                log.line("usage: lines <window> <N>  (N from 0 to 100000; 0 restores the fixture's content)")
+                return
+            }
+            guard let window = resolveWindow(words.joined(separator: " "), verb: verb) else { return }
+            if count == 0 {
+                contentOverrides.removeValue(forKey: window.id)
+                log.line("cmd lines \(window.id) 0 -> the next request_content serves the fixture's content")
+            } else {
+                let width = max(4, String(count).count)
+                let text = (1...count).map { "line " + String(repeating: "0", count: width - String($0).count) + String($0) }
+                    .joined(separator: "\n")
+                contentOverrides[window.id] = (count, text)
+                log.line("cmd lines \(window.id) \(count) -> the next request_content serves \(count) numbered lines")
+            }
         case "close", "dead", "alive":
             guard let window = resolveWindow(arg, verb: verb) else { return }
             switch verb {
@@ -1358,6 +1419,9 @@ final class FakeMac: @unchecked Sendable {
                 windows = fresh.windows
                 dead = Set(fresh.windows.filter { $0.dead == true }.map(\.id))
                 minimized = []
+                stateOverrides = [:]
+                contentOverrides = [:]
+                frontmost = fresh.frontmostWindowId
                 prompts = fresh.prompts
                 let n = broadcast(layoutMessage())
                 broadcast(PromptLibraryMsg(prompts: prompts))
@@ -1374,11 +1438,20 @@ final class FakeMac: @unchecked Sendable {
         }
     }
 
-    private func resolveWindow(_ arg: String, verb: String) -> FixtureWindow? {
+    /// Fixture windows not in the layout: removed by `close` or `close_window`.
+    private func closedWindows() -> [FixtureWindow] {
+        let open = Set(windows.map(\.id))
+        return fixture.windows.filter { !open.contains($0.id) }
+    }
+
+    /// Finds the one window `arg` names, among the layout's windows unless
+    /// `among` says otherwise. Anything else logs why and changes nothing.
+    private func resolveWindow(_ arg: String, verb: String, among candidates: [FixtureWindow]? = nil) -> FixtureWindow? {
         guard !arg.isEmpty else {
             log.line("usage: \(verb) <window id, or a unique part of an id, name or folder>")
             return nil
         }
+        let windows = candidates ?? self.windows
         if let exact = windows.first(where: { $0.id == arg }) { return exact }
         let needle = arg.lowercased()
         let hits = windows.filter {
@@ -1387,7 +1460,8 @@ final class FakeMac: @unchecked Sendable {
         }
         if hits.count == 1 { return hits[0] }
         log.line(hits.isEmpty
-            ? "\(verb): no window matches \(Self.quoted(arg)) (closed windows come back with reload)"
+            ? "\(verb): no such window \(Self.quoted(arg))"
+                + (candidates == nil ? " (closed windows come back with open or reload)" : " among the closed windows")
             : "\(verb): \(Self.quoted(arg)) matches \(hits.count) windows: \(hits.map(\.id).joined(separator: ", "))")
         return nil
     }

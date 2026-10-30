@@ -61,14 +61,14 @@ Order is the build order. Each is sized for one focused session (Ralph-compatibl
 ### US-000: Fake Mac can drive the scenarios this spec tests
 **Why first:** without it, US-003/006/008/009 cannot be tested in the simulator.
 
-- [ ] New stdin commands in `tools/fake-mac/fake-mac.swift`:
+- [x] New stdin commands in `tools/fake-mac/fake-mac.swift`:
   - `wait <window>` / `idle <window>`: set `state` to `waiting_for_input` / back to the fixture's value, resend `layout_update`.
   - `front <window>`: send `frontmost_changed` for that window.
   - `open <window>`: re-add a window removed by `close`, resend layout.
   - `lines <window> <N>`: serve N numbered lines (`line 0001 …`) as that window's terminal content on the next `request_content`.
-- [ ] `help` lists them; `README.md` command table updated.
-- [ ] `tools/run-fake-mac-tests.sh` (new, run by `tools/check.sh` harness scope): starts the fake on a free port with a FIFO, pipes each command, asserts the expected line in the fake's log (`--log`). One case per command plus an unknown-window case (prints `no such window`, changes nothing).
-- [ ] Gate.
+- [x] `help` lists them; `README.md` command table updated.
+- [x] `tools/run-fake-mac-tests.sh` (new, run by `tools/check.sh` harness scope): starts the fake on a free port with a FIFO, pipes each command, asserts the expected line in the fake's log (`--log`). One case per command plus an unknown-window case (prints `no such window`, changes nothing).
+- [x] Gate.
 
 ### US-001: Recency stack of windows per Mac
 - [ ] New pure `WindowRecency` (`QuipiOS/Services/WindowRecency.swift`): ids most recent first, cap 20, no duplicates. `touch(id)`, `prune(keeping:)`, `best(available:excluding:)`.
