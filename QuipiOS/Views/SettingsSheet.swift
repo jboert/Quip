@@ -21,6 +21,8 @@ struct SettingsSheet: View {
     var windowsProvider: () -> [WindowState] = { [] }
     /// The active Mac, for Remote in (Q-88 US-010); nil hides the row.
     var remoteInBackend: PairedBackend? = nil
+    /// The active Mac's id, for the Auto-restart row (Q-90); nil reads Unknown.
+    var activeBackendID: String? = nil
     @AppStorage("tintContentBorder") private var tintContentBorder = true
     /// Same key the PTT path reads in QuipApp; @AppStorage keeps the two in
     /// step without threading a binding through the settings hierarchy.
@@ -368,6 +370,19 @@ struct SettingsSheet: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
+            }
+            // Q-90: whether the Mac restarts Quip on its own. Read from the
+            // per-backend store so it still answers while the Mac is down.
+            let autoRestart = ReliabilityStatusStore.summary(
+                activeBackendID.flatMap { ReliabilityStatusStore.load(backendID: $0) })
+            HStack(spacing: 10) {
+                settingsIcon("arrow.clockwise", tint: autoRestart.warn ? .orange : .green)
+                Text("Auto-restart")
+                Spacer()
+                Text(autoRestart.text)
+                    .font(.subheadline)
+                    .foregroundStyle(autoRestart.warn ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .multilineTextAlignment(.trailing)
             }
             // Q-86: which Mac build this phone talks to, rendered by the same
             // BuildInfo.shortDisplay as the Version row below. Absent from a

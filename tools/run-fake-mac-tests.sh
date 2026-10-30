@@ -15,9 +15,10 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/quip-fake-mac-tests.XXXXXX")"
-FAKE_PID=""; PROBE_PID=""
+FAKE_PID=""; PROBE_PID=""; PROBE2_PID=""
 cleanup() {
     [ -n "$PROBE_PID" ] && kill "$PROBE_PID" 2>/dev/null
+    [ -n "$PROBE2_PID" ] && kill "$PROBE2_PID" 2>/dev/null
     [ -n "$FAKE_PID" ] && kill "$FAKE_PID" 2>/dev/null
     wait 2>/dev/null
     rm -rf "$WORK"
@@ -42,7 +43,7 @@ done
 PIN=24681357
 LOG="$WORK/fake.log"
 PROBE_OUT="$WORK/probe.out"
-mkfifo "$WORK/fake.in" "$WORK/probe.in"
+mkfifo "$WORK/fake.in" "$WORK/probe.in" "$WORK/probe2.in"
 
 # `0<>` opens the FIFO read-write, so it never reaches end-of-file between
 # commands (a plain `<` would block until the first writer, then hit EOF).
@@ -108,6 +109,11 @@ def summary(m):
         return f"{t} {m['windowId']} numbered={len(numbered)} first={first} last={last}"
     if t == "auth_result":
         return f"{t} success={m.get('success')} error={m.get('error')}"
+    if t == "reliability_status":
+        last = m.get("lastRestart")
+        restart = f"{last['reason']}@{last['at']}" if last else "none"
+        return (f"{t} watching={m['watching']} afterQuit={m['afterQuit']} "
+                f"watchdog={m['watchdog']} lastRestart={restart}")
     return t
 
 def stdin_loop():
@@ -220,7 +226,54 @@ for verb in wait idle front open lines; do
     expect_log "^.* +$verb <window>" "help lists $verb"
 done
 checks=$((checks + 1))
-grep -qE 'commands: .*open.*wait idle front lines' "$LOG" || fail "the startup banner lists the new commands"
+grep -qE 'commands: .*open.*wait idle front lines reliability' "$LOG" || fail "the startup banner lists the new commands"
+expect_log "^ +reliability on\|off\|notwatching \[crash\|hang\|crash_loop\]" "help lists reliability"
+
+# reliability (Q-90): nothing is sent until the first command.
+checks=$((checks + 1))
+[ "$(count "$PROBE_OUT" '^reliability_status ')" = "0" ] || fail "no reliability_status before the first command"
+cmd "reliability on crash"
+expect_log "cmd reliability on crash -> reliability_status\(watching=true afterQuit=true watchdog=true lastRestart=crash@[0-9]+\) to 1 phone" \
+    "reliability on crash logs the send"
+expect_probe "^reliability_status watching=True afterQuit=True watchdog=True lastRestart=crash@[0-9.]+$" \
+    "reliability on crash reaches the phone with lastRestart"
+cmd "reliability notwatching"
+expect_probe "^reliability_status watching=False afterQuit=True watchdog=True lastRestart=none$" \
+    "reliability notwatching: switches on, not watching, no lastRestart"
+cmd "reliability off"
+expect_probe "^reliability_status watching=False afterQuit=False watchdog=False lastRestart=none$" \
+    "reliability off turns everything off"
+sync_log
+reliability_before="$(count "$PROBE_OUT" '^reliability_status ')"
+cmd "reliability maybe"
+expect_log "usage: reliability on\|off\|notwatching \[crash\|hang\|crash_loop\]" "reliability rejects an unknown mode"
+cmd "reliability on frozen"
+cmd "reliability on crash extra"
+sync_log
+sleep 0.3
+checks=$((checks + 1))
+[ "$(count "$LOG" 'usage: reliability ')" = "3" ] || fail "reliability rejects an unknown reason and extra words"
+checks=$((checks + 1))
+[ "$(count "$PROBE_OUT" '^reliability_status ')" = "$reliability_before" ] \
+    || fail "a rejected reliability command must send nothing"
+
+# The stored status goes to a phone right after it authenticates.
+cmd "reliability notwatching hang"
+expect_probe "^reliability_status watching=False afterQuit=True watchdog=True lastRestart=hang@" "setup for the post-auth send"
+PROBE2_OUT="$WORK/probe2.out"
+python3 -I "$WORK/probe.py" "$PORT" "$PIN" "$PROBE2_OUT" 0<>"$WORK/probe2.in" 2>"$WORK/probe2.err" &
+PROBE2_PID=$!
+checks=$((checks + 1))
+wait_for "$PROBE2_OUT" "^reliability_status watching=False afterQuit=True watchdog=True lastRestart=hang@[0-9.]+$" \
+    || fail "a newly authenticated phone gets the stored reliability_status"
+expect_log "sent .*reliability_status\(watching=false afterQuit=true watchdog=true lastRestart=hang@[0-9]+\)" \
+    "the welcome logs the stored reliability_status"
+checks=$((checks + 1))
+grep -nE '^(auth_result success=True|reliability_status )' "$PROBE2_OUT" | head -1 | grep -q 'auth_result' \
+    || fail "reliability_status is sent after auth succeeds, never before"
+kill "$PROBE2_PID" 2>/dev/null; wait "$PROBE2_PID" 2>/dev/null; PROBE2_PID=""
+# The checks below count "to 1 phone": wait until the fake has let go of it.
+expect_log "\] disconnected \(" "the second phone's disconnect is noticed"
 
 # wait: neutral fixture window -> waiting_for_input, resent to the phone.
 cmd "wait lantern"

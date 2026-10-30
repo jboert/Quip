@@ -383,6 +383,34 @@ struct HeartbeatMessage: Codable, Sendable {
     }
 }
 
+/// Q-90: whether the Mac will bring Quip back on its own. `watching` is true
+/// only when the crash-recovery agent is loaded AND is the process that
+/// launched this Quip; `afterQuit` / `watchdog` mirror the Mac's Reliability
+/// switches. `lastRestart` names the most recent automatic restart, if any
+/// (`reason` is `crash`, `hang` or `crash_loop`; `at` is seconds since 1970).
+/// Sent after auth and whenever it changes.
+struct ReliabilityStatusMessage: Codable, Sendable, Equatable {
+    struct LastRestart: Codable, Sendable, Equatable {
+        let reason: String
+        let at: Double
+    }
+
+    let type: String
+    let watching: Bool
+    let afterQuit: Bool
+    let watchdog: Bool
+    /// Absent from a Mac that has never restarted Quip.
+    let lastRestart: LastRestart?
+
+    init(watching: Bool, afterQuit: Bool, watchdog: Bool, lastRestart: LastRestart? = nil) {
+        self.type = "reliability_status"
+        self.watching = watching
+        self.afterQuit = afterQuit
+        self.watchdog = watchdog
+        self.lastRestart = lastRestart
+    }
+}
+
 // MARK: - iPhone → Mac Messages
 
 /// Reply to a Mac-side `HeartbeatMessage`. Echoes the seq so Mac can

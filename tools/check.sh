@@ -76,6 +76,8 @@ if [ "$apple" = "true" ]; then
         touched '^(QuipMac/|Shared/)' && run_mac=true
         touched '^(QuipiOS/|Shared/)' && run_ios=true
         touched '^(Shared/|tools/)'   && run_harness=true
+        # Q-90 — the watchdog ships in the Mac bundle but is tested by the harness.
+        touched '^QuipMac/Resources/quip-watchdog\.sh$' && run_harness=true
         # A .github/ change is CI itself, which the scope script answers with
         # "run everything" — mirror that HERE, unconditionally. This used to be
         # an `if nothing else matched` fallback, which quietly did the wrong
@@ -115,6 +117,8 @@ if [ "$run_harness" = "true" ]; then
     bash tools/run-check-script-tests.sh
     [ "$?" -eq 0 ] || failures=$((failures + 1))
     bash tools/run-fake-mac-tests.sh
+    [ "$?" -eq 0 ] || failures=$((failures + 1))
+    bash tools/run-watchdog-tests.sh
     [ "$?" -eq 0 ] || failures=$((failures + 1))
     echo ""
 else

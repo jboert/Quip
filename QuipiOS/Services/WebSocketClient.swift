@@ -393,6 +393,8 @@ final class WebSocketClient {
     /// Mac sent its current TCC permission status. Phone surfaces it in the
     /// settings sheet + as a badge on the main screen when anything is denied.
     var onMacPermissions: ((MacPermissionsMessage) -> Void)?
+    /// Q-90: whether the Mac will restart Quip on its own (`reliability_status`).
+    var onReliabilityStatus: ((ReliabilityStatusMessage) -> Void)?
     /// Mac confirms an image upload; argument is the absolute path the Mac wrote.
     var onImageUploadAck: ((String) -> Void)?
     /// Mac rejects an image upload; argument is a human-readable reason.
@@ -1562,6 +1564,11 @@ final class WebSocketClient {
             guard isAuthenticated else { return }
             if let msg = Self.decodeMessage(MacPermissionsMessage.self, from: data, msgType: peek.type) {
                 onMacPermissions?(msg)
+            }
+        case "reliability_status":
+            guard isAuthenticated else { return }
+            if let msg = Self.decodeMessage(ReliabilityStatusMessage.self, from: data, msgType: peek.type) {
+                onReliabilityStatus?(msg)
             }
         case "mac_build":
             guard isAuthenticated else { return }

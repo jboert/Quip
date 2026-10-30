@@ -20,11 +20,13 @@ enum CrashRecoveryAgent {
 
     /// Pure: build the plist payload as a serializable dict. No FS, no launchctl.
     /// Stable for round-trip + assertion in tests.
-    static func plistContent(executablePath: String) -> [String: Any] {
-        let keepAlive: [String: Any] = [
+    /// `keepAliveAlways` (Q-90 "Restart after Quit") makes `KeepAlive` the
+    /// boolean true, so any exit comes back; false keeps crash-only restart.
+    static func plistContent(executablePath: String, keepAliveAlways: Bool = false) -> [String: Any] {
+        let keepAlive: Any = keepAliveAlways ? true : [
             "SuccessfulExit": false,
             "Crashed": true,
-        ]
+        ] as [String: Any]
         return [
             "Label": label,
             "ProgramArguments": [executablePath],
