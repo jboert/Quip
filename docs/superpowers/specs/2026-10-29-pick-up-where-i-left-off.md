@@ -81,12 +81,13 @@ Owner, 2026-10-29: build on top of JB's `WindowSelectionMemory` (`46ecfe4`) rath
 - [x] Gate.
 
 ### US-002: One landing decision, with recency fallback
-- [ ] New pure `LandingPolicy` (`QuipiOS/Services/LandingPolicy.swift`) implementing §3 steps 1, 2, 5, 6 (3 and 4 stubbed as "no candidate" until US-006/US-009).
-- [ ] `QuipApp.swift` ~652 (vanished window) and ~668 (initial pick) both call it, using `WindowSelectionMemory.recent` for step 5; the two separate `select_window` sends collapse into one call site.
-- [ ] Every phone selection path calls `touch` (tap, deep link, `onSelectWindow` echo, push tap, backend switch).
-- [ ] Tests `LandingPolicyTests.swift` — table in §5, including "stack [C,B,A], layout [A,B] → B".
-- [ ] Wiring test (pattern: `BroadcastWiringTests`): a `layout_update` without the selected window produces exactly one `SelectWindowMessage` for the recency pick.
-- [ ] Gate.
+- [x] New pure `LandingPolicy` (`QuipiOS/Services/LandingPolicy.swift`) implementing §3 steps 1, 2, 5, 6 (3 and 4 stubbed as "no candidate" until US-006/US-009).
+- [x] `QuipApp.swift` ~652 (vanished window) and ~668 (initial pick) both call it, using `WindowSelectionMemory.recent` for step 5; the two separate `select_window` sends collapse into one call site.
+- [x] Every phone selection path calls `touch` (tap, deep link, `onSelectWindow` echo, push tap, backend switch): all of them set `selectedWindowId`, and its `onChange` calls `WindowSelectionMemory.remember` (JB, `46ecfe4`).
+- [x] Tests `LandingPolicyTests.swift` — table in §5, including "stack [C,B,A], layout [A,B] → B".
+- [x] Wiring test (pattern: `BroadcastWiringTests`): a `layout_update` without the selected window produces exactly one `SelectWindowMessage` for the recency pick.
+- [x] Gate.
+- [x] Sim scenario S2 scripted as `tools/qa/q88-s2.sh` (passes). The fake Mac now echoes `select_window` as `frontmost_changed` after 400 ms, as the real Mac's poll does; without it the default "follow the Mac" would land on the fixture's stale frontmost.
 
 ### US-003: Mac frontmost feeds the recency stack
 - [ ] `frontmost_changed` with a tracked id → `touch` on that backend's stack, even with `followFrontmost` off (order only; selection unchanged).

@@ -215,6 +215,9 @@ struct QuipApp: App {
     /// Default true — matches the user's expectation that "the phone
     /// follows the Mac" without an explicit step.
     @AppStorage("followFrontmost") private var followFrontmost = true
+    /// The active Mac's last `frontmost_changed`, for LandingPolicy step 2.
+    /// Cleared on backend switch: it belongs to the Mac that sent it.
+    @State private var macFrontmostId: String?
     private var appearancePreferred: ColorScheme? {
         switch appearanceModeRaw {
         case "light": return .light
@@ -351,6 +354,7 @@ struct QuipApp: App {
                 // immediately. Hot model: the slice was kept up to date in
                 // the background, so this is a sub-frame view swap.
                 let s = manager.active
+                macFrontmostId = nil
                 windows = s.windows
                 selectedWindowId = s.selectedWindowId
                 monitorName = s.monitorName
@@ -649,31 +653,27 @@ struct QuipApp: App {
                     }
                     UIViewController.attemptRotationToDeviceOrientation()
                 }
-                if let wid = selectedWindowId, !update.windows.contains(where: { $0.id == wid }) {
-                    selectedWindowId = update.windows.first?.id
-                    if let newId = selectedWindowId {
-                        session.client.send(SelectWindowMessage(windowId: newId))
-                    }
+                // Auto-pick a window on the first layout_update after a fresh
+                // launch / fresh connect, and when the selected window has
+                // vanished. Without a selection the user opens the app, sees
+                // windows, taps mic — and PTT silently no-ops because
+                // `startRecording` gates on `selectedWindowId != nil` (the
+                // on-screen mic AND the hardware volume-down path). Which
+                // window is LandingPolicy's call (Q-88 §3): follow the Mac,
+                // else the window the user was last in, else the one before
+                // it, else windows.first. One select_window at most.
+                let outcome = LandingPolicy.afterLayout(
+                    selected: selectedWindowId, wasEmpty: wasEmpty,
+                    LandingPolicy.Input(
+                        followFrontmost: followFrontmost && manager.active.qaPair == nil,
+                        macFrontmost: macFrontmostId,
+                        recency: WindowSelectionMemory.recent(forBackendId: session.backendID),
+                        windows: update.windows.map(\.id)))
+                selectedWindowId = outcome.selected
+                if let reason = outcome.reason {
+                    PhoneLog.log("landing reason=\(reason.rawValue)")
                 }
-                // Auto-pick first window on the FIRST layout_update after a
-                // fresh launch / fresh connect. Without this, the user opens
-                // the app, sees windows, taps mic — and PTT silently no-ops
-                // because `startRecording` gates on `selectedWindowId != nil`.
-                // Same gate kills the on-screen mic button AND the hardware
-                // volume-down PTT path, so "nothing happens when I tap mic"
-                // means "no window selected." Picking windows.first restores
-                // both paths. Prefer the window the user last had selected:
-                // a reconnect after backgrounding clears the selection, and
-                // landing on windows.first put them in a different terminal.
-                // If that one has closed, the one they were in before it.
-                if selectedWindowId == nil,
-                   let pick = WindowSelectionMemory.initialSelection(
-                       recent: WindowSelectionMemory.recent(forBackendId: session.backendID),
-                       available: update.windows.map(\.id)) {
-                    selectedWindowId = pick
-                    session.client.send(SelectWindowMessage(windowId: pick))
-                }
-                if wasEmpty, let wid = selectedWindowId, update.windows.contains(where: { $0.id == wid }) {
+                if let wid = outcome.send {
                     session.client.send(SelectWindowMessage(windowId: wid))
                 }
             }
@@ -696,6 +696,7 @@ struct QuipApp: App {
         manager.onFrontmostChanged = { session, windowId in
             guard session.backendID == manager.activeBackendID else { return }
             DispatchQueue.main.async {
+                macFrontmostId = windowId
                 // QA mode owns selection between the pair halves — frontmost autonomy here would yank selection out of the pane.
                 guard manager.active.qaPair == nil else { return }
                 guard followFrontmost else { return }
