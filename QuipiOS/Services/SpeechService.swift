@@ -177,6 +177,14 @@ final class SpeechService {
         }
     }
 
+    /// A tap on an input with no live route (0 Hz or 0 channels: a
+    /// simulator whose audio is not up yet after a boot, a call holding the
+    /// mic) raises an Objective-C exception Swift cannot catch, and the app
+    /// aborts. Every `installTap` checks this first and backs out instead.
+    nonisolated static func canTapInput(sampleRate: Double, channels: AVAudioChannelCount) -> Bool {
+        sampleRate > 0 && channels > 0
+    }
+
     nonisolated static func hasCaptureAuthorization(
         speechStatus: SFSpeechRecognizerAuthorizationStatus,
         recordPermission: AVAudioSession.RecordPermission
@@ -604,6 +612,11 @@ private class AudioWorker: @unchecked Sendable {
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
             let format = input.outputFormat(forBus: 0)
+            guard SpeechService.canTapInput(sampleRate: format.sampleRate, channels: format.channelCount) else {
+                // Stay unarmed; the next arm (PTT press, foreground) retries.
+                PhoneLog.log("ptt arm skipped: input has no format rate=\(Int(format.sampleRate)) ch=\(format.channelCount)")
+                return
+            }
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 guard let self else { return }
                 let now = Date()
@@ -669,6 +682,11 @@ private class AudioWorker: @unchecked Sendable {
                 let input = self.audioEngine.inputNode
                 input.removeTap(onBus: 0)
                 let format = input.outputFormat(forBus: 0)
+                guard SpeechService.canTapInput(sampleRate: format.sampleRate, channels: format.channelCount) else {
+                    PhoneLog.log("ptt start skipped: input has no format rate=\(Int(format.sampleRate)) ch=\(format.channelCount)")
+                    onUpdate(nil, true)
+                    return
+                }
                 input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                     self?.recognitionRequest?.append(buffer)
                     self?.appendToAnalyzer(buffer)
@@ -952,6 +970,10 @@ private class AudioWorker: @unchecked Sendable {
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
             let format = input.outputFormat(forBus: 0)
+            guard SpeechService.canTapInput(sampleRate: format.sampleRate, channels: format.channelCount) else {
+                PhoneLog.log("ptt forward skipped: input has no format rate=\(Int(format.sampleRate)) ch=\(format.channelCount)")
+                return
+            }
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 onBuffer(buffer)
                 guard let self else { return }
@@ -1030,6 +1052,10 @@ private class AudioWorker: @unchecked Sendable {
             let input = self.audioEngine.inputNode
             input.removeTap(onBus: 0)
             let format = input.outputFormat(forBus: 0)
+            guard SpeechService.canTapInput(sampleRate: format.sampleRate, channels: format.channelCount) else {
+                PhoneLog.log("ptt rearm skipped: input has no format rate=\(Int(format.sampleRate)) ch=\(format.channelCount)")
+                return
+            }
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 guard let self else { return }
                 self.recognitionRequest?.append(buffer)

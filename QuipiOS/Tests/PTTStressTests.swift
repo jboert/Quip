@@ -316,6 +316,15 @@ final class PTTStressTests: XCTestCase {
         XCTAssertFalse(service.isRecording)
     }
 
+    /// An input with no route reports 0 Hz / 0 channels, and a tap on it
+    /// aborts the app (simulator after a boot, 2026-10-30).
+    func testTapNeedsAnInputWithARateAndChannels() {
+        XCTAssertTrue(SpeechService.canTapInput(sampleRate: 48_000, channels: 1))
+        XCTAssertFalse(SpeechService.canTapInput(sampleRate: 0, channels: 1))
+        XCTAssertFalse(SpeechService.canTapInput(sampleRate: 48_000, channels: 0))
+        XCTAssertFalse(SpeechService.canTapInput(sampleRate: 0, channels: 0))
+    }
+
     func testCaptureAuthorizationRequiresSpeechAndMicrophone() {
         XCTAssertTrue(SpeechService.hasCaptureAuthorization(
             speechStatus: .authorized,
