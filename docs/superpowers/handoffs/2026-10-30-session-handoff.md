@@ -54,3 +54,7 @@ Installed on the iPhone at `b70769f`. Open: the Mac wiring (owner present), and 
 ## Q-90 Mac wiring (2026-10-31)
 
 `474cf00` + `f9ee248` installed via `tools/install-mac.sh` (Mac at `f9ee248`). launchd owns Quip now: a bare kill comes back. Checks 1–3 of spec §8 pass on the Mac (spec §9). Open: phone checks, permissions check, Stop Quip… and crash-loop checks, US-006 Turn on, US-007.
+
+## iPhone Debug launch crash (2026-10-31)
+
+`d51b9b6` Debug on the iPhone crashed at launch (two .ips, 20:40 / 20:41 local): stack guard hit under `MainiOSView.windowLayout`, main thread, 1008 KB stack. Measured in the simulator with a temporary probe: 1078 KB used at windowLayout (body 137 KB, rootLayers 746 KB). Fixed `b1df59f` with AnyView at each body stage and around rootLayers' big children: peak 251 KB. `StackHeadroom` (DEBUG) asserts above 512 KB; a 100 KB budget fired at 237 KB, so the guard works. iPhone runs the fixed Debug build (05:12Z install, launched, PTT). If a phone Debug install ever dies at launch again with "stack guard", look here first.
