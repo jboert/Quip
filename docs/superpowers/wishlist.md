@@ -10,7 +10,7 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 - **Verified on the Mac:** agent-owned pid, `kill -9` back in 4 s, `kill -STOP` sampled + killed + back.
 - **Owner to check:** phone Settings → Auto-restart reads "On"; Mac permissions (Accessibility, Screen Recording) still granted for the launchd-started copy; Stop Quip… stays stopped and the phone shows Remote in; three `kill -9` in 10 min → stopped.
 - **Then shipped (`d51b9b6`, Mac + iPhone installed):** "Quip was stopped" on the phone after Stop Quip…, Turn on from the phone, Mac restart list with Copy for a ticket, Diagnostics files, crash-loop notice. `22f74d6` fixes install-mac.sh exiting 113 before it reports.
-- **Open:** top-3 frames per restart; phone "keeps crashing" / "disk full" wording (needs a channel while Quip is down); owner checks above.
+- **Open:** ~~top-3 frames per restart~~ (shipped `85e3e8b`, Mac installed); phone "keeps crashing" / "disk full" wording (needs a channel while Quip is down); owner checks above.
 - **iPhone Debug launch crash, fixed `b1df59f`:** the `d51b9b6` Debug install died at launch (stack-guard SIGSEGV under `MainiOSView.windowLayout`). Debug code gives each modifier-chain temporary its own stack slot; windowLayout ran with 1078 KB used, past the phone's 1 MB main stack (simulator has 8 MB, so it never showed). AnyView stage boundaries take the peak to 251 KB; `StackHeadroom` asserts at 512 KB in Debug so the simulator trips first. Verified on the iPhone: Debug build launches, connects, PTT. Release builds were never affected.
 
 ## Session log — 2026-10-30, night (Q-90 PRD run through Ralph, merged `df5ff35`)

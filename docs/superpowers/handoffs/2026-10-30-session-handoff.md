@@ -58,3 +58,7 @@ Installed on the iPhone at `b70769f`. Open: the Mac wiring (owner present), and 
 ## iPhone Debug launch crash (2026-10-31)
 
 `d51b9b6` Debug on the iPhone crashed at launch (two .ips, 20:40 / 20:41 local): stack guard hit under `MainiOSView.windowLayout`, main thread, 1008 KB stack. Measured in the simulator with a temporary probe: 1078 KB used at windowLayout (body 137 KB, rootLayers 746 KB). Fixed `b1df59f` with AnyView at each body stage and around rootLayers' big children: peak 251 KB. `StackHeadroom` (DEBUG) asserts above 512 KB; a 100 KB budget fired at 237 KB, so the guard works. iPhone runs the fixed Debug build (05:12Z install, launched, PTT). If a phone Debug install ever dies at launch again with "stack guard", look here first.
+
+## Q-90 restart frames (2026-10-31)
+
+`85e3e8b`: each restart row in Mac Settings → Reliability lists the top three Quip frames (crash: `.ips` faulting thread; hang: watchdog sample), and so do Copy for a ticket and the crash-loop notice. Mac installed at `85e3e8b` via `tools/install-mac.sh` (Developer ID, launchd pid). Owner to glance: the 03:06 hang row should show `main`; the two `kill -9` rows have no frames (no report). Still open in Q-90: the phone's "keeps crashing" / "disk full" wording (no channel while Quip is down), and the owner checks in the wishlist.
