@@ -38,6 +38,9 @@ enum MacDownBanner {
         guard downFor >= delay else { return nil }
         let remoteIn: Action = remoteInHostSet ? .remoteIn : .setUpRemoteIn
         switch kind {
+        case .quipDown where reliability?.stopped == true:
+            // Stop Quip… on the Mac: nothing will bring it back by itself.
+            return Content(title: "Quip was stopped on your Mac", action: remoteIn)
         case .quipDown where reliability?.watching == true:
             return Content(title: "Quip on your Mac stopped. Restarting… usually under a minute",
                            action: downFor >= restartGrace ? remoteIn : nil)

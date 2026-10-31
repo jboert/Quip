@@ -101,7 +101,7 @@ final class ReliabilityStatusTests: XCTestCase {
         XCTAssertFalse(on.warn, "watching is not a warning", file: file, line: line)
         for status in [installedNotWatching, off] {
             let row = summary(status)
-            XCTAssertEqual(row.text, "Off — turn on in Quip on your Mac", file: file, line: line)
+            XCTAssertEqual(row.text, "Off", file: file, line: line)
             XCTAssertTrue(row.warn, "not watching must warn", file: file, line: line)
         }
     }
@@ -118,5 +118,19 @@ final class ReliabilityStatusTests: XCTestCase {
         }
         XCTExpectFailure("a summary that maps not-watching to On must fail the warn assertions", strict: true)
         assertSummaryRows(broken)
+    }
+
+    // MARK: Stop Quip… and Turn on
+
+    func test_stopped_roundTrips_andIsAbsentByDefault() throws {
+        let stopped = ReliabilityStatusMessage(watching: false, afterQuit: true, watchdog: true, stopped: true)
+        XCTAssertEqual(try JSONDecoder().decode(ReliabilityStatusMessage.self, from: JSONEncoder().encode(stopped)), stopped)
+        let plain = String(decoding: try JSONEncoder().encode(watching), as: UTF8.self)
+        XCTAssertFalse(plain.contains("stopped"), "an ordinary status carries no stopped key")
+    }
+
+    func test_turnOnMessage_wireType() throws {
+        let json = String(decoding: try JSONEncoder().encode(ReliabilityTurnOnMessage()), as: UTF8.self)
+        XCTAssertEqual(json, #"{"type":"reliability_turn_on"}"#)
     }
 }

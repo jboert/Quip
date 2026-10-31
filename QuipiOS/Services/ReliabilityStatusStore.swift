@@ -21,6 +21,6 @@ enum ReliabilityStatusStore {
     static func summary(_ status: ReliabilityStatusMessage?) -> (text: String, warn: Bool) {
         guard let status else { return ("Unknown", false) }
         if status.watching { return ("On", false) }
-        return ("Off — turn on in Quip on your Mac", true)
+        return ("Off", true)
     }
 }

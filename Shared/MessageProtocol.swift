@@ -401,14 +401,26 @@ struct ReliabilityStatusMessage: Codable, Sendable, Equatable {
     let watchdog: Bool
     /// Absent from a Mac that has never restarted Quip.
     let lastRestart: LastRestart?
+    /// True in the last status before Stop Quip… ends Quip on purpose, so
+    /// the phone says "stopped", not "restarting". Absent otherwise.
+    let stopped: Bool?
 
-    init(watching: Bool, afterQuit: Bool, watchdog: Bool, lastRestart: LastRestart? = nil) {
+    init(watching: Bool, afterQuit: Bool, watchdog: Bool, lastRestart: LastRestart? = nil,
+         stopped: Bool? = nil) {
         self.type = "reliability_status"
         self.watching = watching
         self.afterQuit = afterQuit
         self.watchdog = watchdog
         self.lastRestart = lastRestart
+        self.stopped = stopped
     }
+}
+
+/// Q-90: the phone asks the Mac to turn Keep Quip running (and both
+/// Advanced switches) on. Not accepted from a tunnel client.
+struct ReliabilityTurnOnMessage: Codable, Sendable, Equatable {
+    let type: String
+    init() { self.type = "reliability_turn_on" }
 }
 
 // MARK: - iPhone → Mac Messages

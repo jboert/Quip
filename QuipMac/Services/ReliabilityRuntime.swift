@@ -190,9 +190,13 @@ enum ReliabilityLaunch {
         let byAgent = ReliabilityAgents.launchedByAgent
         if !byAgent {
             // The owner opened Quip: earlier restarts no longer count toward
-            // a crash loop, and a crash-loop stop is lifted.
+            // a crash loop, and a crash-loop stop is lifted (and explained
+            // once, by the copy that runs).
             ReliabilityFiles.write(ReliabilityFiles.epochNow, to: ReliabilityFiles.manualLaunch)
-            try? FileManager.default.removeItem(at: ReliabilityFiles.crashLoopMarker)
+            if FileManager.default.fileExists(atPath: ReliabilityFiles.crashLoopMarker.path) {
+                try? FileManager.default.removeItem(at: ReliabilityFiles.crashLoopMarker)
+                UserDefaults.standard.set(true, forKey: ReliabilityCrashLoopNotice.pendingKey)
+            }
         }
         if ReliabilityAgents.sync() {
             log(.info, "agent settings changed; launchd is replacing this copy")
@@ -277,14 +281,18 @@ enum ReliabilityStop {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let service = "\(ReliabilityAgents.domain)/\(CrashRecoveryAgent.label)"
-        if ReliabilityAgents.launchedByAgent {
-            // Our own job: the bootout must outlive this process.
-            _ = ReliabilityAgents.spawnDetached("launchctl bootout \(service)")
-        } else {
-            ReliabilityAgents.launchctl(["bootout", service])
+        NotificationCenter.default.post(name: .quipStopping, object: nil)
+        // Give the "stopped" status a moment to leave before the socket goes.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let service = "\(ReliabilityAgents.domain)/\(CrashRecoveryAgent.label)"
+            if ReliabilityAgents.launchedByAgent {
+                // Our own job: the bootout must outlive this process.
+                _ = ReliabilityAgents.spawnDetached("launchctl bootout \(service)")
+            } else {
+                ReliabilityAgents.launchctl(["bootout", service])
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
     }
 }
 
@@ -327,7 +335,122 @@ enum ReliabilityReport {
     }
 }
 
+/// The phone's Turn on (`reliability_turn_on`), and anything else that turns
+/// every switch on.
+enum ReliabilityTurnOn {
+    @MainActor
+    static func apply(source: String) {
+        let d = UserDefaults.standard
+        for key in [ReliabilityPrefs.keepRunningKey, ReliabilityPrefs.afterQuitKey, ReliabilityPrefs.frozenKey] {
+            d.set(true, forKey: key)
+        }
+        QuipLog.write(severity: .info, subsystem: "launch",
+                      message: "reliability turned on (\(source))", to: LogPaths.webSocketPath)
+        let replaced = ReliabilityAgents.sync()
+        NotificationCenter.default.post(name: .quipReliabilityChanged, object: nil)
+        if !replaced, ReliabilityLaunch.handOffIfNeeded() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+        }
+    }
+}
+
+/// After a crash-loop stop, the owner's next open says why Quip had stopped.
+enum ReliabilityCrashLoopNotice {
+    static let pendingKey = "reliability.crashLoopNoticePending"
+
+    @MainActor
+    static func showIfPending() {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: pendingKey) else { return }
+        d.removeObject(forKey: pendingKey)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let alert = NSAlert()
+            alert.messageText = "Quip was stopped after crashing 3 times in 10 minutes"
+            alert.informativeText = "It is running again. Settings → General → Reliability lists the restarts, with Copy for a ticket."
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+    }
+}
+
+/// Mac Settings → Reliability: the last restarts, newest first.
+enum ReliabilityRestarts {
+    struct Entry: Equatable {
+        let at: Date
+        let reason: String
+        /// The same reason three or more times in the list: one bug, not three.
+        let repeated: Bool
+    }
+
+    /// Pure.
+    static func recent(restartsJSON: Data?, limit: Int = 5) -> [Entry] {
+        struct Raw: Decodable { let at: Double; let reason: String }
+        guard let data = restartsJSON,
+              let raw = try? JSONDecoder().decode([Raw].self, from: data) else { return [] }
+        let newest = raw.sorted { $0.at > $1.at }.prefix(limit)
+        let counts = Dictionary(newest.map { ($0.reason, 1) }, uniquingKeysWith: +)
+        return newest.map { Entry(at: Date(timeIntervalSince1970: $0.at), reason: $0.reason,
+                                  repeated: (counts[$0.reason] ?? 0) >= 3) }
+    }
+
+    /// Plain words for a reason.
+    static func words(_ reason: String) -> String {
+        switch reason {
+        case "crash": return "crashed"
+        case "hang": return "froze"
+        case "quit": return "was quit"
+        default: return reason.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    /// Pure: what "Copy for a ticket" puts on the clipboard. No home paths,
+    /// no window titles.
+    static func ticketText(_ entry: Entry, build: String, sample: String?) -> String {
+        var lines = [
+            "Quip restart: \(entry.reason)",
+            "at: \(entry.at.ISO8601Format())",
+            "build: \(build)",
+        ]
+        if entry.repeated { lines.append("same cause 3+ times in the last restarts") }
+        if let sample { lines.append("hang sample: ~/Library/Logs/Quip/\(sample)") }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The hang sample written for a hang at `at` (the watchdog names it by
+    /// the kill time, a few seconds before the restart is recorded).
+    static func sampleName(for entry: Entry, in names: [String]) -> String? {
+        guard entry.reason == "hang" else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return names
+            .compactMap { name -> (String, Date)? in
+                guard name.hasPrefix("hang-"), name.hasSuffix(".txt"),
+                      let d = f.date(from: String(name.dropFirst(5).dropLast(4))) else { return nil }
+                return (name, d)
+            }
+            .filter { abs($0.1.timeIntervalSince(entry.at)) <= 60 }
+            .min { abs($0.1.timeIntervalSince(entry.at)) < abs($1.1.timeIntervalSince(entry.at)) }?.0
+    }
+
+    /// For the Diagnostics bundle: watchdog.log, restarts.json and the last
+    /// three hang samples, where present.
+    static func diagnosticsFiles() -> [String] {
+        let logs = LogPaths.directory
+        let hangs = ((try? FileManager.default.contentsOfDirectory(atPath: logs.path)) ?? [])
+            .filter { $0.hasPrefix("hang-") && $0.hasSuffix(".txt") }
+            .sorted()
+            .suffix(3)
+            .map { logs.appendingPathComponent($0).path }
+        return [logs.appendingPathComponent("watchdog.log").path, ReliabilityFiles.restarts.path] + hangs
+    }
+}
+
 extension Notification.Name {
     /// Posted after the Reliability settings change, so the phone hears it.
     static let quipReliabilityChanged = Notification.Name("quip.reliabilityChanged")
+    /// Posted by Stop Quip… just before Quip stops on purpose.
+    static let quipStopping = Notification.Name("quip.stopping")
 }

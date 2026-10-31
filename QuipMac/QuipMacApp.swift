@@ -412,6 +412,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 Self.instanceLock = lock
                 // Q-90: the watchdog's heartbeat, and no App Nap.
                 QuipHeartbeat.shared.start()
+                ReliabilityCrashLoopNotice.showIfPending()
             case .alreadyRunning:
                 QuipLog.write(severity: .info, subsystem: "launch",
                               message: "another Quip already owns this login session — quitting this copy",
@@ -480,6 +481,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             forName: .quipReliabilityChanged, object: nil, queue: .main
         ) { [self] _ in
             MainActor.assumeIsolated { broadcastReliabilityStatus() }
+        }
+        // Q-90: Stop Quip… tells the phones before Quip goes, so they say
+        // "stopped" rather than "restarting".
+        NotificationCenter.default.addObserver(
+            forName: .quipStopping, object: nil, queue: .main
+        ) { [self] _ in
+            MainActor.assumeIsolated {
+                let a = ReliabilityPrefs.agents()
+                webSocketServer.broadcast(ReliabilityStatusMessage(
+                    watching: false, afterQuit: a.keepAliveAlways, watchdog: a.watchdog, stopped: true))
+            }
         }
 
         // CRITICAL: register the message + auth callbacks BEFORE
@@ -2474,6 +2486,9 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                let id = UUID(uuidString: msg.id) {
                 claudePreviewService.dismiss(id: id, closeOnDesktop: msg.closeOnDesktop)
             }
+
+        case "reliability_turn_on":
+            ReliabilityTurnOn.apply(source: "phone")
 
         case "set_claude_previews":
             if let msg = MessageCoder.decode(SetClaudePreviewsMessage.self, from: data) {

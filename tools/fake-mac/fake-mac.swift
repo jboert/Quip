@@ -343,10 +343,12 @@ struct ReliabilityStatusMsg: Encodable {
     let afterQuit: Bool
     let watchdog: Bool
     let lastRestart: LastRestart?
+    let stopped: Bool?
 
     var summary: String {
         "watching=\(watching) afterQuit=\(afterQuit) watchdog=\(watchdog)"
             + (lastRestart.map { " lastRestart=\($0.reason)@\(Int($0.at))" } ?? "")
+            + (stopped == true ? " stopped" : "")
     }
 }
 
@@ -1356,9 +1358,10 @@ final class FakeMac: @unchecked Sendable {
               wait <window>   mark it waiting_for_input and resend the layout
               idle <window>   mark it neutral (the fixture's state if that is not waiting) and resend
               front <window>  send frontmost_changed for it, as when it is raised on the Mac
-              reliability on|off|notwatching [crash|hang|crash_loop]
+              reliability on|off|notwatching|stopped [crash|hang|crash_loop]
                               store the Mac's restart protection and send reliability_status to every
-                              phone (and after each auth); a reason adds lastRestart at the current time
+                              phone (and after each auth); a reason adds lastRestart at the current time;
+                              stopped is the status Stop Quip… sends before Quip goes
               lines <window> <N>  serve N numbered lines (line 0001 …) as its terminal content; 0 restores
               reload          re-read the fixture: restores closed windows, states, content and edited prompts
               quit            close every connection and exit
@@ -1422,9 +1425,9 @@ final class FakeMac: @unchecked Sendable {
         case "reliability":
             let parts = arg.split(whereSeparator: \.isWhitespace).map { $0.lowercased() }
             let reasons = ["crash", "hang", "crash_loop"]
-            guard (1...2).contains(parts.count), ["on", "off", "notwatching"].contains(parts[0]),
+            guard (1...2).contains(parts.count), ["on", "off", "notwatching", "stopped"].contains(parts[0]),
                   parts.count == 1 || reasons.contains(parts[1]) else {
-                log.line("usage: reliability on|off|notwatching [crash|hang|crash_loop]")
+                log.line("usage: reliability on|off|notwatching|stopped [crash|hang|crash_loop]")
                 return
             }
             // notwatching: the switches are on, but the agent is not the
@@ -1433,7 +1436,8 @@ final class FakeMac: @unchecked Sendable {
             let status = ReliabilityStatusMsg(
                 watching: parts[0] == "on", afterQuit: installed, watchdog: installed,
                 lastRestart: parts.count == 2
-                    ? .init(reason: parts[1], at: Date().timeIntervalSince1970.rounded()) : nil)
+                    ? .init(reason: parts[1], at: Date().timeIntervalSince1970.rounded()) : nil,
+                stopped: parts[0] == "stopped" ? true : nil)
             reliability = status
             let n = broadcast(status)
             log.line("cmd reliability \(parts.joined(separator: " ")) -> reliability_status(\(status.summary)) "

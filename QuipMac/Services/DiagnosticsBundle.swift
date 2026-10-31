@@ -41,7 +41,8 @@ enum DiagnosticsBundle {
     /// files — zipping a dev machine's months of live logs made the two
     /// makeZip tests take 5+ minutes each locally.
     static func makeZip(maxBytes: Int? = nil,
-                        sources: [String] = [LogPaths.webSocketPath, LogPaths.pushPath, LogPaths.kokoroPath]) throws -> URL {
+                        sources: [String] = [LogPaths.webSocketPath, LogPaths.pushPath, LogPaths.kokoroPath]
+                            + ReliabilityRestarts.diagnosticsFiles()) throws -> URL {
         let timestamp = filenameTimestamp()
         let filename = "Quip-diagnostics-\(timestamp).zip"
         let tmpRoot = URL(fileURLWithPath: NSTemporaryDirectory())

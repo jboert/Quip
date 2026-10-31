@@ -113,7 +113,8 @@ def summary(m):
         last = m.get("lastRestart")
         restart = f"{last['reason']}@{last['at']}" if last else "none"
         return (f"{t} watching={m['watching']} afterQuit={m['afterQuit']} "
-                f"watchdog={m['watchdog']} lastRestart={restart}")
+                f"watchdog={m['watchdog']} lastRestart={restart}"
+                + (" stopped" if m.get("stopped") else ""))
     return t
 
 def stdin_loop():
@@ -227,7 +228,7 @@ for verb in wait idle front open lines; do
 done
 checks=$((checks + 1))
 grep -qE 'commands: .*open.*wait idle front lines reliability' "$LOG" || fail "the startup banner lists the new commands"
-expect_log "^ +reliability on\|off\|notwatching \[crash\|hang\|crash_loop\]" "help lists reliability"
+expect_log "^ +reliability on\|off\|notwatching\|stopped \[crash\|hang\|crash_loop\]" "help lists reliability"
 
 # reliability (Q-90): nothing is sent until the first command.
 checks=$((checks + 1))
@@ -243,10 +244,13 @@ expect_probe "^reliability_status watching=False afterQuit=True watchdog=True la
 cmd "reliability off"
 expect_probe "^reliability_status watching=False afterQuit=False watchdog=False lastRestart=none$" \
     "reliability off turns everything off"
+cmd "reliability stopped"
+expect_probe "^reliability_status watching=False afterQuit=True watchdog=True lastRestart=none stopped$" \
+    "reliability stopped: what Stop Quip… sends before Quip goes"
 sync_log
 reliability_before="$(count "$PROBE_OUT" '^reliability_status ')"
 cmd "reliability maybe"
-expect_log "usage: reliability on\|off\|notwatching \[crash\|hang\|crash_loop\]" "reliability rejects an unknown mode"
+expect_log "usage: reliability on\|off\|notwatching\|stopped \[crash\|hang\|crash_loop\]" "reliability rejects an unknown mode"
 cmd "reliability on frozen"
 cmd "reliability on crash extra"
 sync_log

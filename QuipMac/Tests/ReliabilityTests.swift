@@ -222,4 +222,50 @@ final class ReliabilityTests: XCTestCase {
         XCTAssertNil(ReliabilityReport.lastRestart(restartsJSON: nil, since: .distantPast))
         XCTAssertNil(ReliabilityReport.lastRestart(restartsJSON: Data("junk".utf8), since: .distantPast))
     }
+
+    // MARK: ReliabilityRestarts
+
+    func test_recent_newestFirst_limitFive_marksASameCauseThreeTimes() {
+        let json = Data(#"""
+        [{"at": 100, "reason": "hang"}, {"at": 200, "reason": "crash"}, {"at": 300, "reason": "hang"},
+         {"at": 400, "reason": "quit"}, {"at": 500, "reason": "hang"}, {"at": 600, "reason": "crash"},
+         {"at": 50, "reason": "hang"}]
+        """#.utf8)
+        let r = ReliabilityRestarts.recent(restartsJSON: json)
+        XCTAssertEqual(r.map(\.reason), ["crash", "hang", "quit", "hang", "crash"])
+        XCTAssertEqual(r.first?.at, Date(timeIntervalSince1970: 600))
+        XCTAssertEqual(r.map(\.repeated), [false, false, false, false, false], "only two hangs among the last five")
+
+        let three = Data(#"[{"at": 1, "reason": "hang"}, {"at": 2, "reason": "hang"}, {"at": 3, "reason": "hang"}, {"at": 4, "reason": "crash"}]"#.utf8)
+        XCTAssertEqual(ReliabilityRestarts.recent(restartsJSON: three).map(\.repeated), [false, true, true, true])
+        XCTAssertEqual(ReliabilityRestarts.recent(restartsJSON: nil), [])
+    }
+
+    func test_ticketText_hasNoHomePath() {
+        let e = ReliabilityRestarts.Entry(at: Date(timeIntervalSince1970: 1_793_415_963), reason: "hang", repeated: true)
+        let t = ReliabilityRestarts.ticketText(e, build: "1.5.7 (1708) f9ee248", sample: "hang-20261031T030603Z.txt")
+        XCTAssertEqual(t, """
+        Quip restart: hang
+        at: 2026-10-31T03:06:03Z
+        build: 1.5.7 (1708) f9ee248
+        same cause 3+ times in the last restarts
+        hang sample: ~/Library/Logs/Quip/hang-20261031T030603Z.txt
+        """)
+        XCTAssertFalse(t.contains(NSHomeDirectory()))
+    }
+
+    func test_sampleName_matchesTheHangWithinAMinute() {
+        let e = ReliabilityRestarts.Entry(at: Date(timeIntervalSince1970: 1_793_415_963), reason: "hang", repeated: false)
+        let names = ["hang-20261031T030603Z.txt", "hang-20261030T010000Z.txt", "watchdog.log"]
+        XCTAssertEqual(ReliabilityRestarts.sampleName(for: e, in: names), "hang-20261031T030603Z.txt")
+        let crash = ReliabilityRestarts.Entry(at: e.at, reason: "crash", repeated: false)
+        XCTAssertNil(ReliabilityRestarts.sampleName(for: crash, in: names))
+        let later = ReliabilityRestarts.Entry(at: e.at.addingTimeInterval(3600), reason: "hang", repeated: false)
+        XCTAssertNil(ReliabilityRestarts.sampleName(for: later, in: names))
+    }
+
+    func test_turnOn_isRefusedFromATunnel() {
+        XCTAssertEqual(WebSocketServer.refusedTunnelType(in: Data(#"{"type":"reliability_turn_on"}"#.utf8)),
+                       "reliability_turn_on")
+    }
 }

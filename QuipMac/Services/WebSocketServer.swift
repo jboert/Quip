@@ -212,6 +212,7 @@ final class WebSocketServer {
     /// stay with the owner's LAN / Tailscale phones.
     nonisolated static let localOnlyMessageTypes: Set<String> = [
         "claude_preview_request", "claude_preview_dismiss", "set_claude_previews",
+        "reliability_turn_on",
     ]
 
     /// The type of `data` if a tunnel client may not send it, else nil. Pure.

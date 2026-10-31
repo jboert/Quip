@@ -141,4 +141,22 @@ final class MacDownBannerTests: XCTestCase {
                        "mac_down kind=quip_down probe_ms=5")
         XCTAssertNil(MacDownBanner.logLine(previous: .quipDown, next: .quipDown, probeMs: 5))
     }
+
+    // MARK: Stop Quip… on the Mac
+
+    func test_stopped_saysStopped_offersRemoteInAtOnce() {
+        let stopped = ReliabilityStatusMessage(watching: false, afterQuit: true, watchdog: true, stopped: true)
+        XCTAssertNil(MacDownBanner.content(kind: .quipDown, downFor: 14, remoteInHostSet: true, reliability: stopped))
+        XCTAssertEqual(MacDownBanner.content(kind: .quipDown, downFor: 15, remoteInHostSet: true, reliability: stopped),
+                       Content(title: "Quip was stopped on your Mac", action: .remoteIn))
+        XCTAssertEqual(MacDownBanner.content(kind: .quipDown, downFor: 15, remoteInHostSet: false, reliability: stopped),
+                       Content(title: "Quip was stopped on your Mac", action: .setUpRemoteIn))
+        // Even a status that also says watching: stopped wins, nothing restarts it.
+        let both = ReliabilityStatusMessage(watching: true, afterQuit: true, watchdog: true, stopped: true)
+        XCTAssertEqual(MacDownBanner.content(kind: .quipDown, downFor: 20, remoteInHostSet: true, reliability: both)?.title,
+                       "Quip was stopped on your Mac")
+        // An offline Mac is still offline.
+        XCTAssertEqual(MacDownBanner.content(kind: .offline, downFor: 20, remoteInHostSet: true, reliability: stopped)?.action,
+                       .checkTailscale)
+    }
 }

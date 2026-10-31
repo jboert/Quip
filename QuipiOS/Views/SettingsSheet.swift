@@ -383,6 +383,14 @@ struct SettingsSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(autoRestart.warn ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     .multilineTextAlignment(.trailing)
+                if autoRestart.warn, client.isConnected {
+                    // Asks the Mac to turn Keep Quip running on (Q-90 US-006).
+                    Button("Turn on") { client.send(ReliabilityTurnOnMessage()) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("reliabilityTurnOn")
+                }
             }
             // Q-86: which Mac build this phone talks to, rendered by the same
             // BuildInfo.shortDisplay as the Version row below. Absent from a
