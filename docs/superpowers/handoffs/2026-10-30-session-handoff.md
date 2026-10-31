@@ -62,3 +62,7 @@ Installed on the iPhone at `b70769f`. Open: the Mac wiring (owner present), and 
 ## Q-90 restart frames (2026-10-31)
 
 `85e3e8b`: each restart row in Mac Settings → Reliability lists the top three Quip frames (crash: `.ips` faulting thread; hang: watchdog sample), and so do Copy for a ticket and the crash-loop notice. Mac installed at `85e3e8b` via `tools/install-mac.sh` (Developer ID, launchd pid). Owner to glance: the 03:06 hang row should show `main`; the two `kill -9` rows have no frames (no report). Still open in Q-90: the phone's "keeps crashing" / "disk full" wording (no channel while Quip is down), and the owner checks in the wishlist.
+
+## Q-90 crash-loop check on hardware (2026-10-31, 06:01Z)
+
+Three `kill -9` at 06:01:17 / 06:01:31 / 06:02:02Z: launchd relaunched after the first two; the watchdog logged `crash_loop restarts=3 window=10m action=stopped retry_at=1793428350` at 06:02:30Z, booted the agent out (`launchctl print` 113), wrote `stoppedForCrashLoop`; no Quip running. Phone logged `mac_down kind=quip_down` between kills. Manual `open` at ~06:04Z: handed off to launchd, marker cleared, one-time notice shown ("Quip was stopped after crashing 3 times in 10 minutes"; no frames, as kill -9 leaves no report). Not verified: the 30-min automatic retry (Quip was reopened by hand first; covered by run-watchdog-tests.sh), and the phone screen during the stop.
