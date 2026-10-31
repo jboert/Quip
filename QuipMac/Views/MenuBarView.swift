@@ -435,8 +435,10 @@ struct MenuBarView: View {
 
             Spacer()
 
-            Button("Quit") {
-                NSApplication.shared.terminate(nil)
+            // Q-90: with "Restart after Quit" on, a plain quit comes back, so
+            // this stops Quip on purpose (confirmed first).
+            Button(ReliabilityStop.menuTitle) {
+                ReliabilityStop.quitOrStop()
             }
             .buttonStyle(.plain)
             .font(.caption)

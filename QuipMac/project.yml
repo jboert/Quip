@@ -26,6 +26,7 @@ targets:
           - "*.entitlements"
           - "*.xcodeproj/**"
           - "Resources/cloudflared"
+          - "Resources/quip-watchdog.sh"
           - "build/**"
           - ".claude-flow/**"
           - "Tests/**"
@@ -33,6 +34,9 @@ targets:
       - path: ../Shared
         excludes:
           - "Tests/**"
+      # Q-90: the hang watchdog, run by launchd as `/bin/sh <this file>`.
+      - path: Resources/quip-watchdog.sh
+        buildPhase: resources
     dependencies:
       - package: WhisperKit
       # Q-87: Claude Code hook helper, shipped at Contents/MacOS/quip-claude-hook

@@ -394,6 +394,14 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // cancelled job). Unit tests build their own objects; they need none of this.
         if SingleInstanceGuard.isRunningTests { return }
 
+        // Q-90: launchd owns the running Quip. A copy the owner opened hands
+        // the launch to the crash agent and exits 0 before taking the lock,
+        // so the copy that runs is the one launchd restarts.
+        if ReliabilityLaunch.handOffIfNeeded() {
+            NSApp.terminate(nil)
+            return
+        }
+
         // Refuse to be the second Quip. The login item and CrashRecoveryAgent's
         // LaunchAgent both start us at login and neither knows about the other,
         // so without this the user gets two menu-bar icons and two servers
@@ -402,6 +410,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             switch SingleInstanceGuard.claim(at: SingleInstanceGuard.defaultLockURL) {
             case .acquired(let lock):
                 Self.instanceLock = lock
+                // Q-90: the watchdog's heartbeat, and no App Nap.
+                QuipHeartbeat.shared.start()
             case .alreadyRunning:
                 QuipLog.write(severity: .info, subsystem: "launch",
                               message: "another Quip already owns this login session — quitting this copy",
@@ -464,6 +474,12 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             MainActor.assumeIsolated {
                 swrmProjectStore.stopAll()
             }
+        }
+        // Q-90: the phone hears a Reliability settings change at once.
+        NotificationCenter.default.addObserver(
+            forName: .quipReliabilityChanged, object: nil, queue: .main
+        ) { [self] _ in
+            MainActor.assumeIsolated { broadcastReliabilityStatus() }
         }
 
         // CRITICAL: register the message + auth callbacks BEFORE
@@ -571,6 +587,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 self.webSocketServer.broadcast(MacBuildMessage(
                     stamp: BuildInfo.current, deviceID: WebSocketServer.deviceID()))
                 self.broadcastWhisperStatus()
+                self.broadcastReliabilityStatus()
                 self.broadcastClaudePreviews()
                 // Push the prompt-library catalog so a fresh phone sees
                 // the user's saved prompts without waiting for the next
@@ -2700,6 +2717,17 @@ private static let recentScrapeTTL: TimeInterval = 0.75
 
     private func broadcastWhisperStatus() {
         webSocketServer.broadcast(WhisperStatusMessage(state: whisperStatusStore.state))
+    }
+
+    /// Q-90: whether launchd will bring this Quip back. Reading the agent
+    /// runs launchctl, so it happens off the main thread.
+    private func broadcastReliabilityStatus() {
+        let launchedAt = QuipHeartbeat.shared.startedAt
+        let server = webSocketServer
+        DispatchQueue.global(qos: .utility).async {
+            let status = ReliabilityReport.current(launchedAt: launchedAt)
+            DispatchQueue.main.async { server.broadcast(status) }
+        }
     }
 
     private func startWhisperReaper() {

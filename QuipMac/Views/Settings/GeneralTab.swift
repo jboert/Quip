@@ -18,9 +18,12 @@ struct GeneralTab: View {
     /// Widens the phone's window list to every visible app, not just terminals.
     /// Off by default: it is a real increase in what the phone can type into.
     @AppStorage("mirrorAllApps") private var mirrorAllApps = false
-    @AppStorage("crashRecoveryEnabled") private var crashRecoveryEnabled = false
-    @State private var crashRecoveryError: String?
-    @State private var crashRecoveryReverting = false
+    // Q-90 Reliability, all on by default (ReliabilityPrefs).
+    @AppStorage(ReliabilityPrefs.keepRunningKey) private var keepRunning = true
+    @AppStorage(ReliabilityPrefs.afterQuitKey) private var restartAfterQuit = true
+    @AppStorage(ReliabilityPrefs.frozenKey) private var restartFrozen = true
+    @State private var reliabilityStatus: ReliabilityStatusMessage?
+    @State private var reliabilityError: String?
 
     var body: some View {
         // Ordered by why you open General: permissions first (the actionable
@@ -88,44 +91,67 @@ struct GeneralTab: View {
             }
 
             Section("Reliability") {
-                Toggle("Auto-restart on crash", isOn: $crashRecoveryEnabled)
-                    .onChange(of: crashRecoveryEnabled) { _, new in
-                        applyCrashRecoveryToggle(new)
-                    }
-                Text("If Quip crashes, macOS launchd relaunches it after 30s. Cmd+Q and normal quits do not trigger relaunch. Installs ~/Library/LaunchAgents/\(CrashRecoveryAgent.label).plist.")
+                Toggle("Keep Quip running", isOn: $keepRunning)
+                    .onChange(of: keepRunning) { _, _ in applyReliability() }
+                Text(reliabilityLine)
+                    .font(.caption)
+                    .foregroundStyle(reliabilityStatus?.watching == false && keepRunning ? .orange : .secondary)
+                DisclosureGroup("Advanced") {
+                    Toggle("Restart after Quit", isOn: $restartAfterQuit)
+                        .onChange(of: restartAfterQuit) { _, _ in applyReliability() }
+                    Toggle("Restart a frozen Quip", isOn: $restartFrozen)
+                        .onChange(of: restartFrozen) { _, _ in applyReliability() }
+                }
+                .disabled(!keepRunning)
+                Text("Quip comes back by itself after a crash, a quit or a freeze, so your phone can reach this Mac. Stop Quip… in the menu bar stops it on purpose.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if let err = crashRecoveryError {
+                if let err = reliabilityError {
                     Text(err)
                         .font(.caption)
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                 }
             }
+            .task { refreshReliabilityStatus() }
         }
         .formStyle(.grouped)
     }
 
-    /// Wires the Reliability toggle to install/uninstall (see CrashRecoveryToggle).
-    /// A failure writes the old value back, which fires `.onChange` again —
-    /// `crashRecoveryReverting` swallows that echo so it neither re-runs the
-    /// opposite operation nor clears the error it just set.
-    private func applyCrashRecoveryToggle(_ requested: Bool) {
-        if crashRecoveryReverting {
-            crashRecoveryReverting = false
+    /// Plain words under the switch (spec §5).
+    private var reliabilityLine: String {
+        guard keepRunning else { return "Off: if Quip stops, your phone can't reach this Mac until you open it." }
+        guard let status = reliabilityStatus else { return "Checking…" }
+        guard status.watching else { return "Not watching this Quip yet. Quit and open Quip to fix it." }
+        if let last = status.lastRestart {
+            return "Watching Quip · restarted after \(last.reason.replacingOccurrences(of: "_", with: " ")) at \(Date(timeIntervalSince1970: last.at).formatted(date: .omitted, time: .shortened))"
+        }
+        return "Watching Quip"
+    }
+
+    /// Q-90: applies the switches to the launch agents. A copy that launchd
+    /// did not start hands over to the agent's copy (and quits) when the
+    /// agent is now on, so the Quip that runs is the one launchd restarts.
+    private func applyReliability() {
+        guard ReliabilityAgents.isInstallLocation else {
+            reliabilityError = "Move Quip to /Applications to use this."
             return
         }
-        let result = CrashRecoveryToggle.resolve(requested: requested) { install in
-            if install {
-                try CrashRecoveryAgent.install()
-            } else {
-                try CrashRecoveryAgent.uninstall()
-            }
+        reliabilityError = nil
+        let replaced = ReliabilityAgents.sync()
+        NotificationCenter.default.post(name: .quipReliabilityChanged, object: nil)
+        if !replaced, ReliabilityLaunch.handOffIfNeeded() {
+            NSApp.terminate(nil)
+            return
         }
-        crashRecoveryError = result.error
-        if result.enabled != requested {
-            crashRecoveryReverting = true
-            crashRecoveryEnabled = result.enabled
+        refreshReliabilityStatus()
+    }
+
+    private func refreshReliabilityStatus() {
+        let launchedAt = QuipHeartbeat.shared.startedAt
+        DispatchQueue.global(qos: .utility).async {
+            let status = ReliabilityReport.current(launchedAt: launchedAt)
+            DispatchQueue.main.async { reliabilityStatus = status }
         }
     }
 
