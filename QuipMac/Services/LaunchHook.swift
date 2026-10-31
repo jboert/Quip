@@ -32,6 +32,17 @@ final class LaunchHook {
 final class QuipAppDelegate: NSObject, NSApplicationDelegate {
     static let launchHook = LaunchHook()
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Q-90: launchd owns the running Quip. A copy the owner opened hands
+        // the launch to the crash agent and exits 0 here, before the lock and
+        // before it has a Dock tile (Info.plist starts Quip as LSUIElement),
+        // so the Dock never shows it beside the copy launchd starts.
+        if !SingleInstanceGuard.isRunningTests, ReliabilityLaunch.handOffIfNeeded() {
+            exit(0)
+        }
+        NSApp.setActivationPolicy(.regular)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.launchHook.finishLaunching()
     }

@@ -399,13 +399,8 @@ private static let recentScrapeTTL: TimeInterval = 0.75
         // cancelled job). Unit tests build their own objects; they need none of this.
         if SingleInstanceGuard.isRunningTests { return }
 
-        // Q-90: launchd owns the running Quip. A copy the owner opened hands
-        // the launch to the crash agent and exits 0 before taking the lock,
-        // so the copy that runs is the one launchd restarts.
-        if ReliabilityLaunch.handOffIfNeeded() {
-            NSApp.terminate(nil)
-            return
-        }
+        // Q-90: a copy the owner opened has already handed its launch to
+        // launchd in QuipAppDelegate.applicationWillFinishLaunching.
 
         // Refuse to be the second Quip. The login item and CrashRecoveryAgent's
         // LaunchAgent both start us at login and neither knows about the other,

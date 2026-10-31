@@ -95,6 +95,9 @@ targets:
       properties:
         CFBundleDisplayName: Quip
         CFBundleShortVersionString: 1.5.7
+        # Q-90: start with no Dock tile. QuipAppDelegate gives the copy that
+        # runs its tile; a copy that hands its launch to launchd never gets one.
+        LSUIElement: true
         NSAppleEventsUsageDescription: Quip needs to control Terminal and iTerm2 to manage Claude Code sessions.
         NSAccessibilityUsageDescription: Quip needs Accessibility access to arrange and manage windows on your screen.
         NSBonjourServices:
