@@ -4,6 +4,13 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-10-31 (Q-90 Mac wiring installed)
+
+- **Shipped + installed:** `474cf00` watchdog restart reasons (owner's open / reboot / install are not crashes; quit is `quit`), `f9ee248` launchd owns the running Quip (hand-off, heartbeat + App Nap opt-out, Stop Quip…, Reliability settings, `reliability_status`, `tools/install-mac.sh`). Mac at `f9ee248`.
+- **Verified on the Mac:** agent-owned pid, `kill -9` back in 4 s, `kill -STOP` sampled + killed + back.
+- **Owner to check:** phone Settings → Auto-restart reads "On"; Mac permissions (Accessibility, Screen Recording) still granted for the launchd-started copy; Stop Quip… stays stopped and the phone shows Remote in; three `kill -9` in 10 min → stopped.
+- **Next:** US-006 phone "Turn on" request; US-007 restart list + Copy for a ticket + Diagnostics files + crash-loop banner; phone wording for "keeps crashing" / "disk full" / "was stopped" (needs the Mac to report those states).
+
 ## Session log — 2026-10-30, night (Q-90 PRD run through Ralph, merged `df5ff35`)
 
 - **Shipped (phone, live now):** after 15 s without its Mac the phone probes Screen Sharing (TCP 5900, once a minute) and says "Quip isn't running on your Mac" + Remote in, or "Can't reach your Mac" + Check Tailscale. A Mac that reports restart protection gets "Restarting… usually under a minute", with Remote in from 90 s. Settings shows an Auto-restart row (reads Unknown until the Mac sends `reliability_status`). A once-per-restart toast says why Quip restarted.

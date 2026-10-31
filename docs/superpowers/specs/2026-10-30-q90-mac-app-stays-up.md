@@ -149,3 +149,18 @@ Mac Settings → General → Reliability, all on by default:
   6. `kill -9` three times within 10 min → stopped; the phone says "keeps crashing"; 30 min later one retry.
   7. Menu → Stop Quip… → stays stopped; the phone says "Quip was stopped". Open Quip → protected again.
 - Phone hardware check (remote, on cellular): Mac row shows "Auto-restart: on"; quit Quip on the Mac → "Restarting…" → back on its own; Stop Quip… → **Remote in** → Screen Sharing → open Quip → the phone reconnects and the banner goes away.
+
+## 9. As built (2026-10-31)
+
+Phone: merged `df5ff35` (Ralph run). Mac: `474cf00` (watchdog restart reasons), `f9ee248` (wiring), installed with `tools/install-mac.sh`.
+
+Differences from the stories above:
+- No login item to drop: the "Launch at login" switch was never wired; the agent's `RunAtLoad` is the login launch.
+- The watchdog tells restarts apart (`wd_restart_reason`): an install, the owner's open (`manual-launch` marker, 5 min) and a reboot are not restarts; a quit through the app (`exit` marker) is `quit`. Restarts before the owner's last open do not count toward a crash loop, and opening Quip lifts a crash-loop stop.
+- Not done yet: US-006's phone **Turn on** request, US-007's restart list / Copy for a ticket / Diagnostics bundle files / crash-loop Mac banner, and the phone's "keeps crashing", "disk is full" and "was stopped" wording (the phone does not yet hear those states).
+
+Hardware checks on the owner's Mac (2026-10-31, `f9ee248`):
+1. ✓ `launchctl print` → running, pid = Quip's pid; `XPC_SERVICE_NAME` = the agent label.
+2. ✓ `kill -9` → back in 4 s. (Not recorded: within the install's 5 min grace.)
+3. ✓ `kill -STOP` → `hang … action=killed sample=hang-….txt`, relaunched; restarts.json `hang`. 171 s, because the first two stale checks fell in the install grace.
+4–7 and the phone checks: open.
