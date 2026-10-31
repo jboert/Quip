@@ -1524,6 +1524,26 @@ enum LatencySummary: Equatable {
     }
 }
 
+#if DEBUG
+/// Debug-only stack budget for the main view tree (see `MainiOSView.body`).
+/// Half the phone's 1 MB main-thread stack, so a regression fails loudly in the
+/// simulator, which has 8 MB, before it reaches a phone as a launch crash.
+enum StackHeadroom {
+    static let budget = 512 * 1024
+
+    static func check(_ site: StaticString) {
+        guard Thread.isMainThread else { return }
+        var marker = 0
+        let used = withUnsafeMutablePointer(to: &marker) { ptr in
+            Int(bitPattern: UInt(bitPattern: pthread_get_stackaddr_np(pthread_self())) - UInt(bitPattern: ptr))
+        }
+        if used > budget {
+            assertionFailure("\(site) runs with \(used / 1024) KB of main-thread stack used; the phone has 1 MB. Put AnyView at the base of the chain that grew.")
+        }
+    }
+}
+#endif
+
 struct MainiOSView: View {
     @Bindable var client: WebSocketClient
     /// Q-87: the Claude preview open full screen, if any.
@@ -1863,6 +1883,15 @@ struct MainiOSView: View {
     // unrelated one-line edit (Q-26). It is now split into stages, each of
     // which type-checks on its own. Modifier order is unchanged: the stages
     // apply them in exactly the sequence the single chain did.
+    //
+    // The AnyView at the base of each stage, and around the big children in
+    // rootLayers, is load-bearing in Debug builds. Unoptimized code gives every
+    // temporary in a modifier chain its own stack slot, so ~40 modifiers over a
+    // 13 KB view cost ~600 KB of stack. The phone's main thread has 1 MB (the
+    // simulator's has 8 MB, so the simulator never showed it): d51b9b6 pushed
+    // windowLayout past it and the Debug app died at launch with a stack-guard
+    // SIGSEGV. Erasing a stage's input keeps its temporaries a few bytes wide;
+    // peak use went from 1078 KB to 251 KB. StackHeadroom trips at 512 KB.
     var body: some View {
         contentWithSheets
     }
@@ -1882,7 +1911,7 @@ struct MainiOSView: View {
                 if let pair = manager.active.qaPair,
                    let target = windows.first(where: { $0.id == pair.targetId }),
                    let terminal = windows.first(where: { $0.id == pair.terminalId }) {
-                    QAPairLayoutView(
+                    AnyView(QAPairLayoutView(
                         target: target,
                         terminal: terminal,
                         selectedWindowId: $selectedWindowId,
@@ -1912,20 +1941,20 @@ struct MainiOSView: View {
                             qaPickerSourceWindow = pair.targetId
                             showQAPicker = true
                         }
-                    )
+                    ))
                 } else {
                     if !client.isConnected && !client.isConnecting {
-                        connectBar
+                        AnyView(connectBar
                             .padding(.horizontal, 6)
-                            .padding(.top, 4)
+                            .padding(.top, 4))
                     } else if client.isConnected && !client.isAuthenticated {
-                        authenticatingBar
+                        AnyView(authenticatingBar
                             .padding(.horizontal, 6)
-                            .padding(.top, 2)
+                            .padding(.top, 2))
                     } else {
-                        connectedBar
+                        AnyView(connectedBar
                             .padding(.horizontal, 6)
-                            .padding(.top, 2)
+                            .padding(.top, 2))
                     }
 
                     if !client.isConnected, macDownKind != nil {
@@ -1941,18 +1970,18 @@ struct MainiOSView: View {
                     }
 
                     if isPortrait {
-                        portraitContentSection
+                        AnyView(portraitContentSection)
                     } else {
-                        landscapeContentSection
+                        AnyView(landscapeContentSection)
                         if showTextInput {
-                            textInputBar
+                            AnyView(textInputBar)
                         }
                     }
 
                     if client.isAuthenticated && !windows.isEmpty {
-                        portraitControls
+                        AnyView(portraitControls
                             .padding(.horizontal, 8)
-                            .padding(.top, 4)
+                            .padding(.top, 4))
                     }
                 }
 
@@ -1965,7 +1994,7 @@ struct MainiOSView: View {
 
     /// Recording backdrop, TTS banner, volume-button sink and the error toast.
     private var contentWithOverlays: some View {
-        rootLayers
+        AnyView(rootLayers)
         .overlay { recordingOverlay }
         .overlay { speakingOverlay }
         .allowsHitTesting(true)
@@ -2148,7 +2177,7 @@ struct MainiOSView: View {
 
     /// Lifecycle wiring — onAppear / onChange / onReceive.
     private var contentWithLifecycle: some View {
-        contentWithOverlays
+        AnyView(contentWithOverlays)
         .onAppear {
             updateOrientation()
             // One-shot first-launch seed for the slot row + custom-button
@@ -2351,7 +2380,7 @@ struct MainiOSView: View {
 
     /// Sheets, covers, confirmation dialogs and alerts.
     private var contentWithSheets: some View {
-        contentWithLifecycle
+        AnyView(contentWithLifecycle)
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { code in
                 showQRScanner = false
@@ -4790,6 +4819,10 @@ struct MainiOSView: View {
         // Inside windowLayout rather than at each of its four call sites so
         // every layout — portrait, landscape, expanded — gets them for free.
         VStack(spacing: 0) {
+            #if DEBUG
+            // The deepest point of the launch render; see the note on `body`.
+            let _ = StackHeadroom.check("windowLayout")
+            #endif
             filterChips
             minimizedTray
             windowCanvas
