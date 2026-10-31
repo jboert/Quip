@@ -364,9 +364,13 @@ enum ReliabilityCrashLoopNotice {
         guard d.bool(forKey: pendingKey) else { return }
         d.removeObject(forKey: pendingKey)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let crashes = ReliabilityRestarts.recent(restartsJSON: try? Data(contentsOf: ReliabilityFiles.restarts))
+                .filter { $0.reason == "crash" }
+            let frames = crashes.first.flatMap { ReliabilityFrames.load(for: [$0])[$0.at] } ?? []
             let alert = NSAlert()
             alert.messageText = "Quip was stopped after crashing 3 times in 10 minutes"
             alert.informativeText = "It is running again. Settings → General → Reliability lists the restarts, with Copy for a ticket."
+                + (frames.isEmpty ? "" : "\n\nLast crash in:\n" + frames.joined(separator: "\n"))
             alert.addButton(withTitle: "OK")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
@@ -406,13 +410,17 @@ enum ReliabilityRestarts {
 
     /// Pure: what "Copy for a ticket" puts on the clipboard. No home paths,
     /// no window titles.
-    static func ticketText(_ entry: Entry, build: String, sample: String?) -> String {
+    static func ticketText(_ entry: Entry, build: String, sample: String?, frames: [String] = []) -> String {
         var lines = [
             "Quip restart: \(entry.reason)",
             "at: \(entry.at.ISO8601Format())",
             "build: \(build)",
         ]
         if entry.repeated { lines.append("same cause 3+ times in the last restarts") }
+        if !frames.isEmpty {
+            lines.append("top Quip frames:")
+            lines += frames.enumerated().map { "  \($0.offset + 1). \($0.element)" }
+        }
         if let sample { lines.append("hang sample: ~/Library/Logs/Quip/\(sample)") }
         return lines.joined(separator: "\n")
     }
@@ -445,6 +453,119 @@ enum ReliabilityRestarts {
             .suffix(3)
             .map { logs.appendingPathComponent($0).path }
         return [logs.appendingPathComponent("watchdog.log").path, ReliabilityFiles.restarts.path] + hangs
+    }
+}
+
+/// Spec US-007: the top three Quip frames of a restart, innermost first: from
+/// the crash report for a crash, from the watchdog's `sample` for a hang.
+enum ReliabilityFrames {
+    /// Images holding Quip's own code (a Debug build splits it into a dylib).
+    static let quipImages: Set<String> = ["Quip", "Quip.debug.dylib"]
+    /// Frames that name nothing a ticket reader could look up.
+    static let unnamed: Set<String> = ["<deduplicated_symbol>", "???"]
+
+    struct Report: Equatable {
+        let at: Date
+        let frames: [String]
+    }
+
+    /// Pure: a Mac Quip crash report (.ips). Nil for anything else, such as
+    /// the simulator's Quip, whose reports land in the same folder.
+    static func fromIPS(_ text: String) -> Report? {
+        let parts = text.split(separator: "\n", maxSplits: 1)
+        guard parts.count == 2,
+              let header = try? JSONSerialization.jsonObject(with: Data(parts[0].utf8)) as? [String: Any],
+              let body = try? JSONSerialization.jsonObject(with: Data(parts[1].utf8)) as? [String: Any],
+              let path = body["procPath"] as? String, path.hasSuffix(".app/Contents/MacOS/Quip"),
+              let stamp = header["timestamp"] as? String, let at = ipsDate(stamp) else { return nil }
+        let images = (body["usedImages"] as? [[String: Any]] ?? []).map { $0["name"] as? String }
+        let threads = body["threads"] as? [[String: Any]] ?? []
+        let faulting = body["faultingThread"] as? Int ?? 0
+        guard threads.indices.contains(faulting) else { return Report(at: at, frames: []) }
+        let frames = (threads[faulting]["frames"] as? [[String: Any]] ?? []).compactMap { f -> String? in
+            guard let i = f["imageIndex"] as? Int, images.indices.contains(i),
+                  let name = images[i], quipImages.contains(name),
+                  let symbol = f["symbol"] as? String, !unnamed.contains(symbol) else { return nil }
+            return label(symbol, file: f["sourceFile"] as? String, line: f["sourceLine"] as? Int)
+        }
+        return Report(at: at, frames: Array(frames.prefix(3)))
+    }
+
+    /// Pure: the main thread's heaviest stack in a `sample` report, Quip's
+    /// innermost three frames. `sample` lists children heaviest first, so the
+    /// heaviest stack is the run of lines that each go one level deeper.
+    static func fromSample(_ text: String) -> [String] {
+        guard let start = text.range(of: "Call graph:\n") else { return [] }
+        var path: [String] = []
+        var lastDepth = -1
+        var threadDepth: Int?
+        for line in text[start.upperBound...].split(separator: "\n", omittingEmptySubsequences: false) {
+            guard let m = line.firstMatch(of: #/^([\s+!:|]*)\d+ (.+?)  \(in ([^)]+)\)(?:.*\]  (\S+):(\d+))?/#) else {
+                // The thread line ("2295 Thread_…") opens the call graph; the
+                // next one closes the main thread.
+                if threadDepth == nil, let t = line.firstMatch(of: #/^([\s+!:|]*)\d+ Thread_/#) {
+                    threadDepth = t.1.count
+                    continue
+                }
+                break
+            }
+            let depth = m.1.count
+            guard threadDepth != nil, depth > lastDepth else { break }
+            lastDepth = depth
+            if quipImages.contains(String(m.3)), !unnamed.contains(String(m.2)) {
+                path.append(label(String(m.2), file: m.4.map(String.init), line: m.5.flatMap { Int($0) }))
+            }
+        }
+        return Array(path.reversed().prefix(3))
+    }
+
+    /// The crash report a crash restart came from. The report is written at
+    /// the crash; the watchdog records the restart on its next check, 30 s
+    /// apart, so the report is up to 2 min older than the entry.
+    static func crashReport(for entry: ReliabilityRestarts.Entry, in reports: [Report]) -> Report? {
+        guard entry.reason == "crash" else { return nil }
+        return reports
+            .filter { (-10...120).contains(entry.at.timeIntervalSince($0.at)) }
+            .min { abs(entry.at.timeIntervalSince($0.at)) < abs(entry.at.timeIntervalSince($1.at)) }
+    }
+
+    /// The frames for each entry, read from disk. Call it off the main thread.
+    static func load(for entries: [ReliabilityRestarts.Entry]) -> [Date: [String]] {
+        guard let oldest = entries.map(\.at).min() else { return [:] }
+        let fm = FileManager.default
+        let reportsDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/DiagnosticReports")
+        let reports: [Report] = entries.contains(where: { $0.reason == "crash" })
+            ? ((try? fm.contentsOfDirectory(at: reportsDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+                .filter { $0.lastPathComponent.hasPrefix("Quip-") && $0.pathExtension == "ips" }
+                .filter { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast) >= oldest.addingTimeInterval(-300) }
+                .compactMap { (try? String(contentsOf: $0, encoding: .utf8)).flatMap(fromIPS) }
+            : []
+        let logs = LogPaths.directory
+        let names = (try? fm.contentsOfDirectory(atPath: logs.path)) ?? []
+        var out: [Date: [String]] = [:]
+        for entry in entries {
+            if let report = crashReport(for: entry, in: reports), !report.frames.isEmpty {
+                out[entry.at] = report.frames
+            } else if let sample = ReliabilityRestarts.sampleName(for: entry, in: names),
+                      let text = try? String(contentsOf: logs.appendingPathComponent(sample), encoding: .utf8) {
+                let frames = fromSample(text)
+                if !frames.isEmpty { out[entry.at] = frames }
+            }
+        }
+        return out
+    }
+
+    /// "symbol (File.swift:12)": the file's name only, never its path.
+    private static func label(_ symbol: String, file: String?, line: Int?) -> String {
+        guard let file, let line, line > 0 else { return symbol }
+        return "\(symbol) (\((file as NSString).lastPathComponent):\(line))"
+    }
+
+    private static func ipsDate(_ stamp: String) -> Date? {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SS Z"
+        return f.date(from: stamp)
     }
 }
 

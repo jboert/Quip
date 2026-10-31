@@ -25,6 +25,7 @@ struct GeneralTab: View {
     @State private var reliabilityStatus: ReliabilityStatusMessage?
     @State private var reliabilityError: String?
     @State private var restarts: [ReliabilityRestarts.Entry] = []
+    @State private var restartFrames: [Date: [String]] = [:]
 
     var body: some View {
         // Ordered by why you open General: permissions first (the actionable
@@ -155,24 +156,35 @@ struct GeneralTab: View {
 
     /// One past restart: when, why, and Copy for a ticket (spec US-007).
     private func restartRow(_ entry: ReliabilityRestarts.Entry) -> some View {
-        HStack(spacing: 6) {
-            Text(entry.at.formatted(date: .abbreviated, time: .shortened))
-                .monospacedDigit()
-            Text("· \(ReliabilityRestarts.words(entry.reason))")
-            if entry.repeated {
-                Text("· same cause 3×")
-                    .foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(entry.at.formatted(date: .abbreviated, time: .shortened))
+                    .monospacedDigit()
+                Text("· \(ReliabilityRestarts.words(entry.reason))")
+                if entry.repeated {
+                    Text("· same cause 3×")
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                Button("Copy for a ticket") {
+                    let names = (try? FileManager.default.contentsOfDirectory(atPath: LogPaths.directory.path)) ?? []
+                    let text = ReliabilityRestarts.ticketText(
+                        entry, build: BuildInfo.shortDisplay(BuildInfo.current),
+                        sample: ReliabilityRestarts.sampleName(for: entry, in: names),
+                        frames: restartFrames[entry.at] ?? [])
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                .buttonStyle(.link)
             }
-            Spacer()
-            Button("Copy for a ticket") {
-                let names = (try? FileManager.default.contentsOfDirectory(atPath: LogPaths.directory.path)) ?? []
-                let text = ReliabilityRestarts.ticketText(
-                    entry, build: BuildInfo.shortDisplay(BuildInfo.current),
-                    sample: ReliabilityRestarts.sampleName(for: entry, in: names))
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
+            ForEach(restartFrames[entry.at] ?? [], id: \.self) { frame in
+                Text(frame)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
             }
-            .buttonStyle(.link)
         }
         .font(.caption)
     }
@@ -180,9 +192,11 @@ struct GeneralTab: View {
     private func refreshReliabilityStatus() {
         restarts = ReliabilityRestarts.recent(restartsJSON: try? Data(contentsOf: ReliabilityFiles.restarts))
         let launchedAt = QuipHeartbeat.shared.startedAt
+        let entries = restarts
         DispatchQueue.global(qos: .utility).async {
             let status = ReliabilityReport.current(launchedAt: launchedAt)
-            DispatchQueue.main.async { reliabilityStatus = status }
+            let frames = ReliabilityFrames.load(for: entries)
+            DispatchQueue.main.async { reliabilityStatus = status; restartFrames = frames }
         }
     }
 

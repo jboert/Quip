@@ -268,4 +268,93 @@ final class ReliabilityTests: XCTestCase {
         XCTAssertEqual(WebSocketServer.refusedTunnelType(in: Data(#"{"type":"reliability_turn_on"}"#.utf8)),
                        "reliability_turn_on")
     }
+
+    // MARK: - Top three Quip frames (US-007)
+
+    private func ips(procPath: String, faulting: Int = 0) -> String {
+        """
+        {"app_name":"Quip","timestamp":"2026-10-30 22:11:43.00 -0700","bug_type":"309"}
+        {"procPath":"\(procPath)","faultingThread":\(faulting),
+         "usedImages":[{"name":"libswiftCore.dylib"},{"name":"Quip"},{"name":"AppKit"}],
+         "threads":[{"frames":[{"imageIndex":0,"symbol":"other thread"}]},
+                    {"frames":[{"imageIndex":0,"symbol":"_assertionFailure"},
+                               {"imageIndex":1,"symbol":"<deduplicated_symbol>"},
+                               {"imageIndex":1,"symbol":"QuipLog.append(_:)","sourceFile":"/Users/someone/Quip/QuipLog.swift","sourceLine":42},
+                               {"imageIndex":2,"symbol":"-[NSApplication run]"},
+                               {"imageIndex":1,"symbol":"WebSocketServer.receive()","sourceFile":"WebSocketServer.swift","sourceLine":7},
+                               {"imageIndex":1,"symbol":"closure #1 in X"},
+                               {"imageIndex":1,"symbol":"fourth Quip frame"}]}]}
+        """
+    }
+
+    func test_fromIPS_topThreeQuipFramesOfTheFaultingThread_fileNameOnly() {
+        let r = ReliabilityFrames.fromIPS(ips(procPath: "/Applications/Quip.app/Contents/MacOS/Quip", faulting: 1))
+        XCTAssertEqual(r?.frames, ["QuipLog.append(_:) (QuipLog.swift:42)",
+                                   "WebSocketServer.receive() (WebSocketServer.swift:7)",
+                                   "closure #1 in X"])
+        XCTAssertEqual(r?.at, Date(timeIntervalSince1970: 1_793_423_503))
+        XCTAssertFalse(r?.frames.joined().contains("/Users") ?? true)
+    }
+
+    func test_fromIPS_ignoresTheSimulatorsQuip() {
+        XCTAssertNil(ReliabilityFrames.fromIPS(ips(procPath: "/Users/USER/Library/Developer/CoreSimulator/Devices/X/data/Containers/Bundle/Application/Y/Quip.app/Quip")))
+    }
+
+    func test_fromIPS_garbageIsNil() {
+        XCTAssertNil(ReliabilityFrames.fromIPS("not a report"))
+    }
+
+    func test_fromSample_mainThreadHeaviestPath_innermostQuipFirst() {
+        let sample = """
+        Process:         Quip [49859]
+
+        Call graph:
+            2295 Thread_11741843   DispatchQueue_1: com.apple.main-thread  (serial)
+            + 2295 start  (in dyld) + 6652  [0x1955d0d7c]
+            +   2295 main  (in Quip) + 64  [0x1007fdca0]  QuipMacApp.swift:0
+            +    2295 ???  (in Quip)  load address 0x10065c000 + 0x3ab40  [0x100696b40]
+            +     2295 static App.main()  (in SwiftUI) + 224  [0x1afdc2c54]
+            +       2000 TerminalStateDetector.poll()  (in Quip) + 12  [0x100686254]  TerminalStateDetector.swift:88
+            +       ! 2000 Process.waitUntilExit()  (in Foundation) + 8  [0x1]
+            +       ! : 2000 ShellRunner.run(_:)  (in Quip) + 4  [0x2]  ShellRunner.swift:31
+            +       ! : | 2000 lightest-first? no, heaviest  (in Quip) + 4  [0x3]
+            +       295 NotOnThePath()  (in Quip) + 4  [0x4]  Other.swift:1
+            2295 Thread_11741965: com.apple.NSEventThread
+            + 2295 thread_start  (in Quip) + 8  [0x19569fcd0]
+        """
+        XCTAssertEqual(ReliabilityFrames.fromSample(sample), [
+            "lightest-first? no, heaviest",
+            "ShellRunner.run(_:) (ShellRunner.swift:31)",
+            "TerminalStateDetector.poll() (TerminalStateDetector.swift:88)",
+        ])
+    }
+
+    func test_fromSample_noCallGraphIsEmpty() {
+        XCTAssertEqual(ReliabilityFrames.fromSample("Process: Quip\n"), [])
+    }
+
+    func test_crashReport_pickedWithinTwoMinutesBefore_crashesOnly() {
+        let at = Date(timeIntervalSince1970: 1_793_423_600)
+        let near = ReliabilityFrames.Report(at: at.addingTimeInterval(-40), frames: ["near"])
+        let far = ReliabilityFrames.Report(at: at.addingTimeInterval(-200), frames: ["far"])
+        let after = ReliabilityFrames.Report(at: at.addingTimeInterval(30), frames: ["after"])
+        let crash = ReliabilityRestarts.Entry(at: at, reason: "crash", repeated: false)
+        XCTAssertEqual(ReliabilityFrames.crashReport(for: crash, in: [far, near, after])?.frames, ["near"])
+        XCTAssertNil(ReliabilityFrames.crashReport(for: crash, in: [far, after]))
+        let hang = ReliabilityRestarts.Entry(at: at, reason: "hang", repeated: false)
+        XCTAssertNil(ReliabilityFrames.crashReport(for: hang, in: [near]))
+    }
+
+    func test_ticketText_listsFramesNumbered() {
+        let e = ReliabilityRestarts.Entry(at: Date(timeIntervalSince1970: 1_793_415_963), reason: "crash", repeated: false)
+        let t = ReliabilityRestarts.ticketText(e, build: "b", sample: nil, frames: ["a (A.swift:1)", "b"])
+        XCTAssertEqual(t, """
+        Quip restart: crash
+        at: 2026-10-31T03:06:03Z
+        build: b
+        top Quip frames:
+          1. a (A.swift:1)
+          2. b
+        """)
+    }
 }
