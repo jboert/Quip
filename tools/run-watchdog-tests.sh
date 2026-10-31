@@ -379,5 +379,15 @@ env QUIP_WD_BOOT_AT=$(( $(date +%s) + 5 )) QUIP_WD_PID="$VICTIM2" QUIP_WD_UPTIME
 check "a pid change across a reboot is not a restart" 1 \
     "$(grep -c '"at":' "$TMP/why-state/restarts.json" 2>/dev/null)"
 
+# Only the Quip beside the script is Quip: not the simulator's, not a test host.
+EXE=/Applications/Quip.app/Contents/MacOS/Quip
+check "the installed Quip is Quip" 1 "$(call_args wd_is_quip "$EXE" "$EXE")"
+check "the installed Quip with arguments is Quip" 1 "$(call_args wd_is_quip "$EXE -NSDocumentRevisionsDebugMode YES" "$EXE")"
+check "a DerivedData test host is not Quip" 0 \
+    "$(call_args wd_is_quip "$HOME/Library/Developer/Xcode/DerivedData/QuipMac-x/Build/Products/Debug/Quip.app/Contents/MacOS/Quip" "$EXE")"
+check "the simulator's Quip is not Quip" 0 \
+    "$(call_args wd_is_quip "$HOME/Library/Developer/CoreSimulator/Devices/X/data/Containers/Bundle/Application/Y/Quip.app/Quip" "$EXE")"
+check "a longer name in the same folder is not Quip" 0 "$(call_args wd_is_quip "${EXE}Helper" "$EXE")"
+
 echo "watchdog tests: $checks checks, $failures failures"
 [ "$failures" -eq 0 ]

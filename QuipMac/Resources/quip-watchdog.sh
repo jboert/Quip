@@ -28,7 +28,8 @@
 #                      stoppedForCrashLoop, stoppedForDiskFull
 #                      (default ~/Library/Application Support/Quip)
 #   QUIP_WD_LOG_DIR    watchdog.log, hang-<time>.txt (default ~/Library/Logs/Quip)
-#   QUIP_WD_PID        the Quip pid (default: `pgrep -x Quip`, simulator copies skipped)
+#   QUIP_WD_PID        the Quip pid (default: `pgrep -x Quip`, only the one at QUIP_WD_EXE)
+#   QUIP_WD_EXE        the Quip executable (default: ../MacOS/Quip beside this script)
 #   QUIP_WD_SAMPLE     the sampler (default `sample`)
 #   QUIP_WD_UPTIME     Quip's uptime in seconds, for tests (default: from `ps`)
 #   QUIP_WD_LAUNCHCTL  launchctl (default /bin/launchctl)
@@ -130,16 +131,25 @@ wd_read_epoch() {
     esac
 }
 
+# Pure. Whether a process's command line (CMD) is the Quip at EXE.
+# `pgrep -x Quip` also matches the iOS app in a simulator and the Debug test
+# host a test run starts from DerivedData; after the pids wrap either can sort
+# first, and a pid change to it and back read as two restarts.
+wd_is_quip() {
+    case "$1" in
+        "$2"|"$2 "*) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
 wd_find_pid() {
     if [ -n "${QUIP_WD_PID:-}" ]; then
         echo "$QUIP_WD_PID"; return
     fi
     for p in $(pgrep -x Quip); do
-        # `pgrep -x Quip` also matches the iOS app in a simulator.
-        case "$(ps -o command= -p "$p")" in
-            *CoreSimulator*) ;;
-            *) echo "$p"; return ;;
-        esac
+        if [ "$(wd_is_quip "$(ps -o command= -p "$p")" "$WD_EXE")" = 1 ]; then
+            echo "$p"; return
+        fi
     done
 }
 
@@ -324,6 +334,9 @@ wd_main() {
     WD_STATE_DIR=${QUIP_WD_STATE_DIR:-"$HOME/Library/Application Support/Quip"}
     WD_LOG_DIR=${QUIP_WD_LOG_DIR:-"$HOME/Library/Logs/Quip"}
     WD_AGENT_PLIST=${QUIP_WD_AGENT_PLIST:-"$HOME/Library/LaunchAgents/$WD_AGENT_LABEL.plist"}
+    # This script ships in Quip.app/Contents/Resources: the Quip it watches is
+    # the one beside it.
+    WD_EXE=${QUIP_WD_EXE:-"$(cd "$(dirname "$0")/../MacOS" 2>/dev/null && pwd)/Quip"}
     mkdir -p "$WD_STATE_DIR" "$WD_LOG_DIR"
     state="$WD_STATE_DIR/watchdog.state"
     restarts="$WD_STATE_DIR/restarts.json"
