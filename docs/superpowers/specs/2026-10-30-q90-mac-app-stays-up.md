@@ -166,3 +166,10 @@ Hardware checks on the owner's Mac (2026-10-31, `f9ee248`):
 2. ✓ `kill -9` → back in 4 s. (Not recorded: within the install's 5 min grace.)
 3. ✓ `kill -STOP` → `hang … action=killed sample=hang-….txt`, relaunched; restarts.json `hang`. 171 s, because the first two stale checks fell in the install grace.
 4–7 and the phone checks: open.
+6. ✓ (2026-10-31 06:02Z) three `kill -9` in 10 min: crash-loop stop, notice on reopen.
+7. ✓ Mac side (2026-10-31 17:37Z): Stop leaves Quip down with the agent booted out. Phone side open: the phone was offline during the stop.
+
+After the hardware checks:
+- `92e3dd9`: Dock Quit, `osascript quit` and ⌘Q ask "Stop Quip?" like the menu bar does. With Restart after Quit on, a plain quit used to come back in 50 ms. A quit that carries a reason (logout, restart, shutdown) passes, and so do Quip's own quits.
+- `87f7d2c`: the watchdog only counts `../MacOS/Quip` beside its script. `pgrep -x Quip` had picked up the DerivedData test host and logged two false crashes.
+- `8376891`: Quip starts as LSUIElement and hands off in `applicationWillFinishLaunching`, so the hand-off copy never gets a Dock tile. Before this, it left a ghost "second Quip" in the Dock.
