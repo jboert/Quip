@@ -35,6 +35,14 @@
 #   QUIP_WD_AGENT_PLIST the crash agent's plist
 #                      (default ~/Library/LaunchAgents/com.quip.QuipMac.crash-recovery.plist)
 #   QUIP_WD_FREE_MB    free MB on the home volume, for tests (default: from `df`)
+#   QUIP_WD_BOOT_AT    when the Mac booted, epoch, for tests (default: `sysctl kern.boottime`)
+#
+# Files the Mac app writes, besides the heartbeat:
+#   installing     an install is under way (tools/install-mac.sh), epoch
+#   manual-launch  the owner opened Quip by hand, epoch. Restarts before it no
+#                  longer count toward a crash loop, and the pid change it
+#                  causes is not a restart.
+#   exit           `pid=N` of a Quip that quit through the app (not a crash)
 
 WD_HANG_SECS=60
 WD_MIN_UPTIME_SECS=120
@@ -69,6 +77,26 @@ wd_decide() {
         echo skip_launch; return
     fi
     echo kill
+}
+
+# Pure. Why Quip's pid changed since the last check. Reads NOW, PREV_CHECK_AT,
+# PREV_PID, INSTALLING_AT, MANUAL_AT, BOOT_AT and EXIT_PID (empty = unknown)
+# and prints exactly one of none | quit | crash. An install, an owner's open
+# and a reboot all start a new Quip on purpose: none of them is a restart.
+wd_restart_reason() {
+    if [ -n "${INSTALLING_AT:-}" ] && [ $((NOW - INSTALLING_AT)) -lt "$WD_INSTALL_GRACE_SECS" ]; then
+        echo none; return
+    fi
+    if [ -n "${MANUAL_AT:-}" ] && [ $((NOW - MANUAL_AT)) -lt "$WD_INSTALL_GRACE_SECS" ]; then
+        echo none; return
+    fi
+    if [ -n "${BOOT_AT:-}" ] && [ -n "${PREV_CHECK_AT:-}" ] && [ "$BOOT_AT" -gt "$PREV_CHECK_AT" ]; then
+        echo none; return
+    fi
+    if [ -n "${EXIT_PID:-}" ] && [ "$EXIT_PID" = "${PREV_PID:-}" ]; then
+        echo quit; return
+    fi
+    echo crash
 }
 
 # Whether a decision leaves this check counted as stale for the next one.
@@ -115,8 +143,9 @@ wd_find_pid() {
     done
 }
 
-# Pure. Reads NOW, RESTART_TIMES (space-separated epochs), STOPPED_AT (empty =
-# not stopped), RETRIED (0/1) and FREE_MB, and prints exactly one of
+# Pure. Reads NOW, RESTART_TIMES (space-separated epochs), SINCE (restarts at
+# or before it do not count; empty = all count), STOPPED_AT (empty = not
+# stopped), RETRIED (0/1) and FREE_MB, and prints exactly one of
 # ok | stop | retry | stay_stopped | disk_full. A full disk wins over
 # everything: a restart would only crash again.
 wd_loop_decide() {
@@ -138,11 +167,12 @@ wd_loop_decide() {
     fi
 }
 
-# How many of RESTART_TIMES fall within the loop window before NOW.
+# How many of RESTART_TIMES fall within the loop window before NOW and
+# after SINCE (the owner's last open).
 wd_restarts_in_window() {
     n=0
     for t in ${RESTART_TIMES:-}; do
-        [ $((NOW - t)) -le "$WD_LOOP_WINDOW_SECS" ] && n=$((n + 1))
+        [ $((NOW - t)) -le "$WD_LOOP_WINDOW_SECS" ] && [ "$t" -gt "${SINCE:-0}" ] && n=$((n + 1))
     done
     echo "$n"
 }
@@ -243,6 +273,7 @@ wd_loop_step() {
         [ -n "$retried_at" ] && RETRIED=1
     fi
     RESTART_TIMES=$(wd_restart_times "$restarts")
+    SINCE=$MANUAL_AT
 
     loop=$(wd_loop_decide)
 
@@ -307,12 +338,19 @@ wd_main() {
 
     pid=$(wd_find_pid)
     INSTALLING_AT=$(wd_read_epoch "$WD_STATE_DIR/installing")
+    MANUAL_AT=$(wd_read_epoch "$WD_STATE_DIR/manual-launch")
+    EXIT_PID=""
+    [ -f "$WD_STATE_DIR/exit" ] && EXIT_PID=$(sed -n 's/^pid=//p' "$WD_STATE_DIR/exit")
+    if [ -n "${QUIP_WD_BOOT_AT:-}" ]; then
+        BOOT_AT=$QUIP_WD_BOOT_AT
+    else
+        BOOT_AT=$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ sec = \([0-9]*\),.*/\1/p')
+    fi
     # A new pid after a known one is a restart: the crash agent relaunched
-    # Quip. An install relaunches it too, and is not a crash.
+    # Quip. wd_restart_reason says when it is not one.
     if [ -n "$pid" ] && [ -n "$PREV_PID" ] && [ "$pid" != "$PREV_PID" ]; then
-        if [ -z "$INSTALLING_AT" ] || [ $((NOW - INSTALLING_AT)) -ge "$WD_INSTALL_GRACE_SECS" ]; then
-            wd_record_restart "$restarts" "$NOW" crash
-        fi
+        reason=$(wd_restart_reason)
+        [ "$reason" != none ] && wd_record_restart "$restarts" "$NOW" "$reason"
     fi
     # Remember the last pid seen, across checks where Quip is briefly down.
     last_pid=${pid:-$PREV_PID}

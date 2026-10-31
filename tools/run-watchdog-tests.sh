@@ -129,6 +129,8 @@ loop_table() {
     echo "1000 MB free|ok|$(loop "$f" FREE_MB=1000)"
     echo "400 MB free beats a crash loop|disk_full|$(loop "$f" FREE_MB=400 RESTART_TIMES="$three_recent")"
     echo "400 MB free beats a due retry|disk_full|$(loop "$f" FREE_MB=400 STOPPED_AT=$((NOW - 1801)))"
+    echo "3 recent restarts, owner opened Quip after them|ok|$(loop "$f" RESTART_TIMES="$three_recent" SINCE=$((NOW - 50)))"
+    echo "3 recent restarts, owner opened Quip before them|stop|$(loop "$f" RESTART_TIMES="$three_recent" SINCE=$((NOW - 550)))"
 }
 
 rows=$(loop_table "$SCRIPT" | wc -l | tr -d ' ')
@@ -145,6 +147,25 @@ if [ "$?" -eq 0 ]; then
     echo "FAIL: the broken fixture ($BROKEN) passed every wd_loop_decide assertion"
     failures=$((failures + 1))
 fi
+
+# ---------------------------------------------------- wd_restart_reason table
+
+# A pid change with nothing to explain it is a crash; each row adds one reason
+# it is not.
+reason() {
+    call "$SCRIPT" wd_restart_reason NOW=$NOW PREV_CHECK_AT=$((NOW - 30)) PREV_PID=100 \
+        INSTALLING_AT= MANUAL_AT= BOOT_AT=$((NOW - 99999)) EXIT_PID= "$@"
+}
+check "reason: nothing to explain it" crash "$(reason)"
+check "reason: install 4 min ago" none "$(reason INSTALLING_AT=$((NOW - 240)))"
+check "reason: install 6 min ago" crash "$(reason INSTALLING_AT=$((NOW - 360)))"
+check "reason: owner opened Quip 1 min ago" none "$(reason MANUAL_AT=$((NOW - 60)))"
+check "reason: owner opened Quip 6 min ago" crash "$(reason MANUAL_AT=$((NOW - 360)))"
+check "reason: the Mac booted since the last check" none "$(reason BOOT_AT=$((NOW - 10)))"
+check "reason: booted before the last check" crash "$(reason BOOT_AT=$((NOW - 40)))"
+check "reason: the old pid quit through the app" quit "$(reason EXIT_PID=100)"
+check "reason: another pid quit through the app" crash "$(reason EXIT_PID=99)"
+check "reason: a reboot beats a quit" none "$(reason EXIT_PID=100 BOOT_AT=$((NOW - 10)))"
 
 # --------------------------------------------------------- the helper tables
 
@@ -335,6 +356,28 @@ run_gap QUIP_WD_PID="$VICTIM"
 run_gap -u QUIP_WD_PID PATH="$TMP/nopgrep:$PATH"
 run_gap QUIP_WD_PID="$VICTIM2"
 check "a new pid after a check with Quip down is a crash" 1 "$(grep -c '"reason": "crash"' "$TMP/gap-state/restarts.json" 2>/dev/null)"
+
+# The owner opening Quip, and a quit through the app, are told apart from a
+# crash on the main path too.
+mkdir -p "$TMP/why-state" "$TMP/why-logs"
+run_why() {
+    env QUIP_WD_PID="$1" QUIP_WD_UPTIME=300 QUIP_WD_SAMPLE=/usr/bin/true "${SAFE[@]}" \
+        QUIP_WD_STATE_DIR="$TMP/why-state" QUIP_WD_LOG_DIR="$TMP/why-logs" /bin/sh "$SCRIPT"
+}
+run_why "$VICTIM"
+date +%s > "$TMP/why-state/manual-launch"
+run_why "$VICTIM2"
+check "a pid change right after the owner opened Quip is not a restart" 0 \
+    "$(grep -c '"at":' "$TMP/why-state/restarts.json" 2>/dev/null || echo 0)"
+rm -f "$TMP/why-state/manual-launch"
+printf 'pid=%s\n' "$VICTIM2" > "$TMP/why-state/exit"
+run_why "$VICTIM"
+check "a pid change after the old Quip quit is recorded as quit" 1 \
+    "$(grep -c '"reason": "quit"' "$TMP/why-state/restarts.json" 2>/dev/null)"
+env QUIP_WD_BOOT_AT=$(( $(date +%s) + 5 )) QUIP_WD_PID="$VICTIM2" QUIP_WD_UPTIME=300 QUIP_WD_SAMPLE=/usr/bin/true \
+    "${SAFE[@]}" QUIP_WD_STATE_DIR="$TMP/why-state" QUIP_WD_LOG_DIR="$TMP/why-logs" /bin/sh "$SCRIPT"
+check "a pid change across a reboot is not a restart" 1 \
+    "$(grep -c '"at":' "$TMP/why-state/restarts.json" 2>/dev/null)"
 
 echo "watchdog tests: $checks checks, $failures failures"
 [ "$failures" -eq 0 ]
