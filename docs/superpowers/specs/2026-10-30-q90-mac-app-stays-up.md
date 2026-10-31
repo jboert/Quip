@@ -157,7 +157,8 @@ Phone: merged `df5ff35` (Ralph run). Mac: `474cf00` (watchdog restart reasons), 
 Differences from the stories above:
 - No login item to drop: the "Launch at login" switch was never wired; the agent's `RunAtLoad` is the login launch.
 - The watchdog tells restarts apart (`wd_restart_reason`): an install, the owner's open (`manual-launch` marker, 5 min) and a reboot are not restarts; a quit through the app (`exit` marker) is `quit`. Restarts before the owner's last open do not count toward a crash loop, and opening Quip lifts a crash-loop stop.
-- Not done yet: US-006's phone **Turn on** request, US-007's restart list / Copy for a ticket / Diagnostics bundle files / crash-loop Mac banner, and the phone's "keeps crashing", "disk is full" and "was stopped" wording (the phone does not yet hear those states).
+- `d51b9b6`: Stop Quip… sends `reliability_status {stopped: true}` first, so the phone says "Quip was stopped on your Mac" + Remote in; the Off row carries **Turn on** (`reliability_turn_on`, refused from a tunnel); Mac Settings lists the last 5 restarts with "same cause 3×" and Copy for a ticket; the Diagnostics bundle adds watchdog.log, restarts.json and the last 3 hang samples; a one-time alert after a crash-loop stop.
+- Not done: top three Quip frames per restart (the ticket names the hang sample file instead), and the phone's "keeps crashing" / "disk is full" wording (Quip is down in both cases, so it cannot tell the phone; it shows "Restarting…" then Remote in at 90 s).
 
 Hardware checks on the owner's Mac (2026-10-31, `f9ee248`):
 1. ✓ `launchctl print` → running, pid = Quip's pid; `XPC_SERVICE_NAME` = the agent label.
