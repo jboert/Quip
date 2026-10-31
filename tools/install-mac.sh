@@ -38,7 +38,8 @@ codesign --verify --deep --strict "$DST"
 
 open "$DST"
 for _ in $(seq 1 100); do
-    pid=$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9]*\)$/\1/p')
+    # `launchctl print` exits 113 until the job is loaded; that is "not yet".
+    pid=$( (launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null || true) | sed -n 's/^[[:space:]]*pid = \([0-9]*\)$/\1/p')
     [ -n "$pid" ] && break
     sleep 0.2
 done
