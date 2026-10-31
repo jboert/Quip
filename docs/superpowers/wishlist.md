@@ -10,7 +10,7 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 - **Built, not wired (Mac):** `QuipMac/Resources/quip-watchdog.sh` (hang kill on two stale checks; sleep, launch and install guards; 3-in-10-min crash-loop stop, one retry at 30 min; full-disk hold), `QuipMac/Services/Reliability.swift` (launch hand-off, settings → agents, status, watchdog plist), `CrashRecoveryAgent keepAliveAlways`.
 - **Next, owner at the Mac:** heartbeat writer, App Nap opt-out, launch hand-off, Stop Quip…, Reliability settings, agent install, send `reliability_status`, clear `stoppedForCrashLoop` on a manual open, then one Mac rebuild (also carries `windowOrderMode` and `remoteInJSON`).
 - **Fix before wiring the watchdog:** it counts ANY new Quip pid as a crash, so a manual quit-and-reopen or a reboot is recorded as one; three in 10 min would boot the crash agent out. Have the Mac app mark a clean quit / clean launch (like the `installing` marker) so only unexpected exits count.
-- **iPhone install pending:** the primary iPhone was unavailable at merge time; the phone runs `9b07c1d`.
+- **iPhone:** installed at `b70769f` (2026-10-30, after the merge).
 
 ## Session log — 2026-10-30, later (Q-88 US-009…US-011 shipped; Q-90 specced)
 

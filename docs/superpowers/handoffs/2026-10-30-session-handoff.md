@@ -49,4 +49,4 @@ Another session (Claude-Session …MDytKdm) landed `d3090c3` (only tracked prefs
 
 PRD (7 stories) ran in `../Quip-ralph-q90` on `ralph/q90-mac-stays-up`, 8 of 10 iterations, all passing. Verified by reading the diff; 7 watchdog mutants and 6 Swift mutants all killed; `tools/qa/q90-down.sh` and `q90-restart.sh` PASS on D8C5154B with screenshots checked. Gate `--all` green on the branch and on eb-branch after the merge (QuipMac 1345, QuipiOS 1563, harness 62, fake-mac 48, watchdog 71; QuipLinux / QuipAndroid skipped, not built here). Merged `df5ff35`, scaffolding untracked `dc7bdd5`, pushed; branch and worktree removed.
 
-Open: iPhone install (device was unavailable), the Mac wiring (owner present), and the watchdog's "any new pid is a crash" rule (see wishlist).
+Installed on the iPhone at `b70769f`. Open: the Mac wiring (owner present), and the watchdog's "any new pid is a crash" rule (see wishlist).
