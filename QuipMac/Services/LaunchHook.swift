@@ -35,4 +35,8 @@ final class QuipAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.launchHook.finishLaunching()
     }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        ReliabilityStop.shouldTerminate()
+    }
 }

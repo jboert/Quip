@@ -327,6 +327,11 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             // resize vertically) to a regular Window. Rebind the standard
             // Settings menu item + ⌘, to open that window instead.
             CommandGroup(replacing: .appSettings) { SettingsMenuButton() }
+            // Q-90: ⌘Q asks the same question as Stop Quip… in the menu bar.
+            CommandGroup(replacing: .appTermination) {
+                Button(ReliabilityStop.menuTitle) { ReliabilityStop.quitOrStop() }
+                    .keyboardShortcut("q")
+            }
         }
 
         MenuBarExtra("Quip",

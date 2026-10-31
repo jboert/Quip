@@ -268,6 +268,36 @@ enum ReliabilityStop {
 
     static var menuTitle: String { stopsAgent ? "Stop Quip…" : "Quit" }
 
+    /// Set once the owner confirms, so the terminate that follows passes.
+    @MainActor private static var confirmed = false
+
+    /// Pure: whether a terminate must go through the Stop dialog first. Only
+    /// the owner's own quit does: Dock Quit or `osascript quit` (a Quit Apple
+    /// Event with no reason) and ⌘Q. Logout, restart and shutdown carry a
+    /// reason and pass, and so do Quip's own quits, which carry no event.
+    static func needsConfirmation(stopsAgent: Bool, confirmed: Bool,
+                                  quitEvent: Bool, hasQuitReason: Bool) -> Bool {
+        stopsAgent && !confirmed && quitEvent && !hasQuitReason
+    }
+
+    /// `applicationShouldTerminate`: a Dock Quit would come straight back,
+    /// so it asks the same question as Stop Quip… instead.
+    @MainActor
+    static func shouldTerminate() -> NSApplication.TerminateReply {
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let quitEvent = event?.eventClass == AEEventClass(kCoreEventClass)
+            && event?.eventID == AEEventID(kAEQuitApplication)
+        // keyAEQuitReason ('why?'), which Swift does not import.
+        let hasReason = event?.paramDescriptor(forKeyword: AEKeyword(0x7768_793F)) != nil
+        guard needsConfirmation(stopsAgent: stopsAgent, confirmed: confirmed,
+                                quitEvent: quitEvent, hasQuitReason: hasReason) else {
+            return .terminateNow
+        }
+        // The alert can't run inside the Apple Event handler.
+        DispatchQueue.main.async { quitOrStop() }
+        return .terminateCancel
+    }
+
     @MainActor
     static func quitOrStop() {
         guard stopsAgent else {
@@ -281,6 +311,7 @@ enum ReliabilityStop {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        confirmed = true
         NotificationCenter.default.post(name: .quipStopping, object: nil)
         // Give the "stopped" status a moment to leave before the socket goes.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

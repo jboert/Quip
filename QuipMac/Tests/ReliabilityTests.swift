@@ -357,4 +357,25 @@ final class ReliabilityTests: XCTestCase {
           2. b
         """)
     }
+
+    // MARK: Dock Quit / ⌘Q
+
+    func testOwnersQuitAsksBeforeStopping() {
+        XCTAssertTrue(ReliabilityStop.needsConfirmation(
+            stopsAgent: true, confirmed: false, quitEvent: true, hasQuitReason: false))
+    }
+
+    func testLogoutQuipsOwnQuitsAndConfirmedStopPass() {
+        // Logout / restart / shutdown carry a quit reason.
+        XCTAssertFalse(ReliabilityStop.needsConfirmation(
+            stopsAgent: true, confirmed: false, quitEvent: true, hasQuitReason: true))
+        // Hand-off and second-copy quits carry no Apple Event.
+        XCTAssertFalse(ReliabilityStop.needsConfirmation(
+            stopsAgent: true, confirmed: false, quitEvent: false, hasQuitReason: false))
+        XCTAssertFalse(ReliabilityStop.needsConfirmation(
+            stopsAgent: true, confirmed: true, quitEvent: true, hasQuitReason: false))
+        // Without "Restart after Quit" a quit is just a quit.
+        XCTAssertFalse(ReliabilityStop.needsConfirmation(
+            stopsAgent: false, confirmed: false, quitEvent: true, hasQuitReason: false))
+    }
 }
