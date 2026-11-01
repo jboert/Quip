@@ -53,3 +53,40 @@ enum PromptRaiseGate {
         }
     }
 }
+
+/// Q-56 (6): the clear direction's second signal. An idle agent's CPU blips
+/// past the threshold every few seconds, and a blip is not the owner
+/// answering. The detector keeps the pane fingerprint it confirmed the raise
+/// with and, before clearing, reads the pane once more: unchanged means the
+/// badge stays.
+enum PromptClearGate {
+
+    enum Outcome {
+        case clear
+        case hold
+        /// The window was untracked, retracked or switched to dictation
+        /// while the read was out; do nothing.
+        case ignore
+    }
+
+    /// After a hold, the next clear is not re-read before this.
+    static let cooldown: TimeInterval = 2
+
+    /// - Parameters:
+    ///   - raised: the fingerprint the raise was confirmed with; nil when
+    ///     the raise went through on CPU alone.
+    ///   - now: the fingerprint read for this clear; nil when unreadable.
+    ///
+    /// Without both fingerprints the clear goes through, as before Q-56 (6):
+    /// a stale badge is worse than a flap.
+    static func decide(raised: String?, now: String?, capturedAt: Int, current: Int) -> Outcome {
+        guard capturedAt == current else { return .ignore }
+        guard let raised, let now else { return .clear }
+        return raised == now ? .hold : .clear
+    }
+
+    static func mayCheck(now: Date, heldAt: Date?) -> Bool {
+        guard let heldAt else { return true }
+        return now.timeIntervalSince(heldAt) >= cooldown
+    }
+}

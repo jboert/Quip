@@ -254,6 +254,9 @@ final class TerminalStateDetector {
         // let the first poll of the new run complete a transition it did not earn.
         debounce.forgetAll()
         raisesAwaitingConfirmation.removeAll()
+        raisedFingerprints.removeAll()
+        clearsAwaitingConfirmation.removeAll()
+        clearHeldAt.removeAll()
         print("[TerminalStateDetector] Stopped monitoring")
     }
 
@@ -312,7 +315,7 @@ final class TerminalStateDetector {
         windowStates[windowId] = .neutral
         knownChildren[windowId] = []
         debounce.forget(windowId: windowId)
-        raisesAwaitingConfirmation.remove(windowId)
+        forgetPromptGates(windowId)
         installProcessSource(windowId: windowId, pid: shellPid)
         print("[TerminalStateDetector] Tracking window \(windowId) with shell PID \(shellPid) tty=\(tty ?? "<none>")")
     }
@@ -324,7 +327,7 @@ final class TerminalStateDetector {
         windowStates.removeValue(forKey: windowId)
         knownChildren.removeValue(forKey: windowId)
         debounce.forget(windowId: windowId)
-        raisesAwaitingConfirmation.remove(windowId)
+        forgetPromptGates(windowId)
         cancelProcessSources(for: windowId)
     }
 
@@ -332,14 +335,14 @@ final class TerminalStateDetector {
     func setSTTActive(for windowId: String) {
         windowStates[windowId] = .sttActive
         debounce.forget(windowId: windowId)
-        raisesAwaitingConfirmation.remove(windowId)
+        forgetPromptGates(windowId)
     }
 
     /// Clear STT state back to auto-detected
     func clearSTTState(for windowId: String) {
         windowStates[windowId] = .neutral
         debounce.forget(windowId: windowId)
-        raisesAwaitingConfirmation.remove(windowId)
+        forgetPromptGates(windowId)
     }
 
     // MARK: - kqueue Process Sources
@@ -432,6 +435,19 @@ final class TerminalStateDetector {
     /// `osascript` calls for the same window.
     private var raisesAwaitingConfirmation: Set<String> = []
 
+    /// Q-56 (6): the pane fingerprint each raise was confirmed with, the
+    /// clears with a read in flight, and when each window last held one.
+    private var raisedFingerprints: [String: String] = [:]
+    private var clearsAwaitingConfirmation: Set<String> = []
+    private var clearHeldAt: [String: Date] = [:]
+
+    private func forgetPromptGates(_ windowId: String) {
+        raisesAwaitingConfirmation.remove(windowId)
+        raisedFingerprints.removeValue(forKey: windowId)
+        clearsAwaitingConfirmation.remove(windowId)
+        clearHeldAt.removeValue(forKey: windowId)
+    }
+
     /// Check all tracked windows' process states
     /// Apply poll results on main — only does lightweight state comparisons.
     private func applyPollResults(_ results: [(String, TerminalState)]) {
@@ -446,6 +462,13 @@ final class TerminalStateDetector {
             // and only the raise, goes and looks at the screen first.
             if detected == .waitingForInput {
                 confirmRaise(windowId: windowId, from: currentState)
+                continue
+            }
+            // Q-56 (6): and a clear of a raise the pane confirmed looks at
+            // the pane again, since an idle agent's CPU blips too.
+            if currentState == .waitingForInput, detected == .neutral,
+               let raised = raisedFingerprints[windowId] {
+                confirmClear(windowId: windowId, raised: raised)
                 continue
             }
             windowStates[windowId] = detected
@@ -480,9 +503,11 @@ final class TerminalStateDetector {
                 guard let self else { return }
                 let second = readPane()
                 let stability: PromptRaiseGate.Stability
+                var confirmed: String?
                 switch (first, second) {
                 case let (one?, two?):
                     stability = PaneStability.isStable(one, two) ? .stable : .moving
+                    confirmed = PaneStability.fingerprint(two)
                 default:
                     stability = .unreadable
                 }
@@ -501,10 +526,52 @@ final class TerminalStateDetector {
                     // The window may have moved on during the settle; only a
                     // window still sitting where the poll left it may be raised.
                     guard (self.windowStates[windowId] ?? .neutral) == previous else { return }
+                    self.raisedFingerprints[windowId] = confirmed
+                    self.clearHeldAt.removeValue(forKey: windowId)
                     self.applyConfirmedRaise(windowId: windowId, from: previous)
                 }
             }
         }
+    }
+
+    /// Q-56 (6). Reads the pane once, off main, and clears only if it moved
+    /// since the raise. A hold is logged once per raise.
+    private func confirmClear(windowId: String, raised: String) {
+        guard PromptClearGate.mayCheck(now: Date(), heldAt: clearHeldAt[windowId]) else { return }
+        guard let readPane = makePaneReader?(windowId) else {
+            applyClear(windowId: windowId)
+            return
+        }
+        guard clearsAwaitingConfirmation.insert(windowId).inserted else { return }
+        let generation = pollGeneration
+        pollQueue.async { [weak self] in
+            guard self != nil else { return }
+            let now = readPane().flatMap(PaneStability.fingerprint)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.clearsAwaitingConfirmation.remove(windowId)
+                guard self.windowStates[windowId] == .waitingForInput else { return }
+                switch PromptClearGate.decide(raised: raised, now: now,
+                                              capturedAt: generation, current: self.pollGeneration) {
+                case .ignore:
+                    return
+                case .hold:
+                    if self.clearHeldAt[windowId] == nil {
+                        appendPushLog("clear-gate held for \(windowId) — pane unchanged since the raise")
+                    }
+                    self.clearHeldAt[windowId] = Date()
+                case .clear:
+                    self.applyClear(windowId: windowId)
+                }
+            }
+        }
+    }
+
+    private func applyClear(windowId: String) {
+        raisedFingerprints.removeValue(forKey: windowId)
+        clearHeldAt.removeValue(forKey: windowId)
+        windowStates[windowId] = .neutral
+        onStateTransition?(windowId, .waitingForInput, .neutral)
     }
 
     private func applyConfirmedRaise(windowId: String, from previous: TerminalState) {
