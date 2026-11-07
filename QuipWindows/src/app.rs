@@ -241,6 +241,15 @@ mod tests {
         AppPaths { config_dir: dir.join("Roaming").join("Quip"), log_dir: dir.join("Local").join("Quip").join("Logs") }
     }
 
+    /// The real host listens on IPv4 only. Spec 3.1: on IPv6, a peer on the
+    /// owner's /64 could hold all 8 of the network's pre-auth slots with
+    /// queued wrong PINs (busy slots are never evicted) and refuse the owner.
+    /// Fix that before listening on IPv6.
+    #[test]
+    fn the_real_host_listens_on_ipv4_only() {
+        assert_eq!(StartOptions::default().bind_ip, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
     fn loopback() -> StartOptions {
         StartOptions { bind_ip: IpAddr::V4(Ipv4Addr::LOCALHOST), port: Some(0) }
     }

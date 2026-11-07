@@ -112,6 +112,15 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
   There is no token cap across networks (S5d had 16 in all, refused
   unchecked: a peer on two networks could then make the owner's right PIN
   fail with `Too many attempts`).
+- IPv4 only, on purpose (review 2026-11-07): the host listens on `0.0.0.0`
+  and opens no IPv6 socket; every URL it hands out (QR, `localURLs`,
+  Bonjour, Tailscale `100.x`) is IPv4. On IPv6, a peer on the owner's /64
+  could fill all 8 of that network's pre-auth slots with wrong PINs queued
+  for a token (a queued slot is busy, so never evicted, and is kept after
+  its socket closes) and refuse the owner as `NetworkFull`. Before adding an
+  IPv6 listener, cap the queued wrong PINs per network below
+  `max_unauthenticated_per_network` or reserve a slot for a sender holding
+  none. The test `the_real_host_listens_on_ipv4_only` (`app.rs`) pins this.
 - No hard lockout per /64 (asked for by a security review, rejected): it
   would let one device lock out every neighbour in its /64, a home LAN or a
   shared Wi-Fi, by guessing wrong 10 times, the denial of service that keying
