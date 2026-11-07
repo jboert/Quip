@@ -1,0 +1,29 @@
+# Q-91 M0 spike, CI windows-latest, run 42319562616 (commit 388859b), 2026-11-06
+# Windows 10.0.26100.33674, PowerShell 5.1.26100.33648, PSReadLine 2.4.5, interactive desktop
+PASS   conhost-powershell open: console window found
+PASS   conhost-cmd open: console window found
+PASS   wt-powershell open: Windows Terminal window found
+PASS   conhost-powershell single-line focus: foreground via Alt+SetForegroundWindow
+PASS   conhost-powershell single-line: typed command ran, marker matches
+PASS   conhost-powershell unicode focus: foreground via SetForegroundWindow
+PASS   conhost-powershell unicode: accented, CJK and emoji arrived intact
+PASS   conhost-powershell shift-enter focus: foreground via SetForegroundWindow
+RESULT conhost-powershell shift-enter: SAFE: nothing ran early; one Return ran both lines
+PASS   conhost-powershell paste focus: foreground via SetForegroundWindow
+RESULT conhost-powershell paste: SAFE: nothing ran early; one Return ran both lines
+PASS   conhost-cmd single-line focus: foreground via SetForegroundWindow
+PASS   conhost-cmd single-line: typed command ran, marker matches
+PASS   conhost-cmd shift-enter focus: foreground via SetForegroundWindow
+RESULT conhost-cmd shift-enter: UNSAFE: a line ran before Return
+PASS   conhost-cmd paste focus: foreground via SetForegroundWindow
+RESULT conhost-cmd paste: UNSAFE: a line ran before Return
+PASS   wt-powershell single-line focus: foreground via SetForegroundWindow
+PASS   wt-powershell single-line: typed command ran, marker matches
+PASS   wt-powershell unicode focus: foreground via SetForegroundWindow
+PASS   wt-powershell unicode: accented, CJK and emoji arrived intact
+PASS   wt-powershell shift-enter focus: foreground via SetForegroundWindow
+RESULT wt-powershell shift-enter: SAFE: nothing ran early; one Return ran both lines
+PASS   wt-powershell paste focus: foreground via SetForegroundWindow
+RESULT wt-powershell paste: PARTIAL: nothing ran early; Return ran only one line
+SUMMARY mechanics: PASS
+

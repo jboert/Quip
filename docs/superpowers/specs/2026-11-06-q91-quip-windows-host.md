@@ -262,6 +262,9 @@ usually just flashes the taskbar button. Sequence:
 
 If the window is still not foreground: fail. Never type anyway.
 
+M0 (CI) needed every step: most focus calls succeeded at step 2, and one
+(a classic PowerShell window, first focus after launch) only at step 4.
+
 ### 5.4 Typing (`send_text`)
 
 1. Look up `windowId`. Missing → `injection.log` `kind=windowClosed`,
@@ -284,13 +287,18 @@ If the window is still not foreground: fail. Never type anyway.
      `cliKind` is `shell`): it must land on the command line **without
      running**, and Return is **never** pressed, even when the phone asked.
      `latency.log` gains ` multiline_guard=1 lines=N` (counts only, never text).
-   - How "without running" is done on Windows is decided by M0 (13), from
-     two candidates: (a) each inner line break as Shift+Enter, which
-     PSReadLine treats as AddLine; (b) a clipboard paste (Ctrl+V), which
-     PSReadLine inserts whole. The clipboard is saved and put back after (b).
-     A shell where neither is proven safe (`cmd.exe`, PowerShell without
-     PSReadLine) gets multi-line text refused with an `error` and an
-     `injection.log` line, `kind=unknown detail="multi-line not safe in this shell"`.
+   - **Decided by M0** (CI run 42319562616, evidence
+     `docs/superpowers/evidence/q91/m0-ci-42319562616.txt`): in PowerShell
+     (Windows Terminal and classic console, PSReadLine 2.4.5) each inner line
+     break is sent as **Shift+Enter**: nothing ran early and one Return ran
+     every line. Clipboard paste is not used: in Windows Terminal one Return
+     ran only one of two pasted lines. In `cmd.exe` both Shift+Enter and paste
+     ran lines early, so multi-line text to `cmd.exe` (and to PowerShell
+     without PSReadLine) is refused with an `error` and an `injection.log`
+     line, `kind=unknown detail="multi-line not safe in this shell"`. The
+     host therefore needs the shell, not just "terminal": `classify.rs`
+     reports `powershell | pwsh | cmd | unknown`, and an `unknown` shell is
+     treated like `cmd`.
 6. `pressReturn` (when the policy allows it): a 30 ms pause, then `VK_RETURN`
    down/up.
 7. Send `send_text_ack` when `messageId` was present.
@@ -545,10 +553,11 @@ Where they run:
 
 - **CI**, new job `cargo test (QuipWindows)` on `windows-latest`: fmt, clippy,
   unit + integration tests always; the Win32 UI tests with `QUIP_WIN_UI=1`.
-  GitHub's Windows runners have an interactive desktop, but whether
-  `SetForegroundWindow` and `SendInput` behave there is proven in M0, not
-  assumed. If they do not, the UI tests run only on the PC and CI says
-  "skipped (no interactive desktop)", never green.
+  GitHub's Windows runners have an interactive desktop, and M0 proved
+  focus, `SendInput` typing and Windows Terminal all work there (run
+  42319562616). Launch consoles with `cmd /c start` and null stdio: with the
+  runner's redirected stdio, a directly spawned `conhost.exe` becomes a
+  pseudo-console with no window.
 - **On the PC**: `Quip.exe --selftest` runs the same cases through the real
   app code and writes `%LOCALAPPDATA%\Quip\Logs\selftest-<time>.txt`: one
   `PASS`/`FAIL` line per case plus Windows version, display count and DPI.
