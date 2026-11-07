@@ -69,7 +69,7 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
 | Message | When | Notes |
 |---|---|---|
 | `layout_update` | After auth; then whenever the broadcast set or any frame changes (poll every 1 s) | See 3.4. Send an identical snapshot no more than once. |
-| `frontmost_changed` | When the foreground window changes | `windowId` is the tracked id, or `null` when the foreground window is not in the broadcast set. Feeds the phone's recency stack (Q-88). |
+| `frontmost_changed` | When the foreground window changes | `windowId` is the tracked id. When the foreground window is not in the broadcast set the key is **omitted** (`{"type":"frontmost_changed"}`), as Swift encodes it. Feeds the phone's recency stack (Q-88). |
 | `heartbeat` | Every 15 s per authenticated client | `{"type":"heartbeat","seq":N,"ts":<unix s>}`. The phone replies `heartbeat_ack`. Two missed acks in a row: log it only. Do not disconnect in phase 1. |
 | `send_text_ack` | After a `send_text` that carried `messageId` lands | `injectMs`, `totalMs`, `path:"sendText"`. Not sent on failure. |
 | `error` | When an action fails in a way the user should see | Copy the Mac `ErrorMessage` shape. Use for "window is gone" and "Windows refused to focus the window". |
@@ -118,26 +118,43 @@ Field names and meaning follow `LayoutUpdate` and `WindowState` in
 }
 ```
 
-- **Broadcast set:** windows with `enabled == true`, plus terminals on a
-  visible display. Terminals start enabled. Non-terminals start disabled and
-  are not sent, so the phone grid shows terminals by default. This is the Mac
-  default (`windowsForBroadcast`, mirror off). A "Show all apps" tray toggle
-  (off by default) widens it to every listed window, matching `mirrorAllApps`.
+- **Broadcast set:** the Mac's `windowsForBroadcast` **mirror-desktop** rule:
+  terminals on a visible display, plus windows the user enabled. A "Show all
+  apps" tray toggle (off by default) widens it to the `mirrorAllApps` rule
+  (every visible window, plus enabled ones). Ported as `broadcast.rs`, held to
+  `vectors/broadcast_filter.json`.
+  This is a deliberate difference from the Mac default. The Mac's mirror-off
+  rule is `enabled || (simulator target && visible)`, and nothing starts
+  enabled: the user enables windows in the Mac's own window list. Windows has
+  no such list, so mirror-off would show an empty grid after pairing.
+  `enabled` itself starts false for every window, as on the Mac, and is
+  changed only by `toggle_enabled`.
 - **`id`:** a string. HWND values are reused by Windows after a window closes,
   so the id is `w-` + hex of (HWND, process id, window creation order). It
   stays the same for the window's life and never moves to a new window.
-- **`frame`:** normalized 0..1 against the window's own display (the display
-  holding most of its area), from `DWMWA_EXTENDED_FRAME_BOUNDS` (visible
-  bounds, no invisible resize border).
+- **`frame`:** normalized 0..1 against the window's own display, from
+  `DWMWA_EXTENDED_FRAME_BOUNDS` (visible bounds, no invisible resize border).
+  The window's display is the one **containing the window's centre** (edges
+  max-exclusive), falling back to the primary display and then the first, as
+  in `DisplayGeometry` and `ManagedWindow.toWindowState`. Held to
+  `vectors/display_geometry.json`.
 - **`displayID`:** a stable string for the monitor (the monitor device name
   from `GetMonitorInfoW`, e.g. `\\.\DISPLAY1`, hashed). `isPrimary` is the
   monitor with `MONITORINFOF_PRIMARY`.
 - **`monitor`:** the primary display's name. The phone uses it as a same-host
   identity signal, so it must not change when focus moves to another monitor.
-- **`spaces`, `spaceID`, `targetKind`, `claudeMode`:** omitted. Windows
-  virtual desktops are phase 2.
+- **`spaces`, `spaceID`, `targetKind`, `claudeMode`:** not sent in phase 1
+  (Windows virtual desktops are phase 2), but the Rust types carry them as
+  optional fields so `wire/layout_update.full.json` round-trips.
+- **Always written:** `isThinking`, `isPinned` and `isMinimized` decode as
+  optional but the Swift encoder always writes them, so the Rust encoder must
+  too (`wire/layout_update.min.json`).
 - **`folder` / `project`:** `null` in phase 1. The phone falls back to `app`.
-- **`color`:** stable per window id, from the same palette the Mac uses.
+- **`color`:** dealt like the Mac (`Shared/WindowColor.swift`): the first
+  palette colour not in use by another window, remembered per window id for
+  the window's life. Palette, `normalized`, `hex`, first-unused and
+  colours-to-avoid are held to `vectors/window_color.json`; the Mac's
+  rotation once every colour is taken is private and has no vector.
 - **`isThinking`:** `false` in phase 1.
 
 ## 4. Module map
