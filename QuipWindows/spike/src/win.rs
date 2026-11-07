@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::fmt::Write as _;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::thread::sleep;
@@ -29,6 +30,9 @@ const CONSOLE_CLASS: &str = "ConsoleWindowClass";
 const WT_CLASS: &str = "CASCADIA_HOSTING_WINDOW_CLASS";
 const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 const VK_C: VIRTUAL_KEY = VIRTUAL_KEY(0x43);
+/// Without it, conhost attaches to our own console (seen on the CI runner)
+/// instead of opening a window.
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 // ---------------------------------------------------------------- report
 
@@ -309,6 +313,7 @@ fn which(exe: &str) -> bool {
 fn open_conhost(label: &'static str, shell: Shell, dir: &Path, r: &mut Report) -> Option<Target> {
     let before: HashSet<isize> = top_windows().into_iter().map(|(h, _)| h).collect();
     let mut cmd = Command::new("conhost.exe");
+    cmd.creation_flags(CREATE_NEW_CONSOLE);
     match shell {
         Shell::PowerShell => {
             cmd.args(["powershell.exe", "-NoLogo", "-NoExit", "-Command"])
