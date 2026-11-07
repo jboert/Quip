@@ -1,8 +1,7 @@
 # Session handoff, 2026-11-06 (evening): Q-91 Quip for Windows
 
 **Resume:** "Continue Q-91 from docs/superpowers/handoffs/2026-11-06-session-handoff.md:
-verify R1 (review-fix) in the working tree, push it and read Windows CI, record
-the owner's PC test, then close the run."
+record the owner's PC test, then start S10 (Win32 arrange) under the plan."
 
 ## Where it stands
 
@@ -15,14 +14,14 @@ Plan of record: `docs/superpowers/plans/2026-11-06-q91-windows-host.md`
   `e6dea53` (Win32 UI tests: listing 6, displays 2, qr 2, tray 3; selftest 11/11).
 - Read-only review of S4-S9 done: Needs fixes (0 high, 1 medium, 3 low). One low
   fixed directly (`df3e45f`). The rest is slice **R1**.
-- **R1 was still running when this was written; its changes are uncommitted in
-  the working tree** (`QuipWindows/`, spec 3.1/10.5, the plan's R1 section). Next
-  session: read the R1 report (or the diff), re-run
-  `printf 'QuipWindows/src/lib.rs\n' | tools/check.sh --files -`, commit, push,
-  read Windows CI (the Win32 UI test changes only run there). One review-fix
-  cycle by default: no second review unless the owner asks.
-- After R1: close the run (plan Status, clean tree, gate, push). S10-S12
-  (arrange, typing, release build) stay on hold until the owner's PC check.
+- R1 (review-fix) is complete and pushed (`db0699c`; Windows CI run 42343269299
+  green: listing 6, displays 2, qr 2, tray 3, selftest 11/11). One more fix from
+  the automated security review is pushed (`b009569`: evict a pre-auth socket only
+  when it admits the sender). Windows CI on `b009569` started automatically;
+  check it first thing (`gh run list -R jboert/Quip -w Windows -L 1`).
+- The plan run is closed (Status line in the plan). S10-S12 (arrange, typing,
+  release build) wait for the owner's PC check. Each starts as a fresh worker
+  per the plan protocol; one review after the last slice of the next run.
 
 ## Owner's PC test (2026-11-07)
 
@@ -55,7 +54,6 @@ Record the result in the plan's "Owner gates" and on the board before S10.
 
 ## Open items
 
-- R1 (above).
 - Q-92: the iOS suite cannot open its generated Xcode project on this Mac
   (Xcode 27.2). Every commit today used `QUIP_SKIP_CHECK=1` for that reason,
   with the suites that did run named in each message.
