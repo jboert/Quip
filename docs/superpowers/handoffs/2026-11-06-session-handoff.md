@@ -22,6 +22,16 @@ Plan of record: `docs/superpowers/plans/2026-11-06-q91-windows-host.md`
   release build) wait for the owner's PC check. Each starts as a fresh worker
   per the plan protocol; one review after the last slice of the next run.
 
+## Specs built out (2026-11-07)
+
+- Plan S10-S12 are now worker-ready (read set, steps, tests by layer, Mac
+  parity, real-PC safety, acceptance, validation, risks); spec 5.2-5.5, 6, 8,
+  9 and 11 filled where they had gaps.
+- Test plan: `docs/superpowers/specs/2026-11-07-q91-windows-test-plan.md`
+  (coverage matrix, known gaps, owner PC scripts per gate, release gate).
+- Phase 2 (after S12, needs owner decisions in its section 6):
+  `docs/superpowers/specs/2026-11-07-q91-windows-phase2.md`.
+
 ## Owner's PC test (2026-11-07)
 
 `Quip.exe` built from `b009569` (includes R1 and the eviction fix; Windows CI

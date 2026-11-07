@@ -1,8 +1,10 @@
 # Plan: Q-91 Quip for Windows (phase 1)
 
-**Status:** Run complete through S9 (owner stop): S1-S9 incl. S5b-S5e complete, review done, R1 review-fix complete (Windows CI run 42343269299 green at db0699c), plus one post-review eviction-order fix. Next: owner's PC check (Owner gates), then S10-S12, which stay on hold until then.
+**Status:** Run complete through S9 (owner stop): S1-S9 incl. S5b-S5e complete, review done, R1 review-fix complete (Windows CI run 42343269299 green at db0699c), plus one post-review eviction-order fix. Next: owner's PC check (Owner gates), then S10-S12 (detailed 2026-11-07, not started until then).
 
 - Spec (source of truth for behavior): `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`
+- Test plan (every layer, coverage matrix, owner PC scripts, release gate): `docs/superpowers/specs/2026-11-07-q91-windows-test-plan.md`
+- After phase 1: `docs/superpowers/specs/2026-11-07-q91-windows-phase2.md` (not part of this plan)
 - PRD: `tasks/prd-quip-windows-host.md` · Board: Q-91 · Handoff: `docs/superpowers/handoffs/2026-11-06-session-handoff.md`
 - Branch: work lands directly on `eb-branch` (owner, 2026-11-06: "everything can stay on this branch").
   "Merge back" = gate green + clean tree + pushed `origin/eb-branch`. `main` is protected
@@ -123,19 +125,209 @@
 - Validation: `cargo test` 453 unit + 11 vectors (pairing encode cases now also read back from the QR with `rqrr`) + 67 integration (new `tray_new_pin_closes_every_phone_and_only_the_new_pin_gets_back_in`: two paired phones and one pre-auth socket closed, log shows 3 kick closes, old PIN `Incorrect PIN`, new PIN succeeds, persisted, never logged; mutation check: without the kick it fails) passed; `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` and `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt --check` ok; `cargo build --release --target x86_64-pc-windows-gnu` ok, imports Windows system DLLs only; `printf 'QuipWindows/src/lib.rs\n' | tools/check.sh --files -` all green; Windows CI (`win32_qr` 2 tests, Selftest 11/11): skipped (needs push).
 
 ### S10: M3 Win32 arrange
-- **Status:** On hold (owner stop after S9)
-- Goal: `SetWindowPos` tiling over the work area with DWM border compensation (spec 5.2).
-- Acceptance: restore min/max first; deferred batch; elevated window skipped + logged; selftest arrange case (two spawned windows touch with <=1 px gap, fill the work area) PASS in Windows CI.
+- **Status:** Not started (waits for the owner's PC check)
+- Goal: `arrange_windows` tiles the windows the phone shows over the primary display's work area with no gaps (spec 5.2), and `minimize_window` / `close_window` act on real windows (spec 3.3). The order (restore, measure, move, verify, retry) lives in a new `services/arrange.rs` above `platform/`, like `services/injector.rs`, so the fake tests it on the Mac and the Win32 code only makes the calls.
+- What exists: the math and the routing. `layout::arrange` / `compensate_border` / `ArrangeOutcome` (`src/services/layout.rs:117-174`), `AppState::arrange_plan` (`src/app_state.rs:279-302`), router `arrange` (`src/services/router.rs:318-351`), fake `move_windows` (`src/platform/fake.rs:484-522`). The Win32 backend answers `NotImplemented` for move, minimize and close (`src/platform/win32/mod.rs:261-269`).
+- Gap found while planning: a minimized window is listed with its restored outer rect as both `visible` and `outer` (`src/platform/win32/mod.rs:120-124`), so `arrange_plan` computes a zero border for it (`app_state.rs:296`) and the restored window lands with a 7 px gap. Hence: restore first, then measure (spec 5.2, updated).
+- Read set:
+  - Spec 5.2 (updated in this plan's commit), 3.3 rows `arrange_windows` / `minimize_window` / `close_window`, 10.5 "Arrange", 11 check 5.
+  - `QuipWindows/src/platform/traits.rs:156-187` (`WindowMove`, `WindowBackend`).
+  - `QuipWindows/src/platform/win32/mod.rs:186-195` (`live`: pid must still own the HWND), `:258-270` (stubs), `:285-291` (the test that asserts `NotImplemented`).
+  - `QuipWindows/src/platform/win32/window.rs:124-164` (`outer_rect`, `frame_bounds`, `restored_outer_rect`).
+  - `QuipWindows/src/services/layout.rs:99-174`; `QuipWindows/src/app_state.rs:279-302` and its tests `:458-488`.
+  - `QuipWindows/src/services/router.rs:318-391` (`arrange`, `minimize`, `close`).
+  - `QuipWindows/src/platform/fake.rs:138-155` (fixture border), `:238-346` (setters), `:484-522`.
+  - `QuipWindows/src/fake_mode.rs:265-279` (`HELP`), `:281` on (`command`).
+  - `QuipWindows/tests/ws_integration.rs:528-591` (arrange, dead lane), `:593-656` (select / minimize / close).
+  - `QuipWindows/src/selftest/win32.rs:1-19` (safety rules), `:49-61` (`CASES`), `:109-286` (`Ctx`, `open_conhost`, `close_opened`); `QuipWindows/src/selftest/own.rs:20-40` (`marker`, `has_marker`).
+  - `QuipWindows/tests/win32_listing.rs:295-337` (`OwnWindow`: an in-process window that resizes freely).
+  - `QuipMac/Services/WindowManager.swift:1492-1597` (Mac arrange: AX position then size per window, no batch, no verify, failures only printed).
+  - `tools/qa/q91-arrange.sh`, `tools/qa/q91-lib.sh` (`peer`, `fw`, `wait_for`, `check`).
+  - `Shared/Tests/Fixtures/vectors/arrange.json` (42 cases; read by `tests/shared_vectors.rs`).
+- Steps:
+  1. Trait (`traits.rs`): add `WindowBackend::restore(window) -> PlatformResult<()>` and `WindowBackend::rects(window) -> PlatformResult<WindowRects>` (`outer`, `visible`, `is_minimized`, `is_maximized`, read now). Both go through the pid check.
+  2. New `services/arrange.rs`: `Target { id, window: WindowRef, visible: PixelRect, restore_first: bool }`; `execute(p: &dyn Platform, targets: &[Target], settle: Duration) -> Vec<TargetResult>`. Order: restore every `restore_first` target; read `rects` for all; ONE `move_windows` call with `outer = layout::compensate_border(target, rects.outer, rects.visible)`; sleep `settle` (150 ms in the host); read `rects` again; a window more than 1 px off on any edge gets one more `move_windows` call computed from its new rects. Results: `Moved`, `Refused(String)`, `Gone`, `OffTarget { got: PixelRect }` (still off after the retry). Runs on the input lane, where blocking is fine.
+  3. `AppState::arrange_plan` returns `Vec<arrange::Target>` (visible targets, no compensation). Move the compensation assertions of `app_state.rs:458-465` into `arrange.rs` tests.
+  4. Router `arrange`: run `arrange::execute` on the input lane. `Refused` and `Gone` count as refused and log `op=arrange kind=unknown` with `detail` = the refusal text (`elevated or refused`, or `not responding`). `OffTarget` logs one `websocket.log` Info line `arrange: <id> ended at WxH, wanted WxH (minimum size?)` and is not counted. `ArrangeOutcome` messages do not change.
+  5. Win32 `platform/win32/arrange.rs` (new): `move_windows` checks `live` per window; a window `IsHungAppWindow` reports gets `Refused("not responding")`; the rest go in `BeginDeferWindowPos` / `DeferWindowPos(SWP_NOZORDER | SWP_NOACTIVATE)` / `EndDeferWindowPos`; if any `DeferWindowPos` returns null or `EndDeferWindowPos` fails, abandon the batch and call `SetWindowPos` per window, each with its own result (access denied -> `Refused("elevated or refused")`). `restore` = `ShowWindowAsync(SW_RESTORE)`, then poll every 20 ms up to 500 ms until neither `IsIconic` nor `IsZoomed`; a window that comes back zoomed (it was maximized before it was minimized) gets one more `SW_RESTORE`. `rects` = `outer_rect` + `frame_bounds`.
+  6. Win32 `minimize` = `ShowWindowAsync(SW_MINIMIZE)` (never blocks on a hung window); `close` = `PostMessageW(WM_CLOSE)`, a failed post -> `Refused`. Both through `live`. Never `TerminateProcess`.
+  7. Keep `NOT_IMPLEMENTED` for focus and input only (S11). Change the test at `win32/mod.rs:285-291` to assert it on `send_units` only.
+  8. Fake (`fake.rs`): implement `restore` (records `FakeCall::Restore { handle }`) and `rects`; add `set_border_after_restore(handle, px)` (a minimized window reports no border until restored, as DWM does), `set_rescale_once(handle, percent)` (its first move lands scaled, like a move onto a monitor with another DPI), `set_min_size(handle, w, h)`, `set_maximized(handle, on)`.
+  9. Fake mode (`fake_mode.rs` `command` and `HELP`): `minimize <w>`, `maximize <w>`, `refuse-move <w> on|off`, `rescale <w> <percent>`, `min-size <w> W H`. New stdout line `fake: restore handle=N`.
+  10. Selftest cases and `tests/win32_arrange.rs` (below). Update the rules at `selftest/win32.rs:4-19`: it may move, minimize and close only windows it opened.
+  11. Extend `tools/qa/q91-arrange.sh` (below).
+- Tests to add:
+  - Mac unit, `services/arrange.rs` (fake platform, `settle` = 0): `restores_first_then_measures_the_border` (border appears only after restore; visible rect ends within 1 px of the target; fails by 7 px if measured before restore); `targets_move_in_one_batch_in_broadcast_order` (one `move_windows` call); `one_refused_window_does_not_stop_the_others`; `a_gone_window_is_gone_not_moved`; `a_rescaled_window_gets_exactly_one_more_move`; `no_second_move_when_every_window_is_on_target`; `a_window_held_at_minimum_size_is_off_target_not_refused`; `a_maximized_window_is_restored_before_it_is_measured`. `app_state.rs`: `arrange_plan` gives visible targets and `restore_first` for minimized and maximized windows.
+  - Fake-platform integration, `tests/ws_integration.rs`:
+    - `arrange_restores_a_minimized_window_and_tiles_it_without_a_gap`: send `{"type":"arrange_windows","layout":"horizontal"}`; the next `layout_update` has that window `isMinimized:false` and its `frame.x` within 1 px of its column (normalized against the 1080 px display, as at `:538`); no `error` frame within `QUIET`; `FakeCall::Restore` comes before its `Move`.
+    - `a_cross_dpi_rescale_is_corrected_by_a_second_move`: two `Move` calls for that handle, one for the other; final frame on target; no `error`.
+    - `a_window_at_minimum_size_is_logged_not_an_error`: no `error` frame within `QUIET`; `websocket.log` has `minimum size?`; `injection.log` has no `op=arrange` line.
+    - Keep `arrange_tiles_the_windows_the_phone_shows` (`:529`), `arrange_with_nothing_shown_says_so` (`:566`), `a_dead_input_lane_says_so_not_elevated` (`:578`) green unchanged.
+  - Win32 UI, new `tests/win32_arrange.rs` (`QUIP_WIN_UI=1`; the CI step's `win32_*` glob picks it up, no workflow change):
+    - `two_own_plain_windows_tile_with_no_gap`: two `OwnWindow`s (as in `win32_listing.rs`, `including_own_windows`), `arrange::execute` called on the thread that created them (a cross-thread `SetWindowPos` to a thread that pumps no messages would block). Horizontal, then vertical. Visible (DWM) rects: first edge at the work area's edge, last edge at the other edge, neighbours' gap at most 1 px, the cross axis equal to the work area, all ±1 px.
+    - `a_minimized_own_window_is_restored_and_tiled`.
+    - `two_own_consoles_tile_with_no_gap`: marker consoles (`cmd.exe /K title <m>`), same assertions.
+    - `a_closed_own_window_is_gone`: `rects`, `move_windows`, `minimize`, `close` on a closed own window answer `WindowGone`.
+    - `minimize_then_close_an_own_console`: `IsIconic` after minimize; the marker window is gone within 5 s after close.
+  - New `--selftest` cases (appended to `CASES`, 11 -> 14):
+    - `arrange_own_windows`: two own consoles, horizontal then vertical. Targets are built ONLY from the two own `WindowRef`s (`layout::arrange(layout, 2, primary.work_area)`), never from `AppState`'s broadcast set, which holds the user's windows. PASS: every result `Moved` and every edge rule above holds. FAIL: any edge off, any `Refused` / `OffTarget` / `Gone`, no primary display, or a window left open. No SKIP.
+    - `arrange_restores_minimized`: one own console minimized first (`minimize`), then arranged with a second: PASS when it is no longer iconic and tiled within 1 px. FAIL otherwise. No SKIP.
+    - `minimize_and_close_own_console`: PASS when minimize makes it iconic and close removes the marked window within 5 s (`close_opened` finds nothing left). No SKIP.
+  - Simulator QA, `tools/qa/q91-arrange.sh`: the phone (1.5.7 on clone `1CA3EE21`) never sends `arrange_windows` (its Arrange button only re-lays out the phone grid), so the script keeps sending it from the scripted peer (`peer` in `q91-lib.sh`) while the phone is paired. The checks are the fake's stdout lines, its logs, the frames in the `layout_update` the peer receives, and the phone's screenshot (evidence; the phone grid must follow). New checks: (a) `fw minimize 4133`, then horizontal: `fake: restore handle=4133` before its `fake: move`, and the peer's next `layout_update` has it `isMinimized:false` in its column; (b) `fw refuse-move 4149 on`, then vertical: the peer receives `{"type":"error","reason":"Windows refused to move 1 of 4 windows (elevated or protected)"}`, `injection.log` has `op=arrange` with `detail="elevated or refused"`, the other three moved (how the phone shows an `error` without `messageId` is not asserted); (c) `fw rescale 4101 125`, then horizontal: two `fake: move handle=4101` lines, the second at the column rect. Evidence `docs/superpowers/evidence/q91/s10-q91-arrange.png`.
+- Mac parity:
+  - `arrange.rs` refused / moved results -> `QuipMac/Tests/ArrangeOutcomeTests.swift` `test_refusedMove_isAccessibilityDenied`, `test_acceptedMove_isArranged`; nothing to move -> `test_noWindows_doesNotAttemptTheMove`, `test_noDisplay_doesNotAttemptTheMove` (already in `layout.rs` and `arrange_with_nothing_shown_says_so`).
+  - Tiling math -> `Shared/Tests/ArrangeLayoutMappingTests.swift` and `vectors/arrange.json` (already held).
+  - Restore-then-measure, batch fallback, verify and retry, hung windows: Windows only. The Mac (`WindowManager.swift:1531-1597`) has no batch and no verify, so there is no Mac twin; say so in the test module's doc.
+- Real-PC safety:
+  - S10 types nothing.
+  - The selftest and the UI tests move, minimize and close only windows they opened (a marker in the title, or an in-process `OwnWindow`). Targets come from those `WindowRef`s, never from a desktop listing or `AppState`.
+  - Every backend call checks the pid still owns the HWND (`live`), so a reused handle is never moved or closed.
+  - No `TerminateProcess` in arrange, minimize or close; console cleanup stays in `close_opened`.
+  - The real host moves windows only on a phone's `arrange_windows`.
+- Acceptance:
+  - Win32 `restore`, `rects`, `move_windows`, `minimize`, `close` are real; `NotImplemented` remains only for focus and input.
+  - Each new unit and integration test fails with its fix reverted (report which revert broke which test).
+  - Windows CI on the pushed commit: `win32_arrange` all pass; selftest 14/14 PASS; report saved as `docs/superpowers/evidence/q91/s10-ci-<run>-selftest.txt`.
+  - `tools/qa/q91-arrange.sh <sim-udid>` exits 0 with checks (a)-(c).
+  - Mutation: `cargo mutants --file src/services/arrange.rs --file src/services/layout.rs --file src/app_state.rs -j 4`: every miss in new code gets a test or a one-line reason.
+- Validation:
+  - `cd QuipWindows && rtk proxy cargo test`
+  - `cargo clippy --all-targets -- -D warnings` and `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings`
+  - `cargo fmt --check`; `cargo build --release --target x86_64-pc-windows-gnu`
+  - `printf 'QuipWindows/src/lib.rs\n' | tools/check.sh --files -` (from the repo root)
+  - `bash -n tools/qa/q91-*.sh`; `tools/qa/q91-arrange.sh <sim-udid>`
+  - Windows CI: workflow `Windows`, job `cargo test (QuipWindows)`, steps `Win32 UI tests` and `Selftest`, artifact `selftest-report` (`gh run list --workflow windows.yml --branch eb-branch --limit 1`, `gh run download <id> -n selftest-report`).
+- Risks / open questions:
+  - A classic console may snap its size to whole character cells, so a console tile could miss an edge by up to one cell. The plain-window test proves the math. If only the console test fails, and by a cell multiple, bring the numbers back; do not widen the tolerance.
+  - Does `SetWindowPos` on an elevated window fail, or succeed and do nothing? If it does nothing, the verify step reports `OffTarget`; then an unchanged rect after the retry must count as refused. CI processes most likely run elevated, so only owner check 5 next to an admin window answers it.
+  - CI has one monitor, so the cross-DPI retry is tested only by the fake and on a PC with two monitors of different scale.
 
 ### S11: M4 Win32 focus, typing, keys
-- **Status:** On hold (owner stop after S9)
-- Goal: the input backend (spec 5.3-5.5).
-- Acceptance: 4-step foreground with pid check; `SendInput` unicode batches reporting inserted count; Shift+Enter inner breaks for PowerShell, refusal for cmd/unknown; key table; selftest cases (marker typed and read back incl. emoji; multi-line not run before Return; focus stolen mid-text stops typing; elevated target types nothing) PASS in Windows CI.
+- **Status:** Not started (waits for the owner's PC check)
+- Goal: real `bring_to_foreground`, `send_units` and `press_key` (spec 5.3-5.5), and the integrity check of spec 5.4 step 2b in the shared injector. Text and keys land only in the window the phone chose, never in an elevated one, and multi-line text never runs early.
+- What exists: all the rules above `platform/`. `injector::execute` checks foreground handle and pid before every batch and key (`src/services/injector.rs:67-131`); `typing_plan` makes 32-unit batches that never split a surrogate pair (`src/services/typing_plan.rs:22-74`); `multiline_policy::windows_decide` (`src/services/multiline_policy.rs:196-205`); `keys::plan` (`src/services/keys.rs:91-112`); `router::send_text_on_lane` re-reads the shell at send time (`src/services/router.rs:88-102`). Win32 `current_shell` and `foreground_window` are real (`src/platform/win32/mod.rs:239-256`); focus and input answer `NotImplemented` (`:258-260`, `:272-279`).
+- Gap found while planning: the `SendInput` docs say neither its return value nor `GetLastError` shows that UIPI blocked the input, so the short-count check (`injector.rs:12-13`, `typing_plan.rs:67-70`) cannot be the only guard against an elevated window. Hence spec 5.4 step 2b (updated).
+- Read set:
+  - Spec 5.3, 5.4, 5.5 (all updated in this plan's commit), 10.5 (Focus, Typing, Multi-line, Wrong-window guard), 11 checks 6-9, 13 row 1.
+  - `QuipWindows/src/platform/traits.rs:9-19` (where the rules live), `:90-136` (`FocusStep`, `PlatformError`), `:166-200`.
+  - `QuipWindows/src/services/injector.rs:1-131` and its tests `:133-394` (the `Refusing` wrapper at `:306-358` is the pattern for the selftest's wrappers).
+  - `QuipWindows/src/services/typing_plan.rs:1-74`; `QuipWindows/src/services/keys.rs:11-131`; `QuipWindows/src/services/multiline_policy.rs:144-211`.
+  - `QuipWindows/src/services/router.rs:26-102`, `:144-316` (`select_window`, `send_text`, `quick_action`).
+  - `QuipWindows/src/platform/win32/mod.rs:239-279`; `QuipWindows/src/platform/fake.rs:268-346`.
+  - `QuipWindows/spike/src/win.rs:127-165` (`bring_to_front`: 100 / 150 / 300 ms waits), `:179-221` (`key`, `key_tap`, `type_unicode` with a 5 ms pause at `:218`), `:412-436` (single-line retry), `:466-492` (Shift+Enter check), `:590-591` (4 s PSReadLine settle).
+  - `docs/superpowers/evidence/q91/m0-ci-42319562616.txt`.
+  - `QuipWindows/tests/ws_integration.rs:233-330`, `:477-512`, `:779-912`.
+  - `QuipWindows/src/selftest/win32.rs:483-555` (`cmd_titled`, `powershell_titled`, `console_case`); `QuipWindows/src/selftest/own.rs`.
+  - `QuipWindows/src/main.rs:13-44` (argument dispatch; the probe flag goes here).
+  - `QuipMac/Services/KeystrokeInjector.swift`; `QuipMac/Tests/GenericAppInjectionTests.swift`, `KeystrokeInjectorWriteExpressionTests.swift`, `MultiLineSendPolicyTests.swift`, `InjectionLogTests.swift`.
+  - `tools/qa/q91-send.sh`, `tools/qa/q91-keys.sh`.
+  - `Shared/Tests/Fixtures/vectors/multiline.json` (196 cases), `vectors/injection_log.json` (24 cases).
+- Steps:
+  1. Pure `platform/keymap.rs` (no `windows::`, Mac-tested): `vk(Key) -> (u16, extended: bool)`: Return 0x0D, Escape 0x1B, Tab 0x09, Backspace 0x08, Up 0x26, Down 0x28, Right 0x27 (the three arrows extended), `Letter(c)` = its uppercase ASCII code; `chord_events(KeyChord) -> Vec<KeyEvent { vk, up, extended }>`: Ctrl (0x11) then Shift (0x10) down, key down, key up, modifiers up in reverse; its length equals `KeyChord::input_count()`. `unit_events(&[u16])`: a unicode down/up pair per unit (vk 0, scan = unit).
+  2. Pure `platform/integrity.rs`: `access(target_rid: Option<u32>, own_rid: u32) -> InputAccess { Allowed, Elevated, Unknown }` (higher RID = `Elevated`, none = `Unknown`). Trait: `WindowBackend::input_access(window) -> PlatformResult<InputAccess>`.
+  3. Injector `execute`: once, before the first `Type` or `Key` step, call `input_access`; anything but `Ok(Allowed)` stops with `InputBlocked { after_chars: 0 }`, so `describe_failure` gives `input blocked (elevated window?)` and the "administrator?" reason (`router.rs:53-59`).
+  4. Pause: `typing_plan::run` takes the pause as a parameter (`BATCH_PAUSE` = 5 ms, M0's value) and waits it between batches, not before the first, so tests record it instead of sleeping.
+  5. Win32 `platform/win32/input.rs`: `send_units` = one `SendInput` of `unit_events`, returns inserted / 2; `press_key` = one `SendInput` of `chord_events`, returns inserted. Both check `live` first. Feature `Win32_UI_Input_KeyboardAndMouse`.
+  6. Win32 `platform/win32/focus.rs` `bring_to_foreground`, spec 5.3 as updated: already in front -> `AlreadyForeground`; restore if iconic; step 2 polls 100 ms; step 3 is skipped when the foreground window is hung, and detach always follows attach; step 4 Alt via `SendInput` `VK_MENU`, polls 300 ms; else `FocusRefused`. Success only when `GetForegroundWindow()` is the handle and its owner is `window.pid`.
+  7. Win32 `input_access`: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, window.pid)`, `OpenProcessToken(TOKEN_QUERY)`, `GetTokenInformation(TokenIntegrityLevel)`, last sub-authority = RID; Quip's own RID read once in `Win32Platform::new`. Any failure = `Unknown`.
+  8. Fake: `set_input_access(handle, InputAccess)`; fake-mode command `elevated <w> on|off|unknown` (`HELP` too). `uipi <n>` stays for the short-count path.
+  9. Remove `NOT_IMPLEMENTED`, `ni()` and the test at `win32/mod.rs:285-291`.
+  10. Probe: a Windows-only internal flag `Quip.exe --input-probe <marker>` (listed in `--help` as internal). It acts only if the window in front carries `<marker>` (`has_marker`); else exit 2, nothing sent. It runs `injector::execute(&[Type(<marker>)])` with no focus step, then one raw `SendInput` of the same text that bypasses the injector (to learn what Windows returns under UIPI), prints `access=<…> injector=<error or ok> raw_inserted=<n>`, exits 0. It never focuses anything.
+  11. Selftest cases and `tests/win32_input.rs` (below). Update the rules at `selftest/win32.rs:4-19`: it may focus and type into windows it opened, only through the injector.
+  12. QA script checks (below).
+- Tests to add:
+  - Mac unit: `keymap.rs`: `every_supported_action_has_virtual_keys` (all `keys::SUPPORTED_ACTIONS` plans), `arrows_are_extended_and_return_is_not`, `chords_press_modifiers_first_and_release_them_last`, `event_count_matches_input_count`, `unicode_units_are_down_up_pairs`. `integrity.rs`: `higher_is_elevated`, `same_or_lower_is_allowed`, `unreadable_is_unknown`. `injector.rs` (fake input guard off, so only the injector's check can stop it): `an_elevated_target_gets_no_input_at_all`, `unknown_integrity_is_treated_as_elevated`, `a_failed_access_query_types_nothing`, `access_is_checked_once_after_focus`. `typing_plan.rs`: `the_pause_comes_between_batches_not_before_the_first`.
+  - Fake-platform integration, `tests/ws_integration.rs`:
+    - `an_elevated_window_types_nothing_and_says_administrator`: `send_text` with `messageId`; the reply is `error` with that `messageId` and a `reason` containing `administrator`; no `send_text_ack` within `QUIET`; `injection.log` has `kind=unknown` and `detail="input blocked (elevated window?)"`; `latency.log` has `success=0`; the fake recorded `Focus` and no `TypeText` / `Key`.
+    - `a_quick_action_to_an_elevated_window_presses_nothing`: `press_ctrl_c`; `error`; `injection.log` `op=quickAction` with `detail="input blocked (elevated window?) action=press_ctrl_c"`.
+    - `select_window_on_an_elevated_window_still_focuses`: no `error`; `frontmost_changed` names it (focus is not input).
+    - Existing focus, steal, reuse, shell and latency tests (`:292-330`, `:478-512`, `:779-912`) stay green unchanged.
+  - Win32 UI, new `tests/win32_input.rs` (`QUIP_WIN_UI=1`, own marker windows only): `focus_brings_an_own_console_from_behind_another`, `typed_marker_with_emoji_reads_back`, `multi_line_waits_for_return_in_powershell`, `multi_line_to_cmd_types_nothing`, `focus_stolen_mid_text_stops_typing`, `keys_arrive_as_the_spec_keys`, `ctrl_c_stops_ping`, `windows_terminal_types_and_reads_back` (skips without `wt.exe`), `a_lower_integrity_probe_is_blocked`.
+  - New `--selftest` cases (14 -> 22). Targets: PowerShell starts with `-NoExit -Command "$Host.UI.RawUI.WindowTitle='<m>'; 'ready' | Out-File '<dir>\<m>-ready.txt'"`, and the case waits for that file plus 2 s (PSReadLine loads after the command; M0 waited 4 s). A "collector" PowerShell reads keys for a fixed time (`[Console]::KeyAvailable` / `[Console]::ReadKey($true)`, 15 s) and then writes what arrived to `<dir>\<m>.txt`. Files live in a per-run temp dir, removed after. Marker text: `<m>-é-漢字-🙂`.
+    - `focus_own_console`: two own consoles, the second in front; `bring_to_foreground(first)` -> `Ok(step)` and `foreground_window()` is it. Detail: the step used.
+    - `type_marker_read_back`: own PowerShell running `$r = Read-Host; $r | Out-File -Encoding utf8 '<dir>\<m>.txt'`; `send_text_on_lane(marker text, press_return = true)`; PASS when the file (BOM stripped) equals the marker text.
+    - `multi_line_waits_for_return`: own PowerShell at its PSReadLine prompt; two lines, each `'<x>' | Out-File '<dir>\<m>-a.txt'` / `-b.txt`, with `press_return = true`; FAIL if either file exists after 2 s; then `execute([Focus, Key(RETURN)])`; PASS when both appear within 6 s.
+    - `multi_line_refused_in_cmd`: own cmd console; the real platform wrapped in a counter; `send_text_on_lane` -> `Refused`, and zero `send_units` / `press_key` calls.
+    - `focus_stolen_stops_typing`: two own collectors; a wrapper whose first `send_units` returns and then calls `bring_to_foreground(second)` (it never types itself); 100 chars sent to the first. PASS: `FocusLost { after_chars: 32 }`, the first file holds exactly the first 32 chars, the second file is empty.
+    - `quick_keys_reach_own_console`: a collector that writes each `[Console]::ReadKey($true)` as `Key` plus `Modifiers`; Up, Down, Right, Tab, Shift+Tab, Escape, Backspace, Return via `press_key`; PASS when they match in order (Shift+Tab = `Tab` with `Shift`).
+    - `ctrl_c_stops_ping`: own console running `ping -n 120 127.0.0.1`; `press_key(ctrl+c)`; PASS when that ping (found in its own tree, `own::cleanup_targets`) ends within 3 s.
+    - `elevated_target_types_nothing`: an own collector console; the selftest starts `Quip.exe --input-probe <m>` one integrity level BELOW its own (its own token duplicated and lowered with `SetTokenInformation(TokenIntegrityLevel)`, then `CreateProcessAsUserW`): High -> Medium on CI, Medium -> Low on the owner's PC, so the target is always higher than the sender. PASS: the probe prints `injector=input blocked` and the collector file is empty. The `raw_inserted` value goes in a detail line (evidence for the open question). FAIL if the probe cannot be started (say why); never SKIP.
+    - SKIP rule for every case above: only when `GetForegroundWindow()` is null when the case starts (locked screen, no interactive desktop), with that reason. Anything else that goes wrong is FAIL.
+  - Simulator QA: `tools/qa/q91-send.sh` gains: `fw elevated 4117 on`, then a line from the phone to that PowerShell: no `fake: type` line for 4117, `injection.log` has `detail="input blocked (elevated window?)"`, the phone shows the error (OCR `administrator`); `fw elevated 4117 off` after. `tools/qa/q91-keys.sh` gains one quick button to the elevated window: no `chord=` line, `injection.log` `op=quickAction`. Evidence `s11-q91-send.png`, `s11-q91-keys.png`.
+- Mac parity:
+  - `keymap.rs` -> `GenericAppInjectionTests` `testSpecialKeysUseVirtualKeyCodes`, `testModifiedKeysCarryTheirModifier`, `testUnknownKeyReturnsNilRatherThanKeycodeZero` (here `keys::plan` -> `Unsupported`, already tested) and `KeystrokeInjectorWriteExpressionTests` `test_keyCodeFor_mappedKeys`, `test_arrowKeys_areCSISequences` (here: the extended flag).
+  - Focus before any input -> `GenericAppInjectionTests.testGenericScriptRaisesTheTargetBeforeTyping`; a gone process -> `testGenericScriptFailsLoudlyWhenTheProcessIsGone` (already `a_reused_handle_types_nothing_and_reports_window_closed`).
+  - Multi-line -> `MultiLineSendPolicyTests` `test_multiLineShell_pastesWithoutReturn_inBothTerminals`, `test_pressReturnFalse_neverPressesReturn` (vectors already held); `multi_line_waits_for_return` is the real-shell twin.
+  - `injection.log` lines -> `InjectionLogTests` through `vectors/injection_log.json` (already held; the new detail goes through the same builder).
+  - Elevated window: no Mac twin (macOS has TCC, `InjectionLogTests.testTccDenialIsLabelledDistinctly`); on Windows the kind stays `unknown` and the detail says it (spec 5.4).
+- Real-PC safety:
+  - Type and press keys only into windows the test opened (marker in the title) and only through `injector::execute`, which checks the foreground handle and pid before every batch and every key.
+  - The selftest's wrappers (focus thief, counter) never call `send_units` or `press_key` themselves; the thief only focuses another own window.
+  - Never type into an elevated window or one whose integrity cannot be read; the probe types only when the window in front carries its marker.
+  - Ctrl+C only to an own `ping` of 127.0.0.1. No clipboard use (M0 rejected paste).
+  - If the user takes focus during a case, the case FAILs with "focus moved"; it never retries into whatever is in front. Details name class and app only (the report's `Redactor`).
+- Acceptance:
+  - No `NotImplemented` left in the Win32 backend.
+  - `cargo test` green; the integration tests above fail when the injector's access check is removed (checked by hand, reported).
+  - Windows CI on the pushed commit: `win32_input` all pass; selftest 22/22 PASS; report saved as `docs/superpowers/evidence/q91/s11-ci-<run>-selftest.txt`; the probe's `raw_inserted` recorded in these notes.
+  - `tools/qa/q91-send.sh` and `q91-keys.sh` exit 0 with the new checks.
+  - Spec 14 M4 gate: an independent review plus a silent-failure pass on the diff (typing into the wrong window is the worst failure this host can have).
+- Validation: as S10, plus `cargo mutants --file src/services/injector.rs --file src/services/typing_plan.rs --file src/platform/keymap.rs --file src/platform/integrity.rs -j 4`, and `tools/qa/q91-send.sh <sim-udid>`, `tools/qa/q91-keys.sh <sim-udid>`.
+- Risks / open questions:
+  - PSReadLine may drop keys typed before it loads. Wait for the ready file and the settle; if CI flakes, raise the settle. Never add a retry that types into the same line again without clearing it first (Esc).
+  - The CI runner most likely runs elevated, which is why the elevated case uses a lowered probe. If `CreateProcessAsUserW` with a lowered own token fails there, report the error; do not turn it into a SKIP.
+  - The Alt tap (step 4) can select the menu bar of the window that was in front.
+  - A modifier the user is holding (Ctrl, Shift) combines with injected keys. Checking `GetAsyncKeyState` and refusing is not in the spec; ask the owner.
+  - Windows Terminal types into its active tab (spec 13); the selftest's WT window is its own, so its active tab is the test's.
 
 ### S12: M5 Logs on Windows, release build, install README
-- **Status:** On hold (owner stop after S9)
-- Goal: shippable `.exe` and owner instructions (spec 8, 9).
-- Acceptance: logs under `%LOCALAPPDATA%\Quip\Logs` with Mac line formats; `tools/build-windows.sh` builds `QuipWindows/dist/Quip.exe` and checks imports; `QuipWindows/README.md` install + firewall + SmartScreen + troubleshooting; `CLAUDE.md` log section lists Windows paths; build stamp (version + git sha) embedded.
+- **Status:** Not started (waits for the owner's PC check)
+- Goal: one command builds a shippable `Quip.exe` stamped with version and commit, with an icon and a version resource; Bonjour starts once a LAN address appears; the owner has install and troubleshooting steps; the log paths are documented (spec 8, 9).
+- What exists: logs already land in `%LOCALAPPDATA%\Quip\Logs` with 10 MB rotation (`src/services/log_paths.rs:24-60`, `src/services/quip_log.rs:18`, `:75`); the git sha is stamped for the selftest header only (`build.rs:29-47`, `src/selftest/report.rs:133`); the tray icon is drawn at run time, with no `.ico` resource (`src/tray/icon.rs:1-3`); Bonjour is tried once at start (`src/app.rs:209`) and logs `mDNS: no LAN address, not advertising` (`:151`); `QuipWindows/dist/` is gitignored (`.gitignore:146`); there is no `tools/build-windows.sh` and no `QuipWindows/README.md`.
+- Read set:
+  - Spec 6 (Bonjour bullet), 8, 9, 11 (updated in this plan's commit), 14 M5.
+  - `QuipWindows/build.rs:1-56`; `QuipWindows/.cargo/config.toml`; `QuipWindows/Cargo.toml` (`version = "0.1.0"`, build-deps).
+  - `QuipWindows/src/main.rs:13-44`.
+  - `QuipWindows/src/tray/icon.rs:12-64`; `QuipWindows/src/tray/win32.rs:146-175` (`set_tip`).
+  - `QuipWindows/src/app.rs:90-142` (`start`; addresses read once at `:114`), `:144-170` (`advertise`), `:174-231` (`run`), tests `:310-319`.
+  - `QuipWindows/src/services/mdns_advertiser.rs:66` (`advertised_ips`); `QuipWindows/src/services/local_addresses.rs:66`, `:104`.
+  - `QuipWindows/src/services/logs.rs:54-90`; `QuipWindows/src/selftest/report.rs:64-140`.
+  - `tools/check.sh:301-327`; `.github/scripts/changed-scopes.sh:42-48` (`tools/*` maps to apple, so `tools/build-windows.sh` needs the windows arm first); `.github/scripts/changed-scopes-test.sh`; `.github/workflows/windows.yml` (`paths`, job `test`).
+  - `tools/stamp-build-info.sh` (the Mac/iOS build stamp, for shape).
+  - `CLAUDE.md:3-18` (log section; Linux line `:16`, path resolution `:18`).
+  - `docs/superpowers/wishlist.md:16` (Bonjour retry, `.ico`, Tailscale).
+- Steps:
+  1. Stamp: `build.rs` sets `QUIP_BUILD` = `<CARGO_PKG_VERSION> (<sha>)`, `-dirty` after the sha when `git status --porcelain` is not empty, the version alone without git. One pure `build_info::describe(version, sha, dirty) -> String`, used by a new `Quip --version` (prints `Quip for Windows <QUIP_BUILD>`, exit 0, in `USAGE`), the tray tooltip, a first `websocket.log` line in `app::start` (`start: Quip for Windows <QUIP_BUILD>, port P`) and the selftest header.
+  2. Icon and version resource: move `pixels` into a file with no crate imports and add `ico_bytes(sizes)` there (a 32-bit `.ico` with 16, 24, 32, 48 and 256 px images), so `build.rs` can include it with `#[path]`. `build.rs` writes `OUT_DIR/quip.ico` and `OUT_DIR/quip.rc` (`1 ICON`, `1 VERSIONINFO`: FileVersion / ProductVersion from `CARGO_PKG_VERSION`, FileDescription `Quip for Windows`, ProductName `Quip`, Comments = the sha) and compiles it with `embed-resource` (windres for the gnu target, rc.exe in Windows CI). If it conflicts with `embed-manifest` at link time (two resource inputs), move the manifest into the same `.rc` (`1 24`) and drop `embed-manifest`. Then check `permonitorv2` is still in `Quip.exe` (S6 check). Spec 4's module map says `assets/quip.ico`; update spec 4 in the same commit if the icon is generated.
+  3. `tools/build-windows.sh`: (a) needs `x86_64-pc-windows-gnu` in `rustup target list --installed` and `x86_64-w64-mingw32-gcc`, `-windres`, `-objdump` on PATH; else print the two spec 9 commands and exit 2; (b) `cargo build --release --target x86_64-pc-windows-gnu --manifest-path QuipWindows/Cargo.toml`; (c) copy to `QuipWindows/dist/Quip.exe`; (d) import check: `objdump -p | grep "DLL Name"` against an allowlist in the script (today's DLLs, including `ntdll.dll`, `shell32.dll`, plus any `api-ms-win-*`); any other name (`libgcc_s_seh-1.dll`, `libwinpthread-1.dll`, …) is printed and exits 1; (e) PE subsystem is `Windows GUI`; (f) the HEAD sha is in the exe; (g) prints size, `shasum -a 256` and the stamp. It never copies the exe outside `dist/`. `--check-imports <file|->` runs only (d) on given objdump output.
+  4. Script test `tools/tests/build-windows-test.sh` with fixtures in `tools/tests/fixtures/build-windows/`: clean list -> 0; with `libgcc_s_seh-1.dll` -> 1 and it names the DLL; an unknown non-`api-ms-win` DLL -> 1.
+  5. Gate wiring: `changed-scopes.sh` windows arm gains `tools/build-windows.sh` and `tools/tests/build-windows-test.sh` (before the `tools/*` arm), with cases in `changed-scopes-test.sh`; `windows.yml` `paths` gains `tools/build-windows.sh`; the `tools/check.sh` windows block also runs `bash tools/tests/build-windows-test.sh` (cheap), never the release build.
+  6. Bonjour retry (wishlist): when `advertise` returns `None` at `app.rs:209`, a task on the tokio runtime re-reads `interface_ipv4s` (on `spawn_blocking`) every 30 s; once `advertised_ips` is not empty it advertises and stops. Logs: `mDNS: LAN address found, advertising …` once; while waiting, a line on the 1st try and every 10th. The advertiser goes in a holder the tray's Quit drops (`mDNS: stopped`, as now). For tests: `advertise_when_ready(host, port, read_addrs, sleeper, start)`, generic over the address source and the start call. Spec 6's Bonjour bullet should gain one sentence for this (not in this track's write set).
+  7. `QuipWindows/README.md` (owner-facing; placeholders only, no names or addresses): what it is; build on the Mac (the two install commands, `tools/build-windows.sh`, output `dist/Quip.exe`); install (spec 9 steps 1-6: `%LOCALAPPDATA%\Programs\Quip\`, SmartScreen More info -> Run anyway, firewall on Private, QR, Start with Windows, Tailscale: Tailscale sets its adapter Private itself, add `ws://<100.x>:8765` by hand on the phone with the PIN); updating (Quit from the tray, copy over the same path so the firewall rule stays); check the build (tooltip or `Quip --version`; `Quip --selftest`, from cmd `start /wait Quip --selftest`, report in the logs folder, send it back); troubleshooting: `netstat -an | findstr 8765` (`0.0.0.0:8765 … LISTENING`, one `ESTABLISHED` per phone, none = firewall or profile), the log files (`websocket.log`, `injection.log`, `latency.log`, `phone.log`, `selftest-*.txt` in `%LOCALAPPDATA%\Quip\Logs`, Tray -> Open logs folder), a Block rule for Quip from a dismissed firewall prompt (remove it in Windows Defender Firewall -> Advanced settings), admin windows refused by design, a second launch exits at once; uninstall (Start with Windows off, Quit, delete the folder; `%APPDATA%\Quip` holds the PIN and device id).
+  8. `CLAUDE.md` (in this slice's diff): after the Linux line (`CLAUDE.md:16`) add that on Windows (QuipWindows) the logs live in `%LOCALAPPDATA%\Quip\Logs\`: `websocket.log`, `injection.log`, `latency.log`, `phone.log`, plus `selftest-<time>.txt` per `--selftest` run; add `QuipWindows/src/services/log_paths.rs` to the path-resolution line (`:18`).
+- Tests to add:
+  - Mac unit: `build_info`: `describe` with a sha, with `-dirty`, with no git. `ico_bytes`: header (reserved 0, type 1, count 5), each entry's size and an offset inside the file, the 16 px image reads back equal to `pixels(16)`. `advertise_when_ready`: no address twice, then a LAN one -> exactly one start and the two log lines; Tailscale-only addresses never start it; a start error is retried; it stops when cancelled. `app.rs`: `start_writes_the_stamp_line_first` (temp log dir).
+  - Fake-platform integration: `tests/cli.rs` runs `env!("CARGO_BIN_EXE_Quip") --version`: exit 0, output matches `^Quip for Windows \d+\.\d+\.\d+( \([0-9a-f]{12}(-dirty)?\))?$`. Wire: nothing new; `device_identity` keeps its fields (the stamp is not sent to the phone, no phone change).
+  - Win32 UI, `tests/win32_tray.rs`: `the_exe_has_an_icon_and_a_version_resource` (`ExtractIconExW` finds at least 1 icon; `GetFileVersionInfoW` FileVersion equals `CARGO_PKG_VERSION`).
+  - New `--selftest` cases (22 -> 24): `build_stamp` (PASS when the header carries a sha; FAIL without one, since an unstamped build cannot be traced; no SKIP); `log_dir_writable` (creates and deletes `selftest-probe-<pid>.tmp` in the logs folder; FAIL when it cannot, because the host would then log nothing; no SKIP).
+  - Script test: `bash tools/tests/build-windows-test.sh`.
+  - Simulator QA: no new script. Re-run all six `tools/qa/q91-*.sh` against `--fake-platform` built from this commit as a regression sweep; evidence `s12-q91-*.png`.
+- Mac parity: the stamp -> `tools/stamp-build-info.sh` (Mac/iOS); log paths -> `QuipMac/Services/LogPaths.swift` and `LogPathsTestIsolationTests` (already mirrored in `log_paths.rs`); rotation -> `LogRotationTests` (already). The Bonjour retry is Windows only.
+- Real-PC safety: the build script writes only to `target/` and `dist/` and never to the PC; the README never asks to turn off the firewall or SmartScreen, only one Private allow and one "Run anyway"; the new selftest cases write and delete only their own temp file; no names, addresses or hardware ids in the README or the evidence.
+- Acceptance:
+  - `tools/build-windows.sh` on the Mac exits 0, writes `QuipWindows/dist/Quip.exe`, passes the import check and prints the stamp; the script test passes and its `libgcc` fixture exits 1.
+  - `Quip --version` prints `Quip for Windows 0.1.0 (<12 hex>)`; the same string is in the first `websocket.log` line and the selftest header.
+  - Windows CI on the pushed commit: `win32_tray` passes with the new test; selftest 24/24 PASS; report saved as `docs/superpowers/evidence/q91/s12-ci-<run>-selftest.txt`.
+  - `QuipWindows/README.md` covers every item in step 7; a grep of it for emails, phone numbers and non-placeholder IPs is clean.
+  - `CLAUDE.md` names the Windows log folder and `QuipWindows/src/services/log_paths.rs`.
+  - `bash .github/scripts/changed-scopes-test.sh` passes with the new cases.
+  - Owner gate: spec 11, all 10 checks.
+- Validation: as S10, plus `tools/build-windows.sh`, `bash tools/tests/build-windows-test.sh`, `bash .github/scripts/changed-scopes-test.sh`, `x86_64-w64-mingw32-objdump -p QuipWindows/dist/Quip.exe | grep -E "DLL Name|Subsystem"`.
+- Risks / open questions:
+  - `embed-resource` and `embed-manifest` may not link together; step 2 has the fallback.
+  - A new build-dependency changes `Cargo.lock` and needs the network once; the CI cache key changes with it.
+  - `device_identity.localURLs` and the start-time address list (`app.rs:114`) are read once, so a LAN address that appears later is advertised by Bonjour but is not in `localURLs` until a restart. Spec 3.1 territory; ask the owner whether to refresh it.
+  - Tailscale sets its own adapter to Private each time it comes up (Tailscale source `wgengine/router/osrouter/ifconfig_windows.go` `setPrivateNetwork`; a failure shows as a Tailscale health warning). Not yet seen on the owner's PC: confirm with `Get-NetConnectionProfile` in check 3.
 
 ## Review
 - **Status:** Complete. Overall Result: Needs fixes (0 high, 1 medium, 3 low). Range 21b83c2^..e6dea53. Verified: S6 cmd console and S7 selftest console fixes are real (no weakened assertions); real-PC safety holds; auth matches spec 3.1 at the PIN level; no secrets/PII.

@@ -363,19 +363,36 @@ Mac's "No enabled windows to arrange".)
 - `horizontal`: N equal columns, full height.
 - `vertical`: N equal rows, full width.
 
-For each window: if minimized or maximized, `ShowWindow(SW_RESTORE)` first.
+For each window: if minimized or maximized, restore it first
+(`ShowWindowAsync(SW_RESTORE)`, then wait up to 500 ms until it is neither
+iconic nor zoomed), and only then read its rects. A minimized window has no
+DWM bounds (5.1 lists it with its restored outer rect as both rects), so its
+border is known only once it is restored.
 Then `SetWindowPos(hwnd, null, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE)`,
 batched with `BeginDeferWindowPos` / `DeferWindowPos` / `EndDeferWindowPos`.
+Windows' docs say to abandon the whole batch when one `DeferWindowPos`
+fails, so on any batch failure each window is moved by its own
+`SetWindowPos` and gets its own result.
 
 The invisible resize border: target rect R is the visible rect. Read the
 window's `GetWindowRect` and `DWMWA_EXTENDED_FRAME_BOUNDS`, take the per-edge
 difference, and grow R by it before `SetWindowPos`. Without this, Windows 10/11
 leaves 7 px gaps between tiles.
 
+Verify: about 150 ms after the batch, read each moved window's rects again.
+A window more than 1 px off its target on any edge gets one more
+`SetWindowPos`, computed from its new rects (Windows rescales a window that
+lands on a monitor with another DPI). A window still off after that (the app
+keeps a minimum size) gets a `websocket.log` line and is not counted as
+refused.
+
 A window that does not move (elevated window, UIPI) is skipped and logged to
 `injection.log` with `op=arrange kind=unknown detail="elevated or refused"`.
-The others still move. `layout.rs` (the math) is pure and unit-tested on the
-Mac.
+A window whose thread does not respond (`IsHungAppWindow`) is skipped the
+same way with `detail="not responding"`: `SetWindowPos` would block the
+input thread. The others still move. `layout.rs` (the math) is pure and
+unit-tested on the Mac; the restore / measure / move / verify order lives in
+`services/arrange.rs`, above `platform/`, so the fake tests it too.
 
 The process is per-monitor DPI aware v2 (manifest), so all coordinates are
 physical pixels and no scaling math is needed.
@@ -387,13 +404,20 @@ Windows only lets the foreground process, or one it permits, call
 usually just flashes the taskbar button. Sequence:
 
 1. If minimized: `ShowWindow(SW_RESTORE)`.
-2. `SetForegroundWindow(hwnd)`. If `GetForegroundWindow() == hwnd`, done.
+2. `SetForegroundWindow(hwnd)`. Poll `GetForegroundWindow() == hwnd` every
+   20 ms for up to 100 ms; if it is, done.
 3. Otherwise `AttachThreadInput(our thread, foreground window's thread, TRUE)`,
-   then `BringWindowToTop`, `SetForegroundWindow`, `SetFocus`, then detach.
+   then `BringWindowToTop`, `SetForegroundWindow`, `SetFocus`, then detach
+   (always, also on an early return). Poll up to 150 ms. Skip this step when
+   the foreground window does not respond (`IsHungAppWindow`): attaching to
+   a hung thread can block.
 4. Otherwise send a synthetic Alt down/up (`SendInput` `VK_MENU`) and retry
    `SetForegroundWindow` once. This is the documented "last input event"
-   allowance.
-5. Wait up to 300 ms, polling every 20 ms, for `GetForegroundWindow() == hwnd`.
+   allowance. Poll up to 300 ms. The Alt tap reaches the window that was in
+   front and can select its menu bar; accepted (M0 needed this step once).
+5. The waits are M0's (`spike/src/win.rs` `bring_to_front`), so a refusal
+   takes about 550 ms at most. "Foreground" means the handle **and** the pid
+   that owned it when listed.
 
 If the window is still not foreground: fail. Never type anyway.
 
@@ -413,9 +437,19 @@ M0 (CI) needed every step: most focus calls succeeded at step 2, and one
 2a. Re-read the shell **now**, on the input thread (the 1 s poll can be
    stale: the user may just have started `python`), with the child-process
    rule of 5.1, and apply step 5 to that answer.
+2b. Compare the window's process integrity level (`OpenProcessToken` +
+   `GetTokenInformation(TokenIntegrityLevel)` on the pid that owns it) with
+   Quip's own. Higher, or not readable: type nothing, log `kind=unknown
+   detail="input blocked (elevated window?)"`, send `error`, no
+   `send_text_ack`. This is the main guard against elevated windows: the
+   `SendInput` docs say neither its return value nor `GetLastError` shows
+   that UIPI blocked the input, so step 4's short count cannot be relied on
+   alone. The shared injector asks for this check once, after focus and
+   before the first input, so a backend cannot skip it.
 3. Type the text with `SendInput`, one `KEYEVENTF_UNICODE` down/up pair per
    UTF-16 code unit (surrogate pairs as two units, which Windows reassembles,
-   so emoji arrive intact). Batches of at most 64 inputs per `SendInput` call.
+   so emoji arrive intact). Batches of at most 64 inputs per `SendInput` call,
+   with a 5 ms pause between batches, as in M0.
 4. Before each batch **and before every key** (Shift+Enter, and the Return
    after the 30 ms pause), check the window (handle and pid) is still
    foreground. The shared injector makes this check, not the Win32 code, so
@@ -423,9 +457,9 @@ M0 (CI) needed every step: most focus calls succeeded at step 2, and one
    `kind=unknown detail="focus lost after N chars"`, send `error`. What was
    already typed stays (the same as a human losing focus); nothing goes to
    the other window after the check fails. `SendInput` returns how many
-   inputs it inserted; a short count (UIPI: the window is elevated) stops
-   typing at once, logs `kind=unknown detail="input blocked (elevated
-   window?)"`, sends `error`, and no `send_text_ack`.
+   inputs it inserted; a short count stops typing at once, logs
+   `kind=unknown detail="input blocked (elevated window?)"`, sends `error`,
+   and no `send_text_ack` (a second guard; step 2b is the first).
 5. **Newlines: same rules as the Mac's `MultiLineSendPolicy`** (US-008 there).
    Ported as `multiline_policy.rs` and driven by the same shared vectors (10.2):
    - One trailing line break is stripped and the text counts as single-line.
@@ -472,8 +506,15 @@ through `SecretRedactor` like the Mac.
 | `toggle_enabled` | no keys; 3.3 |
 | anything else | `error` "Not supported on Windows yet" |
 
-Every key action foregrounds the window first (5.3) with the same failure
-rules.
+Keys are virtual-key `SendInput` events, one call per chord: `VK_RETURN`,
+`VK_ESCAPE`, `VK_TAB`, `VK_BACK`, and `VK_UP` / `VK_DOWN` / `VK_RIGHT` with
+`KEYEVENTF_EXTENDEDKEY` (without it they are the numeric keypad's keys).
+Ctrl+C and Ctrl+D are `VK_CONTROL` + `C` / `D`; Shift+Tab is `VK_SHIFT` +
+`VK_TAB`. Modifiers go down first and up last, in reverse order. `y`, `n`
+and `cls` are typed as text, like `send_text`.
+
+Every key action foregrounds the window first (5.3) and checks its
+integrity level (5.4 step 2b), with the same failure rules.
 
 ## 6. Tray app
 
@@ -518,7 +559,9 @@ Quit Quip
   `Quip <PC name>` with TXT `did=<deviceID>` (the Mac's
   `BonjourAdvertiser`), on the LAN (RFC 1918) addresses of non-virtual
   adapters only, from start until Quit. A failure is logged and the host
-  keeps running. `--fake-platform` never advertises.
+  keeps running. `--fake-platform` never advertises. With no LAN address at
+  start it does not advertise and today never retries; S12 adds a retry when
+  a LAN address appears.
 - No console window: `#![windows_subsystem = "windows"]`.
 
 ## 7. Settings
@@ -552,7 +595,15 @@ as `[ERROR] settings NOT saved`.
 - `injection.log`: failed injections only, Mac format:
   `DROPPED op=… window=… app=… kind=… msg="…" [detail="…"]`.
 - `phone.log`: the phone's `phone_log` lines, receive time first.
-- `latency.log`: successful `send_text` timings.
+- `latency.log`: `send_text` and `quick_action` timings (counts and ids
+  only, never text; a failed send is a `success=0` line here as well as a
+  `DROPPED` line in `injection.log`).
+- `selftest-<time>.txt`: one new file per `--selftest` run (10.5), never
+  overwritten.
+
+`websocket.log` also carries the mDNS lines (6) and, as the first line of
+each start, the build stamp (9). Debug-level lines (ignored message types)
+go to no file; `--fake-platform` prints them to stderr.
 
 Each file is capped at 10 MB; on reaching it, the file is renamed to
 `<name>.1` (one old copy kept). A write failure (disk full) is dropped
@@ -575,18 +626,44 @@ linking via `.cargo/config.toml`:
 `rustflags = ["-C", "target-feature=+crt-static"]` for the gnu target. Check:
 `x86_64-w64-mingw32-objdump -p Quip.exe | grep "DLL Name"` lists only Windows
 system DLLs (`KERNEL32`, `USER32`, `ws2_32`, …), no `libgcc`, `libwinpthread`.
+The script holds the allowed names as a list (plus any `api-ms-win-*` API
+set) and fails on any other name, so a new dependency is a reviewed one-line
+change. It also checks the PE subsystem is `Windows GUI` and that the commit
+stamp is in the exe, and never copies the exe anywhere but `dist/`.
+
+Build stamp: `Quip.exe --version` prints `Quip for Windows <version>
+(<12-char git sha>)`, with `-dirty` after the sha when the tree had
+uncommitted changes. The same string is the tray icon's tooltip, the first
+`websocket.log` line of each start and the `--selftest` header. The exe also
+carries a version resource and the Quip icon (`.ico`), so Explorer shows
+both.
 
 The `.exe` is unsigned. On the PC (owner steps, in `QuipWindows/README.md`):
 
 1. Copy `Quip.exe` to `%LOCALAPPDATA%\Programs\Quip\`.
 2. Double-click it. SmartScreen says "Windows protected your PC": click
-   More info → Run anyway (once).
+   More info → Run anyway (once). It asks only for a file marked as
+   downloaded (a cloud drive marks it; a USB copy usually does not), and
+   again for each new build so marked.
 3. Windows Defender Firewall asks about network access: allow on **Private**
    networks. If the home network is marked Public, change it to Private in
-   Settings → Network, or the phone cannot connect.
+   Settings → Network, or the phone cannot connect. The rule is for the
+   exe's path: an update copied over the same path keeps it. Dismissing the
+   prompt can leave a Block rule for Quip, which must be removed.
 4. Tray icon → Show pairing QR, scan from the phone (or add the backend by
    IP and PIN).
 5. Tray icon → Start with Windows, if wanted.
+6. Over Tailscale: Tailscale sets its own adapter's network profile to
+   Private. Bonjour does not cross Tailscale, so add the backend on the
+   phone by hand as `ws://<the PC's 100.x address>:8765` with the PIN (the
+   tray menu shows the Tailscale address).
+
+Troubleshooting (README): `netstat -an | findstr 8765` shows
+`0.0.0.0:8765 … LISTENING` while Quip runs (IPv4 only, 3.1) and one
+`ESTABLISHED` line per connected phone; no `ESTABLISHED` line while the phone
+tries means the firewall or the network profile. Then read `websocket.log`
+(connects, auth, mDNS) and `injection.log` (failed sends), from Tray →
+Open logs folder.
 
 Getting the `.exe` to the PC: any file copy (USB, cloud drive, a share).
 Choosing a transfer method is the owner's call and is not part of the build.
@@ -792,18 +869,26 @@ Run after M4 and again after M5. `--selftest` covers the mechanics; these are
 the things only a person at the PC can see.
 
 1. Run `Quip.exe`: tray icon appears, no console window. A second launch does
-   nothing.
+   nothing. The icon's tooltip shows the version and commit of the build
+   that was copied (9).
 2. `Quip.exe --selftest`: every line PASS. Send the file back.
 3. Phone pairs with the QR. The PC shows as a second backend; the Mac backend
-   keeps working.
+   keeps working. With the phone off Wi-Fi, a backend added by hand as
+   `ws://<100.x>:8765` (Tailscale, 9 step 6) also connects.
 4. Open PowerShell in Windows Terminal and in a classic window. Both show on
    the phone as terminals within 2 s. Close one: gone within 2 s.
-5. Arrange side by side, then stacked, from the phone: no gaps.
+5. Arrange side by side, then stacked, from the phone: no gaps (at most 1 px
+   between tiles, none under the taskbar), also with one of the windows
+   minimized or maximized first. The phone build tested so far (1.5.7) has
+   no control that sends `arrange_windows` (`tools/qa/q91-arrange.sh` sends
+   it from a scripted peer); if the owner's build has none either, this
+   check is run the same way, with the phone paired.
 6. Dictate "Get-Date" with Return into each: runs in that window, no other.
 7. Dictate two lines with Return: both sit in the prompt, nothing runs.
 8. Ctrl+C from the quick buttons stops `ping -t localhost`.
 9. Administrator PowerShell: sending text types nothing anywhere, the phone
-   shows an error, `injection.log` has a line.
+   shows an error, `injection.log` has a line with
+   `detail="input blocked (elevated window?)"`.
 10. Reboot with Start with Windows on: Quip is in the tray, the phone
     reconnects.
 
