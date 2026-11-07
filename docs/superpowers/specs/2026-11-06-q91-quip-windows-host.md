@@ -469,7 +469,7 @@ Quip — 1 phone connected
 PIN 1234 5678               (click copies)
 LAN 192.168.1.20 · Tailscale 100.x.y.z
 Show pairing QR…
-New PIN
+New PIN (disconnects phones)
 Show all apps               ✓/blank
 Start with Windows          ✓/blank
 Open logs folder
@@ -483,8 +483,21 @@ Quit Quip
   `"<path to Quip.exe>"`. Default off.
 - **Pairing QR:** `quip://pair?url=<base64url, no padding>&pin=<pin>` per
   `Shared/PairingPayload.swift`, URL = the first LAN URL (Tailscale if no LAN).
-- **New PIN:** regenerates; connected phones stay connected (they already
-  authenticated) and must re-enter on the next connect, the same as the Mac.
+- **New PIN:** regenerates and saves the PIN, then closes every connected
+  socket, authenticated or not, so a phone that should not be there loses
+  its session at once; every phone must pair again with the new PIN.
+  **Deliberate difference from the Mac**, where connected phones stay
+  connected (security review of 0966c3b: on Windows "New PIN" is the one
+  tray action against a suspected intruder). The menu label says so.
+- **Pairing QR window:** a small top-level window in Quip's own process (so
+  the lister never lists it) with the QR, the URL and the PIN as text; Esc
+  or the close button closes it, "Show pairing QR…" again reuses it, and a
+  New PIN refreshes it.
+- **Bonjour:** the real host advertises `_quip._tcp.` in `local.` as
+  `Quip <PC name>` with TXT `did=<deviceID>` (the Mac's
+  `BonjourAdvertiser`), on the LAN (RFC 1918) addresses of non-virtual
+  adapters only, from start until Quit. A failure is logged and the host
+  keeps running. `--fake-platform` never advertises.
 - No console window: `#![windows_subsystem = "windows"]`.
 
 ## 7. Settings

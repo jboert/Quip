@@ -32,6 +32,8 @@ base64 = "0.22"
 rand = "0.9"
 if-addrs = "0.13"
 hostname = "0.4"
+mdns-sd = "0.11"
+qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "=0.58.0", features = [
@@ -58,6 +60,7 @@ windows = { version = "=0.58.0", features = [
 embed-manifest = "1.5"
 
 [dev-dependencies]
+rqrr = { version = "0.11.0", default-features = false }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "test-util"] }
 

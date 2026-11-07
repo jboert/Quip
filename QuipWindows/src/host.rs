@@ -166,6 +166,8 @@ pub struct HostConfig {
 
 struct Client {
     tx: mpsc::Sender<String>,
+    /// Tells the socket's task to close (`disconnect_all`).
+    kick: Arc<Notify>,
     authenticated: bool,
     remote: String,
     pending_heartbeat: Option<i64>,
@@ -375,12 +377,26 @@ impl Host {
         self.pin.read().map(|p| p.clone()).unwrap_or_default()
     }
 
-    /// Tray "New PIN": connected phones stay connected (spec 6).
+    /// Sets and saves the PIN. Connected phones stay connected; the tray's
+    /// "New PIN" uses `replace_pin`, which also closes them.
     pub fn set_pin(&self, pin: String) {
         if let Ok(mut p) = self.pin.write() {
             *p = pin.clone();
         }
         self.with_settings(|s| s.pin = pin);
+    }
+
+    /// Tray "New PIN" (spec 6): the new PIN is set and saved first, then
+    /// every socket is closed, authenticated or not, so a phone that should
+    /// not be there loses its session and every reconnect needs the new PIN.
+    /// The Mac keeps connected phones; this is a deliberate difference.
+    /// Returns how many sockets were closed.
+    pub fn replace_pin(&self, pin: String) -> usize {
+        self.set_pin(pin);
+        let closed = self.disconnect_all();
+        self.logs
+            .ws(Severity::Info, &format!("new PIN: closed {closed} connection(s); phones must pair with the new PIN"));
+        closed
     }
 
     /// Mutate and persist settings (no-op in fake mode). The change is made
@@ -412,12 +428,30 @@ impl Host {
 
     // --- clients ---
 
-    pub fn register_client(&self, remote: String) -> (ClientId, mpsc::Receiver<String>) {
+    /// A new socket: its id, its send queue and the signal that tells its
+    /// task to close (`disconnect_all`; a stored permit, so a signal sent
+    /// before the task waits is not lost).
+    pub fn register_client(&self, remote: String) -> (ClientId, mpsc::Receiver<String>, Arc<Notify>) {
         let id = self.next_client.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel(CLIENT_QUEUE);
-        lock(&self.clients)
-            .insert(id, Client { tx, authenticated: false, remote, pending_heartbeat: None, missed_acks: 0 });
-        (id, rx)
+        let kick = Arc::new(Notify::new());
+        lock(&self.clients).insert(
+            id,
+            Client { tx, kick: kick.clone(), authenticated: false, remote, pending_heartbeat: None, missed_acks: 0 },
+        );
+        (id, rx, kick)
+    }
+
+    /// Closes every registered socket, authenticated or not: each leaves the
+    /// client set at once (no broadcast reaches it, and an auth still in
+    /// flight cannot mark it authenticated), its queue is dropped and its
+    /// task is told to close. Returns how many.
+    pub fn disconnect_all(&self) -> usize {
+        let gone: Vec<Client> = lock(&self.clients).drain().map(|(_, c)| c).collect();
+        for c in &gone {
+            c.kick.notify_one();
+        }
+        gone.len()
     }
 
     pub fn remove_client(&self, id: ClientId) {

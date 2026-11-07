@@ -6,12 +6,14 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::*;
+use futures_util::StreamExt;
 use quip_windows::host::HEARTBEAT_INTERVAL;
 use quip_windows::platform::fake::{FakeCall, Typed};
 use quip_windows::platform::traits::FocusStep;
 use quip_windows::protocol::limits::MAX_MESSAGE_BYTES;
 use quip_windows::services::keys::{Key, KeyChord};
 use serde_json::json;
+use tokio_tungstenite::tungstenite::Message;
 
 const QUIET: Duration = Duration::from_millis(300);
 const ID_A: &str = "6BA7B810-9DAD-11D1-80B4-00C04FD430C8";
@@ -650,6 +652,56 @@ async fn new_pin_keeps_connected_phones_and_is_required_next_time() {
     assert!(settings.contains("13572468"), "the new PIN is persisted");
 }
 
+/// Reads until the host closes the socket (Close frame or end of stream),
+/// skipping whatever was queued first. Panics if it is still open after 5 s.
+async fn assert_closed_by_host(p: &mut Phone) {
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(until.into(), p.ws.next()).await {
+            Err(_) => panic!("the host did not close the socket within 5 s"),
+            Ok(None | Some(Ok(Message::Close(_))) | Some(Err(_))) => return,
+            Ok(Some(Ok(_))) => continue,
+        }
+    }
+}
+
+#[tokio::test]
+async fn tray_new_pin_closes_every_phone_and_only_the_new_pin_gets_back_in() {
+    let h = start().await;
+    let (mut a, _) = paired(h.addr).await;
+    let (mut b, _) = paired(h.addr).await;
+    // One more that never authenticated: it is closed too.
+    let mut c = connect(h.addr).await;
+    c.recv().await;
+    for _ in 0..50 {
+        if h.host.client_ids().len() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(h.host.authenticated_count(), 2);
+    assert_eq!(h.host.replace_pin("13572468".into()), 3);
+    assert_eq!(h.host.authenticated_count(), 0, "no phone is authenticated from the moment the PIN changes");
+    assert_closed_by_host(&mut a).await;
+    assert_closed_by_host(&mut b).await;
+    assert_closed_by_host(&mut c).await;
+    let log = h.log("websocket.log");
+    assert!(log.contains("closed 3 connection(s)"));
+    // Each socket's task ended on the signal, not on a Close reply the peer
+    // may never send.
+    assert_eq!(log.matches("the PIN was replaced").count(), 3, "{log}");
+
+    let mut again = connect(h.addr).await;
+    again.recv().await;
+    again.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(again.recv().await["error"], "Incorrect PIN", "the old PIN no longer works");
+    again.send(json!({"type":"auth","pin":"13572468"})).await;
+    assert_eq!(again.recv().await["success"], true);
+    assert_eq!(again.recv().await["type"], "device_identity");
+    assert!(h.settings().contains("13572468"), "the new PIN is persisted");
+    assert!(!h.log("websocket.log").contains("13572468"), "the PIN never reaches a log");
+}
+
 #[tokio::test]
 async fn client_count_follows_auth_and_disconnect() {
     let h = start().await;
@@ -1283,7 +1335,7 @@ async fn a_network_with_eight_wrong_pins_in_their_delay_queues_the_next_and_stil
 /// PIN's reply may wait for its delay). The client's replies.
 fn auth_in_background(h: &Harness, ip: &str, pin: &str) -> tokio::sync::mpsc::Receiver<String> {
     use quip_windows::services::auth_throttle::Sender;
-    let (id, rx) = h.host.register_client(format!("[{ip}]:50000"));
+    let (id, rx, _kick) = h.host.register_client(format!("[{ip}]:50000"));
     let host = h.host.clone();
     let sender = Sender::of(ip.parse().unwrap());
     let pin = pin.to_string();
@@ -1385,7 +1437,7 @@ async fn wait_for(cond: impl Fn() -> bool) {
 /// (a loopback socket cannot come from 2001:db8::/32). The first reply.
 async fn auth_from(h: &Harness, ip: &str, pin: &str) -> serde_json::Value {
     use quip_windows::services::auth_throttle::Sender;
-    let (id, mut rx) = h.host.register_client(format!("[{ip}]:50000"));
+    let (id, mut rx, _kick) = h.host.register_client(format!("[{ip}]:50000"));
     h.host.handle_auth(id, &Sender::of(ip.parse().unwrap()), Some(pin.to_string()), None).await;
     let reply = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
     h.host.remove_client(id);

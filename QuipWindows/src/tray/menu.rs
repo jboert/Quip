@@ -108,8 +108,9 @@ pub fn addresses_line(addresses: &[Ipv4Addr], port: u16) -> String {
     }
 }
 
-/// Spec 6, top to bottom. "Show pairing QR…" is listed but disabled until
-/// the QR window exists.
+/// Spec 6, top to bottom. "New PIN" says that it disconnects the phones
+/// (`Host::replace_pin`), so nobody presses it expecting the Mac's
+/// behaviour.
 pub fn build(s: &TrayStatus) -> Vec<Entry> {
     let item =
         |action, label: &str, enabled, checked| Entry::Item { action, label: label.to_string(), enabled, checked };
@@ -118,8 +119,8 @@ pub fn build(s: &TrayStatus) -> Vec<Entry> {
         item(Action::CopyPin, &format!("PIN {} (click copies)", grouped_pin(&s.pin)), true, false),
         Entry::Info(addresses_line(&s.addresses, s.port)),
         Entry::Separator,
-        item(Action::ShowPairingQr, "Show pairing QR…", false, false),
-        item(Action::NewPin, "New PIN", true, false),
+        item(Action::ShowPairingQr, "Show pairing QR…", true, false),
+        item(Action::NewPin, "New PIN (disconnects phones)", true, false),
         Entry::Separator,
         item(Action::ToggleShowAllApps, "Show all apps", true, s.show_all_apps),
         item(Action::ToggleStartWithWindows, "Start with Windows", true, s.start_with_windows),
@@ -165,7 +166,7 @@ mod tests {
                 "LAN 192.168.1.20 · Tailscale 100.101.1.2",
                 "-",
                 "Show pairing QR…",
-                "New PIN",
+                "New PIN (disconnects phones)",
                 "-",
                 "Show all apps",
                 "Start with Windows",
@@ -177,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn toggles_carry_their_state_and_the_qr_is_disabled() {
+    fn toggles_carry_their_state_and_every_item_is_enabled() {
         let checked = |entries: &[Entry], a: Action| {
             entries.iter().find_map(|e| match e {
                 Entry::Item { action, checked, enabled, .. } if *action == a => Some((*checked, *enabled)),
@@ -188,7 +189,8 @@ mod tests {
         let e = build(&s);
         assert_eq!(checked(&e, Action::ToggleShowAllApps), Some((false, true)));
         assert_eq!(checked(&e, Action::ToggleStartWithWindows), Some((true, true)));
-        assert_eq!(checked(&e, Action::ShowPairingQr), Some((false, false)));
+        assert_eq!(checked(&e, Action::ShowPairingQr), Some((false, true)));
+        assert_eq!(checked(&e, Action::NewPin), Some((false, true)));
         s.show_all_apps = true;
         s.start_with_windows = false;
         let e = build(&s);

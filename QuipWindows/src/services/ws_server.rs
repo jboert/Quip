@@ -331,7 +331,7 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
     };
     let (mut sink, source) = ws.split();
     let mut source = source.peekable();
-    let (id, mut rx) = host.register_client(remote.clone());
+    let (id, mut rx, kick) = host.register_client(remote.clone());
     host.logs.ws(Severity::Info, &format!("connection ready from {remote} — awaiting PIN"));
     let writer = tokio::spawn(async move {
         while let Some(json) = rx.recv().await {
@@ -348,19 +348,29 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
     let mut rate = RateLimit::new();
     let mut rate_dropping = false;
     loop {
-        let next = if slot.is_some() {
-            match tokio::time::timeout_at(deadline, source.next()).await {
-                Ok(n) => n,
-                Err(_) => {
+        let read = async {
+            if slot.is_some() {
+                tokio::time::timeout_at(deadline, source.next()).await.ok()
+            } else {
+                Some(source.next().await)
+            }
+        };
+        let next = tokio::select! {
+            biased;
+            () = kick.notified() => {
+                host.logs.ws(Severity::Info, &format!("closing {remote}: the PIN was replaced"));
+                break;
+            }
+            next = read => match next {
+                Some(n) => n,
+                None => {
                     host.logs.ws(
                         Severity::Warn,
                         &format!("reaped {remote}: not authenticated within {}ms", auth_deadline.as_millis()),
                     );
                     break;
                 }
-            }
-        } else {
-            source.next().await
+            },
         };
         let Some(frame) = next else { break };
         let text = match frame {

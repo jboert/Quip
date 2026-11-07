@@ -13,7 +13,8 @@
 //!   `Redactor` drops any that slip through).
 //!
 //! - the one setting it touches, the "Start with Windows" Run value, is put
-//!   back as it was.
+//!   back as it was; the pairing QR window it opens shows a made-up address
+//!   and PIN and is closed again.
 //!
 //! A case is one entry in `CASES`; arrange and typing cases are added there.
 
@@ -56,7 +57,18 @@ pub const CASES: &[Case] = &[
     Case { name: "busy_shell_reads_unknown", run: busy_shell_reads_unknown },
     Case { name: "windows_terminal", run: windows_terminal },
     Case { name: "start_with_windows_round_trip", run: start_with_windows_round_trip },
+    Case { name: "pairing_qr_window", run: pairing_qr_window },
 ];
+
+/// The tray's QR window, with a made-up address and PIN: opens, a second
+/// Show reuses it, the lister leaves it out, Esc closes it.
+fn pairing_qr_window(_: &mut Ctx) -> Outcome {
+    let content = crate::tray::qr::pairing_qr(&[std::net::Ipv4Addr::new(192, 168, 0, 2)], 8765, "00000000");
+    match crate::tray::qr_window::check_open_list_close(content) {
+        Ok(()) => Outcome::Pass,
+        Err(e) => Outcome::Fail(e),
+    }
+}
 
 /// The tray's "Start with Windows" value: set, read back, delete, then the
 /// earlier value (if any) put back, so the PC ends as it started.

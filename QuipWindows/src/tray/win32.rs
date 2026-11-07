@@ -3,7 +3,7 @@
 //!
 //! The icon belongs to a hidden tool window created here, in Quip's own
 //! process, so the window lister never reads its title (it drops Quip's pid
-//! first). The thread only reads cheap host state (phone count, PIN, the
+//! first). The pairing QR window (`qr_window`) lives on this thread too. The thread only reads cheap host state (phone count, PIN, the
 //! show-all flag, the Run value, the adapter addresses) and hands work to
 //! the host: no `Platform` call ever runs here, so a slow `SendInput` on the
 //! input lane cannot freeze the menu. Republishing after "Show all apps"
@@ -38,7 +38,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::menu::{self, Action, Entry, TrayStatus};
-use super::{autostart, icon};
+use super::qr::pairing_qr;
+use super::{autostart, icon, qr_window};
 use crate::host::Host;
 use crate::services::local_addresses::interface_ipv4s;
 use crate::services::pin_store;
@@ -317,11 +318,15 @@ fn perform(hwnd: HWND, app: &TrayApp, action: Action) {
                 host.logs.ws(Severity::Warn, &format!("tray: PIN not copied: {e}"));
             }
         }
-        // The QR window is not built yet; the item is disabled.
-        Action::ShowPairingQr => {}
+        Action::ShowPairingQr => {
+            if let Err(e) = qr_window::show(pairing_qr(&interface_ipv4s(), app.port, &host.pin())) {
+                host.logs.ws(Severity::Error, &format!("tray: {e}"));
+                show_error(&e);
+            }
+        }
         Action::NewPin => {
-            host.set_pin(pin_store::generate(&mut rand::rng()));
-            host.logs.ws(Severity::Info, "tray: new PIN; connected phones stay connected");
+            host.replace_pin(pin_store::generate(&mut rand::rng()));
+            qr_window::refresh(pairing_qr(&interface_ipv4s(), app.port, &host.pin()));
         }
         Action::ToggleShowAllApps => {
             let on = !host.state().show_all_apps();
@@ -350,6 +355,7 @@ fn perform(hwnd: HWND, app: &TrayApp, action: Action) {
         }
         Action::Quit => {
             host.logs.ws(Severity::Info, "tray: quit");
+            qr_window::close();
             TRAY.with(|t| {
                 if let Ok(mut g) = t.try_borrow_mut() {
                     if let Some(tray) = g.as_mut() {

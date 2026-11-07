@@ -8,7 +8,8 @@
 //! on `0.0.0.0:<port>` with the 1 s poll and heartbeat.
 //!
 //! `run` (Windows) is the process: one instance, then `start` on the
-//! Win32 platform, then the tray loop on the main thread. Every error before
+//! Win32 platform, Bonjour (`advertise`, stopped on Quit), then the tray
+//! loop on the main thread. Every error before
 //! the tray is up is shown in a message box (there is no console).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -21,6 +22,7 @@ use crate::services::clock::SystemClock;
 use crate::services::local_addresses::{interface_ipv4s, websocket_urls};
 use crate::services::log_paths::{default_config_dir, LogPaths};
 use crate::services::logs::Logs;
+use crate::services::mdns_advertiser::{Advert, MdnsAdvertiser};
 use crate::services::prefs_store::PrefsStore;
 use crate::services::quip_log::Severity;
 use crate::services::settings::{LoadOutcome, SettingsError, SettingsStore};
@@ -139,6 +141,34 @@ pub async fn start(paths: &AppPaths, platform: Arc<dyn Platform>, opts: StartOpt
     Ok(Running { host, addr, settings_path: store.path().to_path_buf() })
 }
 
+/// Advertises the running host over Bonjour on `addresses` (spec 3.1).
+/// Every outcome is logged to websocket.log; a failure leaves the host
+/// running (the phone still connects by its saved or scanned URL). Only the
+/// real app calls this: `--fake-platform` never advertises.
+pub fn advertise(host: &Host, addresses: &[Ipv4Addr], port: u16) -> Option<MdnsAdvertiser> {
+    let did_prefix: String = host.config.device_id.chars().take(8).collect();
+    let Some(advert) = Advert::new(&host.config.display_name, addresses, port, &host.config.device_id) else {
+        host.logs.ws(Severity::Warn, "mDNS: no LAN address, not advertising (pair with the QR or the URL)");
+        return None;
+    };
+    match MdnsAdvertiser::start(&advert) {
+        Ok(a) => {
+            host.logs.ws(
+                Severity::Info,
+                &format!(
+                    "mDNS: advertising _quip._tcp on {} LAN address(es), port {port} (did={did_prefix})",
+                    advert.ips.len()
+                ),
+            );
+            Some(a)
+        }
+        Err(e) => {
+            host.logs.ws(Severity::Error, &format!("mDNS: not advertising: {e}"));
+            None
+        }
+    }
+}
+
 /// The process: single instance, host, tray. Exit code.
 #[cfg(windows)]
 pub fn run() -> i32 {
@@ -176,6 +206,7 @@ pub fn run() -> i32 {
             return 1;
         }
     };
+    let advertiser = advertise(&running.host, &interface_ipv4s(), running.addr.port());
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("Quip.exe"));
     let app = tray::TrayApp {
         host: running.host.clone(),
@@ -191,6 +222,10 @@ pub fn run() -> i32 {
             1
         }
     };
+    if advertiser.is_some() {
+        drop(advertiser);
+        running.host.logs.ws(Severity::Info, "mDNS: stopped");
+    }
     running.host.flush();
     code
 }
@@ -260,6 +295,18 @@ mod tests {
         assert!(err.to_string().contains("PIN and pairing are unchanged"));
         assert!(p.config_dir.join("settings.toml").is_dir());
         assert!(!p.config_dir.join("settings.toml.bad").exists());
+    }
+
+    #[tokio::test]
+    async fn no_lan_address_is_logged_and_nothing_is_advertised() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = paths(tmp.path());
+        let r = start(&p, Arc::new(FakePlatform::default()), loopback()).await.unwrap();
+        let tailscale_only = [Ipv4Addr::new(100, 101, 1, 2)];
+        assert!(advertise(&r.host, &tailscale_only, r.addr.port()).is_none());
+        r.host.flush();
+        let log = std::fs::read_to_string(p.log_dir.join("websocket.log")).unwrap();
+        assert!(log.contains("mDNS: no LAN address, not advertising"), "{log}");
     }
 
     #[tokio::test]

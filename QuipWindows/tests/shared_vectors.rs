@@ -22,6 +22,7 @@ use quip_windows::services::layout::{self, LayoutMode, NormRect, PixelRect};
 use quip_windows::services::multiline_policy::{self as mp, Shell, TerminalApp, WindowsSend};
 use quip_windows::services::pairing::PairingPayload;
 use quip_windows::services::window_color;
+use quip_windows::tray::qr::{QrMatrix, QUIET_ZONE};
 use serde_json::{json, Value};
 
 fn fixtures() -> PathBuf {
@@ -524,6 +525,24 @@ fn arrange_vectors() {
 
 // --- vectors/pairing.json ---
 
+/// The QR as a reader sees it: quiet zone, 4 px per module.
+fn read_qr(m: &QrMatrix) -> String {
+    let scale = 4;
+    let side = (m.width() + 2 * QUIET_ZONE) * scale;
+    let mut img = rqrr::PreparedImage::prepare_from_greyscale(side, side, |x, y| {
+        let (mx, my) = (x / scale, y / scale);
+        let dark = mx >= QUIET_ZONE && my >= QUIET_ZONE && m.is_dark(mx - QUIET_ZONE, my - QUIET_ZONE);
+        if dark {
+            0
+        } else {
+            255
+        }
+    });
+    let grids = img.detect_grids();
+    assert_eq!(grids.len(), 1);
+    grids[0].decode().unwrap().1
+}
+
 #[test]
 fn pairing_vectors() {
     let v = load("vectors/pairing.json");
@@ -534,6 +553,9 @@ fn pairing_vectors() {
         let back = PairingPayload::decode(&enc).unwrap();
         assert_eq!(back.url, c["expect"]["decodedBack"]["url"].as_str().unwrap());
         assert_eq!(back.pin, c["expect"]["decodedBack"]["pin"].as_str().unwrap());
+        // The tray's QR carries exactly this link.
+        let m = QrMatrix::encode(&enc).unwrap();
+        assert_eq!(read_qr(&m), enc, "QR of {}", c["name"]);
     }
     for c in cases(&v, "decode") {
         let got = PairingPayload::decode(c["input"]["raw"].as_str().unwrap());

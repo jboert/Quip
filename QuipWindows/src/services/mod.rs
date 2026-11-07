@@ -16,6 +16,7 @@ pub mod layout;
 pub mod local_addresses;
 pub mod log_paths;
 pub mod logs;
+pub mod mdns_advertiser;
 pub mod multiline_policy;
 pub mod pairing;
 pub mod phone_log;
