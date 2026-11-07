@@ -137,6 +137,8 @@ fn reencode_phone_to_host(v: &Value) -> Result<Value, String> {
         Incoming::PreferencesSnapshot(x) => ("preferences_snapshot", serde_json::to_value(x)),
         Incoming::PreferencesRequest(x) => ("preferences_request", serde_json::to_value(x)),
         Incoming::RequestContent(x) => ("request_content", serde_json::to_value(x)),
+        Incoming::SetPin(x) => ("set_pin", serde_json::to_value(x)),
+        Incoming::SetColor(x) => ("set_color", serde_json::to_value(x)),
     };
     let b = body.as_mut().map_err(|e| e.to_string())?;
     b.as_object_mut().ok_or("not an object")?.insert("type".into(), json!(t));

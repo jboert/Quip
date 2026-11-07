@@ -525,6 +525,98 @@ async fn toggle_enabled_flips_rebroadcasts_and_persists() {
     assert!(settings.contains("pwsh one"), "{settings}");
 }
 
+// --- set_pin / set_color (Mac `QuipMacApp.swift` cases, spec 3.3) ---
+
+fn layout_names(l: &serde_json::Value) -> Vec<String> {
+    l["windows"].as_array().unwrap().iter().map(|w| w["name"].as_str().unwrap().to_string()).collect()
+}
+
+fn layout_window(l: &serde_json::Value, id: &str) -> serde_json::Value {
+    l["windows"].as_array().unwrap().iter().find(|w| w["id"] == id).unwrap().clone()
+}
+
+#[tokio::test]
+async fn set_pin_puts_the_window_first_flagged_and_unpin_restores_the_order() {
+    let h = start().await;
+    let (mut p, first) = paired(h.addr).await;
+    assert_eq!(layout_names(&first), ["pwsh one", "cmd two"]);
+    let wid = h.window_id(102);
+    p.send(json!({"type":"set_pin","windowId":wid,"pinned":true})).await;
+    let l = p.recv_type("layout_update").await;
+    assert_eq!(layout_names(&l), ["cmd two", "pwsh one"], "the pinned window rides out first");
+    assert_eq!(l["windows"][0]["isPinned"], true);
+    assert_eq!(l["windows"][1]["isPinned"], false);
+    assert!(h.fake.calls().is_empty(), "a pin touches no window");
+    // A poll does not undo it.
+    h.host.poll_tick().await;
+    p.assert_silent(QUIET).await;
+    p.send(json!({"type":"set_pin","windowId":wid,"pinned":false})).await;
+    let l = p.recv_type("layout_update").await;
+    assert_eq!(layout_names(&l), ["pwsh one", "cmd two"]);
+    assert!(l["windows"].as_array().unwrap().iter().all(|w| w["isPinned"] == false));
+}
+
+#[tokio::test]
+async fn set_color_wins_over_the_dealt_color_and_clearing_brings_it_back() {
+    let h = start().await;
+    let (mut p, first) = paired(h.addr).await;
+    let wid = h.window_id(101);
+    let dealt = layout_window(&first, &wid)["color"].clone();
+    p.send(json!({"type":"set_color","windowId":wid,"color":"#ff6b6b"})).await;
+    let l = p.recv_type("layout_update").await;
+    assert_eq!(layout_window(&l, &wid)["color"], "#FF6B6B", "normalized like WindowColor.normalized");
+    h.host.poll_tick().await;
+    p.assert_silent(QUIET).await;
+    // Not a hex color: ignored, as the Mac's setColor does.
+    p.send(json!({"type":"set_color","windowId":wid,"color":"red"})).await;
+    p.assert_silent(QUIET).await;
+    // Absent color clears the choice.
+    p.send(json!({"type":"set_color","windowId":wid})).await;
+    let l = p.recv_type("layout_update").await;
+    assert_eq!(layout_window(&l, &wid)["color"], dealt);
+}
+
+#[tokio::test]
+async fn set_pin_and_set_color_for_an_unknown_id_are_ignored() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    let notepad = h.window_id(103); // tracked, but not shown to the phone
+    for m in [
+        json!({"type":"set_pin","windowId":"w-999-9-9","pinned":true}),
+        json!({"type":"set_color","windowId":"w-999-9-9","color":"#4A90D9"}),
+        json!({"type":"set_pin","windowId":notepad,"pinned":true}),
+        json!({"type":"set_color","windowId":notepad,"color":"#4A90D9"}),
+    ] {
+        p.send(m).await;
+    }
+    p.assert_silent(QUIET).await;
+    let saved: quip_windows::services::settings::Settings = toml::from_str(&h.settings()).unwrap();
+    assert!(saved.pinned_windows.is_empty() && saved.window_colors.is_empty(), "{saved:?}");
+    // The socket still works.
+    p.send(json!({"type":"set_pin","windowId":h.window_id(102),"pinned":true})).await;
+    assert_eq!(layout_names(&p.recv_type("layout_update").await), ["cmd two", "pwsh one"]);
+}
+
+#[tokio::test]
+async fn pins_and_colors_survive_a_restart() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    p.send(json!({"type":"set_pin","windowId":h.window_id(102),"pinned":true})).await;
+    p.recv_type("layout_update").await;
+    p.send(json!({"type":"set_color","windowId":h.window_id(101),"color":"#123456"})).await;
+    p.recv_type("layout_update").await;
+    let saved: quip_windows::services::settings::Settings = toml::from_str(&h.settings()).unwrap();
+    assert_eq!(saved.pinned_windows.len(), 1, "{saved:?}");
+    assert_eq!(saved.window_colors[0].color, "#123456");
+    drop(p);
+    let dir = h.dir;
+    let h2 = start_with(Opts { dir: Some(dir), ..Default::default() }).await;
+    let (_q, l) = paired(h2.addr).await;
+    assert_eq!(layout_names(&l), ["cmd two", "pwsh one"], "the saved pin is first after a restart");
+    assert_eq!(l["windows"][0]["isPinned"], true);
+    assert_eq!(layout_window(&l, &h2.window_id(101))["color"], "#123456");
+}
+
 #[tokio::test]
 async fn arrange_tiles_the_windows_the_phone_shows() {
     let h = start().await;

@@ -12,7 +12,7 @@ use crate::services::geometry::{self, DisplayEntry, DisplayRect};
 use crate::services::layout::{self, ArrangeOutcome, PixelRect};
 use crate::services::multiline_policy::Shell;
 use crate::services::settings::WindowKey;
-use crate::services::window_color::ColorAssigner;
+use crate::services::window_color::{self, ColorAssigner};
 use crate::services::window_id::WindowIdTable;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,7 +20,11 @@ pub struct TrackedWindow {
     pub id: String,
     pub platform: PlatformWindow,
     pub enabled: bool,
+    /// What the phone draws: the user's choice (`set_color`) when there is
+    /// one, else the dealt palette color.
     pub color: String,
+    /// `set_pin` (Mac `WindowManager.pinnedWindowIDs`): rides out first.
+    pub pinned: bool,
     pub display_id: Option<String>,
     pub frame: WindowFrame,
     pub on_visible_display: bool,
@@ -70,11 +74,45 @@ fn rect(p: PixelRect) -> DisplayRect {
     DisplayRect::new(f64::from(p.x), f64::from(p.y), f64::from(p.width), f64::from(p.height))
 }
 
+/// A pin on one live window: its place in the pinned group and the key it was
+/// stored under (the title can change after the pin; unpinning must remove
+/// the key that was saved, not the current one).
+#[derive(Debug, Clone)]
+struct Pin {
+    rank: u64,
+    key: WindowKey,
+}
+
+/// What changed, for the caller to persist (`Settings::set_pinned`,
+/// `Settings::set_color_override`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinChange {
+    pub key: WindowKey,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorChange {
+    pub key: WindowKey,
+    /// Normalized `#RRGGBB`, or `None` when the choice was cleared.
+    pub color: Option<String>,
+}
+
 pub struct AppState {
     ids: WindowIdTable,
     colors: ColorAssigner,
     enabled_by_id: HashMap<String, bool>,
     overrides: HashMap<WindowKey, bool>,
+    /// Saved pins, oldest first (spec 5.1 keys). A window seen for the first
+    /// time whose key is here starts pinned, ranked by its place in this list.
+    pinned_keys: Vec<WindowKey>,
+    pins_by_id: HashMap<String, Pin>,
+    /// The next new pin's rank: always after every pin already made, so a
+    /// new pin lines up at the end of the group (`WindowPinOrder.placingNewPin`).
+    next_pin_rank: u64,
+    /// Saved color choices. Seeded per id at first sight, like `enabled`.
+    color_keys: HashMap<WindowKey, String>,
+    color_by_id: HashMap<String, (String, WindowKey)>,
     show_all_apps: bool,
     windows: Vec<TrackedWindow>,
     displays: Vec<PlatformDisplay>,
@@ -90,12 +128,27 @@ impl AppState {
             colors: ColorAssigner::default(),
             enabled_by_id: HashMap::new(),
             overrides,
+            pinned_keys: vec![],
+            pins_by_id: HashMap::new(),
+            next_pin_rank: 0,
+            color_keys: HashMap::new(),
+            color_by_id: HashMap::new(),
             show_all_apps,
             windows: vec![],
             displays: vec![],
             foreground: None,
             applied_seq: None,
         }
+    }
+
+    /// Saved pins (oldest first) and color choices, from `settings.toml`.
+    /// A color that is not `#RRGGBB` is dropped, as `setColor` would refuse it.
+    pub fn with_saved(mut self, pinned: Vec<WindowKey>, colors: HashMap<WindowKey, String>) -> Self {
+        self.next_pin_rank = pinned.len() as u64;
+        self.pinned_keys = pinned;
+        self.color_keys =
+            colors.into_iter().filter_map(|(k, c)| window_color::normalized(&c).map(|c| (k, c))).collect();
+        self
     }
 
     pub fn set_show_all_apps(&mut self, on: bool) {
@@ -159,11 +212,16 @@ impl AppState {
         let rects: HashMap<String, DisplayRect> = entries.iter().map(|e| (e.id.clone(), e.rect)).collect();
         let mut tracked = Vec::with_capacity(windows.len());
         for (w, id) in windows.into_iter().zip(ids) {
+            if !self.enabled_by_id.contains_key(&id) {
+                self.first_sight(&id, &w);
+            }
             let enabled = *self
                 .enabled_by_id
                 .entry(id.clone())
                 .or_insert_with(|| self.overrides.get(&key_of(&w)).copied().unwrap_or(false));
-            let color = self.colors.color_for(&id);
+            let dealt = self.colors.color_for(&id);
+            let color = self.color_by_id.get(&id).map(|(c, _)| c.clone()).unwrap_or(dealt);
+            let pinned = self.pins_by_id.contains_key(&id);
             let vis = rect(w.visible);
             let display_id = geometry::display_id_for_window(vis, &entries);
             let frame = display_id
@@ -174,16 +232,111 @@ impl AppState {
             // A minimized window stays in the set (flagged `isMinimized`),
             // even from a backend that reported its parking rect at -32000.
             let on_visible_display = w.is_minimized || geometry::is_on_visible_display(vis, &entries);
-            tracked.push(TrackedWindow { id, platform: w, enabled, color, display_id, frame, on_visible_display });
+            tracked.push(TrackedWindow {
+                id,
+                platform: w,
+                enabled,
+                color,
+                pinned,
+                display_id,
+                frame,
+                on_visible_display,
+            });
         }
         let live: HashSet<String> = tracked.iter().map(|t| t.id.clone()).collect();
         self.enabled_by_id.retain(|id, _| live.contains(id));
+        self.pins_by_id.retain(|id, _| live.contains(id));
+        self.color_by_id.retain(|id, _| live.contains(id));
         self.colors.retain(&live);
         self.windows = tracked;
     }
 
+    /// A window not seen before takes its saved pin and color by key.
+    fn first_sight(&mut self, id: &str, w: &PlatformWindow) {
+        let key = key_of(w);
+        if let Some(rank) = self.pinned_keys.iter().position(|k| k == &key) {
+            self.pins_by_id.insert(id.to_string(), Pin { rank: rank as u64, key: key.clone() });
+        }
+        if let Some(c) = self.color_keys.get(&key) {
+            self.color_by_id.insert(id.to_string(), (c.clone(), key));
+        }
+    }
+
+    /// `set_pin` (Mac `togglePin` when the value differs). `None` when `id`
+    /// is not tracked or nothing changed; else the key and value to persist.
+    pub fn set_pinned(&mut self, id: &str, pinned: bool) -> Option<PinChange> {
+        let w = self.windows.iter_mut().find(|w| w.id == id)?;
+        if w.pinned == pinned {
+            return None;
+        }
+        w.pinned = pinned;
+        let key = if pinned {
+            let key = key_of(&w.platform);
+            self.pins_by_id.insert(id.to_string(), Pin { rank: self.next_pin_rank, key: key.clone() });
+            self.next_pin_rank += 1;
+            self.pinned_keys.retain(|k| k != &key);
+            self.pinned_keys.push(key.clone());
+            key
+        } else {
+            let key = self.pins_by_id.remove(id).map(|p| p.key).unwrap_or_else(|| key_of(&w.platform));
+            self.pinned_keys.retain(|k| k != &key);
+            key
+        };
+        Some(PinChange { key, pinned })
+    }
+
+    /// `set_color` (Mac `WindowManager.setColor`): `Some(hex)` sets the
+    /// user's choice, `None` clears it and the window gets its dealt color
+    /// back. A value that is not a hex color is ignored, as on the Mac.
+    /// `None` when `id` is not tracked, the hex is invalid, or nothing changed.
+    pub fn set_color(&mut self, id: &str, hex: Option<&str>) -> Option<ColorChange> {
+        let picked = match hex {
+            Some(raw) => Some(window_color::normalized(raw)?),
+            None => None,
+        };
+        let w = self.windows.iter_mut().find(|w| w.id == id)?;
+        let previous = self.color_by_id.get(id).cloned();
+        if previous.as_ref().map(|(c, _)| c) == picked.as_ref() {
+            return None;
+        }
+        // A choice already made keeps the key it was saved under (the title
+        // may have changed since), so the saved entry is replaced, not doubled.
+        let key = previous.map(|(_, k)| k).unwrap_or_else(|| key_of(&w.platform));
+        match &picked {
+            Some(c) => {
+                self.color_by_id.insert(id.to_string(), (c.clone(), key.clone()));
+                self.color_keys.insert(key.clone(), c.clone());
+                w.color = c.clone();
+            }
+            None => {
+                self.color_by_id.remove(id);
+                self.color_keys.remove(&key);
+                w.color = self.colors.color_for(id);
+            }
+        }
+        Some(ColorChange { key, color: picked })
+    }
+
+    /// The windows the phone is shown, in the order it shows them:
+    /// `WindowPinOrder.apply` over the listing order, so pinned windows come
+    /// first in pin order (the first pin first) and the rest keep the
+    /// listing's order. The Mac orders its own list the same way, so the wire
+    /// list is already pin-ordered. `windows()` stays in listing order: an
+    /// unpinned window goes straight back to its listing place, as it would
+    /// at the next poll (Windows has no drag order for it to keep).
     fn broadcast_set(&self) -> Vec<&TrackedWindow> {
-        broadcast::windows_for_broadcast(&self.windows, broadcast::WINDOWS_MIRROR_DESKTOP, self.show_all_apps, None)
+        let mut set = broadcast::windows_for_broadcast(
+            &self.windows,
+            broadcast::WINDOWS_MIRROR_DESKTOP,
+            self.show_all_apps,
+            None,
+        );
+        let pins = &self.pins_by_id;
+        set.sort_by_key(|w| match pins.get(&w.id) {
+            Some(p) => (0, p.rank),
+            None => (1, 0),
+        });
+        set
     }
 
     /// A window the phone may act on: only ids in the current broadcast set,
@@ -257,7 +410,7 @@ impl AppState {
                 target_kind: None,
                 display_id: w.display_id.clone(),
                 space_id: None,
-                is_pinned: false,
+                is_pinned: w.pinned,
                 is_minimized: w.platform.is_minimized,
                 project: None,
             })
@@ -441,6 +594,82 @@ mod tests {
         assert!(s.snapshot().windows.iter().any(|w| w.id == notepad && w.enabled));
         let term = s.windows()[0].id.clone();
         assert!(s.snapshot().windows.iter().any(|w| w.id == term && !w.enabled));
+    }
+
+    fn order(s: &AppState) -> Vec<String> {
+        s.snapshot().windows.iter().map(|w| w.id.clone()).collect()
+    }
+
+    #[test]
+    fn a_pin_rides_out_first_flagged_and_survives_polls() {
+        let mut s = state();
+        let (one, three) = (s.windows()[0].id.clone(), s.windows()[2].id.clone());
+        assert_eq!(order(&s), [one.clone(), three.clone()]);
+        let c = s.set_pinned(&three, true).unwrap();
+        assert_eq!(c, PinChange { key: key_of(&s.find(&three).unwrap().platform), pinned: true });
+        assert_eq!(order(&s), [three.clone(), one.clone()], "pinned first");
+        let snap = s.snapshot();
+        assert!(snap.windows[0].is_pinned && !snap.windows[1].is_pinned);
+        relist(&mut s, None);
+        assert_eq!(order(&s), [three.clone(), one.clone()], "the pin sticks across polls");
+        assert!(s.set_pinned(&three, true).is_none(), "same value: nothing to persist");
+        assert_eq!(s.set_pinned(&three, false).map(|c| c.pinned), Some(false));
+        assert_eq!(order(&s), [one, three], "unpinned: back to listing order");
+        assert!(s.set_pinned("nope", true).is_none());
+    }
+
+    #[test]
+    fn a_new_pin_lines_up_after_the_pins_already_there() {
+        let mut s = AppState::new(HashMap::new(), false);
+        s.update(vec![win(1, true, 0), win(2, true, 0), win(3, true, 0)], vec![display("DISPLAY1", 0, true)], None);
+        let ids: Vec<String> = s.windows().iter().map(|w| w.id.clone()).collect();
+        s.set_pinned(&ids[2], true);
+        s.set_pinned(&ids[1], true);
+        assert_eq!(order(&s), [ids[2].clone(), ids[1].clone(), ids[0].clone()], "first pin first");
+    }
+
+    #[test]
+    fn saved_pins_and_colors_are_applied_by_key_at_first_sight() {
+        let (k1, k3) = (key_of(&win(1, true, 0)), key_of(&win(3, true, 0)));
+        let colors = [(k1.clone(), "#123abc".to_string()), (k3.clone(), "not a color".to_string())];
+        let mut s = AppState::new(HashMap::new(), false).with_saved(vec![k3, k1], colors.into_iter().collect());
+        s.update(vec![win(1, true, 0), win(3, true, 0)], vec![display("DISPLAY1", 0, true)], None);
+        let snap = s.snapshot();
+        let names: Vec<&str> = snap.windows.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["win 3", "win 1"], "saved pin order, oldest first");
+        assert!(snap.windows.iter().all(|w| w.is_pinned));
+        assert_eq!(snap.windows[1].color, "#123ABC", "normalized");
+        assert_eq!(snap.windows[0].color, PALETTE_SECOND, "an invalid saved color is dropped");
+        // A pin made now goes after both restored ones.
+        let mut s2 = AppState::new(HashMap::new(), false).with_saved(vec![key_of(&win(3, true, 0))], HashMap::new());
+        s2.update(vec![win(1, true, 0), win(3, true, 0)], vec![display("DISPLAY1", 0, true)], None);
+        let one = s2.windows().iter().find(|w| w.platform.handle == 1).unwrap().id.clone();
+        s2.set_pinned(&one, true);
+        let names: Vec<String> = s2.snapshot().windows.iter().map(|w| w.name.clone()).collect();
+        assert_eq!(names, ["win 3", "win 1"]);
+    }
+
+    const PALETTE_SECOND: &str = crate::services::window_color::PALETTE[1];
+
+    #[test]
+    fn a_color_choice_wins_and_clearing_gives_the_dealt_color_back() {
+        let mut s = state();
+        let id = s.windows()[0].id.clone();
+        let dealt = s.find(&id).unwrap().color.clone();
+        let c = s.set_color(&id, Some(" 4a90d9 ")).unwrap();
+        assert_eq!(c.color.as_deref(), Some("#4A90D9"));
+        assert_eq!(s.snapshot().windows[0].color, "#4A90D9");
+        relist(&mut s, None);
+        assert_eq!(s.snapshot().windows[0].color, "#4A90D9", "the choice sticks across polls");
+        assert!(s.set_color(&id, Some("#4A90D9")).is_none(), "same color: nothing to persist");
+        assert!(s.set_color(&id, Some("blue")).is_none(), "not a hex color: ignored");
+        assert_eq!(s.snapshot().windows[0].color, "#4A90D9");
+        assert_eq!(s.set_color(&id, None).unwrap().color, None);
+        assert_eq!(s.snapshot().windows[0].color, dealt);
+        relist(&mut s, None);
+        assert_eq!(s.snapshot().windows[0].color, dealt);
+        assert!(s.set_color(&id, None).is_none());
+        assert!(s.set_color("nope", Some("#FFFFFF")).is_none());
     }
 
     #[test]

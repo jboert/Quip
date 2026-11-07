@@ -12,7 +12,8 @@ use crate::host::{ClientId, Host};
 use crate::platform::traits::{FocusStep, Platform, PlatformError, WindowRef};
 use crate::protocol::messages::{
     ArrangeWindows, CloseWindow, ErrorMessage, Incoming, MinimizeWindow, PreferenceRequest, PreferenceRestore,
-    PreferenceSnapshot, QuickAction, RequestContent, SelectWindow, SendText, SendTextAck, TerminalContent,
+    PreferenceSnapshot, QuickAction, RequestContent, SelectWindow, SendText, SendTextAck, SetColor, SetPin,
+    TerminalContent,
 };
 use crate::protocol::types::WireUuid;
 use crate::services::injection_log::{self, InjectionKind};
@@ -121,6 +122,8 @@ impl Host {
             Incoming::PreferencesSnapshot(m) => self.store_prefs(m).await,
             Incoming::PreferencesRequest(m) => self.restore_prefs(client, m).await,
             Incoming::RequestContent(m) => self.request_content(client, m),
+            Incoming::SetPin(m) => self.set_pin_from_phone(m),
+            Incoming::SetColor(m) => self.set_color_from_phone(m),
         }
     }
 
@@ -401,6 +404,39 @@ impl Host {
         } else {
             self.logs.debug(&format!("request_content {}: not in the broadcast set", m.window_id));
         }
+    }
+
+    /// `case "set_pin"` on the Mac: the host owns the pin set, so the phone
+    /// asks and the next `layout_update` carries the order it produced. The
+    /// Mac answers nothing, ever: an id the phone is not shown is ignored.
+    fn set_pin_from_phone(&self, m: SetPin) {
+        if self.state().find(&m.window_id).is_none() {
+            self.logs.debug(&format!("set_pin {}: not in the broadcast set, ignored", m.window_id));
+            return;
+        }
+        let change = self.state().set_pinned(&m.window_id, m.pinned);
+        if let Some(c) = change {
+            self.with_settings(|s| s.set_pinned(c.key, c.pinned));
+        }
+        self.publish();
+    }
+
+    /// `case "set_color"` on the Mac (`WindowManager.setColor`): a color
+    /// that is not `#RRGGBB` is ignored; absent or null clears the choice.
+    fn set_color_from_phone(&self, m: SetColor) {
+        if self.state().find(&m.window_id).is_none() {
+            self.logs.debug(&format!("set_color {}: not in the broadcast set, ignored", m.window_id));
+            return;
+        }
+        if m.color.as_deref().is_some_and(|c| crate::services::window_color::normalized(c).is_none()) {
+            self.logs.debug(&format!("set_color {}: not a #RRGGBB color, ignored", m.window_id));
+            return;
+        }
+        let change = self.state().set_color(&m.window_id, m.color.as_deref());
+        if let Some(c) = change {
+            self.with_settings(|s| s.set_color_override(c.key, c.color));
+        }
+        self.publish();
     }
 
     async fn store_prefs(&self, m: PreferenceSnapshot) {

@@ -24,10 +24,11 @@ code is marked **(guess)**.
 
 ### 1.1 What the Windows host decodes
 
-`QuipWindows/src/protocol/messages.rs:471` (`HANDLED_TYPES`) lists 12 types:
+`QuipWindows/src/protocol/messages.rs:471` (`HANDLED_TYPES`) lists 14 types:
 `auth`, `heartbeat_ack`, `select_window`, `send_text`, `quick_action`,
 `arrange_windows`, `minimize_window`, `close_window`, `phone_log`,
-`preferences_snapshot`, `preferences_request`, `request_content`. The enum is
+`preferences_snapshot`, `preferences_request`, `request_content`, and
+(since 2026-11-07, 2.14) `set_pin`, `set_color`. The enum is
 `Incoming` at `messages.rs:436`. Everything else is decoded as `Unknown` and
 ignored (`messages.rs:457`).
 
@@ -40,8 +41,8 @@ connection, `QuipMacApp.swift:1663` general) and the server itself
 | Phone → host type | Mac handler | Covered in this spec |
 |---|---|---|
 | `device_identity` | `WebSocketServer.swift:1318` (names the phone in the Mac UI) | 2.13 (tray shows phone names) |
-| `set_pin` | `QuipMacApp.swift:526` | 2.14 |
-| `set_color` | `QuipMacApp.swift:537` | 2.14 |
+| `set_pin` | `QuipMacApp.swift:526` | 2.14 (done in phase 1, 2026-11-07) |
+| `set_color` | `QuipMacApp.swift:537` | 2.14 (done in phase 1, 2026-11-07) |
 | `set_qa_pair` | `QuipMacApp.swift:544` | 2.4 |
 | `clear_qa_pair` | `QuipMacApp.swift:550` | 2.4 |
 | `vibecut_status_request` | `QuipMacApp.swift:567` | 4 (not planned) |
@@ -560,6 +561,10 @@ Priority P1.
 
 ### 2.14 Pins and colours from the phone (`set_pin`, `set_color`)
 
+**Done in phase 1 (2026-11-07):** see phase 1 spec 3.3 (`set_pin`,
+`set_color` rows) and 3.4 (`isPinned` and order, chosen colour). The text
+below is the original plan, kept for the record.
+
 **Mac.** `QuipMacApp.swift:526`-`543`: the Mac owns pins and colours, the
 phone asks, the next broadcast carries the result.
 
@@ -648,7 +653,7 @@ The gate column below is what must be true in addition.
 
 | # | Scope | Gate |
 |---|---|---|
-| M6 | Quick wins: Bonjour retry (2.13), Tailscale QR + copy (2.13), `set_pin` / `set_color` (2.14), phone names in tray (2.13), `request_log_tail` / `request_diagnostics` (2.7) | Unit + integration green; simulator `q91-pin.sh`; owner: phone pairs over Tailscale from the QR alone; PC started with no network, then joined, is found by Bonjour within 60 s |
+| M6 | Quick wins: Bonjour retry (2.13), Tailscale QR + copy (2.13), ~~`set_pin` / `set_color` (2.14)~~ (done in phase 1), phone names in tray (2.13), `request_log_tail` / `request_diagnostics` (2.7) | Unit + integration green; simulator `q91-pin.sh`; owner: phone pairs over Tailscale from the QR alone; PC started with no network, then joined, is found by Bonjour within 60 s |
 | M7 | Spike (throwaway, like M0): UIA text from WT and conhost, console API read, `PrintWindow` vs WGC on WT, WT tab elements | Spike report from CI and the PC; decisions written into 2.1, 2.3, 2.12 |
 | M8 | Terminal text read (2.1) + screenshots (2.3) | Win32 CI: marker read back from conhost and WT; Notepad screenshot decodes; selftest PASS; simulator `q91-content.sh`; hang guard: a read that blocks 5 s delays no keystroke and no heartbeat |
 | M9 | Image upload (2.2) | Win32 CI: PNG upload lands as a typed path in PowerShell; ack after injection; owner: photo from the phone into Claude Code on the PC, spinner clears |

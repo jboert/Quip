@@ -411,6 +411,25 @@ pub struct CloseWindow {
     pub message_id: Option<WireUuid>,
 }
 
+/// `SetPinMessage` (`Shared/MessageProtocol.swift`): the phone asks; the host
+/// owns the pin set and answers with a fresh `layout_update`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct SetPin {
+    #[serde(rename = "windowId")]
+    pub window_id: String,
+    pub pinned: bool,
+}
+
+/// `SetColorMessage` (`Shared/WindowColor.swift`): `#RRGGBB`, or absent /
+/// null to clear the user's choice.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct SetColor {
+    #[serde(rename = "windowId")]
+    pub window_id: String,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PhoneLog {
     pub lines: Vec<String>,
@@ -446,6 +465,8 @@ pub enum Incoming {
     PreferencesSnapshot(PreferenceSnapshot),
     PreferencesRequest(PreferenceRequest),
     RequestContent(RequestContent),
+    SetPin(SetPin),
+    SetColor(SetColor),
 }
 
 /// Why a frame produced no `Incoming`. None of these closes the socket
@@ -481,6 +502,8 @@ pub const HANDLED_TYPES: &[&str] = &[
     "preferences_snapshot",
     "preferences_request",
     "request_content",
+    "set_pin",
+    "set_color",
 ];
 
 /// `MessageCoder.messageType(from:)`.
@@ -526,6 +549,8 @@ pub fn decode_incoming(text: &str) -> Result<Incoming, DecodeError> {
         "preferences_snapshot" => Incoming::PreferencesSnapshot(payload(t, text)?),
         "preferences_request" => Incoming::PreferencesRequest(payload(t, text)?),
         "request_content" => Incoming::RequestContent(payload(t, text)?),
+        "set_pin" => Incoming::SetPin(payload(t, text)?),
+        "set_color" => Incoming::SetColor(payload(t, text)?),
         _ => return Err(DecodeError::Unknown(type_)),
     })
 }
@@ -908,6 +933,30 @@ mod tests {
         let r = decode_incoming(r#"{"type":"auth","pin":12345678}"#);
         let Err(DecodeError::BadPayload { error, .. }) = r else { panic!("expected BadPayload") };
         assert!(!error.contains("12345678"), "{error}");
+    }
+
+    #[test]
+    fn set_pin_and_set_color_decode_the_swift_field_names() {
+        assert_eq!(
+            decode_incoming(r#"{"type":"set_pin","windowId":"w1","pinned":true}"#),
+            Ok(Incoming::SetPin(SetPin { window_id: "w1".into(), pinned: true }))
+        );
+        assert_eq!(
+            decode_incoming(r##"{"type":"set_color","windowId":"w1","color":"#4A90D9"}"##),
+            Ok(Incoming::SetColor(SetColor { window_id: "w1".into(), color: Some("#4A90D9".into()) }))
+        );
+        // Swift encodes a nil `color` by leaving the key out; null is accepted too.
+        for clear in [r#"{"type":"set_color","windowId":"w1"}"#, r#"{"type":"set_color","windowId":"w1","color":null}"#]
+        {
+            assert_eq!(
+                decode_incoming(clear),
+                Ok(Incoming::SetColor(SetColor { window_id: "w1".into(), color: None }))
+            );
+        }
+        assert!(matches!(
+            decode_incoming(r#"{"type":"set_pin","windowId":"w1"}"#),
+            Err(DecodeError::BadPayload { .. })
+        ));
     }
 
     #[test]

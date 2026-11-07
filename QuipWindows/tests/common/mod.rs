@@ -103,11 +103,14 @@ pub struct Opts {
     pub limits: ConnectionLimits,
     /// Overrides `real_sleeper` when set.
     pub sleeper: Option<Arc<dyn Sleeper>>,
+    /// Start in this directory instead of a new one, loading the
+    /// `settings.toml` an earlier host left there: a Quip restart.
+    pub dir: Option<tempfile::TempDir>,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { real_sleeper: false, prefs_file: true, limits: ConnectionLimits::default(), sleeper: None }
+        Opts { real_sleeper: false, prefs_file: true, limits: ConnectionLimits::default(), sleeper: None, dir: None }
     }
 }
 
@@ -116,15 +119,21 @@ pub async fn start() -> Harness {
 }
 
 pub async fn start_with(opts: Opts) -> Harness {
-    let dir = tempfile::tempdir().unwrap();
+    let restart = opts.dir.is_some();
+    let dir = opts.dir.unwrap_or_else(|| tempfile::tempdir().unwrap());
     let fake = FakePlatform::from_fixture(&Fixture::parse(FIXTURE).unwrap());
     let clock = ManualClock::new(1_800_000_000);
     let sleeper = Arc::new(RecordingSleeper::default());
     let store = SettingsStore::in_dir(&dir.path().join("config"));
-    let mut settings = Settings::fresh(&mut rand::rng());
-    settings.pin = PIN.into();
-    settings.device_id = DEVICE_ID.into();
-    store.save(&settings).unwrap();
+    let settings = if restart {
+        store.load_or_create(&mut rand::rng()).unwrap().0
+    } else {
+        let mut settings = Settings::fresh(&mut rand::rng());
+        settings.pin = PIN.into();
+        settings.device_id = DEVICE_ID.into();
+        store.save(&settings).unwrap();
+        settings
+    };
     let host = Host::new(HostParts {
         config: HostConfig {
             device_id: DEVICE_ID.into(),

@@ -7,6 +7,8 @@
 //! show_all_apps = false
 //! enabled_windows = [ { exe = "C:\\...\\WindowsTerminal.exe", title = "..." } ]
 //! disabled_windows = [ ... ]
+//! pinned_windows = [ { exe = "...", title = "..." } ]   # oldest pin first
+//! window_colors = [ { exe = "...", title = "...", color = "#4A90D9" } ]
 //! ```
 //!
 //! Created on first run. A file that does not parse, or parses but carries an
@@ -20,6 +22,11 @@
 //! `disabled_windows` is an addition to the spec's list: terminals start
 //! enabled, so "the user turned this terminal off" has to be stored too, or a
 //! toggle-off would not survive a restart.
+//!
+//! `pinned_windows` and `window_colors` hold the phone's `set_pin` and
+//! `set_color` choices under the same key (the Mac's `pinnedWindowIDs` and
+//! `windowColorOverrides`, which it keys by window id). Both default to empty,
+//! so a file written before they existed still loads.
 
 use std::path::{Path, PathBuf};
 
@@ -41,6 +48,20 @@ pub struct WindowKey {
     pub title: String,
 }
 
+/// One saved `set_color` choice: the window key and its `#RRGGBB`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowColorChoice {
+    pub exe: String,
+    pub title: String,
+    pub color: String,
+}
+
+impl WindowColorChoice {
+    pub fn key(&self) -> WindowKey {
+        WindowKey { exe: self.exe.clone(), title: self.title.clone() }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub pin: String,
@@ -53,6 +74,11 @@ pub struct Settings {
     pub enabled_windows: Vec<WindowKey>,
     #[serde(default)]
     pub disabled_windows: Vec<WindowKey>,
+    /// Oldest pin first: that is the pinned group's order after a restart.
+    #[serde(default)]
+    pub pinned_windows: Vec<WindowKey>,
+    #[serde(default)]
+    pub window_colors: Vec<WindowColorChoice>,
 }
 
 fn default_port() -> u16 {
@@ -68,6 +94,8 @@ impl Settings {
             show_all_apps: false,
             enabled_windows: vec![],
             disabled_windows: vec![],
+            pinned_windows: vec![],
+            window_colors: vec![],
         }
     }
 
@@ -83,6 +111,22 @@ impl Settings {
             self.enabled_windows.push(key);
         } else {
             self.disabled_windows.push(key);
+        }
+    }
+
+    /// Record a pin (appended: the newest pin is last) or remove one.
+    pub fn set_pinned(&mut self, key: WindowKey, pinned: bool) {
+        self.pinned_windows.retain(|k| k != &key);
+        if pinned {
+            self.pinned_windows.push(key);
+        }
+    }
+
+    /// Record the color chosen for `key`, or clear it with `None`.
+    pub fn set_color_override(&mut self, key: WindowKey, color: Option<String>) {
+        self.window_colors.retain(|c| c.exe != key.exe || c.title != key.title);
+        if let Some(color) = color {
+            self.window_colors.push(WindowColorChoice { exe: key.exe, title: key.title, color });
         }
     }
 
@@ -342,6 +386,51 @@ mod tests {
         assert_eq!(s.enabled_override(&a), Some(true));
         assert_eq!(s.enabled_windows, vec![a, b]);
         assert!(s.disabled_windows.is_empty());
+    }
+
+    #[test]
+    fn a_file_from_before_pins_and_colors_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::in_dir(dir.path());
+        std::fs::write(
+            store.path(),
+            "pin = \"12345678\"\ndevice_id = \"6BA7B810-9DAD-11D1-80B4-00C04FD430C8\"\nport = 8765\nshow_all_apps = false\n\
+             enabled_windows = [ { exe = \"C:\\\\a.exe\", title = \"t\" } ]\ndisabled_windows = []\n",
+        )
+        .unwrap();
+        let (s, o) = store.load_or_create(&mut rng()).unwrap();
+        assert_eq!(o, LoadOutcome::Loaded, "not quarantined: the PIN survives");
+        assert_eq!(s.pin, "12345678");
+        assert_eq!(s.enabled_windows.len(), 1);
+        assert!(s.pinned_windows.is_empty() && s.window_colors.is_empty());
+    }
+
+    #[test]
+    fn pins_keep_their_order_and_colors_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::in_dir(dir.path());
+        let (mut s, _) = store.load_or_create(&mut rng()).unwrap();
+        let a = WindowKey { exe: "a".into(), title: "1".into() };
+        let b = WindowKey { exe: "b".into(), title: "2".into() };
+        s.set_pinned(a.clone(), true);
+        s.set_pinned(b.clone(), true);
+        s.set_pinned(a.clone(), true);
+        assert_eq!(s.pinned_windows, vec![b.clone(), a.clone()], "a re-pin moves to the end");
+        s.set_pinned(b.clone(), false);
+        assert_eq!(s.pinned_windows, vec![a.clone()]);
+        s.set_color_override(a.clone(), Some("#4A90D9".into()));
+        s.set_color_override(a.clone(), Some("#FF6B6B".into()));
+        s.set_color_override(b.clone(), Some("#7ED321".into()));
+        s.set_color_override(b.clone(), None);
+        assert_eq!(
+            s.window_colors,
+            vec![WindowColorChoice { exe: "a".into(), title: "1".into(), color: "#FF6B6B".into() }]
+        );
+        assert_eq!(s.window_colors[0].key(), a);
+        store.save(&s).unwrap();
+        let (back, o) = store.load_or_create(&mut rng()).unwrap();
+        assert_eq!(o, LoadOutcome::Loaded);
+        assert_eq!(back, s);
     }
 
     #[test]

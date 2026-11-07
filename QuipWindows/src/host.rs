@@ -449,7 +449,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Host {
     pub fn new(parts: HostParts) -> std::io::Result<Arc<Host>> {
-        let (overrides, show_all) = match &parts.settings {
+        let (overrides, show_all, pinned, colors) = match &parts.settings {
             Some((_, s)) => {
                 let mut o = HashMap::new();
                 for k in &s.enabled_windows {
@@ -458,9 +458,10 @@ impl Host {
                 for k in &s.disabled_windows {
                     o.insert(k.clone(), false);
                 }
-                (o, s.show_all_apps)
+                let colors = s.window_colors.iter().map(|c| (c.key(), c.color.clone())).collect();
+                (o, s.show_all_apps, s.pinned_windows.clone(), colors)
             }
-            None => (HashMap::new(), false),
+            None => (HashMap::new(), false, vec![], HashMap::new()),
         };
         let guesses = GuessBudget::new(parts.config.limits.max_unauthenticated_per_network);
         Ok(Arc::new(Host {
@@ -475,7 +476,7 @@ impl Host {
             pin: RwLock::new(parts.pin),
             settings: parts.settings.map(Mutex::new),
             settings_writer: Writer::spawn("quip-settings-writer"),
-            state: Mutex::new(AppState::new(overrides, show_all)),
+            state: Mutex::new(AppState::new(overrides, show_all).with_saved(pinned, colors)),
             clients: Mutex::new(HashMap::new()),
             next_client: AtomicU64::new(1),
             heartbeat_seq: AtomicI64::new(0),

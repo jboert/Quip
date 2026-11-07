@@ -181,6 +181,8 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
 | `close_window` | `PostMessage(WM_CLOSE)`. Never `TerminateProcess`. |
 | `phone_log` | Append each line to `phone.log` (8). |
 | `preferences_snapshot` | Store the JSON blob as-is in `%APPDATA%\Quip\phone-prefs.json` and answer `preferences_request` with it. This keeps the phone's prefs backup working on a Windows-only setup. |
+| `set_pin` | `{windowId, pinned}` (`SetPinMessage`). As the Mac (`QuipMacApp.swift` `case "set_pin"`): set the window's pin if it differs, persist by the window key (5.1) as `pinned_windows` in `settings.toml` (oldest pin first), then publish a fresh `layout_update` (3.4 `isPinned`, order). An id the phone is not shown is ignored with a debug log line; nothing is sent back, as on the Mac. |
+| `set_color` | `{windowId, color?}` (`SetColorMessage`). As `WindowManager.setColor`: `color` normalized by `WindowColor.normalized` (`#RRGGBB`, `#` optional) becomes the window's colour; absent or `null` clears the choice and the dealt colour comes back; a value that is not a hex colour is ignored (debug log, no change). Persisted by the window key as `window_colors`, then a fresh `layout_update`. Unknown id: ignored, as `set_pin`. |
 | `request_content` | For a window the phone is shown: `terminal_content` to the asker only, with `content` exactly "Terminal text is not available on Windows yet." Without a reply the phone says "No reply from the Mac for this window" (found in simulator QA). Real terminal text is phase 2. |
 | everything else | Ignore (debug log). Includes `image_upload`, `spawn_window`, `duplicate_window`, prompts, push, VibeCut, QA mode, iTerm messages. |
 
@@ -249,6 +251,22 @@ Field names and meaning follow `LayoutUpdate` and `WindowState` in
   colours-to-avoid are held to `vectors/window_color.json`; the Mac's
   rotation once every colour is taken is private and has no vector.
 - **`isThinking`:** `false` in phase 1.
+- **`isPinned` and order:** `true` for a window the phone pinned (`set_pin`,
+  3.3). Pinned windows come first in the `windows` list, in pin order (the
+  first pin first, a new pin after the pins already there), and the rest keep
+  the listing order: `Shared/WindowPinOrder.swift` `apply` + `placingNewPin`.
+  The Mac orders its own list this way, so the wire list is already
+  pin-ordered; Windows does the same, and `arrange_windows` tiles in that
+  order. One difference: the Mac keeps an unpinned window where it was (its
+  list has a drag order); Windows has none, so an unpinned window goes back to
+  its listing place.
+- **`color` chosen on the phone:** a `set_color` choice replaces the dealt
+  colour for that window until it is cleared. The dealt colour is kept, so
+  clearing gives the same one back. Pins and colours are saved by the 5.1 key
+  (exe path + title) and applied to a window with that key the first time it
+  is seen after a restart. As with `enabled`, a title that changed since the
+  choice was made does not match after a restart. Unlike the Mac, a chosen
+  colour does not count as "in use" when a new window is dealt one.
 
 ## 4. Module map
 
