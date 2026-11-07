@@ -32,13 +32,29 @@ pub struct ListingFacts<'a> {
 /// Spec 5.1: visible, titled, unowned, not a tool window, not cloaked, not
 /// Quip's own, not the shell.
 pub fn keeps_window(f: &ListingFacts) -> bool {
-    f.visible
-        && !f.title.is_empty()
-        && !f.has_owner
-        && f.ex_style & WS_EX_TOOLWINDOW == 0
-        && !f.cloaked
-        && f.own_pid != Some(f.pid)
-        && !SHELL_CLASSES.contains(&f.class_name)
+    rejected_by(f).is_none()
+}
+
+/// The first rule of `keeps_window` that drops the window, by name, or
+/// `None` when it is kept. Failure messages print it.
+pub fn rejected_by(f: &ListingFacts) -> Option<&'static str> {
+    if !f.visible {
+        Some("hidden")
+    } else if f.title.is_empty() {
+        Some("untitled")
+    } else if f.has_owner {
+        Some("owned")
+    } else if f.ex_style & WS_EX_TOOLWINDOW != 0 {
+        Some("tool")
+    } else if f.cloaked {
+        Some("cloaked")
+    } else if f.own_pid == Some(f.pid) {
+        Some("own")
+    } else if SHELL_CLASSES.contains(&f.class_name) {
+        Some("shell")
+    } else {
+        None
+    }
 }
 
 /// A Win32 `RECT` (left, top, right, bottom) as a `PixelRect`.
@@ -121,7 +137,11 @@ mod tests {
         ];
         for (name, f) in cases {
             assert!(!keeps_window(&f), "{name}");
+            assert_eq!(rejected_by(&f), Some(name));
         }
+        assert_eq!(rejected_by(&facts()), None);
+        let hidden_untitled = ListingFacts { visible: false, title: "", ..facts() };
+        assert_eq!(rejected_by(&hidden_untitled), Some("hidden"), "the first rule that fails is named");
         for class in SHELL_CLASSES {
             assert!(!keeps_window(&ListingFacts { class_name: class, ..facts() }), "{class}");
         }

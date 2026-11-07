@@ -126,17 +126,35 @@ fn open_conhost(p: &Win32Platform, args: &str) -> (PlatformWindow, CloseOnDrop) 
         .raw_arg(format!(r#"/c start "" conhost.exe {args}"#))
         .status()
         .unwrap();
-    let w = wait_new(p, &before, Duration::from_secs(15), |w| w.class_name == CONSOLE_CLASS)
-        .unwrap_or_else(|| panic!("no new console window for `{args}` in 15 s"));
+    let w = wait_new(p, &before, Duration::from_secs(15), |w| w.class_name == CONSOLE_CLASS).unwrap_or_else(|| {
+        panic!(
+            "no new console window for `{args}` in 15 s\nevery top-level {CONSOLE_CLASS} window:\n{}console processes:\n{}",
+            p.explain_class(CONSOLE_CLASS),
+            console_processes(),
+        )
+    });
     let guard = CloseOnDrop(w.handle);
     (w, guard)
+}
+
+/// Every conhost / OpenConsole / shell process with its parent, for a
+/// failure message.
+fn console_processes() -> String {
+    const NAMES: [&str; 5] = ["conhost", "openconsole", "cmd", "powershell", "pwsh"];
+    let procs = process_snapshot().unwrap_or_default();
+    procs
+        .iter()
+        .filter(|p| NAMES.contains(&exe_stem(&p.exe).as_str()))
+        .map(|p| format!("{} parent={} {}\n", p.pid, p.parent, p.exe))
+        .collect()
 }
 
 fn assert_console_shell(p: &Win32Platform, args: &str, shell: Shell, app: &str) {
     let (w, _close) = open_conhost(p, args);
     let got = wait_listed(p, w.handle, Duration::from_secs(15), |w| w.shell == Some(shell));
     let tree = process_tree(w.pid);
-    let got = got.unwrap_or_else(|| panic!("console for `{args}` left the listing\n{tree}"));
+    let got = got
+        .unwrap_or_else(|| panic!("console for `{args}` left the listing\n{tree}{}", p.explain_class(CONSOLE_CLASS)));
     assert_eq!(got.terminal, Some(TerminalHost::Console), "{args}");
     assert_eq!(got.shell, Some(shell), "{args}; processes under the owner:\n{tree}");
     assert_eq!(got.app, app, "{args}");
@@ -151,7 +169,11 @@ fn classic_consoles_are_terminals_with_their_shell() {
     }
     let p = platform();
     assert_console_shell(&p, "powershell.exe -NoLogo -NoExit", Shell::PowerShell, "PowerShell");
-    assert_console_shell(&p, "cmd.exe /K", Shell::Cmd, "Command Prompt");
+    // A bare `cmd /K` under `start ""` can come up untitled (cmd, unlike
+    // PowerShell, sets no title of its own), and spec 5.1 leaves untitled
+    // windows out. `title` is a cmd builtin: it names the console the way a
+    // shortcut or the Run box does, without adding a child process.
+    assert_console_shell(&p, "cmd.exe /K title Quip cmd test", Shell::Cmd, "Command Prompt");
 }
 
 #[test]

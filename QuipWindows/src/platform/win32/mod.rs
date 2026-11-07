@@ -13,11 +13,12 @@ mod window;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-use crate::platform::listing::{keeps_window, ListingFacts};
+use crate::platform::listing::{keeps_window, rejected_by, ListingFacts};
 use crate::platform::traits::{
     FocusStep, InputBackend, PlatformDisplay, PlatformError, PlatformResult, PlatformWindow, WindowBackend, WindowMove,
     WindowRef,
@@ -64,28 +65,34 @@ impl Win32Platform {
         names.entry(exe.to_string()).or_insert_with(|| process::display_name(exe)).clone()
     }
 
+    /// What the filter reads about `h`. Quip's own windows get an empty title
+    /// without `GetWindowTextW` (see `window`'s module doc).
+    fn read(&self, h: HWND, pid: u32) -> RawWindow {
+        let own = self.own_pid == Some(pid);
+        RawWindow {
+            pid,
+            class_name: window::class_name(h),
+            title: if own { String::new() } else { window::title(h) },
+            visible: window::is_visible(h),
+            has_owner: window::has_owner(h),
+            ex_style: window::ex_style(h),
+            cloaked: window::is_cloaked(h),
+        }
+    }
+
     fn describe(&self, handle: u64, procs: &[Proc]) -> Option<PlatformWindow> {
         let h = window::hwnd(handle);
         let pid = window::owner_pid(h);
         if pid == 0 {
             return None;
         }
-        let own = self.own_pid == Some(pid);
-        let class_name = window::class_name(h);
-        let title = if own { String::new() } else { window::title(h) };
-        let facts = ListingFacts {
-            pid,
-            own_pid: self.own_pid,
-            visible: window::is_visible(h),
-            title: &title,
-            has_owner: window::has_owner(h),
-            ex_style: window::ex_style(h),
-            cloaked: window::is_cloaked(h),
-            class_name: &class_name,
+        let RawWindow { class_name, title, .. } = {
+            let raw = self.read(h, pid);
+            if !keeps_window(&raw.facts(self.own_pid)) {
+                return None;
+            }
+            raw
         };
-        if !keeps_window(&facts) {
-            return None;
-        }
 
         let exe_path = process::exe_path(pid);
         let host = classify::terminal_host(&class_name, exe_path.as_deref());
@@ -122,6 +129,47 @@ impl Win32Platform {
         })
     }
 
+    /// Every top-level window of class `class_name`, listed or not, one line
+    /// each: the facts the filter reads, the owner's exe and the verdict
+    /// (`listed`, the rule that dropped it, `no owner pid` or `no rect`).
+    /// For failure messages: it says why a window someone expected is
+    /// missing.
+    pub fn explain_class(&self, class_name: &str) -> String {
+        let procs = process::snapshot().unwrap_or_default();
+        let handles = match window::top_level_windows() {
+            Ok(h) => h,
+            Err(e) => return format!("{e}\n"),
+        };
+        let mut out = String::new();
+        for handle in handles {
+            let h = window::hwnd(handle);
+            if window::class_name(h) != class_name {
+                continue;
+            }
+            let pid = window::owner_pid(h);
+            let raw = self.read(h, pid);
+            let verdict = match rejected_by(&raw.facts(self.own_pid)) {
+                _ if pid == 0 => "no owner pid",
+                Some(rule) => rule,
+                None if self.describe(handle, &procs).is_none() => "no rect",
+                None => "listed",
+            };
+            out.push_str(&format!(
+                "{handle:#x} pid={pid} exe={:?} title={:?} visible={} owned={} ex_style={:#x} cloaked={} verdict={verdict}\n",
+                process::exe_path(pid).unwrap_or_default(),
+                raw.title,
+                raw.visible,
+                raw.has_owner,
+                raw.ex_style,
+                raw.cloaked,
+            ));
+        }
+        if out.is_empty() {
+            out.push_str(&format!("no top-level {class_name} window at all\n"));
+        }
+        out
+    }
+
     /// The window `w` names, if it still exists and `w.pid` still owns it
     /// (HWND values are reused).
     fn live(&self, w: WindowRef) -> PlatformResult<windows::Win32::Foundation::HWND> {
@@ -130,6 +178,32 @@ impl Win32Platform {
             Ok(h)
         } else {
             Err(PlatformError::WindowGone)
+        }
+    }
+}
+
+/// The filter's inputs for one window, owned (see `ListingFacts`).
+struct RawWindow {
+    pid: u32,
+    class_name: String,
+    title: String,
+    visible: bool,
+    has_owner: bool,
+    ex_style: u32,
+    cloaked: bool,
+}
+
+impl RawWindow {
+    fn facts(&self, own_pid: Option<u32>) -> ListingFacts<'_> {
+        ListingFacts {
+            pid: self.pid,
+            own_pid,
+            visible: self.visible,
+            title: &self.title,
+            has_owner: self.has_owner,
+            ex_style: self.ex_style,
+            cloaked: self.cloaked,
+            class_name: &self.class_name,
         }
     }
 }
