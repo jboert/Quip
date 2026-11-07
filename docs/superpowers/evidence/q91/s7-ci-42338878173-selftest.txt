@@ -1,0 +1,16 @@
+Quip selftest
+time: 2026-11-07T04:33:58Z
+quip: 0.1.0 (git 4e5a473a471b)
+windows: 10.0.26100
+displays: 1
+display 1: Generic PnP Monitor primary 1024x768 at 0,0 work 1024x720 at 0,0 dpi 96 (100%)
+PASS process_snapshot
+PASS displays_one_primary
+PASS displays_work_area_inside_bounds
+PASS frames_inside_0_to_1
+PASS foreground_window_owner
+PASS classic_powershell_console
+PASS classic_cmd_console
+PASS busy_shell_reads_unknown
+PASS windows_terminal
+SUMMARY PASS: 9 passed, 0 failed, 0 skipped of 9 cases
