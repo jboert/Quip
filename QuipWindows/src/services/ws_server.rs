@@ -3,9 +3,12 @@
 //! (`QuipMac/Services/WebSocketServer.swift`):
 //!
 //! 1. TCP accepted, if fewer than `MAX_UNAUTHENTICATED` sockets are waiting
-//!    for auth and fewer than `MAX_UNAUTHENTICATED_PER_SENDER` of them are
-//!    from this exact address (`Sender::address`); more are closed at once,
-//!    so one LAN peer cannot take every slot from the phone. A socket that has not finished the
+//!    for auth, fewer than `MAX_UNAUTHENTICATED_PER_SENDER` of them are from
+//!    this exact address (`Sender::address`) and fewer than
+//!    `MAX_UNAUTHENTICATED_PER_NETWORK` from its network (`Sender::network`);
+//!    more are closed at once, so one LAN peer cannot take every slot from
+//!    the phone. A slot is freed as soon as its peer closes, even while a
+//!    wrong PIN's delay is running. A socket that has not finished the
 //!    WebSocket upgrade within `PRE_HANDSHAKE_DEADLINE` (10 s, the Mac's
 //!    `PreHandshakeReapPolicy`) is closed, and one that has not authenticated
 //!    within `PRE_AUTH_DEADLINE` (120 s, long enough to type a PIN on the
@@ -34,7 +37,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
+use std::pin::Pin;
+
+use futures_util::stream::Peekable;
+use futures_util::{SinkExt, Stream, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -206,7 +212,7 @@ pub fn spawn(host: Arc<Host>, listener: TcpListener) -> JoinHandle<()> {
             match listener.accept().await {
                 Ok((stream, peer)) => {
                     let sender = Sender::of(peer.ip());
-                    let slot = match host.try_pre_auth_slot(&sender.address) {
+                    let slot = match host.try_pre_auth_slot(&sender) {
                         Ok(slot) => slot,
                         Err(why) => {
                             refused += 1;
@@ -218,6 +224,12 @@ pub fn spawn(host: Arc<Host>, listener: TcpListener) -> JoinHandle<()> {
                                         format!(
                                             "{} sockets from {}",
                                             limits.max_unauthenticated_per_sender, sender.address
+                                        )
+                                    }
+                                    PreAuthRefusal::NetworkFull => {
+                                        format!(
+                                            "{} sockets from network {}",
+                                            limits.max_unauthenticated_per_network, sender.network
                                         )
                                     }
                                 };
@@ -255,6 +267,16 @@ fn loggable_type(text: &str) -> String {
         }
         _ => "unknown".into(),
     }
+}
+
+/// Waits until the peer's next frame is in, without taking it: `true` when
+/// that is a close (Close frame, end of stream or a read error), `false` for
+/// any other frame, which stays queued for the reader loop.
+async fn peer_closes<S>(source: &mut Peekable<S>) -> bool
+where
+    S: Stream<Item = Result<Message, WsError>> + Unpin,
+{
+    matches!(Pin::new(source).peek().await, None | Some(Ok(Message::Close(_))) | Some(Err(_)))
 }
 
 fn is_benign_close(e: &WsError) -> bool {
@@ -305,7 +327,8 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
         }
         Ok(Ok(ws)) => ws,
     };
-    let (mut sink, mut source) = ws.split();
+    let (mut sink, source) = ws.split();
+    let mut source = source.peekable();
     let (id, mut rx) = host.register_client(remote.clone());
     host.logs.ws(Severity::Info, &format!("connection ready from {remote} — awaiting PIN"));
     let writer = tokio::spawn(async move {
@@ -366,7 +389,29 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
         if !host.is_authenticated(id) {
             if is_auth {
                 let pin = serde_json::from_str::<AuthMessage>(&text).ok().map(|a| a.pin);
-                host.handle_auth(id, &sender, pin).await;
+                // A wrong PIN's reply waits out the throttle delay (up to
+                // `MAX_NETWORK_DELAY_MS`) while this socket holds its slot. A
+                // peer that closes meanwhile gives the slot back at once: the
+                // reply is abandoned (the attempt is already recorded) and
+                // the loop reads the close. `biased`: the attempt always runs
+                // first, so a close sent with the PIN cannot skip it.
+                let auth = host.handle_auth(id, &sender, pin);
+                tokio::pin!(auth);
+                let closed = tokio::select! {
+                    biased;
+                    () = &mut auth => false,
+                    closes = peer_closes(&mut source) => {
+                        if !closes {
+                            // Another frame came in first; it waits its turn.
+                            auth.await;
+                        }
+                        closes
+                    }
+                };
+                if closed {
+                    host.logs.debug(&format!("{remote} closed during the wrong-PIN delay; reply dropped"));
+                    continue;
+                }
                 if host.is_authenticated(id) {
                     slot = None; // frees the pre-auth slot, lifts the deadline
                 }
@@ -521,6 +566,7 @@ mod tests {
         assert!(crate::host::PRE_AUTH_DEADLINE >= Duration::from_secs(60));
         assert_eq!(crate::host::MAX_UNAUTHENTICATED, 16);
         assert_eq!(crate::host::MAX_UNAUTHENTICATED_PER_SENDER, 4);
+        assert_eq!(crate::host::MAX_UNAUTHENTICATED_PER_NETWORK, 8);
     }
 
     #[test]

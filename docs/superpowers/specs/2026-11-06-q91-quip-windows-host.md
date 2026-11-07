@@ -65,8 +65,11 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
 - Deadlines: the WebSocket upgrade must finish within 10 s of accept (the
   Mac's `PreHandshakeReapPolicy`); auth must succeed within 120 s, long enough
   to type a PIN on the phone's prompt. At most 16 sockets may wait for auth,
-  and at most 4 of them from one sender, so one LAN peer holding sockets open
-  for the 120 s cannot lock the phone out. More are closed at accept.
+  at most 8 of them from one network (the /64 for IPv6, the address for
+  IPv4) and at most 4 from one exact address, so one LAN peer holding
+  sockets open for the 120 s cannot lock the phone out. More are closed at
+  accept. A socket's slot is freed as soon as its peer closes, including
+  while a wrong PIN's delay runs.
 - Sender: the lockout and the per-sender cap use the exact peer address
   without its port, as on the Mac. An IPv4-mapped IPv6 address
   (`::ffff:192.0.2.1`) is its IPv4 address (`192.0.2.1`). So one device on a
@@ -78,11 +81,33 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
   network add nothing (one address alone sees the Mac's numbers); past that a
   wrong PIN waits 200 ms per network failure, capped at 30 s (150 failures),
   or the address's own delay if longer. The delay is spent before the
-  `Incorrect PIN` reply, holding the socket's pre-auth slot, so at most 16
-  guesses run per delay. It never refuses or slows a right PIN from an
-  address that is not locked out. A success does not reset it (the owner
-  pairing must not speed up a neighbour guessing); it is dropped after an
-  hour with no failures.
+  `Incorrect PIN` reply. It never slows a right PIN from an address that is
+  not locked out. A success does not reset it (the owner pairing must not
+  speed up a neighbour guessing); it is dropped after an hour with no
+  failures.
+- Guesses in their delay: a right PIN is answered at once and a wrong one
+  only after its delay, so "no answer yet" means "wrong". Each wrong PIN
+  therefore keeps a guess counted against its network until its delay ends,
+  even if the socket closes first. While 8 of a network's wrong PINs, or 16
+  in all, are in their delay, the next `auth` is refused unchecked, right
+  PIN or not, with
+  `Too many attempts; try again in 30s` (30 s bounds the longest delay).
+  This adds no lockout: it ends with the delays, and a network that can do
+  it can already fill the same pre-auth socket slots.
+- No hard lockout per /64 (asked for by a security review, rejected): it
+  would let one device lock out every neighbour in its /64, a home LAN or a
+  shared Wi-Fi, by guessing wrong 10 times, the denial of service that keying
+  the lockout by exact address fixed. A /64 is slowed and capped instead.
+- Threat math: the PIN is 8 digits, 10^8 values, so a random search needs
+  5 x 10^7 guesses on average. One network makes at most 8 guesses per delay,
+  and the delay reaches its 30 s cap after 150 failures, so it gets about
+  8 / 30 s = 16 guesses a minute: 5 x 10^7 / 16 per minute is about 3.1 x 10^6
+  minutes, about 6 years on average. A peer holding many /64s (or many IPv4
+  addresses) gets 8 each but never more than 16 in all: about 32 a minute,
+  about 3 years. Rotating
+  addresses is needed at all because each exact address locks out for 15 min
+  after 10 failures. The fast first 150 failures per network change nothing
+  that matters (150 of 5 x 10^7).
 - There is no lockout across all senders: it would let any LAN peer lock the
   owner out by guessing wrong 10 times.
 - An authenticated phone may send 10 messages a second (the Mac's

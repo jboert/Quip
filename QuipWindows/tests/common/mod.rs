@@ -53,6 +53,15 @@ impl Sleeper for RecordingSleeper {
     }
 }
 
+/// Never finishes: a wrong PIN's reply waits until the socket goes away.
+pub struct HangingSleeper;
+
+impl Sleeper for HangingSleeper {
+    fn sleep(&self, _: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::pending())
+    }
+}
+
 pub struct Harness {
     pub host: Arc<Host>,
     pub fake: FakePlatform,
@@ -66,11 +75,13 @@ pub struct Opts {
     pub real_sleeper: bool,
     pub prefs_file: bool,
     pub limits: ConnectionLimits,
+    /// Overrides `real_sleeper` when set.
+    pub sleeper: Option<Arc<dyn Sleeper>>,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { real_sleeper: false, prefs_file: true, limits: ConnectionLimits::default() }
+        Opts { real_sleeper: false, prefs_file: true, limits: ConnectionLimits::default(), sleeper: None }
     }
 }
 
@@ -107,7 +118,11 @@ pub async fn start_with(opts: Opts) -> Harness {
             PrefsStore::NoBackup
         },
         settings: Some((store, settings)),
-        sleeper: if opts.real_sleeper { Arc::new(TokioSleeper) } else { sleeper.clone() },
+        sleeper: match opts.sleeper {
+            Some(s) => s,
+            None if opts.real_sleeper => Arc::new(TokioSleeper),
+            None => sleeper.clone(),
+        },
     })
     .unwrap();
     host.poll_tick().await;

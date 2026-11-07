@@ -157,7 +157,10 @@ impl AuthThrottle {
     /// per failure up to 2 s, 0 on the failure that starts the lockout) and
     /// its network's (`network_delay_ms`). The delay is spent on the reply,
     /// holding the socket's pre-auth slot, so a peer rotating addresses
-    /// gets no more than `MAX_UNAUTHENTICATED` guesses per that delay.
+    /// gets no more than `MAX_UNAUTHENTICATED_PER_NETWORK` guesses per that
+    /// delay (spec 3.1 threat math). Closing the socket gives the slot back
+    /// but neither the failure (recorded here, before the delay) nor the
+    /// guess (`host::GuessToken`, held until the delay ends).
     /// A success does not clear the network count: the owner's phone
     /// pairing must not reset the delay of a neighbour guessing.
     pub fn attempt(&self, sender: &Sender, correct: bool) -> Attempt {
