@@ -10,10 +10,14 @@ on:
     branches: [eb-branch, main]
     paths:
       - "QuipWindows/**"
+      - "tools/fake-windows/**"
+      - "Shared/Tests/Fixtures/**"
       - ".github/workflows/windows.yml"
   pull_request:
     paths:
       - "QuipWindows/**"
+      - "tools/fake-windows/**"
+      - "Shared/Tests/Fixtures/**"
       - ".github/workflows/windows.yml"
   workflow_dispatch:
 
@@ -22,6 +26,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    # The same checks tools/check.sh runs on the Mac, natively on Windows:
+    # fmt, clippy, and every unit, integration and shared-vector test.
+    name: cargo test (QuipWindows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            QuipWindows/target
+          key: windows-cargo-${{ hashFiles('QuipWindows/Cargo.lock') }}
+      - name: fmt
+        working-directory: QuipWindows
+        run: cargo fmt --check
+      - name: clippy
+        working-directory: QuipWindows
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        working-directory: QuipWindows
+        run: cargo test
+
   spike:
     # M0 probe: can a process on this runner bring a window to the front and
     # type into PowerShell / cmd, and which multi-line method is safe?

@@ -1,0 +1,70 @@
+{
+  "_comment": "Invented QA data for `Quip --fake-platform` (QuipWindows/src/fake_mode.rs). Windows are classified by the real classify.rs from className/exePath/shells. visible is the DWM rect in physical px; border is the invisible resize border (default 7). The primary display MUST be named 'FakeWindows Display': the phone treats an equal monitor name as same-host evidence, so it can never equal a real host's.",
+  "displayName": "Fake Windows (QA)",
+  "foreground": 4101,
+  "displays": [
+    {
+      "deviceName": "\\\\.\\DISPLAY1",
+      "name": "FakeWindows Display",
+      "bounds": { "x": 0, "y": 0, "width": 1920, "height": 1080 },
+      "workArea": { "x": 0, "y": 0, "width": 1920, "height": 1040 },
+      "isPrimary": true
+    },
+    {
+      "deviceName": "\\\\.\\DISPLAY2",
+      "name": "FakeWindows Second",
+      "bounds": { "x": 1920, "y": 0, "width": 2560, "height": 1440 },
+      "workArea": { "x": 1920, "y": 0, "width": 2560, "height": 1440 },
+      "isPrimary": false
+    }
+  ],
+  "windows": [
+    {
+      "handle": 4101,
+      "pid": 5101,
+      "title": "pwsh in orchard-api",
+      "className": "CASCADIA_HOSTING_WINDOW_CLASS",
+      "exePath": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal\\WindowsTerminal.exe",
+      "productName": "Windows Terminal",
+      "shells": ["pwsh.exe"],
+      "visible": { "x": 0, "y": 0, "width": 960, "height": 1040 }
+    },
+    {
+      "handle": 4117,
+      "pid": 5117,
+      "title": "Windows PowerShell",
+      "className": "ConsoleWindowClass",
+      "exePath": "C:\\Windows\\System32\\conhost.exe",
+      "shells": ["powershell.exe"],
+      "visible": { "x": 960, "y": 0, "width": 960, "height": 1040 }
+    },
+    {
+      "handle": 4133,
+      "pid": 5133,
+      "title": "Command Prompt",
+      "className": "ConsoleWindowClass",
+      "exePath": "C:\\Windows\\System32\\conhost.exe",
+      "shells": ["cmd.exe"],
+      "visible": { "x": 2100, "y": 100, "width": 1200, "height": 800 }
+    },
+    {
+      "handle": 4149,
+      "pid": 5149,
+      "title": "pebble-docs (tabs: pwsh, cmd)",
+      "className": "CASCADIA_HOSTING_WINDOW_CLASS",
+      "exePath": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal\\WindowsTerminal.exe",
+      "productName": "Windows Terminal",
+      "shells": ["pwsh.exe", "cmd.exe"],
+      "visible": { "x": 3400, "y": 500, "width": 1000, "height": 800 }
+    },
+    {
+      "handle": 4165,
+      "pid": 5165,
+      "title": "notes.txt - Notepad",
+      "className": "Notepad",
+      "exePath": "C:\\Windows\\System32\\notepad.exe",
+      "productName": "Notepad",
+      "visible": { "x": 300, "y": 200, "width": 800, "height": 600 }
+    }
+  ]
+}

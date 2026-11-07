@@ -1,0 +1,41 @@
+[package]
+name = "quip-windows"
+version = "0.1.0"
+edition = "2021"
+description = "Quip host for Windows (Q-91): drive a Windows PC from the Quip iPhone app"
+publish = false
+exclude = ["spike"]
+
+[workspace]
+# Standalone crate: the M0 probe in spike/ is its own package and is not
+# built from here.
+exclude = ["spike"]
+
+[lib]
+name = "quip_windows"
+path = "src/lib.rs"
+
+[[bin]]
+name = "Quip"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "io-std", "signal"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+uuid = { version = "1", features = ["v4"] }
+toml = "0.8"
+regex = "1"
+base64 = "0.22"
+rand = "0.9"
+if-addrs = "0.13"
+hostname = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "test-util"] }
+
+[profile.release]
+opt-level = "s"

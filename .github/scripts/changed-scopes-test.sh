@@ -24,9 +24,9 @@ expect() {
     fi
 }
 
-ALL=$'apple=true\nrust=true\nandroid=true'
-NONE=$'apple=false\nrust=false\nandroid=false'
-APPLE=$'apple=true\nrust=false\nandroid=false'
+ALL=$'apple=true\nrust=true\nandroid=true\nwindows=true'
+NONE=$'apple=false\nrust=false\nandroid=false\nwindows=false'
+APPLE=$'apple=true\nrust=false\nandroid=false\nwindows=false'
 
 echo "changed-scopes"
 
@@ -44,13 +44,22 @@ expect "iOS source → apple only" "$APPLE" "QuipiOS/QuipApp.swift"
 expect "Shared → apple only" "$APPLE" "Shared/NumberedPromptDetector.swift"
 expect "swiftc harness → apple only" "$APPLE" "tools/main.swift"
 
-expect "Rust → rust only" $'apple=false\nrust=true\nandroid=false' \
+expect "Rust → rust only" $'apple=false\nrust=true\nandroid=false\nwindows=false' \
     "QuipLinux/src/main.rs"
-expect "Android → android only" $'apple=false\nrust=false\nandroid=true' \
+expect "Android → android only" $'apple=false\nrust=false\nandroid=true\nwindows=false' \
     "QuipAndroid/app/src/main/Foo.kt"
 
-expect "mixed → both scopes" $'apple=true\nrust=true\nandroid=false' \
+expect "mixed → both scopes" $'apple=true\nrust=true\nandroid=false\nwindows=false' \
     "Shared/MultiSelectSync.swift" "QuipLinux/src/services/log_paths.rs" "docs/x.md"
+
+# Q-91: the Windows host and its fake; shared fixtures feed both hosts.
+expect "Windows host → windows only" $'apple=false\nrust=false\nandroid=false\nwindows=true' \
+    "QuipWindows/src/services/router.rs"
+expect "fake-windows → windows, not the swiftc harness" $'apple=false\nrust=false\nandroid=false\nwindows=true' \
+    "tools/fake-windows/fixture.json"
+expect "shared fixture → apple and windows" $'apple=true\nrust=false\nandroid=false\nwindows=true' \
+    "Shared/Tests/Fixtures/vectors/multiline.json"
+expect "shared Swift test → apple only" "$APPLE" "Shared/Tests/WireFixtureTests.swift"
 
 # A change to CI itself has to prove itself everywhere.
 expect "workflow → everything" "$ALL" ".github/workflows/ci.yml"

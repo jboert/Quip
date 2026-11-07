@@ -46,6 +46,7 @@ message that fails to decode is logged and ignored. Neither closes the socket.
 ### 3.1 Handshake
 
 ```
+host  → phone {"type":"auth_result","success":false,"error":"auth_required"}   (on connect)
 phone → host  {"type":"auth","pin":"12345678"}
 host  → phone {"type":"auth_result","success":true}
 host  → phone {"type":"device_identity","deviceID":"<uuid v4>","deviceKind":"windows",
@@ -57,7 +58,15 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
   sent after the throttle delay. Throttle copied from
   `QuipLinux/src/services/auth_throttle.rs`; match the Mac's numbers
   (10 failures, 15 min lockout, growing per-attempt delay).
-- Before auth, every message except `auth` is dropped and nothing is sent.
+- The `auth_required` greeting is sent as soon as the WebSocket upgrade
+  completes; the 1.6.0 phone sends its PIN only after it (or shows its PIN
+  prompt when it has none saved). The Mac sends the same greeting.
+- Before auth, every message except `auth` is dropped and nothing else is sent.
+- Deadlines: the WebSocket upgrade must finish within 10 s of accept (the
+  Mac's `PreHandshakeReapPolicy`); auth must succeed within 120 s, long enough
+  to type a PIN on the phone's prompt. At most 16 sockets may wait for auth.
+  An authenticated phone may send 10 messages a second (the Mac's
+  `allowMessage`); the rest of that second's messages are dropped and logged.
 - `deviceID` is generated once and stored in settings. It is also the mDNS
   TXT `did` value.
 - `localURLs`: one `ws://<ipv4>:8765` per non-loopback, up IPv4 interface,
@@ -89,7 +98,8 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
 | `close_window` | `PostMessage(WM_CLOSE)`. Never `TerminateProcess`. |
 | `phone_log` | Append each line to `phone.log` (8). |
 | `preferences_snapshot` | Store the JSON blob as-is in `%APPDATA%\Quip\phone-prefs.json` and answer `preferences_request` with it. This keeps the phone's prefs backup working on a Windows-only setup. |
-| everything else | Ignore (debug log). Includes `request_content`, `image_upload`, `spawn_window`, `duplicate_window`, prompts, push, VibeCut, QA mode, iTerm messages. |
+| `request_content` | For a window the phone is shown: `terminal_content` to the asker only, with `content` exactly "Terminal text is not available on Windows yet." Without a reply the phone says "No reply from the Mac for this window" (found in simulator QA). Real terminal text is phase 2. |
+| everything else | Ignore (debug log). Includes `image_upload`, `spawn_window`, `duplicate_window`, prompts, push, VibeCut, QA mode, iTerm messages. |
 
 `toggle_enabled` arrives as a `quick_action` action (the Mac handles it in the
 quick-action switch, `QuipMacApp.swift:3875`). Handle it: flip the window's
@@ -230,6 +240,23 @@ the shell by walking the process snapshot (`CreateToolhelp32Snapshot`) for a
 child or parent named `powershell.exe`, `pwsh.exe` or `cmd.exe`. Unknown
 shell: still a terminal, `app` = `Console`.
 
+**The program in front of the shell.** Windows has no "foreground process
+of a console" call, so classify must also look at the shell process's
+**child processes** in the same snapshot (`classify::foreground_program`):
+walk down from the console's shell; a child that is itself a shell (`pwsh`
+started from `cmd`) becomes the shell, and any other child (`python`, `ssh`,
+`node`, `wsl`, …; `conhost.exe` / `OpenConsole.exe` excepted) means a
+program is running in the shell and the shell is reported `unknown`, so
+multi-line text is refused (5.4). Each Windows Terminal tab is one console;
+their results go through the same "all the same shell, else unknown" rule. A
+pid cycle in the snapshot (pid reuse) ends the walk. The rule is
+conservative: a background job started from the shell also reads as
+`unknown`, which only costs multi-line sends.
+
+**Minimized windows** report their restored rect
+(`GetWindowPlacement().rcNormalPosition`), never the (-32000, -32000)
+parking position, and stay in the broadcast set flagged `isMinimized`.
+
 `cliKind` is `shell` for every terminal in phase 1.
 
 **Enabled set persistence:** windows have no stable id across restarts, so the
@@ -238,13 +265,17 @@ launch. This is best-effort; a renamed window simply starts at its default.
 
 ### 5.2 Arranging
 
-`arrange_windows` tiles the enabled windows on the **primary** display, in
-broadcast order, over its work area (`MONITORINFO.rcWork`, which excludes the
+`arrange_windows` tiles the windows the phone currently shows (the
+**broadcast set**, 3.4), not only the enabled ones, on the **primary**
+display, in broadcast order, over its work area (`MONITORINFO.rcWork`, which excludes the
 taskbar). Deliberate difference: the Mac passes the full display frame
 (`cgFrame(for:)`) and relies on macOS keeping windows below the menu bar;
 Windows lets a window sit under the taskbar, so the work area is used. The
 tiling math itself is the Mac's `LayoutCalculator`, held to
-`vectors/arrange.json` with the work area as the target rect:
+`vectors/arrange.json` with the work area as the target rect. (Why the
+broadcast set: under the mirror-desktop rule nothing starts enabled, so
+"enabled windows only" arranged nothing. An empty broadcast set answers the
+Mac's "No enabled windows to arrange".)
 
 - `horizontal`: N equal columns, full height.
 - `vertical`: N equal rows, full width.
@@ -288,17 +319,30 @@ M0 (CI) needed every step: most focus calls succeeded at step 2, and one
 
 ### 5.4 Typing (`send_text`)
 
-1. Look up `windowId`. Missing → `injection.log` `kind=windowClosed`,
-   `error` to the phone, stop.
+1. Look up `windowId`, among the windows the phone is shown (the broadcast
+   set) only. Missing → `injection.log` `kind=windowClosed`, `error` to the
+   phone, stop. Every platform call names the window by HWND **and** the
+   pid that owned it when listed; the platform checks the pid still owns
+   the handle before acting (Windows reuses HWNDs) and otherwise answers
+   "gone" → `kind=windowClosed`, nothing typed.
 2. Foreground it (5.3). Failure → `injection.log` `kind=unknown
    detail="focus refused"`, `error`, stop.
+2a. Re-read the shell **now**, on the input thread (the 1 s poll can be
+   stale: the user may just have started `python`), with the child-process
+   rule of 5.1, and apply step 5 to that answer.
 3. Type the text with `SendInput`, one `KEYEVENTF_UNICODE` down/up pair per
    UTF-16 code unit (surrogate pairs as two units, which Windows reassembles,
    so emoji arrive intact). Batches of at most 64 inputs per `SendInput` call.
-4. Before each batch, check the window is still foreground. If focus moved
-   mid-text, stop typing, log `kind=unknown detail="focus lost after N chars"`,
-   send `error`. What was already typed stays (the same as a human losing
-   focus); nothing goes to the other window after the check fails.
+4. Before each batch **and before every key** (Shift+Enter, and the Return
+   after the 30 ms pause), check the window (handle and pid) is still
+   foreground. The shared injector makes this check, not the Win32 code, so
+   a backend cannot skip it. If focus moved mid-text, stop typing, log
+   `kind=unknown detail="focus lost after N chars"`, send `error`. What was
+   already typed stays (the same as a human losing focus); nothing goes to
+   the other window after the check fails. `SendInput` returns how many
+   inputs it inserted; a short count (UIPI: the window is elevated) stops
+   typing at once, logs `kind=unknown detail="input blocked (elevated
+   window?)"`, sends `error`, and no `send_text_ack`.
 5. **Newlines: same rules as the Mac's `MultiLineSendPolicy`** (US-008 there).
    Ported as `multiline_policy.rs` and driven by the same shared vectors (10.2):
    - One trailing line break is stripped and the text counts as single-line.
@@ -391,11 +435,17 @@ device_id = "<uuid>"
 port = 8765
 show_all_apps = false
 enabled_windows = [ { exe = "C:\\...\\WindowsTerminal.exe", title = "..." } ]
+disabled_windows = [ ]   # a toggle-off also survives a restart
 ```
 
-The file is created on first run. A corrupt file is renamed to
+The file is created on first run. A file that cannot be parsed, or holds
+unusable values (empty PIN, bad UUID, port 0), is renamed to
 `settings.toml.bad` and a new one is made (new PIN and device id), with a
-`websocket.log` line saying so.
+`websocket.log` line saying so. A file that exists but cannot be read (a
+sharing violation from antivirus or backup) is retried 3 times, 50 ms apart,
+then Quip stops with an error: it never makes a new PIN or device id because
+of a read error, since that would unpair every phone. A failed save is logged
+as `[ERROR] settings NOT saved`.
 
 ## 8. Logs
 

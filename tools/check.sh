@@ -63,7 +63,7 @@ changed_files() {
 
 FILES="$(changed_files | sort -u)"
 SCOPES="$(printf '%s\n' "$FILES" | .github/scripts/changed-scopes.sh)"
-eval "$SCOPES"   # sets apple / rust / android
+eval "$SCOPES"   # sets apple / rust / android / windows
 
 # Apple splits further: QuipMac and QuipiOS are separate suites, and Shared/
 # compiles into BOTH so it has to run both.
@@ -96,7 +96,7 @@ if [ "$apple" = "true" ]; then
     fi
 fi
 
-echo "── scopes: apple=$apple rust=$rust android=$android"
+echo "── scopes: apple=$apple rust=$rust android=$android windows=$windows"
 echo "── suites: harness=$run_harness mac=$run_mac ios=$run_ios"
 echo ""
 
@@ -292,6 +292,39 @@ if [ "$run_ios" = "true" ]; then
     echo ""
 else
     note_skip "QuipiOS suite" "no QuipiOS/ or Shared/ change"
+fi
+
+# Q-91 — the Windows host. Its portable core (protocol, server, rules) runs
+# and is tested here; it must also compile and lint for the Windows target.
+# The Win32 UI tests need a Windows desktop and run only in the Windows CI job,
+# so they are reported as skipped, never as green.
+if [ "$windows" = "true" ]; then
+    if ! command -v cargo >/dev/null 2>&1; then
+        note_skip "QuipWindows (cargo)" "cargo not installed"
+    elif ! rustup target list --installed 2>/dev/null | grep -qx 'x86_64-pc-windows-gnu' \
+        || ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+        note_skip "QuipWindows (cargo)" "toolchain missing — rustup target add x86_64-pc-windows-gnu && brew install mingw-w64"
+    else
+        echo "── QuipWindows (cargo)"
+        ran=$((ran + 1))
+        win_log="$(mktemp -t quip-windows-check)"
+        (
+            cd "$ROOT/QuipWindows" &&
+            cargo fmt --check &&
+            cargo clippy --quiet --all-targets -- -D warnings &&
+            cargo clippy --quiet --target x86_64-pc-windows-gnu --all-targets -- -D warnings &&
+            cargo test --quiet
+        ) >"$win_log" 2>&1
+        win_status=$?
+        grep -E '^test result|FAILED|panicked|^error|^warning: unused' "$win_log" | head -20
+        if [ "$win_status" -ne 0 ]; then
+            failures=$((failures + 1))
+            echo "QuipWindows failed — full log: $win_log"
+            tail -20 "$win_log"
+        fi
+        echo ""
+    fi
+    note_skip "QuipWindows Win32 UI tests" "need a Windows desktop — run in the Windows CI job"
 fi
 
 # QuipLinux and QuipAndroid are not this machine's lane. Say so rather than

@@ -1,6 +1,6 @@
 # Plan: Q-91 Quip for Windows (phase 1)
 
-**Status:** In progress — approved by owner 2026-11-06 with a stop after S9 (owner checks the real PC before S10). S4 running; S5-S9 not started; S10-S12 on hold.
+**Status:** In progress — approved by owner 2026-11-06 with a stop after S9 (owner checks the real PC before S10). S1-S4 complete; S5-S9 not started; S10-S12 on hold.
 
 - Spec (source of truth for behavior): `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`
 - PRD: `tasks/prd-quip-windows-host.md` · Board: Q-91 · Handoff: `docs/superpowers/handoffs/2026-11-06-session-handoff.md`
@@ -30,20 +30,21 @@
 - Notes: QuipMac 1388/0; 20 mutations caught; one review cycle done (3 medium, 11 low, all fixed). iOS compile of the Shared tests unverified (Q-92).
 
 ### S3: M1 Rust portable core
-- **Status:** Complete, uncommitted (working tree `QuipWindows/`, `tools/fake-windows/`)
+- **Status:** Complete (committed with S4)
 - Goal: protocol, server, auth, router, pure rules, fake platform, `--fake-platform`.
 - Acceptance: `cargo test` green (333 unit, 36 integration, 9 shared-vector); fmt + clippy clean on both targets; release `Quip.exe` imports only Windows system DLLs.
 - Notes: verified by orchestrator re-run. Review: 7 medium, 17 low, 0 high.
 
 ### S4: M1 review fixes + simulator findings
-- **Status:** In progress (worker running)
+- **Status:** Complete (commit "feat(windows): Q-91 M1 portable core")
 - Goal: resolve the S3 review's 24 findings and 3 simulator findings (request_content reply, fake action log + latency.log, arrange the shown windows).
 - Acceptance: each finding mapped to a fix with a test that failed before it; gate `printf 'QuipWindows/src/lib.rs\n' | tools/check.sh --files -` all green; mutation results reported for changed files.
+- Notes: 454 tests (389 unit, 11 shared-vector, 54 integration); gate green, re-run by the orchestrator. Orchestrator fix: auth deadline 10 s -> 120 s (upgrade stays 10 s), since a phone with no saved PIN shows its prompt on the open socket. Spec 3.1/3.3/7 updated for the auth_required greeting, request_content reply, settings read retry. Residual missed mutants: fake console output arms, equivalent mutants, OS-dependent address listing.
 
 ### S5: Commit M1 + gate wiring + simulator QA scripts
 - **Status:** Not started
 - Goal: land M1 and prove the real phone app works against the host.
-- Scope: commit S3/S4 + the ready gate wiring (`changed-scopes.sh` scope `windows` + test, `tools/check.sh` suite, `windows.yml` test job); write `tools/qa/q91-{pair,layout,send,keys,arrange,two-backends}.sh` against `--fake-platform` on a simulator of our own (clone of D8C5154B, Quip 1.5.7).
+- Scope: (M1 code and gate wiring were committed with S4.) Write `tools/qa/q91-{pair,layout,send,keys,arrange,two-backends}.sh` against `--fake-platform` on a simulator of our own (clone of D8C5154B, Quip 1.5.7).
 - Acceptance: `bash .github/scripts/changed-scopes-test.sh` 0 failures; `tools/check.sh` windows suite green and fails on an injected fmt error; each q91 script exits 0 and saves a screenshot to `docs/superpowers/evidence/q91/`; Windows CI `test` job green on the pushed commit.
 
 ### S6: M2a Win32 window listing, displays, shell classification, frontmost
