@@ -1,0 +1,49 @@
+name: Windows
+
+# Q-91: the Windows host (QuipWindows/). Separate from ci.yml because ci.yml
+# only runs on main and PRs, while Q-91 is built on eb-branch, and the
+# Win32 checks need a real Windows desktop that no other job has.
+# The repo is public, so Windows runner minutes are free.
+
+on:
+  push:
+    branches: [eb-branch, main]
+    paths:
+      - "QuipWindows/**"
+      - ".github/workflows/windows.yml"
+  pull_request:
+    paths:
+      - "QuipWindows/**"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike:
+    # M0 probe: can a process on this runner bring a window to the front and
+    # type into PowerShell / cmd, and which multi-line method is safe?
+    # A failure here is a finding about the runner, not a broken build, so
+    # the run step may fail without failing the job; the report is the output.
+    name: M0 spike (focus, typing, multi-line)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build spike
+        working-directory: QuipWindows/spike
+        run: cargo build --release
+      - name: Run spike
+        id: run
+        continue-on-error: true
+        working-directory: QuipWindows/spike
+        run: .\target\release\quip-spike.exe
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-report
+          path: ${{ env.LOCALAPPDATA }}\Quip\spike-report-*.txt
+          if-no-files-found: warn

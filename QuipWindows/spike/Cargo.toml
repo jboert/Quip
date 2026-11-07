@@ -1,0 +1,25 @@
+[package]
+name = "quip-windows-spike"
+version = "0.0.1"
+edition = "2021"
+description = "Q-91 M0: throwaway probe of focus, typing and multi-line safety on Windows"
+publish = false
+
+[[bin]]
+name = "quip-spike"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.58.0", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_SystemInformation",
+] }
+
+[profile.release]
+opt-level = "s"

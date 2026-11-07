@@ -140,3 +140,7 @@ logs/
 # (QuipMac/project.yml owns it), so a local copy is build noise, not source.
 QuipMac/QuipMac.xcodeproj/xcshareddata/
 QuipiOS/QuipiOS.xcodeproj/xcshareddata/
+
+# Q-91 Windows host build output
+QuipWindows/**/target/
+QuipWindows/dist/
