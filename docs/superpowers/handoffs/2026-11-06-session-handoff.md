@@ -1,98 +1,70 @@
-# Session handoff, 2026-11-06: Q-91 Quip for Windows
+# Session handoff, 2026-11-06 (evening): Q-91 Quip for Windows
 
 **Resume:** "Continue Q-91 from docs/superpowers/handoffs/2026-11-06-session-handoff.md:
-check M1 builder output in `QuipWindows/` and `Shared/Tests/Fixtures/`, run the
-independent review, then commit and push M1."
+verify R1 (review-fix) in the working tree, push it and read Windows CI, record
+the owner's PC test, then close the run."
 
-## Goal
+## Where it stands
 
-Owner wants Quip on their Windows PC (x64 Intel, PowerShell). No Windows host
-existed. All work stays on `eb-branch`, pushed the same day (owner,
-2026-11-06). Testing must be at the Mac/iOS bar, and every milestone must be
-independently reviewed and proven working (owner, 2026-11-06).
+Plan of record: `docs/superpowers/plans/2026-11-06-q91-windows-host.md`
+(owner-approved, stop after S9 for a PC check). Spec:
+`docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`. Board: Q-91.
 
-- Spec (tracked): `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`
-  (sections 10 tests, 14 milestones + gates).
-- PRD (gitignored): `tasks/prd-quip-windows-host.md`.
-- Board: Q-91 (Windows host), Q-92 (iOS gate broken locally).
+- S1-S9 complete and pushed, each verified by the orchestrator (gate re-run)
+  and, for Win32 slices, by Windows CI. Last green CI: run 42341224909 at
+  `e6dea53` (Win32 UI tests: listing 6, displays 2, qr 2, tray 3; selftest 11/11).
+- Read-only review of S4-S9 done: Needs fixes (0 high, 1 medium, 3 low). One low
+  fixed directly (`df3e45f`). The rest is slice **R1**.
+- **R1 was still running when this was written; its changes are uncommitted in
+  the working tree** (`QuipWindows/`, spec 3.1/10.5, the plan's R1 section). Next
+  session: read the R1 report (or the diff), re-run
+  `printf 'QuipWindows/src/lib.rs\n' | tools/check.sh --files -`, commit, push,
+  read Windows CI (the Win32 UI test changes only run there). One review-fix
+  cycle by default: no second review unless the owner asks.
+- After R1: close the run (plan Status, clean tree, gate, push). S10-S12
+  (arrange, typing, release build) stay on hold until the owner's PC check.
 
-## Commits this session
+## Owner's PC test (2026-11-07)
 
-| Hash | Why |
-|---|---|
-| `7671c8e` | Spec: phase 1 design, wire contract taken from the Mac (8-digit PIN, `deviceKind: windows` is harmless on the 1.6.0 phone). |
-| `f51a718` | Spec: test plan at the Mac/iOS bar (shared vectors, Rust twin per Mac test file, fake-windows sim QA, CI + `--selftest`, mutations); milestones M0-M5 with gates; multi-line follows `MultiLineSendPolicy`. |
-| `ffeb81c` | M0 spike `QuipWindows/spike/` + `.github/workflows/windows.yml` (runs on `windows-latest` for QuipWindows pushes on eb-branch); board Q-92. Hook skipped: iOS gate broken (Q-92); Mac suite 1369 green. |
-| `0dcfa6f` | Spike starts classic console with `CREATE_NEW_CONSOLE` (conhost attached to the runner's console otherwise). Records first CI results. |
-| this commit | This handoff. |
+`Quip.exe` built from `df3e45f` (pushed, reviewed code; NOT including R1) was
+sent to the owner. SHA-256
+`3beb48514c039e50dd47ce7353214ecf6a5e7af72f427e5ae8e90bc3d48c802c`.
 
-## M0 findings so far (CI `windows-latest`, build 26100, PS 5.1, PSReadLine 2.4.5)
+What works in this build: tray app, pairing (PIN or QR), Bonjour discovery,
+the phone's grid of PC windows (terminals shown; PowerShell and cmd
+recognised), `--selftest`. What does NOT work yet (S10/S11, on hold): typing
+or keys from the phone into a window, arranging windows. The phone shows an
+error for those; terminal text shows "Terminal text is not available on
+Windows yet."
 
-- Interactive desktop on the runner: yes. Windows Terminal installed: yes.
-- Windows Terminal + PowerShell: focus via plain `SetForegroundWindow`;
-  `SendInput` unicode typing intact (accented, CJK, emoji).
-- Multi-line: **Shift+Enter is safe** (nothing ran early; one Return ran both
-  lines). **Clipboard paste is not** (Return ran only one of two lines). So
-  spec 5.4 should pick Shift+Enter; record this when updating the spec.
-- Classic console (conhost) not tested yet: first run failed to open windows;
-  fixed in `0dcfa6f`, re-run (Windows workflow run 42319374974) was in flight
-  when this was written. Check it with
-  `gh run view 42319374974 -R jboert/Quip --log | grep -E "PASS |FAIL |RESULT "`.
-- Focus has not yet been tested with another window in front (only one window
-  opened in the first run). The re-run opens three.
+Steps for the owner:
+1. Copy `Quip.exe` to `%LOCALAPPDATA%\Programs\Quip\` and double-click it.
+   SmartScreen: More info, then Run anyway (unsigned).
+2. Windows Firewall prompt: allow on **Private** networks. If the home network
+   is set to Public, the phone cannot connect.
+3. Tray icon (bottom-right, maybe under the ^ arrow) -> Show pairing QR..., scan
+   from the phone. Or wait for the PC to appear in the phone's connection list.
+4. Open a PowerShell window: it should appear on the phone's grid.
+5. Selftest: in PowerShell, `& "$env:LOCALAPPDATA\Programs\Quip\Quip.exe" --selftest | Out-Host`.
+   Send back the newest `%LOCALAPPDATA%\Quip\Logs\selftest-*.txt` (it holds no
+   names or IPs).
+6. If the phone cannot connect: on the PC run `netstat -an | findstr 8765`
+   (expect `LISTENING`), and send `%LOCALAPPDATA%\Quip\Logs\websocket.log`.
 
-## Uncommitted work in flight
+Record the result in the plan's "Owner gates" and on the board before S10.
 
-Two builder agents were running when this was written. Their output is in the
-working tree, **not committed, not reviewed**:
+## Open items
 
-- Rust core in `QuipWindows/` (protocol, server, auth, router, pure rules,
-  fake platform, `--fake-platform`) and `tools/fake-windows/`.
-- Swift vector files + tests in `Shared/Tests/Fixtures/{wire,vectors}/`,
-  `Shared/Tests/WireFixtureTests.swift`, `QuipMac/Tests/*Vector*`.
-
-Next steps, in order:
-1. `git status`; read what landed; run `cd QuipWindows && cargo test && cargo
-   clippy --all-targets -- -D warnings && cargo check --target
-   x86_64-pc-windows-gnu`, and the Mac suite for the Swift vectors.
-2. Independent review (reviewer agent gets the diff + spec, not a summary).
-   Fix findings.
-3. Wire Rust tests to the vector files; add scope `windows` to
-   `.github/scripts/changed-scopes.sh` (+ its test) and `tools/check.sh`.
-4. `tools/qa/q91-*.sh` simulator scenarios against `--fake-platform`.
-5. Commit M1 (mutation results + review answers in the message), push.
-
-## Install state
-
-| Where | State |
-|---|---|
-| Mac `/Applications/Quip.app` | 1.5.7 (build 1), installed 2026-10-27. Not updated this session (no QuipMac change). Repo is at 1.6.0 (`edf0438`). |
-| iPhone | Not touched this session. |
-| Windows PC | Nothing installed yet. |
-
-## Verified vs not
-
-| Item | State |
-|---|---|
-| Spike on CI Windows: WT focus, typing, unicode, Shift+Enter safe, paste unsafe | Verified on CI runner |
-| Spike: classic console + focus with a window in front | CI re-run pending |
-| Spike on the owner's PC | Not run |
-| M1 Rust core, Swift vectors | Built by agents, not reviewed, not committed |
-
-## Blockers found
-
-- **Q-92**: iOS suite cannot open its generated Xcode project on this Mac
-  (Xcode 27.2, installed 2026-11-03): `"Models" is a member of more than one
-  group` (first `.claude-flow`, a ruflo state folder). Committed pbxproj fails
-  too. Blocks every iOS gate locally; commits since use `QUIP_SKIP_CHECK=1`
-  with the reason in the message.
-- Toolchain installed this session: Rust target `x86_64-pc-windows-gnu`,
-  `mingw-w64` 14.0.0 (Homebrew).
-
-## Owner to do
-
-1. Run the spike on the PC: on the Mac,
-   `cd QuipWindows/spike && cargo build --release --target x86_64-pc-windows-gnu`,
-   copy `target/x86_64-pc-windows-gnu/release/quip-spike.exe` to the PC, run it
-   from PowerShell, send back `%LOCALAPPDATA%\Quip\spike-report-*.txt`.
-2. Later (M2): run `Quip.exe`, pair the phone, check the grid.
+- R1 (above).
+- Q-92: the iOS suite cannot open its generated Xcode project on this Mac
+  (Xcode 27.2). Every commit today used `QUIP_SKIP_CHECK=1` for that reason,
+  with the suites that did run named in each message.
+- Owner decision pending (told, not answered): rates of PIN guessing add up
+  across IPv4 addresses (no all-senders guess cap, so the owner's right PIN is
+  never refused). Spec 3.1 has the math.
+- Possible follow-ups noted by workers: Bonjour is skipped if no LAN address
+  exists at startup and is not retried; a plain `.ico` resource for Explorer
+  (S12); the phone stores a Windows backend as kind `unknown` (phone-side,
+  out of scope); phone 1.5.7 never sends `arrange_windows`.
+- QA simulator clone `1CA3EE21-B289-4707-88DB-5E9940E82DD7` (Quip 1.5.7) was
+  created for Q-91; keep it for S10/S11 QA, delete when Q-91 ends.
