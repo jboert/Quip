@@ -2,6 +2,8 @@
 
 Talk to your Claude instances. All of them. From your couch. No keyboard needed.
 
+https://github.com/user-attachments/assets/c702916c-4810-4e16-bdfc-886161a1ecea
+
 Quip turns your iPhone into a voice remote for any number of [Claude Code](https://claude.ai/claude-code), Codex and Grok sessions running in Terminal or iTerm2 on your Mac. Just speak your prompt and it lands in the right terminal.
 
 > **Platforms:** the macOS and iOS apps (with Apple Watch) are current. The Linux and Android apps are older and haven't been updated to match. They need significant work before their next release.
