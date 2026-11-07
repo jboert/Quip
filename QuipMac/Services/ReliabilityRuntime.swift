@@ -168,7 +168,10 @@ enum ReliabilityAgents {
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
         posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID))
-        let argv: [UnsafeMutablePointer<CChar>?] = ["/bin/sh", "-c", script].map { strdup($0) } + [nil]
+        // Typed apart: Swift 6.2 (CI's Xcode 26) reads the literal as
+        // [UnsafePointer<CChar>?] when it is mapped inline.
+        let args: [String] = ["/bin/sh", "-c", script]
+        let argv: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var pid = pid_t()
         let rc = posix_spawn(&pid, "/bin/sh", nil, &attr, argv, environ)
