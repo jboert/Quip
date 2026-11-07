@@ -2,9 +2,11 @@
 //! the real app code, and a redacted PASS/FAIL report written to
 //! `%LOCALAPPDATA%\Quip\Logs\selftest-<time>.txt` for the owner to send back.
 //!
-//! `report` (format, exit code, redaction) is pure and Mac-tested; `win32`
+//! `report` (format, exit code, redaction) and `own` (which windows and
+//! processes are the selftest's own) are pure and Mac-tested; `win32`
 //! holds the case registry and runs it.
 
+pub mod own;
 pub mod report;
 #[cfg(windows)]
 pub mod win32;

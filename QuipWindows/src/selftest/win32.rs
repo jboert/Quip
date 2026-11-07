@@ -3,7 +3,10 @@
 //!
 //! It runs on the owner's own PC, so every case keeps these rules:
 //! - it opens only windows of its own and closes all of them, pass or fail
-//!   (`Ctx::close_opened` after every case, and again on drop);
+//!   (`Ctx::close_opened` after every case, and again on drop); a window is
+//!   its own when it carries a title marker unique to the run (`own`), and
+//!   only a console's owner shell and that shell's own children are ever
+//!   ended;
 //! - it never types into, moves, focuses or closes a window it did not open;
 //!   the consoles it opens come to the front by themselves, nothing more;
 //! - it never describes a window it did not open by its title (the report's
@@ -22,6 +25,7 @@ use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow, PostMessageW, WM_CLOSE};
 
+use super::own;
 use super::report::{exit_code, format_report, CaseResult, DisplayInfo, Header, Outcome, Redactor, EXIT_FAILED};
 use crate::app_state::AppState;
 use crate::platform::traits::{PlatformWindow, WindowBackend};
@@ -59,29 +63,25 @@ const SHELL_WAIT: Duration = Duration::from_secs(15);
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(200);
 
-/// Processes the selftest starts (and so may end, under a console it opened).
-const OWN_STEMS: [&str; 4] = ["conhost", "cmd", "powershell", "ping"];
-
-const CMD_TITLE: &str = "Quip-selftest-cmd";
-const FRAMES_TITLE: &str = "Quip-selftest-frames";
-const WT_TITLE: &str = "Quip-selftest-wt";
-
-/// Something a case started.
+/// Something a case started, known by the title marker it set.
 struct Opened {
     what: &'static str,
+    marker: String,
+    /// The window class the marker is looked for in.
+    class: &'static str,
     /// (handle, owner pid) once its window was found.
     window: Option<(u64, u32)>,
-    /// The process the selftest started (conhost.exe for a classic console):
-    /// it and its descendants may be ended. `None` for Windows Terminal,
-    /// whose process can hold the user's own windows: only its window gets
-    /// `WM_CLOSE`.
-    root: Option<u32>,
+    /// A classic console: its owner shell and that shell's own children may
+    /// be ended. Not for Windows Terminal, whose process can hold the user's
+    /// own windows: its window only gets `WM_CLOSE`.
+    may_end: bool,
 }
 
 pub struct Ctx {
     platform: Win32Platform,
     redactor: Redactor,
     opened: Vec<Opened>,
+    markers: u32,
 }
 
 impl Ctx {
@@ -99,18 +99,32 @@ impl Ctx {
         Ok(self.list()?.into_iter().map(|w| w.handle).collect())
     }
 
+    /// A title marker no other window of this run, or any run of another
+    /// process, carries.
+    fn new_marker(&mut self, tag: &str) -> String {
+        self.markers += 1;
+        own::marker(std::process::id(), self.markers, tag)
+    }
+
+    /// Records what a case is about to start, before it starts, so cleanup
+    /// looks for its marker even when the window is never identified.
+    fn expect(&mut self, what: &'static str, marker: &str, class: &'static str, may_end: bool) -> usize {
+        self.redactor.own_title(marker);
+        self.opened.push(Opened { what, marker: marker.to_string(), class, window: None, may_end });
+        self.opened.len() - 1
+    }
+
     /// Polls until a window not in `before` matches `pick`.
     fn wait_new(
         &mut self,
         before: &HashSet<u64>,
         timeout: Duration,
-        pick: impl Fn(&PlatformWindow, &[Proc]) -> bool,
+        pick: impl Fn(&PlatformWindow) -> bool,
     ) -> Option<PlatformWindow> {
         let start = Instant::now();
         while start.elapsed() < timeout {
-            let procs = process_snapshot().unwrap_or_default();
             if let Ok(windows) = self.list() {
-                if let Some(w) = windows.into_iter().find(|w| !before.contains(&w.handle) && pick(w, &procs)) {
+                if let Some(w) = windows.into_iter().find(|w| !before.contains(&w.handle) && pick(w)) {
                     return Some(w);
                 }
             }
@@ -147,68 +161,95 @@ impl Ctx {
     }
 
     /// `cmd /c start "" conhost.exe <args>`: a classic console with its own
-    /// window, even under CI's redirected stdio (spec 10.5). Its conhost.exe
-    /// is found as the child of that cmd, and its window as the new console
-    /// window owned by that conhost or a process under it, so a console the
-    /// user opens meanwhile is never taken for it.
-    fn open_conhost(&mut self, what: &'static str, args: &str) -> Result<PlatformWindow, String> {
+    /// window, even under CI's redirected stdio (spec 10.5). `args(marker)`
+    /// must make the shell set the console title to `marker`; the window is
+    /// the new console window carrying it, so a console the user has open is
+    /// never taken for it. (The window's owner is the shell, not conhost.)
+    fn open_conhost(
+        &mut self,
+        what: &'static str,
+        tag: &str,
+        args: impl Fn(&str) -> String,
+    ) -> Result<PlatformWindow, String> {
+        let marker = self.new_marker(tag);
+        let args = args(&marker);
         let before = self.handles()?;
-        let mut helper = Command::new("cmd.exe")
+        let index = self.expect(what, &marker, CONSOLE_CLASS, true);
+        Command::new("cmd.exe")
             .creation_flags(CREATE_NEW_CONSOLE)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .raw_arg(format!(r#"/c start "" conhost.exe {args}"#))
-            .spawn()
+            .status()
             .map_err(|e| format!("cannot run cmd.exe: {e}"))?;
-        let helper_pid = helper.id();
-        let _ = helper.wait();
-        let procs = process_snapshot().map_err(|e| format!("process snapshot: {e}"))?;
-        let root = procs
-            .iter()
-            .find(|p| p.parent == helper_pid && exe_stem(&p.exe) == "conhost")
-            .map(|p| p.pid)
-            .ok_or_else(|| format!("`cmd /c start conhost.exe {args}` started no conhost.exe"))?;
-        self.opened.push(Opened { what, window: None, root: Some(root) });
-        let index = self.opened.len() - 1;
-        let found = self.wait_new(&before, OPEN_WAIT, |w, procs| {
-            w.class_name == CONSOLE_CLASS && descends_from(w.pid, root, procs)
-        });
+        let found =
+            self.wait_new(&before, OPEN_WAIT, |w| w.class_name == CONSOLE_CLASS && own::has_marker(&w.title, &marker));
         match found {
             Some(w) => {
                 self.claim(index, &w);
                 Ok(w)
             }
             None => Err(format!(
-                "no console window from its conhost.exe in {} s\nevery top-level {CONSOLE_CLASS} window:\n{}processes under its conhost:\n{}",
+                "no new console window titled {marker} in {} s\nevery top-level {CONSOLE_CLASS} window:\n{}console processes:\n{}",
                 OPEN_WAIT.as_secs(),
                 self.platform.explain_class(CONSOLE_CLASS),
-                process_tree(root),
+                console_processes(),
             )),
         }
     }
 
-    /// Closes everything the current case opened: `WM_CLOSE` to its window,
-    /// then, for a console, ends whatever is left of its own process tree.
-    /// Returns what could not be closed.
+    /// Listed windows of `class` carrying `marker`, as (handle, owner pid).
+    fn marked(&mut self, class: &str, marker: &str) -> Vec<(u64, u32)> {
+        self.list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|w| w.class_name == class && own::has_marker(&w.title, marker))
+            .map(|w| (w.handle, w.pid))
+            .collect()
+    }
+
+    /// Closes everything the current case opened: every window carrying its
+    /// marker (found or not) gets `WM_CLOSE`; a console still open after that
+    /// has its owner shell and that shell's own children ended. Returns what
+    /// could not be closed: a window with the marker still listed, or one of
+    /// its processes still running.
     fn close_opened(&mut self) -> Vec<String> {
         let mut problems = Vec::new();
         for o in std::mem::take(&mut self.opened) {
-            if let Some((handle, pid)) = o.window {
-                post_close(handle);
-                let closed = wait_until(CLOSE_WAIT, || !is_live(handle, pid));
-                if !closed && o.root.is_none() {
-                    problems.push(format!("the {} window it opened did not close", o.what));
+            let mut windows: Vec<(u64, u32)> = o.window.into_iter().collect();
+            for w in self.marked(o.class, &o.marker) {
+                if !windows.contains(&w) {
+                    windows.push(w);
                 }
             }
-            if let Some(root) = o.root {
-                end_tree(root);
+            windows.retain(|&(h, p)| is_live(h, p));
+            // Taken while each window is known to be ours (its owner checked).
+            let procs = process_snapshot().unwrap_or_default();
+            let targets: Vec<Proc> = if o.may_end {
+                windows.iter().flat_map(|&(_, pid)| own::cleanup_targets(pid, &procs)).collect()
+            } else {
+                Vec::new()
+            };
+            for &(h, _) in &windows {
+                post_close(h);
+            }
+            // `WM_CLOSE` ends a console's processes too; whatever of its own
+            // tree is left after that is ended.
+            let _ = wait_until(CLOSE_WAIT, || windows.iter().all(|&(h, p)| !is_live(h, p)));
+            if o.may_end {
                 let gone = wait_until(CLOSE_WAIT, || {
-                    o.window.is_none_or(|(h, p)| !is_live(h, p)) && own_tree(root).is_empty()
+                    let now = process_snapshot().unwrap_or_default();
+                    let left = own::still_running(&targets, &now);
+                    end(&left);
+                    left.is_empty() && windows.iter().all(|&(h, p)| !is_live(h, p))
                 });
                 if !gone {
                     problems.push(format!("the {} it opened is still running", o.what));
                 }
+            }
+            if !self.marked(o.class, &o.marker).is_empty() {
+                problems.push(format!("a {} window titled {} is still open", o.what, o.marker));
             }
         }
         problems
@@ -256,50 +297,9 @@ fn wait_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
     }
 }
 
-fn descends_from(pid: u32, root: u32, procs: &[Proc]) -> bool {
-    let mut cur = pid;
-    for _ in 0..64 {
-        if cur == root {
-            return true;
-        }
-        match procs.iter().find(|p| p.pid == cur) {
-            Some(p) if p.parent != cur && p.parent != 0 => cur = p.parent,
-            _ => return false,
-        }
-    }
-    false
-}
-
-/// `root` and everything under it, as (pid, exe).
-fn tree(root: u32, procs: &[Proc]) -> Vec<(u32, String)> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack = vec![root];
-    while let Some(pid) = stack.pop() {
-        if !seen.insert(pid) {
-            continue;
-        }
-        if let Some(p) = procs.iter().find(|p| p.pid == pid) {
-            out.push((p.pid, p.exe.clone()));
-        }
-        stack.extend(procs.iter().filter(|c| c.parent == pid && c.pid != pid).map(|c| c.pid));
-    }
-    out
-}
-
-/// What is still running of a tree the selftest started, limited to the
-/// programs it starts itself.
-fn own_tree(root: u32) -> Vec<u32> {
-    let procs = process_snapshot().unwrap_or_default();
-    tree(root, &procs)
-        .into_iter()
-        .filter(|(_, exe)| OWN_STEMS.contains(&exe_stem(exe).as_str()))
-        .map(|(p, _)| p)
-        .collect()
-}
-
-fn end_tree(root: u32) {
-    for pid in own_tree(root) {
+/// Ends `pids`, which `own::still_running` picked from a console's own tree.
+fn end(pids: &[u32]) {
+    for &pid in pids {
         // SAFETY: plain arguments; the handle is closed right after.
         if let Ok(h) = unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) } {
             // SAFETY: a live process handle opened with PROCESS_TERMINATE,
@@ -316,7 +316,19 @@ fn end_tree(root: u32) {
 /// names only.
 fn process_tree(root: u32) -> String {
     let procs = process_snapshot().unwrap_or_default();
-    tree(root, &procs).into_iter().map(|(pid, exe)| format!("{pid} {exe}\n")).collect()
+    own::tree(root, &procs).into_iter().map(|(pid, exe)| format!("{pid} {exe}\n")).collect()
+}
+
+/// Every conhost / OpenConsole / shell process with its parent, for a
+/// failure detail.
+fn console_processes() -> String {
+    const NAMES: [&str; 5] = ["conhost", "openconsole", "cmd", "powershell", "pwsh"];
+    process_snapshot()
+        .unwrap_or_default()
+        .iter()
+        .filter(|p| NAMES.contains(&exe_stem(&p.exe).as_str()))
+        .map(|p| format!("{} parent={} {}\n", p.pid, p.parent, p.exe))
+        .collect()
 }
 
 fn fail_all(problems: Vec<String>) -> Outcome {
@@ -374,7 +386,7 @@ fn displays_work_area_inside_bounds(ctx: &mut Ctx) -> Outcome {
 /// same path the phone's layout comes from. It opens a console of its own so
 /// the check never passes on an empty desktop.
 fn frames_inside_0_to_1(ctx: &mut Ctx) -> Outcome {
-    let own = match ctx.open_conhost("frames console", &format!("cmd.exe /K title {FRAMES_TITLE}")) {
+    let own = match ctx.open_conhost("frames console", "frames", cmd_titled) {
         Ok(w) => w,
         Err(e) => return Outcome::Fail(e),
     };
@@ -437,9 +449,28 @@ fn foreground_window_owner(ctx: &mut Ctx) -> Outcome {
     }
 }
 
-/// Opens a classic console running `args` and checks how it is listed.
-fn console_case(ctx: &mut Ctx, what: &'static str, args: &str, shell: Shell, app: &str) -> Outcome {
-    let w = match ctx.open_conhost(what, args) {
+/// cmd sets no title of its own and spec 5.1 leaves untitled windows out;
+/// the `title` builtin names it without adding a child process.
+fn cmd_titled(marker: &str) -> String {
+    format!("cmd.exe /K title {marker}")
+}
+
+/// PowerShell titling its console, then running `then` (if any) in it.
+fn powershell_titled(marker: &str, then: &str) -> String {
+    format!(r#"powershell.exe -NoLogo -NoExit -Command "$Host.UI.RawUI.WindowTitle='{marker}'{then}""#)
+}
+
+/// Opens a classic console running `args(marker)` and checks how it is
+/// listed.
+fn console_case(
+    ctx: &mut Ctx,
+    what: &'static str,
+    tag: &str,
+    args: impl Fn(&str) -> String,
+    shell: Shell,
+    app: &str,
+) -> Outcome {
+    let w = match ctx.open_conhost(what, tag, args) {
         Ok(w) => w,
         Err(e) => return Outcome::Fail(e),
     };
@@ -473,22 +504,22 @@ fn console_case(ctx: &mut Ctx, what: &'static str, args: &str, shell: Shell, app
 }
 
 fn classic_powershell_console(ctx: &mut Ctx) -> Outcome {
-    console_case(ctx, "PowerShell console", "powershell.exe -NoLogo -NoExit", Shell::PowerShell, "PowerShell")
+    console_case(ctx, "PowerShell console", "ps", |m| powershell_titled(m, ""), Shell::PowerShell, "PowerShell")
 }
 
-/// cmd sets no title of its own and spec 5.1 leaves untitled windows out;
-/// the `title` builtin names it without adding a child process.
 fn classic_cmd_console(ctx: &mut Ctx) -> Outcome {
-    console_case(ctx, "cmd console", &format!("cmd.exe /K title {CMD_TITLE}"), Shell::Cmd, "Command Prompt")
+    console_case(ctx, "cmd console", "cmd", cmd_titled, Shell::Cmd, "Command Prompt")
 }
 
 /// ping stands in for python / ssh / node: any non-shell child of the shell
-/// is a program that would get the phone's keys.
+/// is a program that would get the phone's keys. The title is set before
+/// ping starts.
 fn busy_shell_reads_unknown(ctx: &mut Ctx) -> Outcome {
     console_case(
         ctx,
         "busy PowerShell console",
-        "powershell.exe -NoLogo -NoExit -Command ping -n 120 127.0.0.1",
+        "busy",
+        |m| powershell_titled(m, "; ping -n 120 127.0.0.1"),
         Shell::Unknown,
         "Console",
     )
@@ -509,7 +540,9 @@ fn windows_terminal(ctx: &mut Ctx) -> Outcome {
         Ok(h) => h,
         Err(e) => return Outcome::Fail(e),
     };
-    let set_title = format!("$Host.UI.RawUI.WindowTitle='{WT_TITLE}'");
+    let marker = ctx.new_marker("wt");
+    let set_title = format!("$Host.UI.RawUI.WindowTitle='{marker}'");
+    let index = ctx.expect("Windows Terminal", &marker, WT_CLASS, false);
     let launched = Command::new("wt.exe")
         .args(["-w", "new", "powershell.exe", "-NoLogo", "-NoExit", "-Command", &set_title])
         .stdin(Stdio::null())
@@ -519,13 +552,13 @@ fn windows_terminal(ctx: &mut Ctx) -> Outcome {
     if let Err(e) = launched {
         return Outcome::Fail(format!("cannot run wt.exe: {e}"));
     }
-    ctx.opened.push(Opened { what: "Windows Terminal", window: None, root: None });
-    let index = ctx.opened.len() - 1;
-    let Some(w) = ctx.wait_new(&before, WT_OPEN_WAIT, |w, _| w.class_name == WT_CLASS && w.title == WT_TITLE) else {
+    let Some(w) =
+        ctx.wait_new(&before, WT_OPEN_WAIT, |w| w.class_name == WT_CLASS && own::has_marker(&w.title, &marker))
+    else {
         let others =
             ctx.list().map(|ws| ws.iter().filter(|w| w.class_name == WT_CLASS && !before.contains(&w.handle)).count());
         return Outcome::Fail(format!(
-            "no new Windows Terminal window titled {WT_TITLE} in {} s ({} other new ones, left alone)",
+            "no new Windows Terminal window titled {marker} in {} s ({} other new ones, left alone)",
             WT_OPEN_WAIT.as_secs(),
             others.map(|n| n.to_string()).unwrap_or_else(|e| e),
         ));
@@ -609,7 +642,7 @@ pub fn run() -> i32 {
     };
     let redactor = Redactor::from_env(&env, hostname::get().ok().and_then(|h| h.into_string().ok()));
     let header = header(&platform, started);
-    let mut ctx = Ctx { platform, redactor, opened: Vec::new() };
+    let mut ctx = Ctx { platform, redactor, opened: Vec::new(), markers: 0 };
     let results = run_cases(&mut ctx, CASES);
     let text = format_report(&header, &results, &ctx.redactor);
     print!("{text}");
