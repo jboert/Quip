@@ -1,16 +1,23 @@
 //! Per-host failure throttle for the auth path.
 //!
 //! Port of `QuipMac/Services/AuthThrottle.swift` (QuipLinux's
-//! `auth_throttle.rs` has the same numbers but keys on `IpAddr`; this keys on
-//! the host string like the Mac so `host(from:)` ports too):
+//! `auth_throttle.rs` has the same numbers). The Mac keys on the endpoint
+//! with its port stripped, one exact address per bucket; this keys on
+//! `sender_key`, which also folds IPv4-mapped IPv6 into IPv4 and an IPv6
+//! address into its /64, so a peer cannot get fresh PIN guesses by rotating
+//! through the 2^64 addresses its own network gives it:
 //! - each failed PIN adds `PER_FAIL_DELAY_MS` to the next answer, capped at
 //!   `MAX_DELAY_MS`;
 //! - `MAX_FAILS_BEFORE_LOCKOUT` failures lock the host out for
 //!   `LOCKOUT_DURATION`, during which auth is refused without a PIN check;
 //! - success clears the host; idle entries (> 1 h, no lockout) are dropped on
 //!   every check.
+//!
+//! There is no lockout across all senders: one would let any LAN peer lock
+//! the owner's phone out by guessing wrong ten times.
 
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -139,13 +146,20 @@ impl AuthThrottle {
         });
     }
 
-    /// `AuthThrottle.host(from:)`: strip the ephemeral port so attempts from
-    /// one machine on many ports share a bucket. IPv6 arrives bracketed, so
-    /// the last-colon rule works for both families.
-    pub fn host(endpoint: &str) -> String {
-        match endpoint.rfind(':') {
-            Some(i) => endpoint[..i].to_string(),
-            None => endpoint.to_string(),
+    /// The bucket a peer's attempts (and its pre-auth sockets) count in. The
+    /// port is ignored, as on the Mac (`AuthThrottle.host(from:)`), so many
+    /// ports from one machine share a bucket. An IPv4-mapped IPv6 address
+    /// (`::ffff:192.0.2.1`, what a dual-stack listener reports for an IPv4
+    /// peer) is its IPv4 address. Any other IPv6 address counts as its /64
+    /// (`2001:db8:1:2::/64`): one network hands a host a whole /64, so
+    /// exact-address keys would give it unlimited buckets.
+    pub fn sender_key(ip: IpAddr) -> String {
+        match ip.to_canonical() {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => {
+                let s = v6.segments();
+                format!("{}/64", Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
         }
     }
 }
@@ -336,20 +350,51 @@ mod tests {
         assert_eq!(checked, MAX_FAILS_BEFORE_LOCKOUT as usize);
     }
 
-    #[test]
-    fn test_hostStripsIPv4Port() {
-        assert_eq!(AuthThrottle::host("192.168.1.10:54321"), "192.168.1.10");
+    fn key(s: &str) -> String {
+        AuthThrottle::sender_key(s.parse().unwrap())
     }
 
     #[test]
-    fn test_hostStripsIPv6Port() {
-        assert_eq!(AuthThrottle::host("[::1]:54321"), "[::1]");
-        assert_eq!(AuthThrottle::host("[fe80::1%en0]:443"), "[fe80::1%en0]");
+    fn sender_key_is_the_ipv4_address() {
+        assert_eq!(key("192.168.1.10"), "192.168.1.10");
+        assert_ne!(key("192.168.1.10"), key("192.168.1.11"), "each IPv4 address is its own sender");
     }
 
     #[test]
-    fn test_hostHandlesNoPort() {
-        assert_eq!(AuthThrottle::host("raw-name"), "raw-name");
+    fn sender_key_folds_ipv4_mapped_ipv6_into_ipv4() {
+        assert_eq!(key("::ffff:192.0.2.1"), "192.0.2.1");
+        assert_eq!(key("::ffff:192.0.2.1"), key("192.0.2.1"));
+    }
+
+    #[test]
+    fn sender_key_buckets_ipv6_by_slash_64() {
+        assert_eq!(key("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), "2001:db8:1:2::/64");
+        assert_eq!(key("2001:db8:1:2::1"), key("2001:db8:1:2:ffff:ffff:ffff:ffff"));
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:1:3::1"), "the next /64 is another sender");
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db9:1:2::1"));
+        assert_eq!(key("::1"), "::/64");
+    }
+
+    #[test]
+    fn two_addresses_in_one_slash_64_share_a_lockout() {
+        let (t, _) = make();
+        let a = key("2001:db8:1:2::a");
+        for i in 0..MAX_FAILS_BEFORE_LOCKOUT {
+            let rotating = key(&format!("2001:db8:1:2::{:x}", 0x100 + i));
+            t.attempt(&rotating, false);
+        }
+        assert!(matches!(t.attempt(&a, true), Attempt::Locked { .. }), "right PIN refused while locked");
+        assert_eq!(t.check(&key("2001:db8:1:3::a")), Decision::Proceed { delay_ms: 0 }, "other /64 unaffected");
+    }
+
+    #[test]
+    fn mapped_and_plain_ipv4_share_a_lockout() {
+        let (t, _) = make();
+        for _ in 0..MAX_FAILS_BEFORE_LOCKOUT {
+            t.attempt(&key("::ffff:192.0.2.1"), false);
+        }
+        assert!(matches!(t.check(&key("192.0.2.1")), Decision::Locked { .. }));
+        assert_eq!(t.check(&key("192.0.2.2")), Decision::Proceed { delay_ms: 0 }, "no lockout across senders");
     }
 
     #[test]

@@ -892,7 +892,12 @@ async fn an_unauthenticated_socket_is_closed_after_the_deadline() {
 
 #[tokio::test]
 async fn at_most_sixteen_sockets_wait_for_auth() {
-    let h = start().await;
+    // One loopback sender here, so lift its own cap to reach the global one.
+    let limits = quip_windows::host::ConnectionLimits {
+        max_unauthenticated_per_sender: quip_windows::host::MAX_UNAUTHENTICATED,
+        ..Default::default()
+    };
+    let h = start_with(Opts { limits, ..Default::default() }).await;
     let mut waiting = vec![];
     for _ in 0..quip_windows::host::MAX_UNAUTHENTICATED {
         let mut p = connect(h.addr).await;
@@ -1070,4 +1075,111 @@ async fn the_first_refused_socket_is_logged_with_its_count() {
     a.recv().await;
     assert!(tokio_tungstenite::connect_async(format!("ws://{}", h.addr)).await.is_err());
     assert!(h.log("websocket.log").contains("(refused=1)"), "{}", h.log("websocket.log"));
+}
+
+#[tokio::test]
+async fn one_sender_holds_at_most_four_pre_auth_sockets_and_another_still_connects() {
+    let h = start().await;
+    // A second listener on the same host, so ::1 is a second sender.
+    let v6 = quip_windows::services::ws_server::bind("[::1]:0".parse().unwrap()).await.unwrap();
+    let v6_addr = v6.local_addr().unwrap();
+    quip_windows::services::ws_server::spawn(h.host.clone(), v6);
+    let mut waiting = vec![];
+    for _ in 0..quip_windows::host::MAX_UNAUTHENTICATED_PER_SENDER {
+        let mut p = connect(h.addr).await;
+        p.recv().await; // auth_required
+        waiting.push(p);
+    }
+    assert_eq!(h.host.unauthenticated_from("127.0.0.1"), 4);
+    assert!(tokio_tungstenite::connect_async(format!("ws://{}", h.addr)).await.is_err(), "the 5th is refused");
+    assert!(
+        h.log("websocket.log").contains("4 sockets from 127.0.0.1 already waiting for auth (refused=1)"),
+        "{}",
+        h.log("websocket.log")
+    );
+    // Another sender is not blocked, and authenticates.
+    let mut other = connect(v6_addr).await;
+    assert_eq!(other.recv().await["error"], "auth_required");
+    assert_eq!(h.host.unauthenticated_from("::/64"), 1);
+    assert_eq!(h.host.unauthenticated_count(), 5);
+    other.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(other.recv().await["success"], true);
+    // Authenticating one of the four frees a slot for that sender again.
+    let mut first = waiting.remove(0);
+    first.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(first.recv().await["success"], true);
+    assert_eq!(h.host.unauthenticated_from("127.0.0.1"), 3);
+    let mut next = connect(h.addr).await;
+    assert_eq!(next.recv().await["error"], "auth_required");
+}
+
+#[tokio::test]
+async fn pre_auth_slots_are_counted_per_sender_key() {
+    use quip_windows::host::PreAuthRefusal;
+    use quip_windows::services::auth_throttle::AuthThrottle;
+    let h = start().await;
+    let key = |s: &str| AuthThrottle::sender_key(s.parse().unwrap());
+    // `::ffff:192.0.2.1` and `192.0.2.1` are one sender; so is one /64.
+    let mut held = vec![];
+    for a in ["192.0.2.1", "::ffff:192.0.2.1", "192.0.2.1", "::ffff:192.0.2.1"] {
+        held.push(h.host.try_pre_auth_slot(&key(a)).unwrap());
+    }
+    assert_eq!(h.host.try_pre_auth_slot(&key("192.0.2.1")).err(), Some(PreAuthRefusal::SenderFull));
+    for i in 1..=4 {
+        held.push(h.host.try_pre_auth_slot(&key(&format!("2001:db8:1:2::{i}"))).unwrap());
+    }
+    assert_eq!(h.host.try_pre_auth_slot(&key("2001:db8:1:2:ffff::9")).err(), Some(PreAuthRefusal::SenderFull));
+    assert!(h.host.try_pre_auth_slot(&key("2001:db8:1:3::1")).is_ok(), "the next /64 is another sender");
+    // The global 16 still binds across senders.
+    for i in 0..8 {
+        held.push(h.host.try_pre_auth_slot(&key(&format!("198.51.100.{}", i / 2 + 1))).unwrap());
+    }
+    assert_eq!(h.host.unauthenticated_count(), 16);
+    assert_eq!(h.host.try_pre_auth_slot(&key("203.0.113.1")).err(), Some(PreAuthRefusal::Full));
+    drop(held.remove(0));
+    assert_eq!(h.host.unauthenticated_from("192.0.2.1"), 3);
+    assert_eq!(h.host.unauthenticated_count(), 15);
+    assert!(h.host.try_pre_auth_slot(&key("203.0.113.1")).is_ok());
+    drop(held);
+    assert_eq!(h.host.unauthenticated_count(), 0);
+    assert_eq!(h.host.unauthenticated_from("192.0.2.1"), 0);
+}
+
+/// The 1.6.0 phone's frames right after connect, in its order. Six count
+/// against the 10/s limit (`auth` is exempt, as on the Mac), so none is dropped.
+#[tokio::test]
+async fn the_phones_connect_burst_is_not_rate_limited() {
+    let h = start().await;
+    let mut p = connect(h.addr).await;
+    assert_eq!(p.recv().await["error"], "auth_required");
+    let wid = h.window_id(101);
+    let burst = [
+        json!({"type":"auth","pin":PIN}),
+        json!({"type":"device_identity","deviceID":"PHONE-A","deviceKind":"ios","displayName":"phone"}),
+        json!({"type":"preferences_snapshot","deviceID":"PHONE-A","preferences":{"pushSound":true}}),
+        json!({"type":"request_content","windowId":wid}),
+        json!({"type":"register_push_device","deviceToken":"00ff","environment":"development"}),
+        json!({"type":"push_preferences","deviceToken":"00ff","paused":false}),
+        json!({"type":"phone_log","lines":["burst-last-frame"]}),
+    ];
+    for f in burst {
+        p.send(f).await;
+    }
+    assert_eq!(p.recv().await["success"], true);
+    assert_eq!(p.recv_type("terminal_content").await["windowId"], wid);
+    for _ in 0..100 {
+        if h.log("phone.log").contains("burst-last-frame") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(h.log("phone.log").contains("burst-last-frame"), "the last frame was handled");
+    assert!(!h.log("websocket.log").contains("rate limit"), "{}", h.log("websocket.log"));
+    // Four more fill the window; the fifth is dropped and its type logged.
+    for _ in 0..4 {
+        p.send(json!({"type":"heartbeat_ack","seq":0})).await;
+    }
+    p.send(json!({"type":"request_content","windowId":wid})).await;
+    p.assert_silent(QUIET).await;
+    assert!(h.log("websocket.log").contains("over 10/s (first type=request_content)"), "{}", h.log("websocket.log"));
 }

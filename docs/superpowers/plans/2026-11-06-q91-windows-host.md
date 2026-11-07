@@ -1,6 +1,6 @@
 # Plan: Q-91 Quip for Windows (phase 1)
 
-**Status:** In progress — approved by owner 2026-11-06 with a stop after S9 (owner checks the real PC before S10). S1-S5 complete; S5b next; S6-S9 not started; S10-S12 on hold.
+**Status:** In progress — approved by owner 2026-11-06 with a stop after S9 (owner checks the real PC before S10). S1-S5b complete; S6 next; S7-S9 not started; S10-S12 on hold.
 
 - Spec (source of truth for behavior): `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`
 - PRD: `tasks/prd-quip-windows-host.md` · Board: Q-91 · Handoff: `docs/superpowers/handoffs/2026-11-06-session-handoff.md`
@@ -62,11 +62,13 @@
 - Orchestrator checks (rest of S5 acceptance): `bash .github/scripts/changed-scopes-test.sh` 17/17; `tools/check.sh` windows suite fails on an injected fmt error and is green after; Windows CI green on `0e97ee5` (after pinning the toolchain to 1.98.1: newer stable deprecated `fetch_update`); re-ran `tools/qa/q91-send.sh` on 1CA3EE21: 9/9 ok.
 
 ### S5b: Pre-auth and PIN-guess hardening (automated security review of 21b83c2)
-- **Status:** Not started
+- **Status:** Complete (uncommitted)
 - Goal: one LAN peer cannot lock the phone out; PIN-guess limits cannot be dodged by rotating IPv6 addresses.
 - Acceptance: at most 4 pre-auth sockets per sender inside the global 16 (test: a 5th from the same host refused while another host still connects); throttle key normalises IPv4-mapped IPv6 to IPv4 and buckets IPv6 by /64 (tests: two addresses in one /64 share a lockout; `::ffff:192.0.2.1` and `192.0.2.1` share one); no global lockout (it would let an attacker lock out the owner; stated in spec 3.1); the phone's connect burst is not dropped by the 10/s rate limit (compare the Mac's `allowMessage` exemptions; test with a burst of the phone's startup frames); gate green.
+- Notes: `AuthThrottle::sender_key(IpAddr)` replaces the Mac-style `host(endpoint)`: IPv4-mapped IPv6 folds to IPv4 (`to_canonical`), other IPv6 keys as its /64. The same key drives the PIN throttle and `Host::try_pre_auth_slot(sender)`, which now returns `Err(PreAuthRefusal::Full | SenderFull)`; `ConnectionLimits.max_unauthenticated_per_sender` (default `MAX_UNAUTHENTICATED_PER_SENDER` = 4). Refusal log: `refused <peer>: 4 sockets from <key> already waiting for auth (refused=N)`. The loopback-only check also uses `to_canonical`. No global lockout (spec 3.1). Rate limit: the Mac exempts only `auth` and also counts pre-auth frames from a window opened at connect (`WebSocketServer.swift:1295-1305`), so it drops a >10-frame first second too; Windows kept at parity (no new exemption). The phone's listed connect burst is 6 counted frames and passes. The rate-limit log line now names the first dropped type (`(first type=…)`, snake_case only) so the frames behind the S5 simulator drop can be identified on the next QA run.
+- Validation: `rtk proxy cargo test` 392 unit + 11 vectors + 57 integration passed; `printf 'QuipWindows/src/lib.rs\n' | tools/check.sh --files -` all green; `cargo mutants --file src/host.rs --file src/services/auth_throttle.rs --file src/services/ws_server.rs -j 4` (QUIP_SHARED_FIXTURES, QUIP_FAKE_WINDOWS_FIXTURE set): 192 tested, 136 caught, 11 missed, 45 unviable; every miss is in code this slice did not change (`AuthThrottle::gc` `>` x3, `ws_config` max_message_size, `spawn` `Ticks::Auto` `==`, `is_benign_close` x5 and its `!` at the call site).
 
- Win32 window listing, displays, shell classification, frontmost
+### S6: M2a Win32 window listing, displays, shell classification, frontmost
 - **Status:** Not started
 - Goal: real `WindowBackend` on Windows (spec 5.1).
 - Acceptance: `EnumWindows` filter (visible, titled, unowned, not tool, not cloaked); WT and conhost terminals classified with shell `powershell|pwsh|cmd|unknown` incl. child-process check (python/ssh in a shell -> unknown); minimized reports restored rect; displays from `EnumDisplayMonitors` with one primary; per-monitor DPI v2 manifest; Win32 UI tests (`QUIP_WIN_UI=1`) for listing/displays/classification pass in Windows CI.

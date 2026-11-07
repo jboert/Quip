@@ -3,7 +3,9 @@
 //! (`QuipMac/Services/WebSocketServer.swift`):
 //!
 //! 1. TCP accepted, if fewer than `MAX_UNAUTHENTICATED` sockets are waiting
-//!    for auth (more are closed at once). A socket that has not finished the
+//!    for auth and fewer than `MAX_UNAUTHENTICATED_PER_SENDER` of them are
+//!    from this sender (`AuthThrottle::sender_key`); more are closed at once,
+//!    so one LAN peer cannot take every slot from the phone. A socket that has not finished the
 //!    WebSocket upgrade within `PRE_HANDSHAKE_DEADLINE` (10 s, the Mac's
 //!    `PreHandshakeReapPolicy`) is closed, and one that has not authenticated
 //!    within `PRE_AUTH_DEADLINE` (120 s, long enough to type a PIN on the
@@ -18,7 +20,11 @@
 //!    `MAX_MESSAGE_BYTES` is dropped and logged. None closes the socket.
 //! 6. Every frame except `auth` counts against `RateLimit` (the Mac's
 //!    `ClientConnection.allowMessage`: 10 per second per client); the rest of
-//!    the second's frames are dropped, logged once per window.
+//!    the second's frames are dropped, logged once per window with the first
+//!    dropped type. Like the Mac, nothing else is exempt: a phone burst of
+//!    more than 10 frames in a second loses its tail on both hosts. (The Mac
+//!    also counts pre-auth frames, from a window opened at connect; this
+//!    counts only after auth, which never drops more than the Mac would.)
 //!
 //! Each connection has a reader (this task, messages handled in order, so a
 //! `send_text` followed by `press_return` cannot overtake each other) and a
@@ -34,7 +40,7 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-use crate::host::{Host, Ticks, HEARTBEAT_INTERVAL, POLL_INTERVAL};
+use crate::host::{Host, PreAuthRefusal, PreAuthSlot, Ticks, HEARTBEAT_INTERVAL, POLL_INTERVAL};
 use crate::protocol::limits::{MAX_MESSAGE_BYTES, PROTOCOL_MAX_MESSAGE_BYTES};
 use crate::protocol::messages::{decode_incoming, message_type, AuthMessage, DecodeError, Incoming};
 use crate::services::auth_throttle::AuthThrottle;
@@ -199,22 +205,30 @@ pub fn spawn(host: Arc<Host>, listener: TcpListener) -> JoinHandle<()> {
         loop {
             match listener.accept().await {
                 Ok((stream, peer)) => {
-                    let Some(slot) = host.try_pre_auth_slot() else {
-                        refused += 1;
-                        if refused == 1 || refused.is_multiple_of(100) {
-                            host.logs.ws(
-                                Severity::Warn,
-                                &format!(
-                                    "refused {peer}: {} sockets already waiting for auth (refused={refused})",
-                                    host.config.limits.max_unauthenticated
-                                ),
-                            );
+                    let sender = AuthThrottle::sender_key(peer.ip());
+                    let slot = match host.try_pre_auth_slot(&sender) {
+                        Ok(slot) => slot,
+                        Err(why) => {
+                            refused += 1;
+                            if refused == 1 || refused.is_multiple_of(100) {
+                                let limits = host.config.limits;
+                                let what = match why {
+                                    PreAuthRefusal::Full => format!("{} sockets", limits.max_unauthenticated),
+                                    PreAuthRefusal::SenderFull => {
+                                        format!("{} sockets from {sender}", limits.max_unauthenticated_per_sender)
+                                    }
+                                };
+                                host.logs.ws(
+                                    Severity::Warn,
+                                    &format!("refused {peer}: {what} already waiting for auth (refused={refused})"),
+                                );
+                            }
+                            drop(stream);
+                            continue;
                         }
-                        drop(stream);
-                        continue;
                     };
                     let h = host.clone();
-                    tokio::spawn(async move { connection(h, stream, peer, slot).await });
+                    tokio::spawn(async move { connection(h, stream, peer, sender, slot).await });
                 }
                 Err(e) => {
                     host.logs.ws(Severity::Warn, &format!("accept failed: {e}"));
@@ -223,6 +237,21 @@ pub fn spawn(host: Arc<Host>, listener: TcpListener) -> JoinHandle<()> {
             }
         }
     })
+}
+
+/// A frame's `type` for a log line: the phone chooses it, so anything but a
+/// short snake_case word is logged as `unknown`.
+fn loggable_type(text: &str) -> String {
+    match message_type(text) {
+        Some(t)
+            if !t.is_empty()
+                && t.len() <= 40
+                && t.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') =>
+        {
+            t
+        }
+        _ => "unknown".into(),
+    }
 }
 
 fn is_benign_close(e: &WsError) -> bool {
@@ -237,9 +266,9 @@ fn is_benign_close(e: &WsError) -> bool {
     }
 }
 
-async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, slot: crate::host::PreAuthSlot) {
+async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender: String, slot: PreAuthSlot) {
     let remote = peer.to_string();
-    if host.config.loopback_only && !peer.ip().is_loopback() {
+    if host.config.loopback_only && !peer.ip().to_canonical().is_loopback() {
         host.logs.ws(Severity::Warn, &format!("refused non-loopback peer {remote} (fake platform is 127.0.0.1 only)"));
         return;
     }
@@ -286,7 +315,6 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, slot: 
         let _ = sink.close().await;
     });
     host.greet(id);
-    let throttle_host = AuthThrottle::host(&remote);
     let mut error: Option<String> = None;
     let mut slot = Some(slot);
     let mut rate = RateLimit::new();
@@ -335,7 +363,7 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, slot: 
         if !host.is_authenticated(id) {
             if is_auth {
                 let pin = serde_json::from_str::<AuthMessage>(&text).ok().map(|a| a.pin);
-                host.handle_auth(id, &throttle_host, pin).await;
+                host.handle_auth(id, &sender, pin).await;
                 if host.is_authenticated(id) {
                     slot = None; // frees the pre-auth slot, lifts the deadline
                 }
@@ -349,9 +377,12 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, slot: 
             if !rate.allow(received) {
                 if !rate_dropping {
                     rate_dropping = true;
+                    let first = loggable_type(&text);
                     host.logs.ws(
                         Severity::Warn,
-                        &format!("rate limit: dropping frames from {remote} over {MAX_MESSAGES_PER_SECOND}/s"),
+                        &format!(
+                            "rate limit: dropping frames from {remote} over {MAX_MESSAGES_PER_SECOND}/s (first type={first})"
+                        ),
                     );
                 }
                 continue;
@@ -359,7 +390,7 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, slot: 
             rate_dropping = false;
         }
         match decode_incoming(&text) {
-            Ok(Incoming::Auth(a)) => host.handle_auth(id, &throttle_host, Some(a.pin)).await,
+            Ok(Incoming::Auth(a)) => host.handle_auth(id, &sender, Some(a.pin)).await,
             Ok(Incoming::HeartbeatAck(a)) => host.heartbeat_ack(id, &a),
             Ok(msg) => host.route(id, msg, received).await,
             Err(DecodeError::Unknown(t)) => host.logs.debug(&format!("ignored type={t}")),
@@ -486,6 +517,20 @@ mod tests {
         assert_eq!(PRE_HANDSHAKE_DEADLINE, Duration::from_secs(10));
         assert!(crate::host::PRE_AUTH_DEADLINE >= Duration::from_secs(60));
         assert_eq!(crate::host::MAX_UNAUTHENTICATED, 16);
+        assert_eq!(crate::host::MAX_UNAUTHENTICATED_PER_SENDER, 4);
+    }
+
+    #[test]
+    fn only_a_snake_case_type_reaches_the_log() {
+        assert_eq!(loggable_type(r#"{"type":"request_content","windowId":"w"}"#), "request_content");
+        assert_eq!(loggable_type(r#"{"type":"v2_thing"}"#), "v2_thing");
+        assert_eq!(loggable_type(r#"{"type":"bad\nline"}"#), "unknown");
+        assert_eq!(loggable_type(r#"{"type":"Upper"}"#), "unknown");
+        assert_eq!(loggable_type(r#"{"type":"a-b"}"#), "unknown");
+        assert_eq!(loggable_type(r#"{"type":""}"#), "unknown");
+        assert_eq!(loggable_type(&format!(r#"{{"type":"{}"}}"#, "a".repeat(40))), "a".repeat(40));
+        assert_eq!(loggable_type(&format!(r#"{{"type":"{}"}}"#, "a".repeat(41))), "unknown");
+        assert_eq!(loggable_type("not json"), "unknown");
     }
 
     #[test]

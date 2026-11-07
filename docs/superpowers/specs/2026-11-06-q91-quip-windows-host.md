@@ -64,9 +64,25 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
 - Before auth, every message except `auth` is dropped and nothing else is sent.
 - Deadlines: the WebSocket upgrade must finish within 10 s of accept (the
   Mac's `PreHandshakeReapPolicy`); auth must succeed within 120 s, long enough
-  to type a PIN on the phone's prompt. At most 16 sockets may wait for auth.
-  An authenticated phone may send 10 messages a second (the Mac's
-  `allowMessage`); the rest of that second's messages are dropped and logged.
+  to type a PIN on the phone's prompt. At most 16 sockets may wait for auth,
+  and at most 4 of them from one sender, so one LAN peer holding sockets open
+  for the 120 s cannot lock the phone out. More are closed at accept.
+- Sender: the PIN throttle and the per-sender cap use one key, the peer
+  address without its port. An IPv4-mapped IPv6 address (`::ffff:192.0.2.1`)
+  is its IPv4 address (`192.0.2.1`); any other IPv6 address counts as its /64,
+  so rotating addresses inside one network gives no fresh guesses or slots.
+  (The Mac keys on the exact address.) The cost: IPv6 peers in one /64 share a
+  lockout; the phone reaches the host over IPv4 (`localURLs`, Tailscale
+  `100.x`), so this does not lock it out.
+- There is no lockout across all senders: it would let any LAN peer lock the
+  owner out by guessing wrong 10 times.
+- An authenticated phone may send 10 messages a second (the Mac's
+  `allowMessage`); the rest of that second's messages are dropped and logged
+  once, with the first dropped type. Only `auth` is exempt, as on the Mac. The
+  phone's connect burst (`device_identity`, `preferences_snapshot`,
+  `request_content`, `register_push_device`, `push_preferences`, `phone_log`)
+  is 6 counted frames and fits; a phone that sends more than 10 in its first
+  second loses the tail on the Mac too.
 - `deviceID` is generated once and stored in settings. It is also the mDNS
   TXT `did` value.
 - `localURLs`: one `ws://<ipv4>:8765` per non-loopback, up IPv4 interface,

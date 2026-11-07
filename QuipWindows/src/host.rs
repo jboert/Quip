@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
@@ -64,18 +64,44 @@ pub const PRE_AUTH_DEADLINE: Duration = Duration::from_secs(120);
 /// Sockets accepted but not yet authenticated, at most. More are closed at
 /// accept, so a LAN peer cannot pin unbounded sockets and tasks.
 pub const MAX_UNAUTHENTICATED: usize = 16;
+/// Of those, at most this many from one sender (`AuthThrottle::sender_key`,
+/// so a rotating IPv6 address in one /64 is one sender). One LAN peer can
+/// then hold a quarter of the slots for `PRE_AUTH_DEADLINE`, not all of
+/// them, and the owner's phone still gets in. A phone opens one socket per
+/// backend row; two rows (LAN + Tailscale) reach the host from two addresses.
+pub const MAX_UNAUTHENTICATED_PER_SENDER: usize = 4;
 
 /// Per-connection limits (`HostConfig::limits`). Tests shorten the deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectionLimits {
     pub pre_auth_deadline: Duration,
     pub max_unauthenticated: usize,
+    pub max_unauthenticated_per_sender: usize,
 }
 
 impl Default for ConnectionLimits {
     fn default() -> Self {
-        Self { pre_auth_deadline: PRE_AUTH_DEADLINE, max_unauthenticated: MAX_UNAUTHENTICATED }
+        Self {
+            pre_auth_deadline: PRE_AUTH_DEADLINE,
+            max_unauthenticated: MAX_UNAUTHENTICATED,
+            max_unauthenticated_per_sender: MAX_UNAUTHENTICATED_PER_SENDER,
+        }
     }
+}
+
+/// Why `try_pre_auth_slot` refused a socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreAuthRefusal {
+    /// `max_unauthenticated` sockets are already waiting, from anyone.
+    Full,
+    /// `max_unauthenticated_per_sender` are already waiting from this sender.
+    SenderFull,
+}
+
+#[derive(Debug, Default)]
+struct PreAuthCounts {
+    total: usize,
+    by_sender: HashMap<String, usize>,
 }
 
 pub type ClientId = u64;
@@ -144,18 +170,26 @@ pub struct Host {
     poll_lock: tokio::sync::Mutex<()>,
     listing_seq: Arc<AtomicU64>,
     publish_lock: Mutex<()>,
-    unauthenticated: Arc<AtomicUsize>,
+    pre_auth: Arc<Mutex<PreAuthCounts>>,
 }
 
-/// One of the `max_unauthenticated` slots; freed on drop (socket closed or
-/// authenticated).
+/// One of the `max_unauthenticated` slots, held for one sender; freed on
+/// drop (socket closed or authenticated).
 pub struct PreAuthSlot {
-    count: Arc<AtomicUsize>,
+    counts: Arc<Mutex<PreAuthCounts>>,
+    sender: String,
 }
 
 impl Drop for PreAuthSlot {
     fn drop(&mut self) {
-        self.count.fetch_sub(1, Ordering::SeqCst);
+        let mut c = lock(&self.counts);
+        c.total -= 1;
+        if let Some(n) = c.by_sender.get_mut(&self.sender) {
+            *n -= 1;
+            if *n == 0 {
+                c.by_sender.remove(&self.sender);
+            }
+        }
     }
 }
 
@@ -213,7 +247,7 @@ impl Host {
             poll_lock: tokio::sync::Mutex::new(()),
             listing_seq: Arc::new(AtomicU64::new(0)),
             publish_lock: Mutex::new(()),
-            unauthenticated: Arc::new(AtomicUsize::new(0)),
+            pre_auth: Arc::new(Mutex::new(PreAuthCounts::default())),
         }))
     }
 
@@ -289,19 +323,32 @@ impl Host {
         ids
     }
 
-    /// Take a pre-auth slot for a just-accepted socket, or `None` when
-    /// `max_unauthenticated` are already waiting (the socket is refused).
-    pub fn try_pre_auth_slot(&self) -> Option<PreAuthSlot> {
-        let max = self.config.limits.max_unauthenticated;
-        let taken = self
-            .unauthenticated
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < max).then_some(n + 1))
-            .is_ok();
-        taken.then(|| PreAuthSlot { count: self.unauthenticated.clone() })
+    /// Take a pre-auth slot for a just-accepted socket from `sender` (its
+    /// `AuthThrottle::sender_key`), or say why it is refused: the global
+    /// `max_unauthenticated` or this sender's `max_unauthenticated_per_sender`
+    /// is reached. Both counts move under one lock.
+    pub fn try_pre_auth_slot(&self, sender: &str) -> Result<PreAuthSlot, PreAuthRefusal> {
+        let limits = self.config.limits;
+        let mut c = lock(&self.pre_auth);
+        if c.total >= limits.max_unauthenticated {
+            return Err(PreAuthRefusal::Full);
+        }
+        let mine = c.by_sender.get(sender).copied().unwrap_or(0);
+        if mine >= limits.max_unauthenticated_per_sender {
+            return Err(PreAuthRefusal::SenderFull);
+        }
+        c.total += 1;
+        c.by_sender.insert(sender.to_string(), mine + 1);
+        Ok(PreAuthSlot { counts: self.pre_auth.clone(), sender: sender.to_string() })
     }
 
     pub fn unauthenticated_count(&self) -> usize {
-        self.unauthenticated.load(Ordering::SeqCst)
+        lock(&self.pre_auth).total
+    }
+
+    /// Sockets from `sender` waiting for auth.
+    pub fn unauthenticated_from(&self, sender: &str) -> usize {
+        lock(&self.pre_auth).by_sender.get(sender).copied().unwrap_or(0)
     }
 
     /// Queue raw JSON for one client. A full queue means the phone stopped
