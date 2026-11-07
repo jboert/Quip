@@ -1100,7 +1100,7 @@ async fn one_sender_holds_at_most_four_pre_auth_sockets_and_another_still_connec
     // Another sender is not blocked, and authenticates.
     let mut other = connect(v6_addr).await;
     assert_eq!(other.recv().await["error"], "auth_required");
-    assert_eq!(h.host.unauthenticated_from("::/64"), 1);
+    assert_eq!(h.host.unauthenticated_from("::1"), 1);
     assert_eq!(h.host.unauthenticated_count(), 5);
     other.send(json!({"type":"auth","pin":PIN})).await;
     assert_eq!(other.recv().await["success"], true);
@@ -1114,24 +1114,27 @@ async fn one_sender_holds_at_most_four_pre_auth_sockets_and_another_still_connec
 }
 
 #[tokio::test]
-async fn pre_auth_slots_are_counted_per_sender_key() {
+async fn pre_auth_slots_are_counted_per_exact_address() {
     use quip_windows::host::PreAuthRefusal;
-    use quip_windows::services::auth_throttle::AuthThrottle;
+    use quip_windows::services::auth_throttle::Sender;
     let h = start().await;
-    let key = |s: &str| AuthThrottle::sender_key(s.parse().unwrap());
-    // `::ffff:192.0.2.1` and `192.0.2.1` are one sender; so is one /64.
+    let key = |s: &str| Sender::of(s.parse().unwrap()).address;
+    // `::ffff:192.0.2.1` and `192.0.2.1` are one sender.
     let mut held = vec![];
     for a in ["192.0.2.1", "::ffff:192.0.2.1", "192.0.2.1", "::ffff:192.0.2.1"] {
         held.push(h.host.try_pre_auth_slot(&key(a)).unwrap());
     }
     assert_eq!(h.host.try_pre_auth_slot(&key("192.0.2.1")).err(), Some(PreAuthRefusal::SenderFull));
-    for i in 1..=4 {
-        held.push(h.host.try_pre_auth_slot(&key(&format!("2001:db8:1:2::{i}"))).unwrap());
+    // The 5th from one exact IPv6 address is refused; a neighbour in its /64
+    // still gets a slot.
+    for _ in 0..4 {
+        held.push(h.host.try_pre_auth_slot(&key("2001:db8:1:2::1")).unwrap());
     }
-    assert_eq!(h.host.try_pre_auth_slot(&key("2001:db8:1:2:ffff::9")).err(), Some(PreAuthRefusal::SenderFull));
-    assert!(h.host.try_pre_auth_slot(&key("2001:db8:1:3::1")).is_ok(), "the next /64 is another sender");
+    assert_eq!(h.host.try_pre_auth_slot(&key("2001:db8:1:2::1")).err(), Some(PreAuthRefusal::SenderFull));
+    held.push(h.host.try_pre_auth_slot(&key("2001:db8:1:2::2")).expect("a neighbour in the same /64 connects"));
+    assert_eq!(h.host.unauthenticated_from("2001:db8:1:2::2"), 1);
     // The global 16 still binds across senders.
-    for i in 0..8 {
+    for i in 0..7 {
         held.push(h.host.try_pre_auth_slot(&key(&format!("198.51.100.{}", i / 2 + 1))).unwrap());
     }
     assert_eq!(h.host.unauthenticated_count(), 16);
@@ -1143,6 +1146,48 @@ async fn pre_auth_slots_are_counted_per_sender_key() {
     drop(held);
     assert_eq!(h.host.unauthenticated_count(), 0);
     assert_eq!(h.host.unauthenticated_from("192.0.2.1"), 0);
+}
+
+/// Auth from `ip` on a fresh client, straight through `Host::handle_auth`
+/// (a loopback socket cannot come from 2001:db8::/32). The first reply.
+async fn auth_from(h: &Harness, ip: &str, pin: &str) -> serde_json::Value {
+    use quip_windows::services::auth_throttle::Sender;
+    let (id, mut rx) = h.host.register_client(format!("[{ip}]:50000"));
+    h.host.handle_auth(id, &Sender::of(ip.parse().unwrap()), Some(pin.to_string())).await;
+    let reply = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
+    h.host.remove_client(id);
+    reply
+}
+
+#[tokio::test]
+async fn two_addresses_in_one_slash_64_do_not_share_a_lockout() {
+    let h = start().await;
+    for _ in 0..10 {
+        assert_eq!(auth_from(&h, "2001:db8:1:2::a", "99999999").await["error"], "Incorrect PIN");
+    }
+    let locked = auth_from(&h, "2001:db8:1:2::a", PIN).await;
+    assert!(locked["error"].as_str().unwrap().starts_with("Too many attempts"), "{locked}");
+    assert_eq!(auth_from(&h, "2001:db8:1:2::b", PIN).await["success"], true, "the neighbour pairs");
+    // And the other way round: b's lockout leaves a fresh c pairing too.
+    for _ in 0..10 {
+        auth_from(&h, "2001:db8:1:2::b", "99999999").await;
+    }
+    assert!(auth_from(&h, "2001:db8:1:2::b", PIN).await["error"].as_str().unwrap().starts_with("Too many"));
+    assert_eq!(auth_from(&h, "2001:db8:1:2::c", PIN).await["success"], true);
+    assert!(h.log("websocket.log").contains("auth: 2001:db8:1:2::a locked"), "{}", h.log("websocket.log"));
+}
+
+#[tokio::test]
+async fn rotating_addresses_in_one_slash_64_get_a_growing_delay_but_the_right_pin_still_pairs() {
+    let h = start().await;
+    for i in 0..13u32 {
+        let r = auth_from(&h, &format!("2001:db8:1:2::{:x}", 0x100 + i), "99999999").await;
+        assert_eq!(r["error"], "Incorrect PIN", "rotation is never locked out");
+    }
+    let delays: Vec<u64> = h.sleeper.delays.lock().unwrap().iter().map(|d| d.as_millis() as u64).collect();
+    assert_eq!(delays, [200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 2_200, 2_400, 2_600]);
+    assert_eq!(auth_from(&h, "2001:db8:1:2::1", PIN).await["success"], true);
+    assert_eq!(h.sleeper.delays.lock().unwrap().len(), 13, "a right PIN is answered without a delay");
 }
 
 /// The 1.6.0 phone's frames right after connect, in its order. Six count

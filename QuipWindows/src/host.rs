@@ -35,7 +35,7 @@ use crate::app_state::AppState;
 use crate::platform::traits::{Platform, PlatformError};
 use crate::platform::Lanes;
 use crate::protocol::messages::{encode, AuthResult, DeviceIdentity, FrontmostChanged, Heartbeat, HeartbeatAck};
-use crate::services::auth_throttle::{Attempt, AuthThrottle};
+use crate::services::auth_throttle::{Attempt, AuthThrottle, Sender};
 use crate::services::clock::SharedClock;
 use crate::services::dedupe::DedupeTable;
 use crate::services::logs::Logs;
@@ -64,8 +64,8 @@ pub const PRE_AUTH_DEADLINE: Duration = Duration::from_secs(120);
 /// Sockets accepted but not yet authenticated, at most. More are closed at
 /// accept, so a LAN peer cannot pin unbounded sockets and tasks.
 pub const MAX_UNAUTHENTICATED: usize = 16;
-/// Of those, at most this many from one sender (`AuthThrottle::sender_key`,
-/// so a rotating IPv6 address in one /64 is one sender). One LAN peer can
+/// Of those, at most this many from one exact address (`Sender::address`,
+/// so a neighbour in the same IPv6 /64 is not crowded out). One LAN peer can
 /// then hold a quarter of the slots for `PRE_AUTH_DEADLINE`, not all of
 /// them, and the owner's phone still gets in. A phone opens one socket per
 /// backend row; two rows (LAN + Tailscale) reach the host from two addresses.
@@ -324,7 +324,7 @@ impl Host {
     }
 
     /// Take a pre-auth slot for a just-accepted socket from `sender` (its
-    /// `AuthThrottle::sender_key`), or say why it is refused: the global
+    /// `Sender::address`), or say why it is refused: the global
     /// `max_unauthenticated` or this sender's `max_unauthenticated_per_sender`
     /// is reached. Both counts move under one lock.
     pub fn try_pre_auth_slot(&self, sender: &str) -> Result<PreAuthSlot, PreAuthRefusal> {
@@ -393,9 +393,10 @@ impl Host {
         self.send(id, &AuthResult::auth_required());
     }
 
-    /// Handle an `auth` frame (decoded or not). `host` is the peer address
-    /// without port, the throttle bucket.
-    pub async fn handle_auth(&self, id: ClientId, host: &str, pin: Option<String>) {
+    /// Handle an `auth` frame (decoded or not) from `sender`, the peer's
+    /// throttle keys (`AuthThrottle::attempt`).
+    pub async fn handle_auth(&self, id: ClientId, sender: &Sender, pin: Option<String>) {
+        let host = &sender.address;
         let Some(pin) = pin else {
             self.send(id, &AuthResult::failure("Malformed auth message"));
             return;
@@ -406,7 +407,7 @@ impl Host {
             return;
         }
         // Check, compare and record under one throttle lock (`attempt`).
-        match self.throttle.attempt(host, pin_store::matches(&expected, &pin)) {
+        match self.throttle.attempt(sender, pin_store::matches(&expected, &pin)) {
             Attempt::Locked { remaining } => {
                 let secs = remaining.as_secs_f64().ceil() as u64;
                 self.logs.ws(Severity::Warn, &format!("auth: {host} locked, {secs}s remaining"));

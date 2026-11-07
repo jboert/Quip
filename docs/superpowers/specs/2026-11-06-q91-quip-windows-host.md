@@ -67,13 +67,22 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
   to type a PIN on the phone's prompt. At most 16 sockets may wait for auth,
   and at most 4 of them from one sender, so one LAN peer holding sockets open
   for the 120 s cannot lock the phone out. More are closed at accept.
-- Sender: the PIN throttle and the per-sender cap use one key, the peer
-  address without its port. An IPv4-mapped IPv6 address (`::ffff:192.0.2.1`)
-  is its IPv4 address (`192.0.2.1`); any other IPv6 address counts as its /64,
-  so rotating addresses inside one network gives no fresh guesses or slots.
-  (The Mac keys on the exact address.) The cost: IPv6 peers in one /64 share a
-  lockout; the phone reaches the host over IPv4 (`localURLs`, Tailscale
-  `100.x`), so this does not lock it out.
+- Sender: the lockout and the per-sender cap use the exact peer address
+  without its port, as on the Mac. An IPv4-mapped IPv6 address
+  (`::ffff:192.0.2.1`) is its IPv4 address (`192.0.2.1`). So one device on a
+  shared network (a home LAN /64, a tailnet) cannot lock out or crowd out
+  another device on it.
+- Network delay: a second count per network (an IPv6 address's /64; for IPv4
+  the address itself) only slows wrong PINs, so rotating addresses inside one
+  /64 gives fresh lockouts but no fast guesses. Up to 10 failures in the
+  network add nothing (one address alone sees the Mac's numbers); past that a
+  wrong PIN waits 200 ms per network failure, capped at 30 s (150 failures),
+  or the address's own delay if longer. The delay is spent before the
+  `Incorrect PIN` reply, holding the socket's pre-auth slot, so at most 16
+  guesses run per delay. It never refuses or slows a right PIN from an
+  address that is not locked out. A success does not reset it (the owner
+  pairing must not speed up a neighbour guessing); it is dropped after an
+  hour with no failures.
 - There is no lockout across all senders: it would let any LAN peer lock the
   owner out by guessing wrong 10 times.
 - An authenticated phone may send 10 messages a second (the Mac's

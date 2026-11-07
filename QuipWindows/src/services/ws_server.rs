@@ -4,7 +4,7 @@
 //!
 //! 1. TCP accepted, if fewer than `MAX_UNAUTHENTICATED` sockets are waiting
 //!    for auth and fewer than `MAX_UNAUTHENTICATED_PER_SENDER` of them are
-//!    from this sender (`AuthThrottle::sender_key`); more are closed at once,
+//!    from this exact address (`Sender::address`); more are closed at once,
 //!    so one LAN peer cannot take every slot from the phone. A socket that has not finished the
 //!    WebSocket upgrade within `PRE_HANDSHAKE_DEADLINE` (10 s, the Mac's
 //!    `PreHandshakeReapPolicy`) is closed, and one that has not authenticated
@@ -43,7 +43,7 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use crate::host::{Host, PreAuthRefusal, PreAuthSlot, Ticks, HEARTBEAT_INTERVAL, POLL_INTERVAL};
 use crate::protocol::limits::{MAX_MESSAGE_BYTES, PROTOCOL_MAX_MESSAGE_BYTES};
 use crate::protocol::messages::{decode_incoming, message_type, AuthMessage, DecodeError, Incoming};
-use crate::services::auth_throttle::AuthThrottle;
+use crate::services::auth_throttle::Sender;
 use crate::services::quip_log::Severity;
 
 /// `WebSocketServer.listenPort`: a constant, not a setting the phone could
@@ -205,8 +205,8 @@ pub fn spawn(host: Arc<Host>, listener: TcpListener) -> JoinHandle<()> {
         loop {
             match listener.accept().await {
                 Ok((stream, peer)) => {
-                    let sender = AuthThrottle::sender_key(peer.ip());
-                    let slot = match host.try_pre_auth_slot(&sender) {
+                    let sender = Sender::of(peer.ip());
+                    let slot = match host.try_pre_auth_slot(&sender.address) {
                         Ok(slot) => slot,
                         Err(why) => {
                             refused += 1;
@@ -215,7 +215,10 @@ pub fn spawn(host: Arc<Host>, listener: TcpListener) -> JoinHandle<()> {
                                 let what = match why {
                                     PreAuthRefusal::Full => format!("{} sockets", limits.max_unauthenticated),
                                     PreAuthRefusal::SenderFull => {
-                                        format!("{} sockets from {sender}", limits.max_unauthenticated_per_sender)
+                                        format!(
+                                            "{} sockets from {}",
+                                            limits.max_unauthenticated_per_sender, sender.address
+                                        )
                                     }
                                 };
                                 host.logs.ws(
@@ -266,7 +269,7 @@ fn is_benign_close(e: &WsError) -> bool {
     }
 }
 
-async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender: String, slot: PreAuthSlot) {
+async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender: Sender, slot: PreAuthSlot) {
     let remote = peer.to_string();
     if host.config.loopback_only && !peer.ip().to_canonical().is_loopback() {
         host.logs.ws(Severity::Warn, &format!("refused non-loopback peer {remote} (fake platform is 127.0.0.1 only)"));
