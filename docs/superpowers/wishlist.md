@@ -4,6 +4,26 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-11-07 (Q-91 Quip for Windows: owner PC test)
+
+Plan `docs/superpowers/plans/2026-11-06-q91-windows-host.md`, spec `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`, handoff `docs/superpowers/handoffs/2026-11-06-session-handoff.md`. Board: Q-91, Q-92.
+
+- **Done:** S1–S9, the review, R1 review-fix (`db0699c`) and the eviction fix (`b009569`: a pre-auth socket is evicted only when that admits the sender). Windows CI green at `b009569` (run 42343467201).
+- **With the owner:** `Quip.exe` built from `b009569`, sent 2026-11-07 for the PC test. It covers tray, pairing (PIN or QR), Bonjour, the phone grid of PC windows and `--selftest`. Typing, keys and arrange are not in this build; the phone shows an error for them.
+- **WIP / next:** record the owner's PC test in the plan's "Owner gates" and on the board. Then S10 Win32 arrange, S11 focus/typing/keys, S12 logs on Windows, release build, README and install doc. One review after S12.
+- **Blocked:** Q-92. The iOS project does not open on Xcode 27.2, so the iPhone suite is unrun. Shared Swift changes are not verified on iOS. Simulator QA ran phone 1.5.7, not 1.6.0.
+- **Owner decisions pending:** PIN-guess rate summed across many IPv4 addresses (spec 3.1 has the math). Should Mac "New PIN" also disconnect phones, as Windows does (parity)?
+- **Future asks:** retry Bonjour when no LAN address exists at startup. A `.ico` for Explorer (S12). Tailscale from Windows: the owner has Tailscale on the PC; Bonjour is LAN only, so the phone adds `ws://<100.x>:8765` by hand. Delete simulator clone `1CA3EE21` when Q-91 ends.
+- **Review 2026-11-07 (auth and slot code at `b009569`):** no code defect found. One design gap, owner to decide: on IPv6, an attacker on the same /64 (guest on the LAN or a tailnet node) can keep all 8 network slots busy with queued wrong PINs whose sockets already closed (`QuipWindows/src/host.rs` ~834 keeps the slot with the queued PIN), refusing the owner as NetworkFull until a slot frees. Not reachable on IPv4. Mitigations: cap queued slots per network below 8, cap how long a closed socket's queued PIN holds its slot, or reserve one slot for a sender holding none. No test covers it yet.
+- **Tailscale notes (code trace, not device-tested):** a manual `ws://100.x:8765` row pairs with the PIN and a Bonjour LAN row merges into it by `did` (no second row). The row keeps the name "Backend". Tailscale sets its own adapter to Private, so "Allow on Private" usually covers it; if not, check `Get-NetConnectionProfile` and the firewall rules for the exe path.
+- **Acceptance flow (owner, on the PC):**
+  1. Copy `Quip.exe` to `%LOCALAPPDATA%\Programs\Quip\` and run it (SmartScreen: More info, Run anyway).
+  2. Allow the firewall prompt on **Private** networks.
+  3. Tray icon → Show pairing QR…, scan from the phone.
+  4. Open a PowerShell window; it shows on the phone grid.
+  5. Run `--selftest` and send the newest `%LOCALAPPDATA%\Quip\Logs\selftest-*.txt`.
+  6. Then repeat pairing and the grid over Tailscale.
+
 ## Session log — 2026-10-31 (Q-90 Mac wiring installed)
 
 - **Shipped + installed:** `474cf00` watchdog restart reasons (owner's open / reboot / install are not crashes; quit is `quit`), `f9ee248` launchd owns the running Quip (hand-off, heartbeat + App Nap opt-out, Stop Quip…, Reliability settings, `reliability_status`, `tools/install-mac.sh`). Mac at `f9ee248`.
