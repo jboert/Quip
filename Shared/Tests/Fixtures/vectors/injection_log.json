@@ -1,0 +1,317 @@
+{
+  "_doc" : "The injection.log DROPPED line (KeystrokeInjector.injectionLogLine, QuipMac/Services/KeystrokeInjector.swift), without the leading ISO-8601 timestamp the writer adds. input: op, window, app (iTerm2 | Terminal | Claude, or null for none), kind (sessionNotFound | tccDenied | windowClosed | unknown, or null = unclassified), message, detail ('' = absent), redact (true = message and non-empty detail pass through SecretRedactor first, as logInjectionFailure does when it writes the file). expect: the line. Format: 'DROPPED op=<token> window=<token> app=<app or -> kind=<kind> msg=\"<value>\"' plus ' detail=\"<value>\"' when detail is non-empty. A token is the text split on Unicode whitespace and newlines, empty pieces dropped, joined with '_'; empty result is '-'. A value escapes, in this order, backslash to \\\\, quote to \\\", LF to \\n, CR to \\r; nothing else is escaped. Expected values are written by the Swift test (QUIP_WRITE_VECTORS=1), never by hand.",
+  "cases" : [
+    {
+      "expect" : "DROPPED op=sendText window=w-1a2b3c app=iTerm2 kind=sessionNotFound msg=\"session not yet mapped for window w-1a2b3c\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "sessionNotFound",
+        "message" : "session not yet mapped for window w-1a2b3c",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w-1a2b3c"
+      },
+      "name" : "carries op window app and kind"
+    },
+    {
+      "expect" : "DROPPED op=sendKeystroke window=- app=- kind=tccDenied msg=\"Not authorized to send Apple events.\"",
+      "input" : {
+        "app" : null,
+        "detail" : "",
+        "kind" : "tccDenied",
+        "message" : "Not authorized to send Apple events.",
+        "op" : "sendKeystroke",
+        "redact" : false,
+        "window" : "-"
+      },
+      "name" : "tcc denial, no app"
+    },
+    {
+      "expect" : "DROPPED op=selectWindow window=w-1a2b3c app=Terminal kind=windowClosed msg=\"window closed\"",
+      "input" : {
+        "app" : "Terminal",
+        "detail" : "",
+        "kind" : "windowClosed",
+        "message" : "window closed",
+        "op" : "selectWindow",
+        "redact" : false,
+        "window" : "w-1a2b3c"
+      },
+      "name" : "window closed"
+    },
+    {
+      "expect" : "DROPPED op=pasteText window=w1 app=Terminal kind=unknown msg=\"AppleEvent timed out.\"",
+      "input" : {
+        "app" : "Terminal",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "AppleEvent timed out.",
+        "op" : "pasteText",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "unknown keeps its payload out of the kind field"
+    },
+    {
+      "expect" : "DROPPED op=spawnWindow window=- app=- kind=unclassified msg=\"boom\"",
+      "input" : {
+        "app" : null,
+        "detail" : "",
+        "kind" : null,
+        "message" : "boom",
+        "op" : "spawnWindow",
+        "redact" : false,
+        "window" : "-"
+      },
+      "name" : "no classification reads as unclassified"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w2 app=Claude kind=unknown msg=\"boom\"",
+      "input" : {
+        "app" : "Claude",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "boom",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w2"
+      },
+      "name" : "claude desktop app"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"said \\\"hi\\\"\\nDROPPED op=forged window=evil\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "said \"hi\"\nDROPPED op=forged window=evil",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "quotes and newlines cannot forge a second line"
+    },
+    {
+      "expect" : "DROPPED op=sendText_to_w-1_[iTerm2] window=w-1 app=iTerm2 kind=tccDenied msg=\"denied\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "tccDenied",
+        "message" : "denied",
+        "op" : "sendText to w-1 [iTerm2]",
+        "redact" : false,
+        "window" : "w-1"
+      },
+      "name" : "op with spaces collapses to underscores"
+    },
+    {
+      "expect" : "DROPPED op=a_b_c_d window=w_1 app=iTerm2 kind=unclassified msg=\"x\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : null,
+        "message" : "x",
+        "op" : "a \t b\n\nc   d",
+        "redact" : false,
+        "window" : "  w 1  "
+      },
+      "name" : "tabs, newlines and runs of spaces in a token"
+    },
+    {
+      "expect" : "DROPPED op=op_x window=w_y app=iTerm2 kind=unclassified msg=\"x\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : null,
+        "message" : "x",
+        "op" : "op x",
+        "redact" : false,
+        "window" : "w y"
+      },
+      "name" : "non-breaking space is whitespace"
+    },
+    {
+      "expect" : "DROPPED op=- window=- app=- kind=unclassified msg=\"boom\"",
+      "input" : {
+        "app" : null,
+        "detail" : "",
+        "kind" : null,
+        "message" : "boom",
+        "op" : "",
+        "redact" : false,
+        "window" : ""
+      },
+      "name" : "empty tokens read as a dash"
+    },
+    {
+      "expect" : "DROPPED op=- window=- app=- kind=unclassified msg=\"boom\"",
+      "input" : {
+        "app" : null,
+        "detail" : "",
+        "kind" : null,
+        "message" : "boom",
+        "op" : " \n ",
+        "redact" : false,
+        "window" : "\t"
+      },
+      "name" : "whitespace-only token reads as a dash"
+    },
+    {
+      "expect" : "DROPPED op=sendKeystroke window=w1 app=iTerm2 kind=unknown msg=\"boom\" detail=\"key=shift+tab win=808\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "key=shift+tab win=808",
+        "kind" : "unknown",
+        "message" : "boom",
+        "op" : "sendKeystroke",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "detail is quoted and only present when given"
+    },
+    {
+      "expect" : "DROPPED op=spawnWindow window=- app=- kind=unclassified msg=\"boom\" detail=\"cmd=echo \\\"hi\\\"\\nDROPPED op=forged\"",
+      "input" : {
+        "app" : null,
+        "detail" : "cmd=echo \"hi\"\nDROPPED op=forged",
+        "kind" : null,
+        "message" : "boom",
+        "op" : "spawnWindow",
+        "redact" : false,
+        "window" : "-"
+      },
+      "name" : "detail cannot forge a line either"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"a\\\\b \\\\\\\" c\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "a\\b \\\" c",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "backslash escaped before quotes"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"a\\rb\\r\\nc\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "a\rb\r\nc",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "carriage return escaped"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"a\tb\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "a\tb",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "tab in msg is kept raw"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "empty message"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"café 😀  end\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "café 😀  end",
+        "op" : "sendText",
+        "redact" : false,
+        "window" : "w1"
+      },
+      "name" : "unicode passes through"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"error near [REDACTED] in script\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "error near sk-AAAAAAAAAAAAAAAAAAAAAAAA in script",
+        "op" : "sendText",
+        "redact" : true,
+        "window" : "w1"
+      },
+      "name" : "redacted: sk key in msg"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"boom\" detail=\"Authorization: Bearer [REDACTED]\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123",
+        "kind" : "unknown",
+        "message" : "boom",
+        "op" : "sendText",
+        "redact" : true,
+        "window" : "w1"
+      },
+      "name" : "redacted: bearer token in detail"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"token=[REDACTED] [REDACTED]\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "token=abcdefghijklmnopqrstuvwx1234 AKIAIOSFODNN7EXAMPLE",
+        "op" : "sendText",
+        "redact" : true,
+        "window" : "w1"
+      },
+      "name" : "redacted: token= and AWS example key"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"plain error\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "plain error",
+        "op" : "sendText",
+        "redact" : true,
+        "window" : "w1"
+      },
+      "name" : "redacted: empty detail stays absent"
+    },
+    {
+      "expect" : "DROPPED op=sendText window=w1 app=iTerm2 kind=unknown msg=\"\\\"[REDACTED]\\\"\\n\"",
+      "input" : {
+        "app" : "iTerm2",
+        "detail" : "",
+        "kind" : "unknown",
+        "message" : "\"sk-BBBBBBBBBBBBBBBBBBBBBBBB\"\n",
+        "op" : "sendText",
+        "redact" : true,
+        "window" : "w1"
+      },
+      "name" : "redaction runs before escaping"
+    }
+  ]
+}

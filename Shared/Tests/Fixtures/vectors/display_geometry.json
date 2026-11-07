@@ -1,0 +1,1166 @@
+{
+  "_doc" : "DisplayGeometry (Shared/DisplayGeometry.swift). Every rect is {x,y,width,height} in ONE top-left-origin pixel space shared by all displays and windows. Section normalize: input {window, display} -> the window's frame normalized 0-1 against that display ((wx-dx)/dw, (wy-dy)/dh, ww/dw, wh/dh); a display with width<=0 or height<=0 gives {0,0,0,0}. Section span: input {displays:[rect]} -> the bounding box of all displays; an empty list gives {0,0,1,1}. Section scenes: input {displays:[{id,isPrimary,rect}], windows:[rect]} -> expect.span (bounding box), expect.spanAspect (span width/height, null if height is 0), expect.displays[i] {id, aspect (width/height, 1 if height is 0), spanFrame (the display normalized into the span: DisplayState.spanFrame)}, expect.windows[i] {displayID (the first display whose rect contains the window centre, x>=minX && x<maxX && y>=minY && y<maxY; else the first isPrimary display; else the first display), frame (the window normalized against that display: WindowState.frame), spanFrame (frame composed onto the display's spanFrame: where the phone's All view draws it)}. A display with no displays to choose from (empty list) gives displayID, frame and spanFrame null; the span is the unit rect and spanAspect 1 (the Mac then normalizes against NSScreen.main, which no vector can pin). A zero-size display (mid-reconfiguration) can still be picked by the primary fallback: the frame is then DisplayGeometry.normalize's zero frame {0,0,0,0}, and the Windows host follows that. Known Mac quirk, not to be copied: the Mac broadcast path (ManagedWindow.toWindowState) sends the window's raw pixel bounds in that case instead; QuipMac/Tests/MacVectorTests.swift pins both. Numbers compare to 1e-9. aspect and spanAspect are DisplayGeometry.aspect(of:) and DisplayGeometry.spanAspect(of:), the functions QuipMacApp.buildDisplayGeometry calls. Expected values are written by the Swift test (QUIP_WRITE_VECTORS=1), never by hand.",
+  "normalize" : [
+    {
+      "expect" : {
+        "height" : 0.55555555555555558,
+        "width" : 0.46875,
+        "x" : 0.0625,
+        "y" : 0.1388888888888889
+      },
+      "input" : {
+        "display" : {
+          "height" : 1440,
+          "width" : 2560,
+          "x" : 3440,
+          "y" : 0
+        },
+        "window" : {
+          "height" : 800,
+          "width" : 1200,
+          "x" : 3600,
+          "y" : 200
+        }
+      },
+      "name" : "second-screen window against its own display"
+    },
+    {
+      "expect" : {
+        "height" : 0.55555555555555558,
+        "width" : 0.34883720930232559,
+        "x" : 1.0465116279069768,
+        "y" : 0.1388888888888889
+      },
+      "input" : {
+        "display" : {
+          "height" : 1440,
+          "width" : 3440,
+          "x" : 0,
+          "y" : 0
+        },
+        "window" : {
+          "height" : 800,
+          "width" : 1200,
+          "x" : 3600,
+          "y" : 200
+        }
+      },
+      "name" : "second-screen window against the wrong display goes past 1"
+    },
+    {
+      "expect" : {
+        "height" : 0.55555555555555558,
+        "width" : 0.34883720930232559,
+        "x" : 0.058139534883720929,
+        "y" : 0.069444444444444448
+      },
+      "input" : {
+        "display" : {
+          "height" : 1440,
+          "width" : 3440,
+          "x" : 0,
+          "y" : 0
+        },
+        "window" : {
+          "height" : 800,
+          "width" : 1200,
+          "x" : 200,
+          "y" : 100
+        }
+      },
+      "name" : "primary window"
+    },
+    {
+      "expect" : {
+        "height" : 0,
+        "width" : 0,
+        "x" : 0,
+        "y" : 0
+      },
+      "input" : {
+        "display" : {
+          "height" : 0,
+          "width" : 0,
+          "x" : 0,
+          "y" : 0
+        },
+        "window" : {
+          "height" : 100,
+          "width" : 100,
+          "x" : 10,
+          "y" : 10
+        }
+      },
+      "name" : "degenerate display gives a zero frame, not NaN"
+    },
+    {
+      "expect" : {
+        "height" : 0,
+        "width" : 0,
+        "x" : 0,
+        "y" : 0
+      },
+      "input" : {
+        "display" : {
+          "height" : 0,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 0
+        },
+        "window" : {
+          "height" : 100,
+          "width" : 100,
+          "x" : 10,
+          "y" : 10
+        }
+      },
+      "name" : "zero-height display gives a zero frame"
+    },
+    {
+      "expect" : {
+        "height" : 0.41666666666666669,
+        "width" : 0.3125,
+        "x" : 0.21875,
+        "y" : 0.069444444444444448
+      },
+      "input" : {
+        "display" : {
+          "height" : 1440,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "window" : {
+          "height" : 600,
+          "width" : 800,
+          "x" : -2000,
+          "y" : 100
+        }
+      },
+      "name" : "negative-origin display"
+    },
+    {
+      "expect" : {
+        "height" : 1.0925925925925926,
+        "width" : 1.0520833333333333,
+        "x" : -0.026041666666666668,
+        "y" : -0.046296296296296294
+      },
+      "input" : {
+        "display" : {
+          "height" : 1080,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 0
+        },
+        "window" : {
+          "height" : 1180,
+          "width" : 2020,
+          "x" : -50,
+          "y" : -50
+        }
+      },
+      "name" : "window larger than its display"
+    }
+  ],
+  "scenes" : [
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 2.3888888888888888,
+            "id" : "d-primary",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.57333333333333336,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-second",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.42666666666666669,
+              "x" : 0.57333333333333336,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 1440,
+          "width" : 6000,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 4.166666666666667,
+        "windows" : [
+          {
+            "displayID" : "d-second",
+            "frame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.46875,
+              "x" : 0.0625,
+              "y" : 0.1388888888888889
+            },
+            "spanFrame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.20000000000000001,
+              "x" : 0.59999999999999998,
+              "y" : 0.1388888888888889
+            }
+          },
+          {
+            "displayID" : "d-primary",
+            "frame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.34883720930232559,
+              "x" : 0.058139534883720929,
+              "y" : 0.069444444444444448
+            },
+            "spanFrame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.20000000000000001,
+              "x" : 0.033333333333333333,
+              "y" : 0.069444444444444448
+            }
+          },
+          {
+            "displayID" : "d-second",
+            "frame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.46875,
+              "x" : -0.09375,
+              "y" : 0.069444444444444448
+            },
+            "spanFrame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.20000000000000001,
+              "x" : 0.53333333333333333,
+              "y" : 0.069444444444444448
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-primary",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 1440,
+              "width" : 3440,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-second",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 1440,
+              "width" : 2560,
+              "x" : 3440,
+              "y" : 0
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 800,
+            "width" : 1200,
+            "x" : 3600,
+            "y" : 200
+          },
+          {
+            "height" : 800,
+            "width" : 1200,
+            "x" : 200,
+            "y" : 100
+          },
+          {
+            "height" : 800,
+            "width" : 1200,
+            "x" : 3200,
+            "y" : 100
+          }
+        ]
+      },
+      "name" : "ultrawide primary + monitor to the right"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 2.3888888888888888,
+            "id" : "d-primary",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.57333333333333336,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "aspect" : 3.5555555555555554,
+            "id" : "d-short",
+            "spanFrame" : {
+              "height" : 0.5,
+              "width" : 0.42666666666666669,
+              "x" : 0.57333333333333336,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 1440,
+          "width" : 6000,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 4.166666666666667,
+        "windows" : [
+          {
+            "displayID" : "d-primary",
+            "frame" : {
+              "height" : 0.20833333333333334,
+              "width" : 0.11627906976744186,
+              "x" : 1.1627906976744187,
+              "y" : 0.69444444444444442
+            },
+            "spanFrame" : {
+              "height" : 0.20833333333333334,
+              "width" : 0.066666666666666666,
+              "x" : 0.66666666666666674,
+              "y" : 0.69444444444444442
+            }
+          },
+          {
+            "displayID" : "d-short",
+            "frame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.234375,
+              "x" : 0.0234375,
+              "y" : 0.1388888888888889
+            },
+            "spanFrame" : {
+              "height" : 0.27777777777777779,
+              "width" : 0.10000000000000001,
+              "x" : 0.58333333333333337,
+              "y" : 0.069444444444444448
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-primary",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 1440,
+              "width" : 3440,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-short",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 720,
+              "width" : 2560,
+              "x" : 3440,
+              "y" : 0
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 300,
+            "width" : 400,
+            "x" : 4000,
+            "y" : 1000
+          },
+          {
+            "height" : 400,
+            "width" : 600,
+            "x" : 3500,
+            "y" : 100
+          }
+        ]
+      },
+      "name" : "window in a gap falls back to primary"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-a",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.5,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "aspect" : 3.5555555555555554,
+            "id" : "d-b",
+            "spanFrame" : {
+              "height" : 0.5,
+              "width" : 0.5,
+              "x" : 0.5,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 1080,
+          "width" : 3840,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 3.5555555555555554,
+        "windows" : [
+          {
+            "displayID" : "d-a",
+            "frame" : {
+              "height" : 0.27777777777777779,
+              "width" : 0.20833333333333334,
+              "x" : 1.0416666666666667,
+              "y" : 0.64814814814814814
+            },
+            "spanFrame" : {
+              "height" : 0.27777777777777779,
+              "width" : 0.10416666666666667,
+              "x" : 0.52083333333333337,
+              "y" : 0.64814814814814814
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-a",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-b",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 540,
+              "width" : 1920,
+              "x" : 1920,
+              "y" : 0
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 300,
+            "width" : 400,
+            "x" : 2000,
+            "y" : 700
+          }
+        ]
+      },
+      "name" : "gap fallback uses the first display when none is primary"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 3.5555555555555554,
+            "id" : "d-b",
+            "spanFrame" : {
+              "height" : 0.5,
+              "width" : 0.5,
+              "x" : 0.5,
+              "y" : 0
+            }
+          },
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-a",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.5,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 1080,
+          "width" : 3840,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 3.5555555555555554,
+        "windows" : [
+          {
+            "displayID" : "d-a",
+            "frame" : {
+              "height" : 0.27777777777777779,
+              "width" : 0.20833333333333334,
+              "x" : 1.0416666666666667,
+              "y" : 0.64814814814814814
+            },
+            "spanFrame" : {
+              "height" : 0.27777777777777779,
+              "width" : 0.10416666666666667,
+              "x" : 0.52083333333333337,
+              "y" : 0.64814814814814814
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-b",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 540,
+              "width" : 1920,
+              "x" : 1920,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-a",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 300,
+            "width" : 400,
+            "x" : 2000,
+            "y" : 700
+          }
+        ]
+      },
+      "name" : "primary listed second still wins the gap"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-primary",
+            "spanFrame" : {
+              "height" : 0.75,
+              "width" : 0.42857142857142855,
+              "x" : 0.5714285714285714,
+              "y" : 0.125
+            }
+          },
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-left",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.5714285714285714,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 1440,
+          "width" : 4480,
+          "x" : -2560,
+          "y" : -180
+        },
+        "spanAspect" : 3.1111111111111112,
+        "windows" : [
+          {
+            "displayID" : "d-left",
+            "frame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.46875,
+              "x" : 0.0625,
+              "y" : 0.125
+            },
+            "spanFrame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.26785714285714285,
+              "x" : 0.035714285714285712,
+              "y" : 0.125
+            }
+          },
+          {
+            "displayID" : "d-primary",
+            "frame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.41666666666666669,
+              "x" : 0.052083333333333336,
+              "y" : 0.092592592592592587
+            },
+            "spanFrame" : {
+              "height" : 0.41666666666666669,
+              "width" : 0.17857142857142858,
+              "x" : 0.59375,
+              "y" : 0.19444444444444445
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-primary",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-left",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 1440,
+              "width" : 2560,
+              "x" : -2560,
+              "y" : -180
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 800,
+            "width" : 1200,
+            "x" : -2400,
+            "y" : 0
+          },
+          {
+            "height" : 600,
+            "width" : 800,
+            "x" : 100,
+            "y" : 100
+          }
+        ]
+      },
+      "name" : "display left of primary"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 1.539714867617108,
+            "id" : "d-only",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 1,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 982,
+          "width" : 1512,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 1.539714867617108,
+        "windows" : [
+          {
+            "displayID" : "d-only",
+            "frame" : {
+              "height" : 0.96130346232179231,
+              "width" : 0.5,
+              "x" : 0,
+              "y" : 0.038696537678207736
+            },
+            "spanFrame" : {
+              "height" : 0.96130346232179231,
+              "width" : 0.5,
+              "x" : 0,
+              "y" : 0.038696537678207736
+            }
+          },
+          {
+            "displayID" : "d-only",
+            "frame" : {
+              "height" : 0.96130346232179231,
+              "width" : 0.5,
+              "x" : 0.5,
+              "y" : 0.038696537678207736
+            },
+            "spanFrame" : {
+              "height" : 0.96130346232179231,
+              "width" : 0.5,
+              "x" : 0.5,
+              "y" : 0.038696537678207736
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-only",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 982,
+              "width" : 1512,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 944,
+            "width" : 756,
+            "x" : 0,
+            "y" : 38
+          },
+          {
+            "height" : 944,
+            "width" : 756,
+            "x" : 756,
+            "y" : 38
+          }
+        ]
+      },
+      "name" : "single display"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-left",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.5,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-right",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 0.5,
+              "x" : 0.5,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 1080,
+          "width" : 3840,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 3.5555555555555554,
+        "windows" : [
+          {
+            "displayID" : "d-right",
+            "frame" : {
+              "height" : 0.18518518518518517,
+              "width" : 0.10416666666666667,
+              "x" : -0.052083333333333336,
+              "y" : 0.092592592592592587
+            },
+            "spanFrame" : {
+              "height" : 0.18518518518518517,
+              "width" : 0.052083333333333336,
+              "x" : 0.47395833333333331,
+              "y" : 0.092592592592592587
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-left",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-right",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 1920,
+              "y" : 0
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 200,
+            "width" : 200,
+            "x" : 1820,
+            "y" : 100
+          }
+        ]
+      },
+      "name" : "center exactly on the seam belongs to the right display"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-top",
+            "spanFrame" : {
+              "height" : 0.5,
+              "width" : 1,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-bottom",
+            "spanFrame" : {
+              "height" : 0.5,
+              "width" : 1,
+              "x" : 0,
+              "y" : 0.5
+            }
+          }
+        ],
+        "span" : {
+          "height" : 2160,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 0.88888888888888884,
+        "windows" : [
+          {
+            "displayID" : "d-bottom",
+            "frame" : {
+              "height" : 0.18518518518518517,
+              "width" : 0.20833333333333334,
+              "x" : 0.052083333333333336,
+              "y" : -0.092592592592592587
+            },
+            "spanFrame" : {
+              "height" : 0.092592592592592587,
+              "width" : 0.20833333333333334,
+              "x" : 0.052083333333333336,
+              "y" : 0.45370370370370372
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-top",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-bottom",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 0,
+              "y" : 1080
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 200,
+            "width" : 400,
+            "x" : 100,
+            "y" : 980
+          }
+        ]
+      },
+      "name" : "centre on a shared edge belongs to the lower display (max edge exclusive)"
+    },
+    {
+      "expect" : {
+        "displays" : [
+          {
+            "aspect" : 1,
+            "id" : "d-zero",
+            "spanFrame" : {
+              "height" : 0,
+              "width" : 0,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "aspect" : 1.7777777777777777,
+            "id" : "d-real",
+            "spanFrame" : {
+              "height" : 1,
+              "width" : 1,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ],
+        "span" : {
+          "height" : 1080,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 1.7777777777777777,
+        "windows" : [
+          {
+            "displayID" : "d-real",
+            "frame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.41666666666666669,
+              "x" : 0.052083333333333336,
+              "y" : 0.092592592592592587
+            },
+            "spanFrame" : {
+              "height" : 0.55555555555555558,
+              "width" : 0.41666666666666669,
+              "x" : 0.052083333333333336,
+              "y" : 0.092592592592592587
+            }
+          },
+          {
+            "displayID" : "d-zero",
+            "frame" : {
+              "height" : 0,
+              "width" : 0,
+              "x" : 0,
+              "y" : 0
+            },
+            "spanFrame" : {
+              "height" : 0,
+              "width" : 0,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+          {
+            "id" : "d-zero",
+            "isPrimary" : true,
+            "rect" : {
+              "height" : 0,
+              "width" : 0,
+              "x" : 0,
+              "y" : 0
+            }
+          },
+          {
+            "id" : "d-real",
+            "isPrimary" : false,
+            "rect" : {
+              "height" : 1080,
+              "width" : 1920,
+              "x" : 0,
+              "y" : 0
+            }
+          }
+        ],
+        "windows" : [
+          {
+            "height" : 600,
+            "width" : 800,
+            "x" : 100,
+            "y" : 100
+          },
+          {
+            "height" : 300,
+            "width" : 400,
+            "x" : 2000,
+            "y" : 100
+          }
+        ]
+      },
+      "name" : "zero-size primary display: a window that falls back to it gets a zero frame"
+    },
+    {
+      "expect" : {
+        "displays" : [
+
+        ],
+        "span" : {
+          "height" : 1,
+          "width" : 1,
+          "x" : 0,
+          "y" : 0
+        },
+        "spanAspect" : 1,
+        "windows" : [
+          {
+            "displayID" : null,
+            "frame" : null,
+            "spanFrame" : null
+          }
+        ]
+      },
+      "input" : {
+        "displays" : [
+
+        ],
+        "windows" : [
+          {
+            "height" : 600,
+            "width" : 800,
+            "x" : 0,
+            "y" : 0
+          }
+        ]
+      },
+      "name" : "empty display list: no display, no frame"
+    }
+  ],
+  "span" : [
+    {
+      "expect" : {
+        "height" : 1440,
+        "width" : 6000,
+        "x" : 0,
+        "y" : 0
+      },
+      "input" : {
+        "displays" : [
+          {
+            "height" : 1440,
+            "width" : 3440,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1440,
+            "width" : 2560,
+            "x" : 3440,
+            "y" : 0
+          }
+        ]
+      },
+      "name" : "two side by side"
+    },
+    {
+      "expect" : {
+        "height" : 1440,
+        "width" : 6000,
+        "x" : -2560,
+        "y" : 0
+      },
+      "input" : {
+        "displays" : [
+          {
+            "height" : 1440,
+            "width" : 3440,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1440,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          }
+        ]
+      },
+      "name" : "display left of primary"
+    },
+    {
+      "expect" : {
+        "height" : 1440,
+        "width" : 3440,
+        "x" : 0,
+        "y" : 0
+      },
+      "input" : {
+        "displays" : [
+          {
+            "height" : 1440,
+            "width" : 3440,
+            "x" : 0,
+            "y" : 0
+          }
+        ]
+      },
+      "name" : "single display"
+    },
+    {
+      "expect" : {
+        "height" : 1,
+        "width" : 1,
+        "x" : 0,
+        "y" : 0
+      },
+      "input" : {
+        "displays" : [
+
+        ]
+      },
+      "name" : "empty list is the unit rect"
+    },
+    {
+      "expect" : {
+        "height" : 2520,
+        "width" : 2880,
+        "x" : 0,
+        "y" : -1440
+      },
+      "input" : {
+        "displays" : [
+          {
+            "height" : 1080,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1440,
+            "width" : 2560,
+            "x" : 320,
+            "y" : -1440
+          }
+        ]
+      },
+      "name" : "stacked above with offset"
+    }
+  ]
+}

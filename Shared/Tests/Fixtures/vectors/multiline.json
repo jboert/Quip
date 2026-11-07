@@ -1,0 +1,3337 @@
+{
+  "_doc" : "MultiLineSendPolicy (QuipMac/Services/MultiLineSendPolicy.swift) for send_text. input: text (as received from the phone), cliKind (claude|codex|grok|shell|cursor), terminalApp (the Mac host: Terminal|iTerm2|Claude), pressReturn (what the phone asked). expect: normalizedText = text with ONE trailing line break removed (this is what gets injected); isMultiLine = normalizedText still contains a line break; lineCount = lines in normalizedText, empty ones included; route = pasteText|sendText (Mac-specific injection path); pressReturn = whether Return is pressed after; latencySuffix = what latency.log gains (non-empty only when a requested Return was dropped; counts only, never text). A line break is a Swift Character with isNewline: LF, VT (U+000B), FF (U+000C), CR, NEL (U+0085), LS (U+2028), PS (U+2029), and CRLF, which is ONE Character, so it counts as one break. The Windows host (every terminal a shell in phase 1) is held to the shell cases in Terminal/iTerm2: multi-line never gets a Return. Expected values are written by the Swift test (QUIP_WRITE_VECTORS=1), never by hand. On Windows, spec 5.4 applies first: multi-line text to cmd.exe or a shell not proven safe is refused with an error before this policy runs, inner line breaks to PowerShell are sent as Shift+Enter (M0 ruled out clipboard paste: in Windows Terminal one Return ran only one of two pasted lines), and route has no meaning there.",
+  "cases" : [
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo hi"
+      },
+      "name" : "single line / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "echo hi"
+      },
+      "name" : "single line / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo hi"
+      },
+      "name" : "single line / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo hi"
+      },
+      "name" : "single line / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo hi"
+      },
+      "name" : "single line / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "echo hi"
+      },
+      "name" : "single line / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo hi"
+      },
+      "name" : "single line / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "echo hi"
+      },
+      "name" : "single line / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : ""
+      },
+      "name" : "empty / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : ""
+      },
+      "name" : "empty / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : ""
+      },
+      "name" : "empty / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : ""
+      },
+      "name" : "empty / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : ""
+      },
+      "name" : "empty / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : ""
+      },
+      "name" : "empty / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : ""
+      },
+      "name" : "empty / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : ""
+      },
+      "name" : "empty / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "ls\r\n"
+      },
+      "name" : "one trailing CRLF / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "ls\r"
+      },
+      "name" : "one trailing CR / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "\n"
+      },
+      "name" : "only a LF / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "\n"
+      },
+      "name" : "only a LF / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "\n"
+      },
+      "name" : "only a LF / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "\n"
+      },
+      "name" : "only a LF / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "\n"
+      },
+      "name" : "only a LF / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "\n"
+      },
+      "name" : "only a LF / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "\n"
+      },
+      "name" : "only a LF / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "\n"
+      },
+      "name" : "only a LF / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "\n",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "\n\n"
+      },
+      "name" : "two LFs / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=3",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=3",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\nb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a\nb\n"
+      },
+      "name" : "multi-line with trailing LF / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\n",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a\n\n"
+      },
+      "name" : "blank last line survives / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=3",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=3",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\nc",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a\n\nc"
+      },
+      "name" : "empty middle line counts / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\recho two",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "echo one\recho two"
+      },
+      "name" : "bare CR between lines / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "echo one\r\necho two",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "echo one\r\necho two"
+      },
+      "name" : "CRLF between lines is one break / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=3",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=3",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "a\n\rb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a\n\rb"
+      },
+      "name" : "LF then CR is two breaks / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a b"
+      },
+      "name" : "U+2028 line separator / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a b",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a b"
+      },
+      "name" : "U+2029 paragraph separator / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "ab",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "ab"
+      },
+      "name" : "U+0085 next line / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\u000bb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a\u000bb"
+      },
+      "name" : "vertical tab / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "a\fb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a\fb"
+      },
+      "name" : "form feed / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "ls "
+      },
+      "name" : "trailing U+2028 is stripped / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "a\tb",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "a\tb"
+      },
+      "name" : "tab is not a break / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "café 😀\nok",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "café 😀\nok"
+      },
+      "name" : "emoji and accents / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / shell in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / shell in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : " multiline_guard=1 lines=2",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / shell in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / claude in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "claude",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / claude in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : false,
+        "terminalApp" : "iTerm2",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / codex in iTerm2 / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / grok in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 2,
+        "normalizedText" : "SECRET-1\nSECRET-2",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "shell",
+        "pressReturn" : true,
+        "terminalApp" : "Claude",
+        "text" : "SECRET-1\nSECRET-2\n"
+      },
+      "name" : "secret text is never in the suffix / shell in Claude / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "cursor",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / cursor in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "cursor",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / cursor in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : true,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / codex in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : true,
+        "latencySuffix" : "",
+        "lineCount" : 3,
+        "normalizedText" : "echo one\necho two\necho three",
+        "pressReturn" : false,
+        "route" : "pasteText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "echo one\necho two\necho three"
+      },
+      "name" : "three lines / grok in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "cursor",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo hi"
+      },
+      "name" : "single line / cursor in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "cursor",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "echo hi"
+      },
+      "name" : "single line / cursor in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "echo hi"
+      },
+      "name" : "single line / codex in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "echo hi",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "echo hi"
+      },
+      "name" : "single line / grok in Terminal / pressReturn=false"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "cursor",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / cursor in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "cursor",
+        "pressReturn" : true,
+        "terminalApp" : "iTerm2",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / cursor in iTerm2 / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : true,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "codex",
+        "pressReturn" : true,
+        "terminalApp" : "Terminal",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / codex in Terminal / pressReturn=true"
+    },
+    {
+      "expect" : {
+        "isMultiLine" : false,
+        "latencySuffix" : "",
+        "lineCount" : 1,
+        "normalizedText" : "ls",
+        "pressReturn" : false,
+        "route" : "sendText"
+      },
+      "input" : {
+        "cliKind" : "grok",
+        "pressReturn" : false,
+        "terminalApp" : "Terminal",
+        "text" : "ls\n"
+      },
+      "name" : "one trailing LF / grok in Terminal / pressReturn=false"
+    }
+  ]
+}

@@ -1,0 +1,349 @@
+{
+  "_doc": "PairingPayload (Shared/PairingPayload.swift): the QR / share link quip://pair?url=<base64 of the UTF-8 url, standard alphabet, '=' padding stripped>&pin=<pin>. Section encode: input {url, pin} -> expect {encoded: the exact link string (query values percent-encoded as Foundation URLComponents does: '+' and '/' are NOT escaped, space is %20, '&' is %26), decodedBack: decode(encoded) as {url,pin}}. Section decode: input {raw} -> expect {url, pin} or null. Rules: scheme must be exactly 'quip' and host exactly 'pair' (case-sensitive); the FIRST url and pin query items are used; query values are percent-decoded and '+' stays '+' (never a space); pin must be non-empty; url is re-padded with '=' to a multiple of 4, must be base64 as Foundation's Data(base64Encoded:) accepts it: standard alphabet only (no '-' or '_'), whitespace rejected (even percent-encoded), but non-canonical trailing bits ACCEPTED ('Yh' decodes as 'Yg' would) and must decode to valid UTF-8; anything else is null. Expected values are written by the Swift test (QUIP_WRITE_VECTORS=1), never by hand.",
+  "decode": [
+    {
+      "expect": {
+        "pin": "12345678",
+        "url": "ws://192.0.2.10:8765"
+      },
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly8xOTIuMC4yLjEwOjg3NjU&pin=12345678"
+      },
+      "name": "canonical"
+    },
+    {
+      "expect": {
+        "pin": "778899",
+        "url": "wss://x/ws"
+      },
+      "input": {
+        "raw": "quip://pair?url=d3NzOi8veC93cw==&pin=778899"
+      },
+      "name": "padded base64 also accepted"
+    },
+    {
+      "expect": {
+        "pin": "12345678",
+        "url": "ws://192.0.2.10:8765"
+      },
+      "input": {
+        "raw": "quip://pair?pin=12345678&url=d3M6Ly8xOTIuMC4yLjEwOjg3NjU"
+      },
+      "name": "pin before url"
+    },
+    {
+      "expect": {
+        "pin": "1",
+        "url": "ws://a"
+      },
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly9h&url=d3M6Ly9i&pin=1"
+      },
+      "name": "first url wins over a duplicate"
+    },
+    {
+      "expect": {
+        "pin": "1",
+        "url": "ws://a"
+      },
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly9h&pin=1&v=2"
+      },
+      "name": "unknown extra field ignored"
+    },
+    {
+      "expect": {
+        "pin": "1",
+        "url": "ws://a"
+      },
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly9h%3D%3D&pin=1"
+      },
+      "name": "percent-encoded base64 is decoded first"
+    },
+    {
+      "expect": {
+        "pin": "11112222",
+        "url": "ws://198.51.100.7:8765/?>>>???"
+      },
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly8xOTguNTEuMTAwLjc6ODc2NS8/Pj4+Pz8/&pin=11112222"
+      },
+      "name": "plus is not a space"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly8xOTguNTEuMTAwLjc6ODc2NS8_Pj4-Pz8_&pin=11112222"
+      },
+      "name": "url-safe base64 alphabet rejected"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=d3M6L&pin=1"
+      },
+      "name": "base64 length 1 mod 4 rejected"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=gICA&pin=1"
+      },
+      "name": "invalid utf-8 bytes rejected"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "https://pair?url=d3NzOi8veC93cw&pin=123456"
+      },
+      "name": "wrong scheme"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://window?url=d3NzOi8veC93cw&pin=123456"
+      },
+      "name": "wrong host"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "QUIP://pair?url=d3M6Ly9h&pin=1"
+      },
+      "name": "upper-case scheme"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://PAIR?url=d3M6Ly9h&pin=1"
+      },
+      "name": "upper-case host"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?pin=123456"
+      },
+      "name": "missing url"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=d3NzOi8veC93cw"
+      },
+      "name": "missing pin"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=d3NzOi8veC93cw&pin="
+      },
+      "name": "empty pin"
+    },
+    {
+      "expect": {
+        "pin": "1",
+        "url": ""
+      },
+      "input": {
+        "raw": "quip://pair?url=&pin=1"
+      },
+      "name": "empty url decodes to an empty url"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=!!!!&pin=123456"
+      },
+      "name": "non-base64 url"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair"
+      },
+      "name": "no query"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "ws://192.0.2.10:8765"
+      },
+      "name": "plain ws URL"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "not a url at all"
+      },
+      "name": "garbage"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": ""
+      },
+      "name": "empty string"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=d3M6%20Ly9h&pin=1"
+      },
+      "name": "percent-encoded space inside the base64"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly9h%0A&pin=1"
+      },
+      "name": "percent-encoded newline inside the base64"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "quip://pair?url=d3M6 Ly9h&pin=1"
+      },
+      "name": "raw space makes the link unparseable"
+    },
+    {
+      "expect": {
+        "pin": "1",
+        "url": "ws://ab"
+      },
+      "input": {
+        "raw": "quip://pair?url=d3M6Ly9hYh&pin=1"
+      },
+      "name": "non-canonical trailing bits (Yh instead of Yg)"
+    }
+  ],
+  "encode": [
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "12345678",
+          "url": "ws://192.0.2.10:8765"
+        },
+        "encoded": "quip://pair?url=d3M6Ly8xOTIuMC4yLjEwOjg3NjU&pin=12345678"
+      },
+      "input": {
+        "pin": "12345678",
+        "url": "ws://192.0.2.10:8765"
+      },
+      "name": "LAN URL with an 8-digit PIN"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "00000000",
+          "url": "ws://quip-host.example.ts.net:8765"
+        },
+        "encoded": "quip://pair?url=d3M6Ly9xdWlwLWhvc3QuZXhhbXBsZS50cy5uZXQ6ODc2NQ&pin=00000000"
+      },
+      "input": {
+        "pin": "00000000",
+        "url": "ws://quip-host.example.ts.net:8765"
+      },
+      "name": "tailnet host"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "482913",
+          "url": "wss://quip.example.com/ws"
+        },
+        "encoded": "quip://pair?url=d3NzOi8vcXVpcC5leGFtcGxlLmNvbS93cw&pin=482913"
+      },
+      "input": {
+        "pin": "482913",
+        "url": "wss://quip.example.com/ws"
+      },
+      "name": "wss with path"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "11112222",
+          "url": "ws://198.51.100.7:8765/?>>>???"
+        },
+        "encoded": "quip://pair?url=d3M6Ly8xOTguNTEuMTAwLjc6ODc2NS8/Pj4+Pz8/&pin=11112222"
+      },
+      "input": {
+        "pin": "11112222",
+        "url": "ws://198.51.100.7:8765/?>>>???"
+      },
+      "name": "base64 with + and / survives the query"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "778899",
+          "url": "wss://host.local:8765/ws"
+        },
+        "encoded": "quip://pair?url=d3NzOi8vaG9zdC5sb2NhbDo4NzY1L3dz&pin=778899"
+      },
+      "input": {
+        "pin": "778899",
+        "url": "wss://host.local:8765/ws"
+      },
+      "name": "url needing no padding"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "1",
+          "url": "ws://ab"
+        },
+        "encoded": "quip://pair?url=d3M6Ly9hYg&pin=1"
+      },
+      "input": {
+        "pin": "1",
+        "url": "ws://ab"
+      },
+      "name": "url needing two pad chars"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "24681357",
+          "url": "ws://café.example:8765"
+        },
+        "encoded": "quip://pair?url=d3M6Ly9jYWbDqS5leGFtcGxlOjg3NjU&pin=24681357"
+      },
+      "input": {
+        "pin": "24681357",
+        "url": "ws://café.example:8765"
+      },
+      "name": "non-ASCII url"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "1234 5678&x",
+          "url": "ws://192.0.2.10:8765"
+        },
+        "encoded": "quip://pair?url=d3M6Ly8xOTIuMC4yLjEwOjg3NjU&pin=1234%205678%26x"
+      },
+      "input": {
+        "pin": "1234 5678&x",
+        "url": "ws://192.0.2.10:8765"
+      },
+      "name": "pin with a space and an ampersand is percent-encoded"
+    },
+    {
+      "expect": {
+        "decodedBack": {
+          "pin": "1",
+          "url": "ws://abc"
+        },
+        "encoded": "quip://pair?url=d3M6Ly9hYmM&pin=1"
+      },
+      "input": {
+        "pin": "1",
+        "url": "ws://abc"
+      },
+      "name": "url needing one pad char"
+    }
+  ]
+}

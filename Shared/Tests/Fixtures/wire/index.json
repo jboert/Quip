@@ -1,0 +1,223 @@
+{
+  "_doc": "Wire fixtures for the phase-1 WebSocket messages (Q-91 spec 10.2). Each <type>.<variant>.json file is ONE message exactly as it travels in a text frame. Variants: min = only the fields the Swift encoder always writes; full = every optional field present; other names are the named case. A type with no .full.json has no optional fields. Contract, the same for every peer (Swift: Shared/Tests/WireFixtureTests.swift; Rust: QuipWindows/tests/): decode the file into the peer's own type (Swift: swiftType, from Shared/MessageProtocol.swift and Shared/DisplayGeometry.swift), encode that value again, and the result must have the same keys, the same JSON value kinds AND the same values as the file, recursively, in any key order. Two allowances, no others: (1) a key whose value is null in the file may be absent from the re-encoding (Swift omits nil optionals rather than writing null); (2) numbers compare as numbers, so an integer-valued double may print as 2 or 2.0. Strings compare exactly: UUIDs are upper case, as Swift's JSONEncoder writes them, and a peer must write them the same way.",
+  "fixtures": [
+    {
+      "direction": "phone->host",
+      "file": "arrange_windows.horizontal.json",
+      "swiftType": "ArrangeWindowsMessage",
+      "type": "arrange_windows"
+    },
+    {
+      "direction": "phone->host",
+      "file": "arrange_windows.vertical.json",
+      "swiftType": "ArrangeWindowsMessage",
+      "type": "arrange_windows"
+    },
+    {
+      "direction": "phone->host",
+      "file": "auth.min.json",
+      "swiftType": "AuthMessage",
+      "type": "auth"
+    },
+    {
+      "direction": "host->phone",
+      "file": "auth_result.full.json",
+      "note": "failure, with the error the host sends for a wrong PIN",
+      "swiftType": "AuthResultMessage",
+      "type": "auth_result"
+    },
+    {
+      "direction": "host->phone",
+      "file": "auth_result.min.json",
+      "note": "success; error absent",
+      "swiftType": "AuthResultMessage",
+      "type": "auth_result"
+    },
+    {
+      "direction": "phone->host",
+      "file": "close_window.full.json",
+      "swiftType": "CloseWindowMessage",
+      "type": "close_window"
+    },
+    {
+      "direction": "phone->host",
+      "file": "close_window.min.json",
+      "swiftType": "CloseWindowMessage",
+      "type": "close_window"
+    },
+    {
+      "direction": "host->phone",
+      "file": "device_identity.full.json",
+      "swiftType": "DeviceIdentityMessage",
+      "type": "device_identity"
+    },
+    {
+      "direction": "host->phone",
+      "file": "device_identity.min.json",
+      "swiftType": "DeviceIdentityMessage",
+      "type": "device_identity"
+    },
+    {
+      "direction": "host->phone",
+      "file": "error.full.json",
+      "swiftType": "ErrorMessage",
+      "type": "error"
+    },
+    {
+      "direction": "host->phone",
+      "file": "error.min.json",
+      "swiftType": "ErrorMessage",
+      "type": "error"
+    },
+    {
+      "direction": "host->phone",
+      "file": "frontmost_changed.full.json",
+      "note": "foreground window is tracked",
+      "swiftType": "FrontmostChangedMessage",
+      "type": "frontmost_changed"
+    },
+    {
+      "direction": "host->phone",
+      "file": "frontmost_changed.min.json",
+      "note": "foreground window is not tracked: this is what the Mac actually emits (the key is omitted, not null)",
+      "swiftType": "FrontmostChangedMessage",
+      "type": "frontmost_changed"
+    },
+    {
+      "direction": "host->phone",
+      "file": "frontmost_changed.null.json",
+      "note": "explicit null: decodes the same as the key being absent; the Mac re-encodes it with the key omitted",
+      "swiftType": "FrontmostChangedMessage",
+      "type": "frontmost_changed"
+    },
+    {
+      "direction": "host->phone",
+      "file": "heartbeat.min.json",
+      "swiftType": "HeartbeatMessage",
+      "type": "heartbeat"
+    },
+    {
+      "direction": "phone->host",
+      "file": "heartbeat_ack.min.json",
+      "swiftType": "HeartbeatAckMessage",
+      "type": "heartbeat_ack"
+    },
+    {
+      "direction": "host->phone",
+      "file": "layout_update.full.json",
+      "note": "every optional LayoutUpdate, DisplayState and WindowState field present. spaces, spaceID, targetKind and claudeMode are phase 2 for Windows but are part of the shared type",
+      "swiftType": "LayoutUpdate",
+      "type": "layout_update"
+    },
+    {
+      "direction": "host->phone",
+      "file": "layout_update.min.json",
+      "note": "the smallest layout_update the Swift encoder produces: every optional field nil. isThinking, isPinned and isMinimized are not optional in WindowState, so they are always written",
+      "swiftType": "LayoutUpdate",
+      "type": "layout_update"
+    },
+    {
+      "direction": "phone->host",
+      "file": "minimize_window.full.json",
+      "swiftType": "MinimizeWindowMessage",
+      "type": "minimize_window"
+    },
+    {
+      "direction": "phone->host",
+      "file": "minimize_window.min.json",
+      "swiftType": "MinimizeWindowMessage",
+      "type": "minimize_window"
+    },
+    {
+      "direction": "phone->host",
+      "file": "phone_log.full.json",
+      "swiftType": "PhoneLogMessage",
+      "type": "phone_log"
+    },
+    {
+      "direction": "phone->host",
+      "file": "phone_log.min.json",
+      "note": "lines is required; it may be empty",
+      "swiftType": "PhoneLogMessage",
+      "type": "phone_log"
+    },
+    {
+      "direction": "phone->host",
+      "file": "preferences_request.min.json",
+      "swiftType": "PreferenceRequestMessage",
+      "type": "preferences_request"
+    },
+    {
+      "direction": "host->phone",
+      "file": "preferences_restore.full.json",
+      "note": "every PreferencesSnapshot field present",
+      "swiftType": "PreferenceRestoreMessage",
+      "type": "preferences_restore"
+    },
+    {
+      "direction": "host->phone",
+      "file": "preferences_restore.min.json",
+      "note": "no backup for this device: empty preferences, deviceID absent (a Mac from before the field)",
+      "swiftType": "PreferenceRestoreMessage",
+      "type": "preferences_restore"
+    },
+    {
+      "direction": "phone->host",
+      "file": "preferences_snapshot.full.json",
+      "note": "every PreferencesSnapshot field present. The host stores preferences as an opaque blob and sends it back in preferences_restore",
+      "swiftType": "PreferenceSnapshotMessage",
+      "type": "preferences_snapshot"
+    },
+    {
+      "direction": "phone->host",
+      "file": "preferences_snapshot.min.json",
+      "note": "every PreferencesSnapshot field is optional",
+      "swiftType": "PreferenceSnapshotMessage",
+      "type": "preferences_snapshot"
+    },
+    {
+      "direction": "phone->host",
+      "file": "quick_action.full.json",
+      "note": "messageId and promptFingerprint present",
+      "swiftType": "QuickActionMessage",
+      "type": "quick_action"
+    },
+    {
+      "direction": "phone->host",
+      "file": "quick_action.min.json",
+      "swiftType": "QuickActionMessage",
+      "type": "quick_action"
+    },
+    {
+      "direction": "phone->host",
+      "file": "select_window.min.json",
+      "swiftType": "SelectWindowMessage",
+      "type": "select_window"
+    },
+    {
+      "direction": "phone->host",
+      "file": "send_text.full.json",
+      "note": "messageId and raiseWindow present",
+      "swiftType": "SendTextMessage",
+      "type": "send_text"
+    },
+    {
+      "direction": "phone->host",
+      "file": "send_text.min.json",
+      "swiftType": "SendTextMessage",
+      "type": "send_text"
+    },
+    {
+      "direction": "host->phone",
+      "file": "send_text_ack.min.json",
+      "swiftType": "SendTextAckMessage",
+      "type": "send_text_ack"
+    },
+    {
+      "direction": "host->phone",
+      "file": "state_change.min.json",
+      "swiftType": "StateChangeMessage",
+      "type": "state_change"
+    }
+  ]
+}

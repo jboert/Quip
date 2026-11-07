@@ -1531,7 +1531,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
                 id: display.id,
                 name: display.name,
                 isPrimary: display.isPrimary,
-                aspect: rect.height > 0 ? rect.width / rect.height : 1,
+                aspect: DisplayGeometry.aspect(of: rect),
                 spanFrame: DisplayGeometry.spanFrame(of: rect, in: span)
             )
         }
@@ -1541,7 +1541,7 @@ private static let recentScrapeTTL: TimeInterval = 0.75
             primaryRect: primaryRect,
             primaryName: primary?.name ?? "Display 1",
             primaryAspect: primaryRect.height > 0 ? Double(primaryRect.width / primaryRect.height) : nil,
-            spanAspect: span.height > 0 ? span.width / span.height : nil,
+            spanAspect: DisplayGeometry.spanAspect(of: span),
             spaces: windowManager.spaces
         )
     }

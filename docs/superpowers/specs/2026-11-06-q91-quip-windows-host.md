@@ -240,7 +240,11 @@ launch. This is best-effort; a renamed window simply starts at its default.
 
 `arrange_windows` tiles the enabled windows on the **primary** display, in
 broadcast order, over its work area (`MONITORINFO.rcWork`, which excludes the
-taskbar):
+taskbar). Deliberate difference: the Mac passes the full display frame
+(`cgFrame(for:)`) and relies on macOS keeping windows below the menu bar;
+Windows lets a window sit under the taskbar, so the work area is used. The
+tiling math itself is the Mac's `LayoutCalculator`, held to
+`vectors/arrange.json` with the work area as the target rect:
 
 - `horizontal`: N equal columns, full height.
 - `vertical`: N equal rows, full width.

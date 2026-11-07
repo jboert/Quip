@@ -1,0 +1,2369 @@
+{
+  "_doc" : "arrange_windows (QuipMacApp.handleArrangeWindows): LayoutMode.from(arrangeLayout:) then LayoutCalculator.calculate (QuipMac/Models/LayoutPreset.swift), then each normalized rect scaled into the target rect (NormalizedRect.toCGRect(in:)). input: layout (horizontal|vertical), windowCount (how many enabled windows), targetRect {x,y,width,height} in top-left-origin screen pixels. The Mac passes the FULL frame of the primary display (WindowManager.cgFrame(for:)), menu bar and Dock included, not a work area; the Windows host passes its own choice (spec 5.2), and these vectors hold only the math. expect: mode (columns for horizontal = side by side, rows for vertical = stacked), normalized: the 0-1 rects in window order, rects: the same rects in target-rect pixels (unrounded; a host may round to +-1 px). windowCount 0 gives no rects (the Mac sends an error 'No enabled windows to arrange' instead). Expected values are written by the Swift test (QUIP_WRITE_VECTORS=1), never by hand.",
+  "cases" : [
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+
+        ],
+        "rects" : [
+
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 0
+      },
+      "name" : "horizontal x0 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1055,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 1
+      },
+      "name" : "horizontal x1 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.5,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.5,
+            "x" : 0.5,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1055,
+            "width" : 960,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 960,
+            "x" : 960,
+            "y" : 25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 2
+      },
+      "name" : "horizontal x2 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0.33333333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0.66666666666666663,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1055,
+            "width" : 640,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 640,
+            "x" : 640,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 640,
+            "x" : 1280,
+            "y" : 25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 3
+      },
+      "name" : "horizontal x3 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.25,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.5,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.75,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1055,
+            "width" : 480,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 480,
+            "x" : 480,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 480,
+            "x" : 960,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 480,
+            "x" : 1440,
+            "y" : 25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 4
+      },
+      "name" : "horizontal x4 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.20000000000000001,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.40000000000000002,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.60000000000000009,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.80000000000000004,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1055,
+            "width" : 384,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 384,
+            "x" : 384,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 384,
+            "x" : 768,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 384,
+            "x" : 1152.0000000000002,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 384,
+            "x" : 1536,
+            "y" : 25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 5
+      },
+      "name" : "horizontal x5 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.16666666666666666,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.33333333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.5,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.66666666666666663,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.83333333333333326,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1055,
+            "width" : 320,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 320,
+            "x" : 320,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 320,
+            "x" : 640,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 320,
+            "x" : 960,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 320,
+            "x" : 1280,
+            "y" : 25
+          },
+          {
+            "height" : 1055,
+            "width" : 320,
+            "x" : 1599.9999999999998,
+            "y" : 25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 6
+      },
+      "name" : "horizontal x6 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+
+        ],
+        "rects" : [
+
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 0
+      },
+      "name" : "vertical x0 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1055,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 1
+      },
+      "name" : "vertical x1 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.5,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.5,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 527.5,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 527.5,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 552.5
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 2
+      },
+      "name" : "vertical x2 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.33333333333333331
+          },
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.66666666666666663
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 351.66666666666663,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 351.66666666666663,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 376.66666666666663
+          },
+          {
+            "height" : 351.66666666666663,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 728.33333333333326
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 3
+      },
+      "name" : "vertical x3 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.25
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.75
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 263.75,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 263.75,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 288.75
+          },
+          {
+            "height" : 263.75,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 552.5
+          },
+          {
+            "height" : 263.75,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 816.25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 4
+      },
+      "name" : "vertical x4 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.20000000000000001
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.40000000000000002
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.60000000000000009
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.80000000000000004
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 211,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 211,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 236
+          },
+          {
+            "height" : 211,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 447
+          },
+          {
+            "height" : 211,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 658.00000000000011
+          },
+          {
+            "height" : 211,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 869
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 5
+      },
+      "name" : "vertical x5 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.16666666666666666
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.33333333333333331
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.66666666666666663
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.83333333333333326
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 175.83333333333331,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 25
+          },
+          {
+            "height" : 175.83333333333331,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 200.83333333333331
+          },
+          {
+            "height" : 175.83333333333331,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 376.66666666666663
+          },
+          {
+            "height" : 175.83333333333331,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 552.5
+          },
+          {
+            "height" : 175.83333333333331,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 728.33333333333326
+          },
+          {
+            "height" : 175.83333333333331,
+            "width" : 1920,
+            "x" : 0,
+            "y" : 904.16666666666663
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1055,
+          "width" : 1920,
+          "x" : 0,
+          "y" : 25
+        },
+        "windowCount" : 6
+      },
+      "name" : "vertical x6 on rect 1920x1055 offset 25 down"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+
+        ],
+        "rects" : [
+
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 0
+      },
+      "name" : "horizontal x0 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1415,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 1
+      },
+      "name" : "horizontal x1 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.5,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.5,
+            "x" : 0.5,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1415,
+            "width" : 1280,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 1280,
+            "x" : -1280,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 2
+      },
+      "name" : "horizontal x2 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0.33333333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0.66666666666666663,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1415,
+            "width" : 853.33333333333326,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 853.33333333333326,
+            "x" : -1706.6666666666667,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 853.33333333333326,
+            "x" : -853.33333333333348,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 3
+      },
+      "name" : "horizontal x3 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.25,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.5,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.75,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1415,
+            "width" : 640,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 640,
+            "x" : -1920,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 640,
+            "x" : -1280,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 640,
+            "x" : -640,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 4
+      },
+      "name" : "horizontal x4 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.20000000000000001,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.40000000000000002,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.60000000000000009,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.80000000000000004,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1415,
+            "width" : 512,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 512,
+            "x" : -2048,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 512,
+            "x" : -1536,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 512,
+            "x" : -1023.9999999999998,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 512,
+            "x" : -512,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 5
+      },
+      "name" : "horizontal x5 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.16666666666666666,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.33333333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.5,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.66666666666666663,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.83333333333333326,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1415,
+            "width" : 426.66666666666663,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 426.66666666666663,
+            "x" : -2133.3333333333335,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 426.66666666666663,
+            "x" : -1706.6666666666667,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 426.66666666666663,
+            "x" : -1280,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 426.66666666666663,
+            "x" : -853.33333333333348,
+            "y" : 0
+          },
+          {
+            "height" : 1415,
+            "width" : 426.66666666666663,
+            "x" : -426.66666666666697,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 6
+      },
+      "name" : "horizontal x6 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+
+        ],
+        "rects" : [
+
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 0
+      },
+      "name" : "vertical x0 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 1415,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 1
+      },
+      "name" : "vertical x1 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.5,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.5,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 707.5,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 707.5,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 707.5
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 2
+      },
+      "name" : "vertical x2 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.33333333333333331
+          },
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.66666666666666663
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 471.66666666666663,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 471.66666666666663,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 471.66666666666663
+          },
+          {
+            "height" : 471.66666666666663,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 943.33333333333326
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 3
+      },
+      "name" : "vertical x3 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.25
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.75
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 353.75,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 353.75,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 353.75
+          },
+          {
+            "height" : 353.75,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 707.5
+          },
+          {
+            "height" : 353.75,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 1061.25
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 4
+      },
+      "name" : "vertical x4 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.20000000000000001
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.40000000000000002
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.60000000000000009
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.80000000000000004
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 283,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 283,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 283
+          },
+          {
+            "height" : 283,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 566
+          },
+          {
+            "height" : 283,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 849.00000000000011
+          },
+          {
+            "height" : 283,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 1132
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 5
+      },
+      "name" : "vertical x5 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.16666666666666666
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.33333333333333331
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.66666666666666663
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.83333333333333326
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 235.83333333333331,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 0
+          },
+          {
+            "height" : 235.83333333333331,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 235.83333333333331
+          },
+          {
+            "height" : 235.83333333333331,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 471.66666666666663
+          },
+          {
+            "height" : 235.83333333333331,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 707.5
+          },
+          {
+            "height" : 235.83333333333331,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 943.33333333333326
+          },
+          {
+            "height" : 235.83333333333331,
+            "width" : 2560,
+            "x" : -2560,
+            "y" : 1179.1666666666665
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 1415,
+          "width" : 2560,
+          "x" : -2560,
+          "y" : 0
+        },
+        "windowCount" : 6
+      },
+      "name" : "vertical x6 on display left of primary, odd size"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+
+        ],
+        "rects" : [
+
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 0
+      },
+      "name" : "horizontal x0 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 728,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 1
+      },
+      "name" : "horizontal x1 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.5,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.5,
+            "x" : 0.5,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 728,
+            "width" : 683,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 683,
+            "x" : 683,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 2
+      },
+      "name" : "horizontal x2 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0.33333333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.33333333333333331,
+            "x" : 0.66666666666666663,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 728,
+            "width" : 455.33333333333331,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 455.33333333333331,
+            "x" : 455.33333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 455.33333333333331,
+            "x" : 910.66666666666663,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 3
+      },
+      "name" : "horizontal x3 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.25,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.5,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.25,
+            "x" : 0.75,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 728,
+            "width" : 341.5,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 341.5,
+            "x" : 341.5,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 341.5,
+            "x" : 683,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 341.5,
+            "x" : 1024.5,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 4
+      },
+      "name" : "horizontal x4 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.20000000000000001,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.40000000000000002,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.60000000000000009,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.20000000000000001,
+            "x" : 0.80000000000000004,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 728,
+            "width" : 273.19999999999999,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 273.19999999999999,
+            "x" : 273.19999999999999,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 273.19999999999999,
+            "x" : 546.39999999999998,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 273.19999999999999,
+            "x" : 819.60000000000014,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 273.19999999999999,
+            "x" : 1092.8,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 5
+      },
+      "name" : "horizontal x5 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "columns",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.16666666666666666,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.33333333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.5,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.66666666666666663,
+            "y" : 0
+          },
+          {
+            "height" : 1,
+            "width" : 0.16666666666666666,
+            "x" : 0.83333333333333326,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 728,
+            "width" : 227.66666666666666,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 227.66666666666666,
+            "x" : 227.66666666666666,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 227.66666666666666,
+            "x" : 455.33333333333331,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 227.66666666666666,
+            "x" : 683,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 227.66666666666666,
+            "x" : 910.66666666666663,
+            "y" : 0
+          },
+          {
+            "height" : 728,
+            "width" : 227.66666666666666,
+            "x" : 1138.3333333333333,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "horizontal",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 6
+      },
+      "name" : "horizontal x6 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+
+        ],
+        "rects" : [
+
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 0
+      },
+      "name" : "vertical x0 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 1,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 728,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 0
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 1
+      },
+      "name" : "vertical x1 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.5,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.5,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 364,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 364,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 364
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 2
+      },
+      "name" : "vertical x2 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.33333333333333331
+          },
+          {
+            "height" : 0.33333333333333331,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.66666666666666663
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 242.66666666666666,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 242.66666666666666,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 242.66666666666666
+          },
+          {
+            "height" : 242.66666666666666,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 485.33333333333331
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 3
+      },
+      "name" : "vertical x3 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.25
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          },
+          {
+            "height" : 0.25,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.75
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 182,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 182,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 182
+          },
+          {
+            "height" : 182,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 364
+          },
+          {
+            "height" : 182,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 546
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 4
+      },
+      "name" : "vertical x4 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.20000000000000001
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.40000000000000002
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.60000000000000009
+          },
+          {
+            "height" : 0.20000000000000001,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.80000000000000004
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 145.59999999999999,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 145.59999999999999,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 145.59999999999999
+          },
+          {
+            "height" : 145.59999999999999,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 291.19999999999999
+          },
+          {
+            "height" : 145.59999999999999,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 436.80000000000007
+          },
+          {
+            "height" : 145.59999999999999,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 582.39999999999998
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 5
+      },
+      "name" : "vertical x5 on 1366x728 not divisible by 3"
+    },
+    {
+      "expect" : {
+        "mode" : "rows",
+        "normalized" : [
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.16666666666666666
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.33333333333333331
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.5
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.66666666666666663
+          },
+          {
+            "height" : 0.16666666666666666,
+            "width" : 1,
+            "x" : 0,
+            "y" : 0.83333333333333326
+          }
+        ],
+        "rects" : [
+          {
+            "height" : 121.33333333333333,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 0
+          },
+          {
+            "height" : 121.33333333333333,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 121.33333333333333
+          },
+          {
+            "height" : 121.33333333333333,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 242.66666666666666
+          },
+          {
+            "height" : 121.33333333333333,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 364
+          },
+          {
+            "height" : 121.33333333333333,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 485.33333333333331
+          },
+          {
+            "height" : 121.33333333333333,
+            "width" : 1366,
+            "x" : 0,
+            "y" : 606.66666666666663
+          }
+        ]
+      },
+      "input" : {
+        "layout" : "vertical",
+        "targetRect" : {
+          "height" : 728,
+          "width" : 1366,
+          "x" : 0,
+          "y" : 0
+        },
+        "windowCount" : 6
+      },
+      "name" : "vertical x6 on 1366x728 not divisible by 3"
+    }
+  ]
+}

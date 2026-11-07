@@ -1,0 +1,50 @@
+{
+  "type": "layout_update",
+  "monitor": "Generic Monitor",
+  "screenAspect": 1.7777777777777777,
+  "spanAspect": 3.5555555555555554,
+  "displays": [
+    {"id": "display-1", "name": "Generic Monitor", "isPrimary": true, "aspect": 1.7777777777777777,
+     "spanFrame": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0}},
+    {"id": "display-2", "name": "Second Monitor", "isPrimary": false, "aspect": 1.7777777777777777,
+     "spanFrame": {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0}}
+  ],
+  "spaces": [
+    {"id": "space-1", "name": "On Screen", "isCurrent": true}
+  ],
+  "windows": [
+    {
+      "id": "w-1a2b3c",
+      "name": "PowerShell",
+      "app": "Windows Terminal",
+      "folder": "src",
+      "project": "demo-proj",
+      "enabled": true,
+      "frame": {"x": 0.125, "y": 0.25, "width": 0.5, "height": 0.75},
+      "state": "waiting_for_input",
+      "color": "#4A90D9",
+      "isThinking": true,
+      "claudeMode": "plan",
+      "cliKind": "claude",
+      "targetKind": "simulator",
+      "displayID": "display-2",
+      "spaceID": "space-1",
+      "isPinned": true,
+      "isMinimized": true
+    },
+    {
+      "id": "w-4d5e6f",
+      "name": "Command Prompt",
+      "app": "Console Window Host",
+      "enabled": false,
+      "frame": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+      "state": "neutral",
+      "color": "#7ED321",
+      "isThinking": false,
+      "cliKind": "shell",
+      "displayID": "display-1",
+      "isPinned": false,
+      "isMinimized": false
+    }
+  ]
+}

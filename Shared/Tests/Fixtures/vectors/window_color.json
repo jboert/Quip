@@ -1,0 +1,291 @@
+{
+  "_doc": "Window colors. Section palette (Shared/WindowColor.swift): one case, expect = WindowColor.palette in order; new windows are dealt these. Section normalized: input {raw} -> '#RRGGBB' upper case, or null unless raw (trimmed of whitespace and newlines, one optional leading '#') is exactly 6 hex digits. Section hex: input {red, green, blue}, each a number or the string 'nan' / 'inf' / '-inf' -> '#RRGGBB' with each component clamped to 0...1, times 255, rounded half away from zero; a non-finite component is 0. Section first_unused (WindowManager.firstUnusedPaletteColor, Mac): input {avoiding:[hex]} -> the first palette color not in avoiding, or null. Section colors_to_avoid (WindowManager.colorsToAvoid, Mac): input {all:[hex], shown:[hex]} -> sorted list: all while some palette color is outside all, else shown. There is no pure window-id -> color function on the Mac: colors are dealt in turn (first unused, then a rotation) and remembered per id. Expected values are written by the Swift test (QUIP_WRITE_VECTORS=1), never by hand. Some hex inputs (e.g. 0.5/255) sit next to a rounding boundary: a reader must parse JSON floats exactly, to the nearest double (Rust: serde_json with the float_roundtrip feature), or it may round to a different byte.",
+  "colors_to_avoid": [
+    {
+      "expect": [
+        "#123456",
+        "#F5A623"
+      ],
+      "input": {
+        "all": [
+          "#F5A623",
+          "#123456"
+        ],
+        "shown": [
+          "#F5A623"
+        ]
+      },
+      "name": "a palette color is free: avoid all"
+    },
+    {
+      "expect": [
+        "#4A90D9"
+      ],
+      "input": {
+        "all": [
+          "#F5A623",
+          "#4A90D9",
+          "#7ED321",
+          "#D0021B",
+          "#9013FE",
+          "#50E3C2",
+          "#BD10E0",
+          "#B8E986",
+          "#F8E71C",
+          "#FF6B6B",
+          "#123456"
+        ],
+        "shown": [
+          "#4A90D9"
+        ]
+      },
+      "name": "palette exhausted: avoid only shown"
+    },
+    {
+      "expect": [],
+      "input": {
+        "all": [],
+        "shown": []
+      },
+      "name": "empty"
+    }
+  ],
+  "first_unused": [
+    {
+      "expect": "#F5A623",
+      "input": {
+        "avoiding": []
+      },
+      "name": "nothing used"
+    },
+    {
+      "expect": "#7ED321",
+      "input": {
+        "avoiding": [
+          "#F5A623",
+          "#4A90D9"
+        ]
+      },
+      "name": "first two used"
+    },
+    {
+      "expect": "#F5A623",
+      "input": {
+        "avoiding": [
+          "#000000"
+        ]
+      },
+      "name": "unknown colors ignored"
+    },
+    {
+      "expect": null,
+      "input": {
+        "avoiding": [
+          "#F5A623",
+          "#4A90D9",
+          "#7ED321",
+          "#D0021B",
+          "#9013FE",
+          "#50E3C2",
+          "#BD10E0",
+          "#B8E986",
+          "#F8E71C",
+          "#FF6B6B"
+        ]
+      },
+      "name": "all ten used"
+    },
+    {
+      "expect": "#F5A623",
+      "input": {
+        "avoiding": [
+          "#f5a623"
+        ]
+      },
+      "name": "case matters"
+    }
+  ],
+  "hex": [
+    {
+      "expect": "#FF0080",
+      "input": {
+        "blue": 0.5,
+        "green": 0,
+        "red": 1
+      },
+      "name": "red with half blue"
+    },
+    {
+      "expect": "#FF0000",
+      "input": {
+        "blue": "nan",
+        "green": -0.1,
+        "red": 1.2
+      },
+      "name": "wide gamut clamps"
+    },
+    {
+      "expect": "#000000",
+      "input": {
+        "blue": 0,
+        "green": 0,
+        "red": 0
+      },
+      "name": "black"
+    },
+    {
+      "expect": "#FFFFFF",
+      "input": {
+        "blue": 1,
+        "green": 1,
+        "red": 1
+      },
+      "name": "white"
+    },
+    {
+      "expect": "#010203",
+      "input": {
+        "blue": 0.00980392156862745,
+        "green": 0.0058823529411764705,
+        "red": 0.00196078431372549
+      },
+      "name": "rounding at .5/255"
+    },
+    {
+      "expect": "#7F8040",
+      "input": {
+        "blue": 0.25,
+        "green": 0.502,
+        "red": 0.498
+      },
+      "name": "just under half"
+    },
+    {
+      "expect": "#000033",
+      "input": {
+        "blue": 0.2,
+        "green": "-inf",
+        "red": "inf"
+      },
+      "name": "infinities"
+    }
+  ],
+  "normalized": [
+    {
+      "expect": "#4A90D9",
+      "input": {
+        "raw": "#4a90d9"
+      },
+      "name": "lower case with hash"
+    },
+    {
+      "expect": "#4A90D9",
+      "input": {
+        "raw": "  4A90D9\n"
+      },
+      "name": "whitespace and no hash"
+    },
+    {
+      "expect": "#ABCDEF",
+      "input": {
+        "raw": "\t#abcdef\r"
+      },
+      "name": "tab and CR trimmed"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": ""
+      },
+      "name": "empty"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "#"
+      },
+      "name": "hash only"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "#FFF"
+      },
+      "name": "three digits"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "#FFFFFFF"
+      },
+      "name": "seven digits"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "#GG0000"
+      },
+      "name": "non-hex"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "red"
+      },
+      "name": "name"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "#12 456"
+      },
+      "name": "inner space"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "##123456"
+      },
+      "name": "two hashes"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "0x123456"
+      },
+      "name": "0x prefix"
+    },
+    {
+      "expect": null,
+      "input": {
+        "raw": "#１２３４５６"
+      },
+      "name": "full-width digits"
+    },
+    {
+      "expect": "#F5A623",
+      "input": {
+        "raw": "#F5A623"
+      },
+      "name": "palette color"
+    }
+  ],
+  "palette": [
+    {
+      "expect": [
+        "#F5A623",
+        "#4A90D9",
+        "#7ED321",
+        "#D0021B",
+        "#9013FE",
+        "#50E3C2",
+        "#BD10E0",
+        "#B8E986",
+        "#F8E71C",
+        "#FF6B6B"
+      ],
+      "input": {},
+      "name": "the palette"
+    }
+  ]
+}

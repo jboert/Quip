@@ -1,0 +1,669 @@
+{
+  "_doc" : "WindowManager.windowsForBroadcast (QuipMac/Services/WindowManager.swift): which tracked windows go into a layout_update. input.windows: in tracking order, each {id, kind, enabled, onVisibleScreen}; kind is terminal (a supported terminal host), simulator (a QA-mode target) or other (any other app). input.mirrorDesktop / mirrorAllApps: the two Mac settings (both default false). input.qaPair: [idA, idB] or null. expect: the ids that are broadcast, in input order. Rules: a qaPair returns only windows whose id is in the pair; else mirrorAllApps keeps onVisibleScreen || enabled; else mirrorDesktop keeps ((terminal || simulator) && onVisibleScreen) || enabled; else enabled || (simulator && onVisibleScreen). The spec's phase-1 Windows broadcast set (enabled, plus terminals on a visible display) is the mirrorDesktop=true row without simulators. Expected values are written by the Swift test (QUIP_WRITE_VECTORS=1), never by hand.",
+  "cases" : [
+    {
+      "expect" : [
+        "t-on",
+        "t-on-hidden",
+        "sim-off",
+        "app-on",
+        "app-on-hidden"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : false,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "t-on",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "t-on-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off-hidden",
+            "kind" : "simulator",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          }
+        ]
+      },
+      "name" : "full mix, mirrorDesktop=false mirrorAllApps=false"
+    },
+    {
+      "expect" : [
+        "t-on",
+        "t-off",
+        "t-on-hidden",
+        "sim-off",
+        "app-on",
+        "app-off",
+        "app-on-hidden"
+      ],
+      "input" : {
+        "mirrorAllApps" : true,
+        "mirrorDesktop" : false,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "t-on",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "t-on-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off-hidden",
+            "kind" : "simulator",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          }
+        ]
+      },
+      "name" : "full mix, mirrorDesktop=false mirrorAllApps=true"
+    },
+    {
+      "expect" : [
+        "t-on",
+        "t-off",
+        "t-on-hidden",
+        "sim-off",
+        "app-on",
+        "app-on-hidden"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : true,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "t-on",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "t-on-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off-hidden",
+            "kind" : "simulator",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          }
+        ]
+      },
+      "name" : "full mix, mirrorDesktop=true mirrorAllApps=false"
+    },
+    {
+      "expect" : [
+        "t-on",
+        "t-off",
+        "t-on-hidden",
+        "sim-off",
+        "app-on",
+        "app-off",
+        "app-on-hidden"
+      ],
+      "input" : {
+        "mirrorAllApps" : true,
+        "mirrorDesktop" : true,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "t-on",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "t-off-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "t-on-hidden",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "sim-off-hidden",
+            "kind" : "simulator",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "app-on-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "app-off-hidden",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          }
+        ]
+      },
+      "name" : "full mix, mirrorDesktop=true mirrorAllApps=true"
+    },
+    {
+      "expect" : [
+        "a",
+        "c"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : false,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "a",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "b",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "c",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "mirror off: only enabled windows, terminal or not"
+    },
+    {
+      "expect" : [
+        "a",
+        "b",
+        "c",
+        "e"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : true,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "a",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "b",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "c",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "d",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "e",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "mirror on: every visible terminal plus enabled non-terminals"
+    },
+    {
+      "expect" : [
+        "a",
+        "b"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : true,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "a",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "b",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "c",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          }
+        ]
+      },
+      "name" : "mirror on: off-screen disabled terminal dropped"
+    },
+    {
+      "expect" : [
+        "browser"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : true,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "browser",
+            "kind" : "other",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "term",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          }
+        ]
+      },
+      "name" : "mirror on: enabled wins over visibility"
+    },
+    {
+      "expect" : [
+        "a"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : false,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : true,
+            "id" : "a",
+            "kind" : "terminal",
+            "onVisibleScreen" : false
+          },
+          {
+            "enabled" : false,
+            "id" : "b",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "mirror off ignores visibility for enabled windows"
+    },
+    {
+      "expect" : [
+        "sim"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : false,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : false,
+            "id" : "sim",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "term",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "mirror off: visible disabled target rides along, disabled terminal does not"
+    },
+    {
+      "expect" : [
+
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : false,
+        "qaPair" : null,
+        "windows" : [
+          {
+            "enabled" : false,
+            "id" : "sim",
+            "kind" : "simulator",
+            "onVisibleScreen" : false
+          }
+        ]
+      },
+      "name" : "mirror off: off-screen disabled target filtered"
+    },
+    {
+      "expect" : [
+        "sim",
+        "term"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : false,
+        "qaPair" : [
+          "sim",
+          "term"
+        ],
+        "windows" : [
+          {
+            "enabled" : false,
+            "id" : "sim",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "term",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "other",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "browser",
+            "kind" : "other",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "qa pair overrides enabled and mirror"
+    },
+    {
+      "expect" : [
+        "sim",
+        "term"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : true,
+        "qaPair" : [
+          "sim",
+          "term"
+        ],
+        "windows" : [
+          {
+            "enabled" : false,
+            "id" : "sim",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "term",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "otherTerm",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "qa pair with mirror on still two"
+    },
+    {
+      "expect" : [
+        "term"
+      ],
+      "input" : {
+        "mirrorAllApps" : true,
+        "mirrorDesktop" : false,
+        "qaPair" : [
+          "gone",
+          "term"
+        ],
+        "windows" : [
+          {
+            "enabled" : false,
+            "id" : "term",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : true,
+            "id" : "x",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "qa pair with one half missing keeps the present half"
+    },
+    {
+      "expect" : [
+        "term",
+        "sim"
+      ],
+      "input" : {
+        "mirrorAllApps" : false,
+        "mirrorDesktop" : false,
+        "qaPair" : [
+          "sim",
+          "term"
+        ],
+        "windows" : [
+          {
+            "enabled" : false,
+            "id" : "term",
+            "kind" : "terminal",
+            "onVisibleScreen" : true
+          },
+          {
+            "enabled" : false,
+            "id" : "sim",
+            "kind" : "simulator",
+            "onVisibleScreen" : true
+          }
+        ]
+      },
+      "name" : "order follows the input, not the pair"
+    },
+    {
+      "expect" : [
+
+      ],
+      "input" : {
+        "mirrorAllApps" : true,
+        "mirrorDesktop" : true,
+        "qaPair" : null,
+        "windows" : [
+
+        ]
+      },
+      "name" : "empty list"
+    }
+  ]
+}

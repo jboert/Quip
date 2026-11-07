@@ -113,6 +113,18 @@ enum DisplayGeometry {
         return DisplayRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
+    /// width / height of one display, for `DisplayState.aspect`. A display
+    /// with no height reports 1 rather than dividing by zero.
+    static func aspect(of display: DisplayRect) -> Double {
+        display.height > 0 ? display.width / display.height : 1
+    }
+
+    /// width / height of the desktop span, for `LayoutUpdate.spanAspect`; nil
+    /// when the span has no height.
+    static func spanAspect(of span: DisplayRect) -> Double? {
+        span.height > 0 ? span.width / span.height : nil
+    }
+
     /// A display's own rect normalized into the desktop span. This is what
     /// ships as `DisplayState.spanFrame`.
     static func spanFrame(of display: DisplayRect, in span: DisplayRect) -> WindowFrame {
