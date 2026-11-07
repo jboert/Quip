@@ -12,6 +12,9 @@
 //! - it never describes a window it did not open by its title (the report's
 //!   `Redactor` drops any that slip through).
 //!
+//! - the one setting it touches, the "Start with Windows" Run value, is put
+//!   back as it was.
+//!
 //! A case is one entry in `CASES`; arrange and typing cases are added there.
 
 use std::collections::{HashMap, HashSet};
@@ -52,7 +55,20 @@ pub const CASES: &[Case] = &[
     Case { name: "classic_cmd_console", run: classic_cmd_console },
     Case { name: "busy_shell_reads_unknown", run: busy_shell_reads_unknown },
     Case { name: "windows_terminal", run: windows_terminal },
+    Case { name: "start_with_windows_round_trip", run: start_with_windows_round_trip },
 ];
+
+/// The tray's "Start with Windows" value: set, read back, delete, then the
+/// earlier value (if any) put back, so the PC ends as it started.
+fn start_with_windows_round_trip(_: &mut Ctx) -> Outcome {
+    match std::env::current_exe() {
+        Ok(exe) => match crate::tray::autostart::round_trip(&exe) {
+            Ok(()) => Outcome::Pass,
+            Err(e) => Outcome::Fail(e),
+        },
+        Err(e) => Outcome::Fail(format!("cannot find Quip.exe: {e}")),
+    }
+}
 
 /// `CREATE_NEW_CONSOLE`: without it the `cmd /c start` helper shares the
 /// console Quip was started from.

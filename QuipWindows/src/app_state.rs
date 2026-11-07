@@ -102,6 +102,10 @@ impl AppState {
         self.show_all_apps = on;
     }
 
+    pub fn show_all_apps(&self) -> bool {
+        self.show_all_apps
+    }
+
     pub fn displays(&self) -> &[PlatformDisplay] {
         &self.displays
     }

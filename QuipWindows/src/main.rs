@@ -1,46 +1,61 @@
-//! `Quip.exe`. Only `--fake-platform` (spec 10.6) runs a host so far; the
-//! Win32 backend lists windows, and the tray app that will run on it is not
-//! built yet. `--selftest` (spec 10.5) runs the Win32 cases and writes a
-//! report. No `windows_subsystem = "windows"` yet:
-//! until there is a tray, stderr is the only place an error can show.
+//! `Quip.exe`. With no arguments on Windows it is the tray app (spec 6):
+//! one instance per session, the host on the Win32 platform, the tray menu.
+//! `--selftest` (spec 10.5) runs the Win32 cases and writes a report;
+//! `--fake-platform` (spec 10.6) runs the host on the scripted fake.
+//!
+//! A GUI program (`windows_subsystem = "windows"`): no console window opens.
+//! The commands that print attach to the console of whatever started them
+//! (`tray::console`); the tray app reports errors in a message box.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+const USAGE: &str = "usage: Quip              the tray app (Windows)
+       Quip --selftest   check this PC, write a report to %LOCALAPPDATA%\\Quip\\Logs
+       Quip --fake-platform [--port N] [--pin PIN] [--fixture PATH] [--log-dir DIR]
+       Quip --help
+From an interactive prompt use `start /wait Quip --selftest` (cmd) or
+`Quip --selftest | Out-Host` (PowerShell) to see the output before the next prompt.";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = if args.iter().any(|a| a == "--selftest") {
-        selftest()
-    } else if args.iter().any(|a| a == "--fake-platform") {
-        match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
-            Ok(rt) => rt.block_on(quip_windows::fake_mode::run(args)),
-            Err(e) => {
-                eprintln!("cannot start the async runtime: {e}");
-                1
-            }
-        }
-    } else {
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    let code = if args.is_empty() {
         real_host()
+    } else {
+        attach_console();
+        if has("--help") || has("-h") {
+            println!("{USAGE}");
+            0
+        } else if has("--selftest") {
+            selftest()
+        } else if has("--fake-platform") {
+            match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+                Ok(rt) => rt.block_on(quip_windows::fake_mode::run(args)),
+                Err(e) => {
+                    eprintln!("cannot start the async runtime: {e}");
+                    1
+                }
+            }
+        } else {
+            eprintln!("unknown arguments: {}\n{USAGE}", args.join(" "));
+            2
+        }
     };
     std::process::exit(code);
 }
 
-/// Builds the Win32 platform. The tray app that runs the host on it is not
-/// built yet, so this stops there.
+#[cfg(windows)]
+fn attach_console() {
+    quip_windows::tray::console::attach_parent_console();
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}
+
 #[cfg(windows)]
 fn real_host() -> i32 {
-    match quip_windows::platform::win32::Win32Platform::new() {
-        Ok(_) => {
-            eprintln!(
-                "Quip: the Windows tray app is not built yet; run with --fake-platform, or --selftest to check this PC.\n{}",
-                quip_windows::fake_mode::USAGE
-            );
-            2
-        }
-        Err(e) => {
-            eprintln!("Quip: {e}");
-            1
-        }
-    }
+    quip_windows::app::run()
 }
 
 #[cfg(not(windows))]

@@ -54,6 +54,21 @@ pub fn websocket_urls(addresses: &[Ipv4Addr], port: u16) -> Vec<String> {
     out
 }
 
+/// Tailscale's CGNAT range, `100.64.0.0/10`.
+pub fn is_tailscale_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    a == 100 && (64..=127).contains(&b)
+}
+
+/// What the tray shows (spec 6): the LAN addresses (RFC 1918) and the
+/// Tailscale ones, each in the order given. Anything else (public, link-local)
+/// is dropped.
+pub fn lan_and_tailscale(addresses: &[Ipv4Addr]) -> (Vec<Ipv4Addr>, Vec<Ipv4Addr>) {
+    let lan = addresses.iter().copied().filter(|a| is_rfc1918_ipv4(&a.to_string())).collect();
+    let tailscale = addresses.iter().copied().filter(|a| is_tailscale_ipv4(*a)).collect();
+    (lan, tailscale)
+}
+
 /// The module rule: a Windows virtual switch or VM adapter, by name or
 /// description.
 pub fn is_virtual_adapter(name: &str, description: &str) -> bool {
@@ -109,6 +124,20 @@ mod tests {
     //! Windows-only exclusions.
     #![allow(non_snake_case)]
     use super::*;
+
+    #[test]
+    fn tray_splits_lan_from_tailscale_and_drops_the_rest() {
+        let ips: Vec<Ipv4Addr> = ["8.8.8.8", "100.101.1.2", "192.168.1.20", "169.254.1.1", "10.0.0.5", "100.63.0.1"]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        let (lan, ts) = lan_and_tailscale(&ips);
+        assert_eq!(lan, vec![Ipv4Addr::new(192, 168, 1, 20), Ipv4Addr::new(10, 0, 0, 5)]);
+        assert_eq!(ts, vec![Ipv4Addr::new(100, 101, 1, 2)]);
+        assert!(is_tailscale_ipv4(Ipv4Addr::new(100, 64, 0, 0)));
+        assert!(is_tailscale_ipv4(Ipv4Addr::new(100, 127, 255, 255)));
+        assert!(!is_tailscale_ipv4(Ipv4Addr::new(100, 128, 0, 1)));
+    }
 
     #[test]
     fn testAcceptsRFC1918Ranges() {

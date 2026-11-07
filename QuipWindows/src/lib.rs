@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+pub mod app;
 pub mod app_state;
 pub mod fake_mode;
 pub mod host;
@@ -14,3 +15,4 @@ pub mod platform;
 pub mod protocol;
 pub mod selftest;
 pub mod services;
+pub mod tray;

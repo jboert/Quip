@@ -65,11 +65,20 @@ jobs:
         # command the owner runs on the PC. Exit 0 only when every case
         # passed (a SKIP fails the step too). The report path is published
         # first, so the upload finds it even when the run fails.
+        # Quip.exe is a GUI program, which PowerShell does not wait for and
+        # gives no console: start it with its output in files, wait for that
+        # process alone (not its children), then print the output.
         working-directory: QuipWindows
         run: |
           "SELFTEST_DIR=$env:LOCALAPPDATA\Quip\Logs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           cargo build
-          .\target\debug\Quip.exe --selftest
+          $p = Start-Process -FilePath .\target\debug\Quip.exe -ArgumentList '--selftest' -NoNewWindow -PassThru `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\selftest-stdout.txt" -RedirectStandardError "$env:RUNNER_TEMP\selftest-stderr.txt"
+          $null = $p.Handle  # keeps the exit code readable after exit
+          $p.WaitForExit()
+          Get-Content "$env:RUNNER_TEMP\selftest-stderr.txt", "$env:RUNNER_TEMP\selftest-stdout.txt"
+          "Quip.exe --selftest exited with $($p.ExitCode)"
+          exit $p.ExitCode
       - name: Upload selftest report
         if: always()
         uses: actions/upload-artifact@v4
