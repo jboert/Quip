@@ -619,18 +619,30 @@ impl Host {
         if mine >= limits.max_unauthenticated_per_sender {
             return Err(PreAuthRefusal::SenderFull);
         }
-        let mut evicted = None;
-        if c.by_network.get(&sender.network).copied().unwrap_or(0) >= limits.max_unauthenticated_per_network {
+        // Pick at most one victim, and evict only when that admits the
+        // sender: a full network needs a victim inside it (which also frees
+        // a host slot); a full host alone needs any victim. Refusing after an
+        // eviction would let a peer in a full network close other senders'
+        // sockets for nothing.
+        let network_full =
+            c.by_network.get(&sender.network).copied().unwrap_or(0) >= limits.max_unauthenticated_per_network;
+        let victim = if network_full {
             if mine > 0 {
                 return Err(PreAuthRefusal::NetworkFull);
             }
-            let victim = c.victim(|s| s.network == sender.network);
-            evicted = victim.and_then(|seq| c.evict(seq)).map(|a| (a, "network"));
-        }
-        if c.total >= limits.max_unauthenticated {
-            let victim = c.victim(|_| true);
-            evicted = victim.and_then(|seq| c.evict(seq)).map(|a| (a, "host"));
-        }
+            match c.victim(|s| s.network == sender.network) {
+                Some(seq) => Some((seq, "network")),
+                None => return Err(PreAuthRefusal::NetworkFull),
+            }
+        } else if c.total >= limits.max_unauthenticated {
+            match c.victim(|_| true) {
+                Some(seq) => Some((seq, "host")),
+                None => return Err(PreAuthRefusal::Full),
+            }
+        } else {
+            None
+        };
+        let evicted = victim.and_then(|(seq, what)| c.evict(seq).map(|a| (a, what)));
         // Nothing to evict: every slot there is busy (a PIN check, or a
         // wrong PIN queued for a guess token).
         if c.by_network.get(&sender.network).copied().unwrap_or(0) >= limits.max_unauthenticated_per_network {

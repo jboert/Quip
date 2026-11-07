@@ -1492,6 +1492,53 @@ async fn a_slot_whose_wrong_pin_is_queued_is_never_evicted() {
     }
 }
 
+/// A sender refused for its own full network must not cost anyone else a
+/// socket: with the network holding only busy slots (wrong PINs queued for a
+/// guess token) and the host full of other networks' idle slots, a newcomer
+/// from that network is refused and every other slot survives.
+#[tokio::test]
+async fn a_newcomer_refused_for_its_full_network_evicts_nobody() {
+    use quip_windows::host::{PreAuthRefusal, MAX_UNAUTHENTICATED_PER_NETWORK, MAX_UNAUTHENTICATED_PER_SENDER};
+    use quip_windows::services::auth_throttle::Sender;
+    let hanging: std::sync::Arc<dyn quip_windows::host::Sleeper> = std::sync::Arc::new(HangingSleeper);
+    let h = start_with(Opts { sleeper: Some(hanging), ..Default::default() }).await;
+    let key = |s: &str| Sender::of(s.parse().unwrap());
+    let net = "2001:db8:1:1::/64";
+    let mut in_delay = vec![];
+    for i in 1..=MAX_UNAUTHENTICATED_PER_NETWORK {
+        in_delay.push(auth_in_background(&h, &format!("2001:db8:1:1::{i:x}"), "99999999"));
+    }
+    wait_for(|| h.host.guesses_in_delay(net) == MAX_UNAUTHENTICATED_PER_NETWORK).await;
+    // Fill the network with slots whose wrong PIN is queued: never evictable.
+    let mut queued = vec![];
+    for (n, addr) in ["2001:db8:1:1::fe", "2001:db8:1:1::ff"]
+        .iter()
+        .flat_map(|a| std::iter::repeat_n(*a, MAX_UNAUTHENTICATED_PER_SENDER))
+        .enumerate()
+    {
+        let sender = key(addr);
+        let slot = h.host.try_pre_auth_slot(&sender).unwrap();
+        let (id, _rx, _kick) = h.host.register_client(format!("[{addr}]:{}", 50000 + n));
+        let (host, s, q) = (h.host.clone(), slot.clone(), sender.clone());
+        tokio::spawn(async move { host.handle_auth(id, &q, Some("99999999".into()), Some(s)).await });
+        wait_for(|| h.host.guesses_queued(net) == n + 1).await;
+        queued.push(slot);
+    }
+    assert_eq!(h.host.unauthenticated_from_network(net), MAX_UNAUTHENTICATED_PER_NETWORK);
+    // Fill the rest of the host with idle IPv4 slots (evictable).
+    let mut idle = vec![];
+    for a in ["192.0.2.1", "192.0.2.2"] {
+        for _ in 0..MAX_UNAUTHENTICATED_PER_SENDER {
+            idle.push(h.host.try_pre_auth_slot(&key(a)).unwrap());
+        }
+    }
+    assert_eq!(h.host.unauthenticated_count(), quip_windows::host::MAX_UNAUTHENTICATED);
+    assert_eq!(h.host.try_pre_auth_slot(&key("2001:db8:1:1::fd")).err(), Some(PreAuthRefusal::NetworkFull));
+    assert!(idle.iter().all(|s| !s.is_evicted()), "no other network's socket was evicted");
+    assert!(queued.iter().all(|s| !s.is_evicted()));
+    assert_eq!(h.host.unauthenticated_count(), quip_windows::host::MAX_UNAUTHENTICATED);
+}
+
 /// Closing early frees the socket but not the guess. With all 8 of a
 /// network's guess tokens in their delay its right PIN still pairs, and
 /// its next wrong PINs queue, each keeping its socket's slot after a close,

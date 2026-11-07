@@ -1,6 +1,6 @@
 # Plan: Q-91 Quip for Windows (phase 1)
 
-**Status:** In progress — approved by owner 2026-11-06 with a stop after S9 (owner checks the real PC before S10). S1-S6 complete (incl. S5b-S5d); S5e complete; S7-S9 complete; review done (Needs fixes); R1 review-fix next; S10-S12 on hold.
+**Status:** Run complete through S9 (owner stop): S1-S9 incl. S5b-S5e complete, review done, R1 review-fix complete (Windows CI run 42343269299 green at db0699c), plus one post-review eviction-order fix. Next: owner's PC check (Owner gates), then S10-S12, which stay on hold until then.
 
 - Spec (source of truth for behavior): `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`
 - PRD: `tasks/prd-quip-windows-host.md` · Board: Q-91 · Handoff: `docs/superpowers/handoffs/2026-11-06-session-handoff.md`
@@ -142,7 +142,7 @@
 - Low 4 (auth_throttle.rs:5-8 module doc said /64 lockout) fixed directly by the orchestrator.
 
 ### R1: Review-fix slice
-- **Status:** Complete (Win32 UI test changes verified only by the Windows target build; Windows CI needs a push)
+- **Status:** Complete (db0699c; Windows CI run 42343269299: listing 6, displays 2, qr 2, tray 3, selftest 11/11). Post-review: the automated security review of db0699c found the host-wide eviction ran before a NetworkFull refusal (a peer in a full network could evict others for nothing); fixed by the orchestrator: one victim chosen, evicted only when it admits the sender; test `a_newcomer_refused_for_its_full_network_evicts_nobody` fails on db0699c.
 - Goal: resolve the review's actionable findings.
 - Findings:
   1. Medium, `QuipWindows/src/host.rs:481-498` + `services/ws_server.rs:217-244` (S5b/S5d/S5e): the global 16 pre-auth socket cap is checked first and refuses newcomers at accept, so a peer holding 4 IPv4 addresses x 4 sockets (or 2+ addresses in a /64) keeps the owner's phone from ever sending its PIN; contradicts spec 3.1. Fix (a): when the global cap is full, a sender with zero pre-auth sockets is admitted by evicting the oldest pre-auth socket of the address (and then network) holding the most; test: 4 attacker IPv4 addresses x 4 sockets, a 5th address still gets the greeting and pairs; same for a /64 neighbour; spec 3.1 sentence kept true.
