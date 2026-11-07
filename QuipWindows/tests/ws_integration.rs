@@ -1186,16 +1186,16 @@ async fn pre_auth_slots_are_counted_per_exact_address() {
     assert_eq!(h.host.try_pre_auth_slot(&key("2001:db8:1:2::1")).err(), Some(PreAuthRefusal::SenderFull));
     held.push(h.host.try_pre_auth_slot(&key("2001:db8:1:2::2")).expect("a neighbour in the same /64 connects"));
     assert_eq!(h.host.unauthenticated_from("2001:db8:1:2::2"), 1);
-    // The global 16 still binds across senders.
+    // The global 16 still binds across senders, for a sender holding one.
     for i in 0..7 {
         held.push(h.host.try_pre_auth_slot(&key(&format!("198.51.100.{}", i / 2 + 1))).unwrap());
     }
     assert_eq!(h.host.unauthenticated_count(), 16);
-    assert_eq!(h.host.try_pre_auth_slot(&key("203.0.113.1")).err(), Some(PreAuthRefusal::Full));
+    assert_eq!(h.host.try_pre_auth_slot(&key("198.51.100.4")).err(), Some(PreAuthRefusal::Full));
     drop(held.remove(0));
     assert_eq!(h.host.unauthenticated_from("192.0.2.1"), 3);
     assert_eq!(h.host.unauthenticated_count(), 15);
-    assert!(h.host.try_pre_auth_slot(&key("203.0.113.1")).is_ok());
+    assert!(h.host.try_pre_auth_slot(&key("198.51.100.4")).is_ok());
     drop(held);
     assert_eq!(h.host.unauthenticated_count(), 0);
     assert_eq!(h.host.unauthenticated_from("192.0.2.1"), 0);
@@ -1216,11 +1216,19 @@ async fn one_slash_64_holds_at_most_eight_pre_auth_sockets_and_ipv4_still_connec
     assert_eq!(h.host.unauthenticated_from_network("2001:db8:1:2::/64"), 8);
     assert_eq!(h.host.unauthenticated_from("2001:db8:1:2::100"), 2);
     assert_eq!(
-        h.host.try_pre_auth_slot(&key("2001:db8:1:2::ffff")).err(),
+        h.host.try_pre_auth_slot(&key("2001:db8:1:2::100")).err(),
         Some(PreAuthRefusal::NetworkFull),
-        "a 9th from a new address in the /64"
+        "a 9th from an address already holding one"
     );
-    assert_eq!(h.host.try_pre_auth_slot(&key("2001:db8:1:2::100")).err(), Some(PreAuthRefusal::NetworkFull));
+    // A 9th from a new address in the /64 replaces the oldest slot of the
+    // /64's busiest address (all hold 2, so the oldest of all): the /64
+    // stays at 8.
+    let neighbour = h.host.try_pre_auth_slot(&key("2001:db8:1:2::ffff")).expect("a neighbour holding none gets in");
+    assert!(held[0].is_evicted());
+    assert_eq!(held.iter().filter(|s| s.is_evicted()).count(), 1);
+    assert_eq!(h.host.unauthenticated_from_network("2001:db8:1:2::/64"), 8);
+    assert_eq!(h.host.unauthenticated_from("2001:db8:1:2::100"), 1);
+    held.push(neighbour);
     held.push(h.host.try_pre_auth_slot(&key("192.0.2.1")).expect("an IPv4 sender still connects"));
     held.push(h.host.try_pre_auth_slot(&key("2001:db8:1:3::1")).expect("the next /64 is another network"));
     assert_eq!(h.host.unauthenticated_count(), 10);
@@ -1229,10 +1237,13 @@ async fn one_slash_64_holds_at_most_eight_pre_auth_sockets_and_ipv4_still_connec
         held.push(h.host.try_pre_auth_slot(&key("2001:db8:1:3::1")).unwrap());
     }
     assert_eq!(h.host.try_pre_auth_slot(&key("2001:db8:1:3::1")).err(), Some(PreAuthRefusal::SenderFull));
-    // Freeing one of the /64's slots lets a new address in it connect.
+    // Dropping an evicted slot changes nothing; freeing a live one of the
+    // /64's lets an address in it connect again.
+    drop(held.remove(0));
+    assert_eq!(h.host.unauthenticated_from_network("2001:db8:1:2::/64"), 8);
     drop(held.remove(0));
     assert_eq!(h.host.unauthenticated_from_network("2001:db8:1:2::/64"), 7);
-    assert_eq!(h.host.unauthenticated_from("2001:db8:1:2::100"), 1);
+    assert_eq!(h.host.unauthenticated_from("2001:db8:1:2::100"), 0);
     held.push(h.host.try_pre_auth_slot(&key("2001:db8:1:2::ffff")).unwrap());
     drop(held);
     assert_eq!(h.host.unauthenticated_from_network("2001:db8:1:2::/64"), 0);
@@ -1283,6 +1294,202 @@ async fn closing_during_the_wrong_pin_delay_frees_the_slot_at_once() {
     assert_eq!(h.host.unauthenticated_from("127.0.0.1"), 0);
     assert_eq!(h.host.unauthenticated_from_network("127.0.0.1"), 0);
     assert_eq!(h.host.guesses_in_delay("127.0.0.1"), 1, "the guess stays counted until its delay ends");
+}
+
+/// Review R1: four IPv4 addresses with four sockets each fill all 16 slots.
+/// A fifth address, holding none, still gets the greeting and pairs: it
+/// evicts the oldest slot of the busiest address. The attacker's own extra
+/// sockets are still refused, a retry from the evicted address too.
+#[tokio::test]
+async fn four_ipv4_addresses_holding_all_sixteen_slots_never_keep_a_fifth_from_pairing() {
+    use quip_windows::host::{PreAuthRefusal, MAX_UNAUTHENTICATED};
+    use quip_windows::services::auth_throttle::Sender;
+    let h = start().await;
+    let key = |s: &str| Sender::of(s.parse().unwrap());
+    let mut attacker = vec![];
+    for a in 1..=4 {
+        for _ in 0..4 {
+            attacker.push(h.host.try_pre_auth_slot(&key(&format!("198.51.100.{a}"))).unwrap());
+        }
+        if a == 1 {
+            let fifth = h.host.try_pre_auth_slot(&key("198.51.100.1")).err();
+            assert_eq!(fifth, Some(PreAuthRefusal::SenderFull), "the per-address 4 binds below the 16");
+        }
+    }
+    assert_eq!(h.host.unauthenticated_count(), MAX_UNAUTHENTICATED);
+
+    let mut phone = connect(h.addr).await; // 127.0.0.1 holds none
+    assert_eq!(phone.recv().await["error"], "auth_required");
+    assert!(attacker[0].is_evicted(), "the oldest of the busiest address");
+    assert_eq!(attacker.iter().filter(|s| s.is_evicted()).count(), 1);
+    assert_eq!(h.host.unauthenticated_from("198.51.100.1"), 3);
+    assert_eq!(h.host.unauthenticated_count(), MAX_UNAUTHENTICATED);
+    assert_eq!(h.host.try_pre_auth_slot(&key("198.51.100.1")).err(), Some(PreAuthRefusal::Full), "no retry");
+    assert_eq!(h.host.try_pre_auth_slot(&key("198.51.100.2")).err(), Some(PreAuthRefusal::Full));
+
+    phone.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(phone.recv().await["success"], true);
+    assert_eq!(h.host.unauthenticated_from("127.0.0.1"), 0);
+    assert_eq!(h.host.unauthenticated_count(), MAX_UNAUTHENTICATED - 1);
+    assert_eq!(h.host.try_pre_auth_slot(&key("198.51.100.2")).err(), Some(PreAuthRefusal::SenderFull));
+    let log = h.log("websocket.log");
+    assert!(
+        log.contains(
+            "evicted the oldest pre-auth socket of 198.51.100.1 to admit 127.0.0.1, which held none (host full)"
+        ),
+        "{log}"
+    );
+    drop(attacker);
+    assert_eq!(h.host.unauthenticated_count(), 0, "an evicted slot is counted once");
+}
+
+/// The same from inside an attacker-held /64 (`::/64`, so the real `::1`
+/// is the neighbour): the attacker holds the network's 8 and, with two IPv4
+/// addresses, all 16. `::1` evicts inside its network, gets the greeting
+/// and pairs; the attacker's addresses in the /64 are still refused.
+#[tokio::test]
+async fn a_neighbour_inside_an_attacker_held_slash_64_still_pairs() {
+    use quip_windows::host::{PreAuthRefusal, MAX_UNAUTHENTICATED};
+    use quip_windows::services::auth_throttle::Sender;
+    let h = start().await;
+    let v6 = quip_windows::services::ws_server::bind("[::1]:0".parse().unwrap()).await.unwrap();
+    let v6_addr = v6.local_addr().unwrap();
+    quip_windows::services::ws_server::spawn(h.host.clone(), v6);
+    let key = |s: &str| Sender::of(s.parse().unwrap());
+    let mut in_net = vec![];
+    for (a, n) in [("::2", 4), ("::3", 3), ("::4", 1)] {
+        for _ in 0..n {
+            in_net.push(h.host.try_pre_auth_slot(&key(a)).unwrap());
+        }
+    }
+    assert_eq!(h.host.unauthenticated_from_network("::/64"), 8);
+    assert_eq!(h.host.try_pre_auth_slot(&key("::2")).err(), Some(PreAuthRefusal::SenderFull));
+    assert_eq!(h.host.try_pre_auth_slot(&key("::3")).err(), Some(PreAuthRefusal::NetworkFull));
+    let mut v4 = vec![];
+    for a in ["198.51.100.1", "198.51.100.2"] {
+        for _ in 0..4 {
+            v4.push(h.host.try_pre_auth_slot(&key(a)).unwrap());
+        }
+    }
+    assert_eq!(h.host.unauthenticated_count(), MAX_UNAUTHENTICATED);
+
+    let mut phone = connect(v6_addr).await;
+    assert_eq!(phone.recv().await["error"], "auth_required");
+    assert!(in_net[0].is_evicted(), "the oldest of the /64's busiest address");
+    assert_eq!(in_net.iter().filter(|s| s.is_evicted()).count(), 1);
+    assert!(v4.iter().all(|s| !s.is_evicted()), "another network's slots are not taken");
+    assert_eq!(h.host.unauthenticated_from_network("::/64"), 8);
+    assert_eq!(h.host.try_pre_auth_slot(&key("::2")).err(), Some(PreAuthRefusal::Full), "no retry");
+
+    phone.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(phone.recv().await["success"], true);
+    assert_eq!(h.host.unauthenticated_from_network("::/64"), 7, "the paired phone's slot is freed");
+    let log = h.log("websocket.log");
+    assert!(
+        log.contains("evicted the oldest pre-auth socket of ::2 to admit ::1, which held none (network full)"),
+        "{log}"
+    );
+}
+
+/// An evicted socket is closed, even in its wrong PIN's delay, and its
+/// slot is no longer counted.
+#[tokio::test]
+async fn an_evicted_socket_is_closed_mid_delay_and_gives_its_slot_up() {
+    let hanging: std::sync::Arc<dyn quip_windows::host::Sleeper> = std::sync::Arc::new(HangingSleeper);
+    let limits = quip_windows::host::ConnectionLimits { max_unauthenticated: 2, ..Default::default() };
+    let h = start_with(Opts { sleeper: Some(hanging), limits, ..Default::default() }).await;
+    let v6 = quip_windows::services::ws_server::bind("[::1]:0".parse().unwrap()).await.unwrap();
+    let v6_addr = v6.local_addr().unwrap();
+    quip_windows::services::ws_server::spawn(h.host.clone(), v6);
+    let mut oldest = connect(h.addr).await;
+    oldest.recv().await; // auth_required
+    oldest.send(json!({"type":"auth","pin":"99999999"})).await;
+    wait_for(|| h.log("websocket.log").contains("incorrect PIN")).await;
+    let mut second = connect(h.addr).await;
+    second.recv().await; // auth_required
+    assert_eq!(h.host.unauthenticated_count(), 2);
+
+    let mut phone = connect(v6_addr).await;
+    assert_eq!(phone.recv().await["error"], "auth_required");
+    assert_closed_by_host(&mut oldest).await;
+    assert_eq!(h.host.unauthenticated_from("127.0.0.1"), 1);
+    assert_eq!(h.host.unauthenticated_count(), 2);
+    phone.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(phone.recv().await["success"], true);
+    second.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(second.recv().await["success"], true, "the younger socket was kept");
+    wait_for(|| h.log("websocket.log").contains("evicted for a sender with no socket waiting for auth")).await;
+}
+
+/// A right PIN gives its slot back at once, before the socket's task drops
+/// it, so no eviction can pick an authenticated socket.
+#[tokio::test]
+async fn a_right_pin_frees_its_slot_at_once() {
+    use quip_windows::services::auth_throttle::Sender;
+    let h = start().await;
+    let sender = Sender::of("192.0.2.1".parse().unwrap());
+    let slot = h.host.try_pre_auth_slot(&sender).unwrap();
+    let (id, mut rx, _kick) = h.host.register_client("192.0.2.1:50000".into());
+    h.host.handle_auth(id, &sender, Some(PIN.to_string()), Some(slot.clone())).await;
+    assert_eq!(recv_json(&mut rx).await["success"], true);
+    assert!(h.host.is_authenticated(id));
+    assert_eq!(h.host.unauthenticated_count(), 0, "freed while the slot is still held");
+    drop(slot);
+    assert_eq!(h.host.unauthenticated_count(), 0, "and counted once");
+}
+
+/// A right PIN on an evicted socket's slot does not authenticate it.
+#[tokio::test]
+async fn an_auth_on_an_evicted_slot_does_not_complete() {
+    use quip_windows::services::auth_throttle::Sender;
+    let limits = quip_windows::host::ConnectionLimits { max_unauthenticated: 1, ..Default::default() };
+    let h = start_with(Opts { limits, ..Default::default() }).await;
+    let victim_sender = Sender::of("192.0.2.1".parse().unwrap());
+    let victim = h.host.try_pre_auth_slot(&victim_sender).unwrap();
+    let (id, mut rx, _kick) = h.host.register_client("192.0.2.1:50000".into());
+    let _newcomer = h.host.try_pre_auth_slot(&Sender::of("192.0.2.2".parse().unwrap())).unwrap();
+    assert!(victim.is_evicted());
+    tokio::time::timeout(Duration::from_secs(1), victim.evicted()).await.expect("the eviction is signalled");
+    h.host.handle_auth(id, &victim_sender, Some(PIN.to_string()), Some(victim.clone())).await;
+    assert!(!h.host.is_authenticated(id));
+    assert!(rx.try_recv().is_err(), "nothing is sent");
+    assert_eq!(h.host.unauthenticated_count(), 1, "only the newcomer's slot");
+}
+
+/// A wrong PIN queued for a guess token keeps its slot (spec 3.1 threat
+/// math): it is never the one evicted, and with only such slots there a
+/// sender holding none is refused.
+#[tokio::test]
+async fn a_slot_whose_wrong_pin_is_queued_is_never_evicted() {
+    use quip_windows::host::{PreAuthRefusal, MAX_UNAUTHENTICATED_PER_NETWORK};
+    use quip_windows::services::auth_throttle::Sender;
+    for max in [1, 2] {
+        let hanging: std::sync::Arc<dyn quip_windows::host::Sleeper> = std::sync::Arc::new(HangingSleeper);
+        let limits = quip_windows::host::ConnectionLimits { max_unauthenticated: max, ..Default::default() };
+        let h = start_with(Opts { sleeper: Some(hanging), limits, ..Default::default() }).await;
+        let key = |s: &str| Sender::of(s.parse().unwrap());
+        let net = "2001:db8:1:1::/64";
+        let mut in_delay = vec![];
+        for i in 1..=MAX_UNAUTHENTICATED_PER_NETWORK {
+            in_delay.push(auth_in_background(&h, &format!("2001:db8:1:1::{i:x}"), "99999999"));
+        }
+        wait_for(|| h.host.guesses_in_delay(net) == MAX_UNAUTHENTICATED_PER_NETWORK).await;
+        let queued_sender = key("2001:db8:1:1::ff");
+        let queued = h.host.try_pre_auth_slot(&queued_sender).unwrap();
+        let (id, _rx, _kick) = h.host.register_client("[2001:db8:1:1::ff]:50000".into());
+        let (host, slot, qs) = (h.host.clone(), queued.clone(), queued_sender.clone());
+        tokio::spawn(async move { host.handle_auth(id, &qs, Some("99999999".into()), Some(slot)).await });
+        wait_for(|| h.host.guesses_queued(net) == 1).await;
+        if max == 1 {
+            assert_eq!(h.host.try_pre_auth_slot(&key("192.0.2.2")).err(), Some(PreAuthRefusal::Full));
+        } else {
+            let idle = h.host.try_pre_auth_slot(&key("192.0.2.1")).unwrap();
+            let _newcomer = h.host.try_pre_auth_slot(&key("192.0.2.2")).expect("evicts the idle slot");
+            assert!(idle.is_evicted(), "the idle one, though the queued one is older");
+        }
+        assert!(!queued.is_evicted());
+        assert_eq!(h.host.unauthenticated_from("2001:db8:1:1::ff"), 1);
+    }
 }
 
 /// Closing early frees the socket but not the guess. With all 8 of a

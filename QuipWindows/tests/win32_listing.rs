@@ -2,16 +2,22 @@
 //! open consoles, Windows Terminal and Notepad, so they only run with
 //! `QUIP_WIN_UI=1` (Windows CI sets it; run them one at a time with
 //! `--test-threads=1`, they share the desktop).
+//!
+//! Every window a test opens is found by a title marker it sets itself
+//! (`selftest::own::marker`), as `Quip.exe --selftest` does, so a window the
+//! user has open is never taken for it, and never closed.
 #![cfg(windows)]
 
 use std::collections::HashSet;
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use quip_windows::platform::traits::{PlatformWindow, WindowBackend, WindowRef};
 use quip_windows::platform::win32::{process_snapshot, Win32Platform};
+use quip_windows::selftest::own::{has_marker, marker};
 use quip_windows::services::classify::{exe_stem, TerminalHost, CONSOLE_CLASS, WT_CLASS};
 use quip_windows::services::layout::PixelRect;
 use quip_windows::services::multiline_policy::Shell;
@@ -104,7 +110,25 @@ fn hwnd(handle: u64) -> HWND {
     HWND(handle as usize as *mut std::ffi::c_void)
 }
 
-/// Posts `WM_CLOSE` to a window another process owns when dropped.
+/// A title marker unique to this test process and window.
+fn new_marker(tag: &str) -> String {
+    static N: AtomicU32 = AtomicU32::new(0);
+    marker(std::process::id(), N.fetch_add(1, Ordering::SeqCst) + 1, tag)
+}
+
+/// cmd sets no title of its own and spec 5.1 leaves untitled windows out;
+/// the `title` builtin names it without adding a child process.
+fn cmd_titled(m: &str) -> String {
+    format!("cmd.exe /K title {m}")
+}
+
+/// PowerShell titling its console, then running `then` (if any) in it.
+fn powershell_titled(m: &str, then: &str) -> String {
+    format!(r#"powershell.exe -NoLogo -NoExit -Command "$Host.UI.RawUI.WindowTitle='{m}'{then}""#)
+}
+
+/// Posts `WM_CLOSE` when dropped to a window another process owns, found by
+/// this test's marker.
 struct CloseOnDrop(u64);
 
 impl Drop for CloseOnDrop {
@@ -114,9 +138,13 @@ impl Drop for CloseOnDrop {
     }
 }
 
-/// `cmd /c start "" conhost.exe <args>`: a classic console with its own
-/// window, even under CI's redirected stdio (spec 10.5).
-fn open_conhost(p: &Win32Platform, args: &str) -> (PlatformWindow, CloseOnDrop) {
+/// `cmd /c start "" conhost.exe <args(marker)>`: a classic console with its
+/// own window, even under CI's redirected stdio (spec 10.5). `args` must
+/// make the shell title the console with the marker; only a new console
+/// carrying it is taken (and later closed).
+fn open_conhost(p: &Win32Platform, tag: &str, args: impl Fn(&str) -> String) -> (PlatformWindow, CloseOnDrop) {
+    let m = new_marker(tag);
+    let args = args(&m);
     let before = handles(p);
     Command::new("cmd.exe")
         .creation_flags(CREATE_NEW_CONSOLE)
@@ -126,9 +154,12 @@ fn open_conhost(p: &Win32Platform, args: &str) -> (PlatformWindow, CloseOnDrop) 
         .raw_arg(format!(r#"/c start "" conhost.exe {args}"#))
         .status()
         .unwrap();
-    let w = wait_new(p, &before, Duration::from_secs(15), |w| w.class_name == CONSOLE_CLASS).unwrap_or_else(|| {
+    let w = wait_new(p, &before, Duration::from_secs(15), |w| {
+        w.class_name == CONSOLE_CLASS && has_marker(&w.title, &m)
+    })
+    .unwrap_or_else(|| {
         panic!(
-            "no new console window for `{args}` in 15 s\nevery top-level {CONSOLE_CLASS} window:\n{}console processes:\n{}",
+            "no new console window titled {m} for `{args}` in 15 s\nevery top-level {CONSOLE_CLASS} window:\n{}console processes:\n{}",
             p.explain_class(CONSOLE_CLASS),
             console_processes(),
         )
@@ -149,8 +180,10 @@ fn console_processes() -> String {
         .collect()
 }
 
-fn assert_console_shell(p: &Win32Platform, args: &str, shell: Shell, app: &str) {
-    let (w, _close) = open_conhost(p, args);
+fn assert_console_shell(p: &Win32Platform, tag: &str, args: impl Fn(&str) -> String, shell: Shell, app: &str) {
+    let args_shown = args("<marker>");
+    let (w, _close) = open_conhost(p, tag, args);
+    let args = args_shown.as_str();
     let got = wait_listed(p, w.handle, Duration::from_secs(15), |w| w.shell == Some(shell));
     let tree = process_tree(w.pid);
     let got = got
@@ -168,12 +201,12 @@ fn classic_consoles_are_terminals_with_their_shell() {
         return;
     }
     let p = platform();
-    assert_console_shell(&p, "powershell.exe -NoLogo -NoExit", Shell::PowerShell, "PowerShell");
+    assert_console_shell(&p, "ps", |m| powershell_titled(m, ""), Shell::PowerShell, "PowerShell");
     // A bare `cmd /K` under `start ""` can come up untitled (cmd, unlike
     // PowerShell, sets no title of its own), and spec 5.1 leaves untitled
     // windows out. `title` is a cmd builtin: it names the console the way a
     // shortcut or the Run box does, without adding a child process.
-    assert_console_shell(&p, "cmd.exe /K title Quip cmd test", Shell::Cmd, "Command Prompt");
+    assert_console_shell(&p, "cmd", cmd_titled, Shell::Cmd, "Command Prompt");
 }
 
 #[test]
@@ -183,8 +216,8 @@ fn a_program_running_in_the_shell_makes_it_unknown() {
     }
     let p = platform();
     // ping stands in for python / ssh / node: any non-shell child of the
-    // shell is a program that would get our keys.
-    let (w, _close) = open_conhost(&p, "powershell.exe -NoLogo -NoExit -Command ping -n 120 127.0.0.1");
+    // shell is a program that would get our keys. The title is set first.
+    let (w, _close) = open_conhost(&p, "busy", |m| powershell_titled(m, "; ping -n 120 127.0.0.1"));
     let got = wait_listed(&p, w.handle, Duration::from_secs(15), |w| w.shell == Some(Shell::Unknown));
     let tree = process_tree(w.pid);
     let got = got.unwrap_or_else(|| panic!("console left the listing\n{tree}"));
@@ -208,10 +241,17 @@ fn windows_terminal_is_a_terminal_with_its_tab_shell() {
         return;
     }
     let p = platform();
+    // The window shows its active tab's title, which the tab's PowerShell
+    // sets to the marker.
+    let m = new_marker("wt");
+    let set_title = format!("$Host.UI.RawUI.WindowTitle='{m}'");
     let before = handles(&p);
-    Command::new("wt.exe").args(["-w", "new", "powershell.exe", "-NoLogo", "-NoExit"]).status().unwrap();
-    let w = wait_new(&p, &before, Duration::from_secs(20), |w| w.class_name == WT_CLASS)
-        .expect("no new Windows Terminal window in 20 s");
+    Command::new("wt.exe")
+        .args(["-w", "new", "powershell.exe", "-NoLogo", "-NoExit", "-Command", &set_title])
+        .status()
+        .unwrap();
+    let w = wait_new(&p, &before, Duration::from_secs(20), |w| w.class_name == WT_CLASS && has_marker(&w.title, &m))
+        .unwrap_or_else(|| panic!("no new Windows Terminal window titled {m} in 20 s"));
     let _close = CloseOnDrop(w.handle);
     let got = wait_listed(&p, w.handle, Duration::from_secs(15), |w| w.shell == Some(Shell::PowerShell));
     let tree = process_tree(w.pid);
@@ -228,12 +268,18 @@ fn notepad_is_an_app_not_a_terminal() {
         return;
     }
     let p = platform();
+    // Notepad titles its window after the file it opens, so a file named
+    // after the marker marks the window.
+    let m = new_marker("notepad");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(format!("{m}.txt"));
+    std::fs::write(&file, "").unwrap();
     let before = handles(&p);
-    let mut child = Command::new("notepad.exe").spawn().unwrap();
+    let mut child = Command::new("notepad.exe").arg(&file).spawn().unwrap();
     let w = wait_new(&p, &before, Duration::from_secs(15), |w| {
-        w.exe_path.as_deref().map(exe_stem).as_deref() == Some("notepad")
+        w.exe_path.as_deref().map(exe_stem).as_deref() == Some("notepad") && has_marker(&w.title, &m)
     })
-    .expect("no Notepad window in 15 s");
+    .unwrap_or_else(|| panic!("no Notepad window titled {m} in 15 s"));
     let _close = CloseOnDrop(w.handle);
     assert_eq!(w.terminal, None);
     assert_eq!(w.shell, None);

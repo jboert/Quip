@@ -293,6 +293,19 @@ fn is_benign_close(e: &WsError) -> bool {
     }
 }
 
+/// Resolves when the socket's pre-auth slot is evicted; never once it has
+/// none (authenticated).
+async fn evicted(slot: &Option<PreAuthSlot>) {
+    match slot {
+        Some(s) => s.evicted().await,
+        None => std::future::pending().await,
+    }
+}
+
+fn log_evicted(host: &Host, remote: &str) {
+    host.logs.ws(Severity::Info, &format!("closing {remote}: evicted for a sender with no socket waiting for auth"));
+}
+
 async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender: Sender, slot: PreAuthSlot) {
     let remote = peer.to_string();
     if host.config.loopback_only && !peer.ip().to_canonical().is_loopback() {
@@ -303,12 +316,19 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
     let auth_deadline = host.config.limits.pre_auth_deadline;
     let deadline = tokio::time::Instant::now() + auth_deadline;
     let handshake_deadline = tokio::time::Instant::now() + PRE_HANDSHAKE_DEADLINE.min(auth_deadline);
-    let ws = match tokio::time::timeout_at(
+    let upgrade = tokio::time::timeout_at(
         handshake_deadline,
         tokio_tungstenite::accept_async_with_config(stream, Some(ws_config())),
-    )
-    .await
-    {
+    );
+    let upgraded = tokio::select! {
+        biased;
+        () = slot.evicted() => {
+            log_evicted(&host, &remote);
+            return;
+        }
+        upgraded = upgrade => upgraded,
+    };
+    let ws = match upgraded {
         Err(_) => {
             if should_reap(false) {
                 host.logs.ws(
@@ -361,6 +381,10 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
                 host.logs.ws(Severity::Info, &format!("closing {remote}: the PIN was replaced"));
                 break;
             }
+            () = evicted(&slot) => {
+                log_evicted(&host, &remote);
+                break;
+            }
             next = read => match next {
                 Some(n) => n,
                 None => {
@@ -408,11 +432,16 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
                 // abandoned (the attempt is already recorded) and
                 // the loop reads the close. `biased`: the attempt always runs
                 // first, so a close sent with the PIN cannot skip it.
+                // An eviction meanwhile abandons the reply and closes.
                 let auth = host.handle_auth(id, &sender, pin, slot.clone());
                 tokio::pin!(auth);
                 let closed = tokio::select! {
                     biased;
                     () = &mut auth => false,
+                    () = evicted(&slot) => {
+                        log_evicted(&host, &remote);
+                        break;
+                    }
                     closes = peer_closes(&mut source) => {
                         if !closes {
                             // Another frame came in first; it waits its turn.

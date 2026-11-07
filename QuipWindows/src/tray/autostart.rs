@@ -8,6 +8,12 @@ use std::path::Path;
 pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 pub const VALUE_NAME: &str = "Quip";
 
+/// The Run value the selftest round-trips instead of `VALUE_NAME`, so a
+/// selftest killed half way never loses or changes the user's setting.
+pub fn selftest_value_name(pid: u32) -> String {
+    format!("{VALUE_NAME}-selftest-{pid}")
+}
+
 /// `"C:\Program Files\Quip\Quip.exe"`: quoted, so a path with spaces is one
 /// command, not a program `C:\Program` with arguments.
 pub fn run_value(exe: &Path) -> String {
@@ -27,7 +33,7 @@ pub fn points_at(value: &str, exe: &Path) -> bool {
 }
 
 #[cfg(windows)]
-pub use self::win32::{read, remove, round_trip, write};
+pub use self::win32::{read, read_named, remove, round_trip, write};
 
 #[cfg(windows)]
 mod win32 {
@@ -39,13 +45,28 @@ mod win32 {
 
     use super::{RUN_KEY, VALUE_NAME};
 
-    fn err(what: &str, e: WIN32_ERROR) -> String {
-        format!("{what} {VALUE_NAME} in HKCU\\{RUN_KEY}: {}", windows::core::Error::from(e.to_hresult()).message())
+    fn err(what: &str, value: &str, e: WIN32_ERROR) -> String {
+        format!("{what} {value} in HKCU\\{RUN_KEY}: {}", windows::core::Error::from(e.to_hresult()).message())
     }
 
     /// The current Run value, `None` when there is none.
     pub fn read() -> Result<Option<String>, String> {
-        let (key, name) = (HSTRING::from(RUN_KEY), HSTRING::from(VALUE_NAME));
+        read_named(VALUE_NAME)
+    }
+
+    /// Sets the Run value to `value` (see `run_value`).
+    pub fn write(value: &str) -> Result<(), String> {
+        write_named(VALUE_NAME, value)
+    }
+
+    /// Deletes the Run value. No value is not an error.
+    pub fn remove() -> Result<(), String> {
+        remove_named(VALUE_NAME)
+    }
+
+    /// The Run key's value `value_name`, `None` when there is none.
+    pub fn read_named(value_name: &str) -> Result<Option<String>, String> {
+        let (key, name) = (HSTRING::from(RUN_KEY), HSTRING::from(value_name));
         let mut bytes: u32 = 0;
         // SAFETY: the strings outlive the call; a null data pointer with a
         // size pointer asks for the size only.
@@ -54,7 +75,7 @@ mod win32 {
             return Ok(None);
         }
         if e != ERROR_SUCCESS {
-            return Err(err("cannot read", e));
+            return Err(err("cannot read", value_name, e));
         }
         let mut buf = vec![0u16; (bytes as usize).div_ceil(2) + 1];
         let mut size = (buf.len() * 2) as u32;
@@ -74,15 +95,14 @@ mod win32 {
             return Ok(None);
         }
         if e != ERROR_SUCCESS {
-            return Err(err("cannot read", e));
+            return Err(err("cannot read", value_name, e));
         }
         let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
         Ok(Some(String::from_utf16_lossy(&buf[..len])))
     }
 
-    /// Sets the Run value to `value` (see `run_value`).
-    pub fn write(value: &str) -> Result<(), String> {
-        let (key, name) = (HSTRING::from(RUN_KEY), HSTRING::from(VALUE_NAME));
+    fn write_named(value_name: &str, value: &str) -> Result<(), String> {
+        let (key, name) = (HSTRING::from(RUN_KEY), HSTRING::from(value_name));
         let data: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: `data` is a NUL-terminated UTF-16 string of exactly the
         // byte count passed, alive for the call.
@@ -99,43 +119,47 @@ mod win32 {
         if e == ERROR_SUCCESS {
             Ok(())
         } else {
-            Err(err("cannot write", e))
+            Err(err("cannot write", value_name, e))
         }
     }
 
-    /// Sets the value for `exe`, checks it reads back, deletes it, checks it
-    /// is gone, then puts back whatever was there before (the selftest case).
+    /// The selftest case: under `selftest_value_name(<this pid>)`, never the
+    /// user's `Quip` value, sets the value for `exe`, checks it reads back,
+    /// deletes it and checks it is gone. `Quip` is only read, before and
+    /// after, and must not have changed.
     pub fn round_trip(exe: &std::path::Path) -> Result<(), String> {
-        let before = read()?;
+        let name = super::selftest_value_name(std::process::id());
+        let users = read()?;
         let checked = (|| {
             let value = super::run_value(exe);
-            write(&value)?;
-            match read()? {
+            write_named(&name, &value)?;
+            match read_named(&name)? {
                 Some(got) if got == value => {}
                 other => return Err(format!("wrote {value:?}, read back {other:?}")),
             }
-            remove()?;
-            match read()? {
+            remove_named(&name)?;
+            match read_named(&name)? {
                 None => Ok(()),
                 Some(got) => Err(format!("still set after the delete: {got:?}")),
             }
         })();
-        let restored = match &before {
-            Some(v) => write(v),
-            None => remove(),
+        // Never left behind, even when a check failed.
+        let cleaned = remove_named(&name).map_err(|e| format!("{name} was not deleted: {e}"));
+        let untouched = match read()? {
+            now if now == users => Ok(()),
+            now => Err(format!("{VALUE_NAME} changed from {users:?} to {now:?}")),
         };
-        checked.and(restored.map_err(|e| format!("the earlier value was not put back: {e}")))
+        checked.and(cleaned).and(untouched)
     }
 
-    /// Deletes the Run value. No value is not an error.
-    pub fn remove() -> Result<(), String> {
-        let (key, name) = (HSTRING::from(RUN_KEY), HSTRING::from(VALUE_NAME));
+    fn remove_named(value_name: &str) -> Result<(), String> {
+        let (key, name) = (HSTRING::from(RUN_KEY), HSTRING::from(value_name));
         // SAFETY: the strings outlive the call.
         let e = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, &key, PCWSTR(name.as_ptr())) };
         if e == ERROR_SUCCESS || e == ERROR_FILE_NOT_FOUND {
             Ok(())
         } else {
-            Err(err("cannot delete", e))
+            Err(err("cannot delete", value_name, e))
         }
     }
 }
@@ -159,6 +183,13 @@ mod tests {
         assert!(points_at(r"C:\Program Files\Quip\Quip.exe", &exe));
         assert!(!points_at(r#""D:\Tools\Quip.exe""#, &exe));
         assert!(!points_at("", &exe));
+    }
+
+    #[test]
+    fn the_selftest_round_trips_its_own_value_name() {
+        assert_eq!(selftest_value_name(4242), "Quip-selftest-4242");
+        assert_ne!(selftest_value_name(4242), VALUE_NAME);
+        assert_ne!(selftest_value_name(4242), selftest_value_name(4243));
     }
 
     #[test]

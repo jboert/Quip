@@ -21,10 +21,10 @@
 //! Lock order: `publish_lock` -> `state` -> `last_layout` / `last_front` ->
 //! `clients`. Nothing takes them the other way round.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
@@ -62,7 +62,10 @@ pub const CLIENT_QUEUE: usize = 1024;
 /// peer can hold meanwhile.
 pub const PRE_AUTH_DEADLINE: Duration = Duration::from_secs(120);
 /// Sockets accepted but not yet authenticated, at most. More are closed at
-/// accept, so a LAN peer cannot pin unbounded sockets and tasks.
+/// accept, so a LAN peer cannot pin unbounded sockets and tasks, except
+/// from a sender holding none: it gets one by evicting another's
+/// (`Host::try_pre_auth_slot`), so a peer on many addresses filling all 16
+/// cannot keep the owner's phone from sending its PIN.
 pub const MAX_UNAUTHENTICATED: usize = 16;
 /// Of those, at most this many from one exact address (`Sender::address`,
 /// so a neighbour in the same IPv6 /64 is not crowded out). One LAN peer can
@@ -104,20 +107,85 @@ impl Default for ConnectionLimits {
 /// Why `try_pre_auth_slot` refused a socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreAuthRefusal {
-    /// `max_unauthenticated` sockets are already waiting, from anyone.
+    /// `max_unauthenticated` sockets are already waiting, from anyone, and
+    /// this sender holds one of them (one holding none evicts instead).
     Full,
     /// `max_unauthenticated_per_sender` are already waiting from this sender.
     SenderFull,
     /// `max_unauthenticated_per_network` are already waiting from this
-    /// sender's network.
+    /// sender's network, and this sender holds one of them.
     NetworkFull,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct PreAuthCounts {
     total: usize,
     by_sender: HashMap<String, usize>,
     by_network: HashMap<String, usize>,
+    /// Every held slot by the order it was taken, oldest first: the
+    /// eviction candidates.
+    live: BTreeMap<u64, LiveSlot>,
+    next_seq: u64,
+}
+
+struct LiveSlot {
+    sender: Sender,
+    state: Arc<SlotState>,
+}
+
+/// Shared by a slot's clones and the eviction that may end it.
+#[derive(Default)]
+struct SlotState {
+    evicted: AtomicBool,
+    signal: Notify,
+    /// PIN checks under way on the slot, and wrong PINs of it queued for a
+    /// guess token (`Busy`). Changed only under the `PreAuthCounts` lock.
+    /// A busy slot is never evicted: an auth in flight decides first, and a
+    /// queued wrong PIN keeps the slot that bounds its network's checks
+    /// (spec 3.1 threat math).
+    busy: AtomicUsize,
+}
+
+impl PreAuthCounts {
+    /// Gives `seq`'s place back, once: the second call (a drop after an
+    /// eviction or a claim) finds nothing.
+    fn free(&mut self, seq: u64) -> Option<LiveSlot> {
+        let slot = self.live.remove(&seq)?;
+        self.total -= 1;
+        release(&mut self.by_sender, &slot.sender.address);
+        release(&mut self.by_network, &slot.sender.network);
+        Some(slot)
+    }
+
+    /// The slot to evict, among those `within` accepts: the oldest of the
+    /// address holding the most, ties going to the address whose network
+    /// holds the most.
+    fn victim(&self, within: impl Fn(&Sender) -> bool) -> Option<u64> {
+        let rank = |s: &Sender| {
+            (
+                self.by_sender.get(&s.address).copied().unwrap_or(0),
+                self.by_network.get(&s.network).copied().unwrap_or(0),
+            )
+        };
+        let mut best: Option<(u64, (usize, usize))> = None;
+        let idle = |l: &LiveSlot| l.state.busy.load(Ordering::SeqCst) == 0;
+        // Oldest first, so on a full tie the first one seen stays.
+        for (seq, slot) in self.live.iter().filter(|(_, l)| idle(l) && within(&l.sender)) {
+            let r = rank(&slot.sender);
+            if best.is_none_or(|(_, b)| r > b) {
+                best = Some((*seq, r));
+            }
+        }
+        best.map(|(seq, _)| seq)
+    }
+
+    /// Frees `seq` and tells its socket to close. Its address.
+    fn evict(&mut self, seq: u64) -> Option<String> {
+        let slot = self.free(seq)?;
+        slot.state.evicted.store(true, Ordering::SeqCst);
+        slot.state.signal.notify_waiters();
+        Some(slot.sender.address)
+    }
 }
 
 fn release(counts: &mut HashMap<String, usize>, key: &str) {
@@ -208,24 +276,77 @@ struct GuessCounts {
 }
 
 /// One of the `max_unauthenticated` slots, held for one sender and its
-/// network; freed when the last clone drops (socket closed or authenticated,
-/// and no wrong PIN of the socket still queued for a guess token).
+/// network; freed when the last clone drops (socket closed, and no wrong PIN
+/// of the socket still queued for a guess token), when its socket
+/// authenticates (`claim`), or when a sender holding none evicts it
+/// (`Host::try_pre_auth_slot`), whichever comes first.
 #[derive(Clone)]
 pub struct PreAuthSlot {
-    _held: Arc<SlotInner>,
+    held: Arc<SlotInner>,
 }
 
 struct SlotInner {
     counts: Arc<Mutex<PreAuthCounts>>,
-    sender: Sender,
+    seq: u64,
+    state: Arc<SlotState>,
 }
 
 impl Drop for SlotInner {
     fn drop(&mut self) {
-        let mut c = lock(&self.counts);
-        c.total -= 1;
-        release(&mut c.by_sender, &self.sender.address);
-        release(&mut c.by_network, &self.sender.network);
+        lock(&self.counts).free(self.seq);
+    }
+}
+
+impl PreAuthSlot {
+    /// Evicted to admit another sender: its socket must close, and its auth
+    /// must not complete.
+    pub fn is_evicted(&self) -> bool {
+        self.held.state.evicted.load(Ordering::SeqCst)
+    }
+
+    /// Resolves once the slot is evicted (at once if it already is).
+    pub async fn evicted(&self) {
+        loop {
+            // Registered before the check, so an eviction in between still
+            // wakes this waiter.
+            let signal = self.held.state.signal.notified();
+            tokio::pin!(signal);
+            signal.as_mut().enable();
+            if self.is_evicted() {
+                return;
+            }
+            signal.await;
+        }
+    }
+
+    /// Marks the slot busy for a PIN check, unless it was evicted first.
+    /// One lock decides, so an evicted socket's PIN is never checked and a
+    /// socket whose PIN is being checked is never evicted.
+    fn begin_auth(&self) -> Option<Busy> {
+        let _c = lock(&self.held.counts);
+        if self.is_evicted() {
+            return None;
+        }
+        self.held.state.busy.fetch_add(1, Ordering::SeqCst);
+        Some(Busy { slot: self.clone() })
+    }
+
+    /// A right PIN: the slot is given back at once, still busy, so no
+    /// eviction can pick it in between.
+    fn claim(&self) {
+        lock(&self.held.counts).free(self.held.seq);
+    }
+}
+
+/// One PIN check, or one queued wrong PIN, on a slot (`SlotState::busy`).
+struct Busy {
+    slot: PreAuthSlot,
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        let _c = lock(&self.slot.held.counts);
+        self.slot.held.state.busy.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -474,28 +595,68 @@ impl Host {
     }
 
     /// Take a pre-auth slot for a just-accepted socket from `sender`, or say
-    /// why it is refused: the global `max_unauthenticated`, this address's
-    /// `max_unauthenticated_per_sender` or this network's
-    /// `max_unauthenticated_per_network` is reached. All counts move under
+    /// why it is refused: this address's `max_unauthenticated_per_sender`,
+    /// or, for a sender already holding a slot, this network's
+    /// `max_unauthenticated_per_network` or the global `max_unauthenticated`
+    /// is reached. A sender holding none is never refused for a full network
+    /// or a full host: it evicts the oldest slot of the address holding the
+    /// most (in its network when that is what is full; ties go to the
+    /// address whose network holds the most), whose socket is then closed.
+    /// A slot whose PIN is being checked or whose wrong PIN is queued for a
+    /// guess token is never evicted; with only such slots there, the sender
+    /// is refused.
+    /// So peers filling every slot cannot keep the owner's phone from
+    /// sending its PIN, and an attacker's own extra sockets gain nothing:
+    /// they are refused, or replace one of its own. All counts move under
     /// one lock.
     pub fn try_pre_auth_slot(&self, sender: &Sender) -> Result<PreAuthSlot, PreAuthRefusal> {
         let limits = self.config.limits;
         let mut c = lock(&self.pre_auth);
-        if c.total >= limits.max_unauthenticated {
+        let mine = c.by_sender.get(&sender.address).copied().unwrap_or(0);
+        if mine > 0 && c.total >= limits.max_unauthenticated {
             return Err(PreAuthRefusal::Full);
         }
-        let mine = c.by_sender.get(&sender.address).copied().unwrap_or(0);
         if mine >= limits.max_unauthenticated_per_sender {
             return Err(PreAuthRefusal::SenderFull);
         }
-        let network = c.by_network.get(&sender.network).copied().unwrap_or(0);
-        if network >= limits.max_unauthenticated_per_network {
+        let mut evicted = None;
+        if c.by_network.get(&sender.network).copied().unwrap_or(0) >= limits.max_unauthenticated_per_network {
+            if mine > 0 {
+                return Err(PreAuthRefusal::NetworkFull);
+            }
+            let victim = c.victim(|s| s.network == sender.network);
+            evicted = victim.and_then(|seq| c.evict(seq)).map(|a| (a, "network"));
+        }
+        if c.total >= limits.max_unauthenticated {
+            let victim = c.victim(|_| true);
+            evicted = victim.and_then(|seq| c.evict(seq)).map(|a| (a, "host"));
+        }
+        // Nothing to evict: every slot there is busy (a PIN check, or a
+        // wrong PIN queued for a guess token).
+        if c.by_network.get(&sender.network).copied().unwrap_or(0) >= limits.max_unauthenticated_per_network {
             return Err(PreAuthRefusal::NetworkFull);
         }
+        if c.total >= limits.max_unauthenticated {
+            return Err(PreAuthRefusal::Full);
+        }
+        let seq = c.next_seq;
+        c.next_seq += 1;
         c.total += 1;
-        c.by_sender.insert(sender.address.clone(), mine + 1);
-        c.by_network.insert(sender.network.clone(), network + 1);
-        Ok(PreAuthSlot { _held: Arc::new(SlotInner { counts: self.pre_auth.clone(), sender: sender.clone() }) })
+        *c.by_sender.entry(sender.address.clone()).or_insert(0) += 1;
+        *c.by_network.entry(sender.network.clone()).or_insert(0) += 1;
+        let state = Arc::new(SlotState::default());
+        c.live.insert(seq, LiveSlot { sender: sender.clone(), state: state.clone() });
+        drop(c);
+        if let Some((victim, what)) = evicted {
+            self.logs.ws(
+                Severity::Warn,
+                &format!(
+                    "evicted the oldest pre-auth socket of {victim} to admit {}, which held none ({what} full)",
+                    sender.address
+                ),
+            );
+        }
+        Ok(PreAuthSlot { held: Arc::new(SlotInner { counts: self.pre_auth.clone(), seq, state }) })
     }
 
     pub fn unauthenticated_count(&self) -> usize {
@@ -571,6 +732,16 @@ impl Host {
     /// socket closes meanwhile.
     pub async fn handle_auth(&self, id: ClientId, sender: &Sender, pin: Option<String>, slot: Option<PreAuthSlot>) {
         let host = &sender.address;
+        // Busy until this check is decided; a wrong PIN that has to queue
+        // keeps it busy until it gets a guess token.
+        let busy = match &slot {
+            Some(s) => match s.begin_auth() {
+                Some(b) => Some(b),
+                // Evicted: its socket is closing; the PIN is not checked.
+                None => return,
+            },
+            None => None,
+        };
         let Some(pin) = pin else {
             self.send(id, &AuthResult::failure("Malformed auth message"));
             return;
@@ -588,6 +759,9 @@ impl Host {
                 self.send(id, &AuthResult::failure(format!("Too many attempts; try again in {secs}s")));
             }
             Attempt::Accepted => {
+                if let Some(s) = &slot {
+                    s.claim();
+                }
                 self.logs.ws(Severity::Info, &format!("auth ok from {host}"));
                 // Under publish_lock: the handshake is queued in order, and
                 // the client joins the broadcast set only after it, so no
@@ -628,7 +802,8 @@ impl Host {
                 );
                 // A wrong PIN holds one of its network's guess tokens for
                 // its delay. With none free it queues for one, keeping the
-                // socket's pre-auth slot, so the network's checks stay at
+                // socket's pre-auth slot (busy, so not evicted either), so
+                // the network's checks stay at
                 // `max_unauthenticated_per_network` per delay plus what its
                 // slots can queue (spec 3.1). Token, queue and delay live in
                 // their own task, so a socket closed meanwhile (`ws_server`
@@ -644,8 +819,11 @@ impl Host {
                             budget.per_network
                         ),
                     );
-                    slot
+                    Some((slot, busy))
                 } else {
+                    // In its delay the socket may be evicted: its token
+                    // keeps the guess counted.
+                    drop(busy);
                     None
                 };
                 let sleeper = self.sleeper.clone();

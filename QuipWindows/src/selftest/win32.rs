@@ -70,8 +70,9 @@ fn pairing_qr_window(_: &mut Ctx) -> Outcome {
     }
 }
 
-/// The tray's "Start with Windows" value: set, read back, delete, then the
-/// earlier value (if any) put back, so the PC ends as it started.
+/// The tray's "Start with Windows" value: set, read back and delete under a
+/// value name of this run's own (`autostart::selftest_value_name`); the
+/// user's `Quip` value is only read, and must be unchanged.
 fn start_with_windows_round_trip(_: &mut Ctx) -> Outcome {
     match std::env::current_exe() {
         Ok(exe) => match crate::tray::autostart::round_trip(&exe) {

@@ -90,7 +90,15 @@ fn start_with_windows_writes_and_removes_the_run_value() {
     autostart::remove().unwrap();
 
     autostart::round_trip(&exe).unwrap();
-    assert_eq!(autostart::read().unwrap(), None, "round_trip puts back what was there: nothing");
+    assert_eq!(autostart::read().unwrap(), None, "round_trip leaves Quip alone: still nothing");
+    // With a Quip value set, round_trip leaves it exactly as it was and
+    // leaves no value of its own behind.
+    let users = autostart::run_value(std::path::Path::new(r"D:\Other Quip\Quip.exe"));
+    autostart::write(&users).unwrap();
+    autostart::round_trip(&exe).unwrap();
+    assert_eq!(autostart::read().unwrap().as_deref(), Some(users.as_str()), "Quip is untouched");
+    let own = autostart::selftest_value_name(std::process::id());
+    assert_eq!(autostart::read_named(&own).unwrap(), None, "{own} is deleted");
     drop(restore);
     assert_eq!(autostart::read().unwrap(), before, "the user's value is back");
 }

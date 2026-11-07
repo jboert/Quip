@@ -68,9 +68,21 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
   at most 8 of them from one network (the /64 for IPv6, the address for
   IPv4) and at most 4 from one exact address, so one LAN peer holding
   sockets open for the 120 s cannot lock the phone out. More are closed at
-  accept. A socket's slot is freed as soon as its peer closes, including
-  while a wrong PIN's delay runs; only a wrong PIN still queued for a guess
-  token (below) keeps its slot until it has one.
+  accept, with one exception: a sender holding no waiting socket is never
+  refused because its network's 8 or all 16 are taken. It evicts the oldest
+  waiting socket of the address holding the most (inside its own network
+  when that is what is full; a tie goes to the address whose network holds
+  the most), which is closed at once, even in a wrong PIN's delay, and whose
+  PIN, if one arrives after, is not checked. A socket whose PIN is being
+  checked, or whose wrong PIN is queued for a guess token (below), is never
+  evicted; with only such sockets there, the newcomer is refused. So a peer
+  on 4 IPv4 addresses, or on 2 or more addresses in the phone's /64, filling
+  every slot with idle sockets still cannot keep the phone from sending its
+  PIN; its own extra sockets are refused or replace one of its own. Keeping
+  slots queued instead takes a stream of wrong PINs, which an IPv4 address
+  cannot sustain past its 10-failure lockout. A socket's slot is freed as
+  soon as its peer closes, including while a wrong PIN's delay runs; only a
+  wrong PIN still queued for a guess token keeps its slot until it has one.
 - Sender: the lockout and the per-sender cap use the exact peer address
   without its port, as on the Mac. An IPv4-mapped IPv6 address
   (`::ffff:192.0.2.1`) is its IPv4 address (`192.0.2.1`). So one device on a
@@ -681,6 +693,15 @@ tokio-tungstenite client, `platform/fake.rs` as the backend:
 - Listing: spawn `powershell.exe` (conhost) and, when installed,
   `wt.exe`; both appear as terminals with the right `app`; Notepad appears as
   non-terminal; a cloaked/tool window does not.
+- Own windows only: every window a test opens carries a title marker unique
+  to the run (`selftest::own::marker`), set by cmd's `title`, PowerShell's
+  `$Host.UI.RawUI.WindowTitle` (also a Windows Terminal tab's title, which
+  the window shows) or, for Notepad, the name of a temp file it opens. A
+  test takes, and closes, only a new window carrying its marker, as
+  `--selftest` does, so on a PC in use it never closes the user's window.
+- The "Start with Windows" round trip (`--selftest`) writes, reads and
+  deletes a value of its own, `Quip-selftest-<pid>`; the user's `Quip` value
+  is only read, and the case fails if it changed.
 - Displays: at least one, exactly one primary, frames inside 0..1.
 - Arrange: two spawned windows, horizontal → visible rects (DWM bounds)
   touch with ≤1 px gap and fill the work area; vertical the same.
