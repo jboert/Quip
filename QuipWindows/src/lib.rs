@@ -12,4 +12,5 @@ pub mod fake_mode;
 pub mod host;
 pub mod platform;
 pub mod protocol;
+pub mod selftest;
 pub mod services;

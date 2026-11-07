@@ -1,5 +1,6 @@
 //! Monitors: `EnumDisplayMonitors` + `GetMonitorInfoW` (bounds, work area,
-//! primary flag, device name) + `EnumDisplayDevicesW` (a human name).
+//! primary flag, device name) + `EnumDisplayDevicesW` (a human name), and
+//! `GetDpiForMonitor` for the selftest header.
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
@@ -7,6 +8,7 @@ use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC, HMONITOR, MONITORINFO,
     MONITORINFOEXW,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 
 use super::window::{from_wide, pixel_rect};
@@ -40,18 +42,20 @@ fn monitor_description(device: &[u16]) -> Option<String> {
     ok.then(|| from_wide(&dd.DeviceString))
 }
 
+fn monitor_info(m: HMONITOR) -> Option<MONITORINFOEXW> {
+    let mut info = MONITORINFOEXW {
+        monitorInfo: MONITORINFO { cbSize: size_of::<MONITORINFOEXW>() as u32, ..Default::default() },
+        ..Default::default()
+    };
+    // SAFETY: `info` is a writable MONITORINFOEXW whose `cbSize` says so;
+    // GetMonitorInfoW takes it through its leading MONITORINFO.
+    unsafe { GetMonitorInfoW(m, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) }.as_bool().then_some(info)
+}
+
 pub fn list() -> PlatformResult<Vec<PlatformDisplay>> {
     let mut out = Vec::new();
     for m in monitors() {
-        let mut info = MONITORINFOEXW {
-            monitorInfo: MONITORINFO { cbSize: size_of::<MONITORINFOEXW>() as u32, ..Default::default() },
-            ..Default::default()
-        };
-        // SAFETY: `info` is a writable MONITORINFOEXW whose `cbSize` says so;
-        // GetMonitorInfoW takes it through its leading MONITORINFO.
-        if !unsafe { GetMonitorInfoW(m, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) }.as_bool() {
-            continue;
-        }
+        let Some(info) = monitor_info(m) else { continue };
         let device_name = from_wide(&info.szDevice);
         let mut device_z = info.szDevice.to_vec();
         device_z.push(0);
@@ -68,4 +72,20 @@ pub fn list() -> PlatformResult<Vec<PlatformDisplay>> {
     }
     ensure_one_primary(&mut out);
     Ok(out)
+}
+
+/// (device name, effective DPI) per monitor: 96 is 100 % scaling. A monitor
+/// Windows gives no DPI for is left out.
+pub fn effective_dpis() -> Vec<(String, u32)> {
+    monitors()
+        .into_iter()
+        .filter_map(|m| {
+            let info = monitor_info(m)?;
+            let (mut x, mut y) = (0u32, 0u32);
+            // SAFETY: a monitor handle from EnumDisplayMonitors and two
+            // writable u32s.
+            unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut x, &mut y) }.ok()?;
+            Some((from_wide(&info.szDevice), x))
+        })
+        .collect()
 }

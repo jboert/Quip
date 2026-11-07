@@ -60,6 +60,23 @@ jobs:
         env:
           QUIP_WIN_UI: "1"
         run: cargo test --test "win32_*" -- --test-threads=1 --nocapture
+      - name: Selftest
+        # Spec 10.5: the same cases through `Quip.exe --selftest`, the
+        # command the owner runs on the PC. Exit 0 only when every case
+        # passed (a SKIP fails the step too). The report path is published
+        # first, so the upload finds it even when the run fails.
+        working-directory: QuipWindows
+        run: |
+          "SELFTEST_DIR=$env:LOCALAPPDATA\Quip\Logs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          cargo build
+          .\target\debug\Quip.exe --selftest
+      - name: Upload selftest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-report
+          path: ${{ env.SELFTEST_DIR }}\selftest-*.txt
+          if-no-files-found: warn
 
   spike:
     # M0 probe: can a process on this runner bring a window to the front and

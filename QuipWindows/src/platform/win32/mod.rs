@@ -27,7 +27,19 @@ use crate::services::classify::{self, Proc};
 use crate::services::keys::KeyChord;
 use crate::services::multiline_policy::Shell;
 
+pub use display::effective_dpis;
 pub use process::snapshot as process_snapshot;
+
+/// `major.minor.build`, e.g. `10.0.26100`, from `RtlGetVersion`
+/// (`GetVersionExW` reports 6.2 to an exe without a compatibility manifest).
+pub fn os_version() -> Option<String> {
+    use windows::Wdk::System::SystemServices::RtlGetVersion;
+    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+    let mut v = OSVERSIONINFOW { dwOSVersionInfoSize: size_of::<OSVERSIONINFOW>() as u32, ..Default::default() };
+    // SAFETY: `v` is a writable OSVERSIONINFOW whose size field says so.
+    let status = unsafe { RtlGetVersion(&mut v) };
+    status.is_ok().then(|| format!("{}.{}.{}", v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber))
+}
 
 /// What `NotImplemented` says for the operations this backend does not do yet.
 pub const NOT_IMPLEMENTED: &str = "the Win32 backend lists windows but cannot act on them yet (use --fake-platform)";
