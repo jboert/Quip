@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use std::fmt::Write as _;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -312,17 +312,19 @@ fn which(exe: &str) -> bool {
 
 fn open_conhost(label: &'static str, shell: Shell, dir: &Path, r: &mut Report) -> Option<Target> {
     let before: HashSet<isize> = top_windows().into_iter().map(|(h, _)| h).collect();
-    let mut cmd = Command::new("conhost.exe");
-    cmd.creation_flags(CREATE_NEW_CONSOLE);
-    match shell {
-        Shell::PowerShell => {
-            cmd.args(["powershell.exe", "-NoLogo", "-NoExit", "-Command"])
-                .arg(format!("Set-Location '{}'", dir.display()));
-        }
-        Shell::Cmd => {
-            cmd.args(["cmd.exe", "/K"]).arg(format!("cd /d \"{}\"", dir.display()));
-        }
-    }
+    // `start` gives the new conhost its own window. Spawned directly with our
+    // stdio (redirected on the CI runner), conhost runs as a pseudo-console
+    // and writes into our output instead of opening a window.
+    let mut cmd = Command::new("cmd.exe");
+    cmd.creation_flags(CREATE_NEW_CONSOLE)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .raw_arg(match shell {
+            Shell::PowerShell => r#"/c start "" conhost.exe powershell.exe -NoLogo -NoExit"#,
+            Shell::Cmd => r#"/c start "" conhost.exe cmd.exe /K"#,
+        });
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
