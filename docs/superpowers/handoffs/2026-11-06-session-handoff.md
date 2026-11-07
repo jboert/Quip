@@ -34,10 +34,10 @@ Plan of record: `docs/superpowers/plans/2026-11-06-q91-windows-host.md`
 
 ## Owner's PC test (2026-11-07)
 
-`Quip.exe` built from `b009569` (includes R1 and the eviction fix; Windows CI
-run 42343467201 green) was sent to the owner on 2026-11-07, replacing the
-earlier `df3e45f` build. SHA-256
-`32fd17ac8fd42e39f30217fbab7a04c9cdfacf58068c901215280bd0500575cf`.
+`Quip.exe` built from `f09f5b2` (R1, the eviction fix, and phone pins and
+colours that stick; Windows CI run 42420599018 green) was sent to the owner on
+2026-11-07, replacing the earlier `df3e45f` and `b009569` builds. SHA-256
+`ab7d3e4523a3c8fb39456e785c660e4af27f56fe12c3f2e73ad1793cbd645f45`.
 
 What works in this build: tray app, pairing (PIN or QR), Bonjour discovery,
 the phone's grid of PC windows (terminals shown; PowerShell and cmd
