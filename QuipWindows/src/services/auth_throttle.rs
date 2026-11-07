@@ -2,10 +2,12 @@
 //!
 //! Port of `QuipMac/Services/AuthThrottle.swift` (QuipLinux's
 //! `auth_throttle.rs` has the same numbers). The Mac keys on the endpoint
-//! with its port stripped, one exact address per bucket; this keys on
-//! `sender_key`, which also folds IPv4-mapped IPv6 into IPv4 and an IPv6
-//! address into its /64, so a peer cannot get fresh PIN guesses by rotating
-//! through the 2^64 addresses its own network gives it:
+//! with its port stripped, one exact address per bucket. This keeps that
+//! for the lockout: a `Sender`'s exact `address` (IPv4-mapped IPv6 folded to
+//! IPv4) is the key below. Its `network` (the /64 for IPv6, the address for
+//! IPv4) keys a second count that only lengthens the wrong-PIN delay, so a
+//! peer rotating through its /64 gains nothing, yet never locks out a
+//! neighbour (spec 3.1):
 //! - each failed PIN adds `PER_FAIL_DELAY_MS` to the next answer, capped at
 //!   `MAX_DELAY_MS`;
 //! - `MAX_FAILS_BEFORE_LOCKOUT` failures lock the host out for
