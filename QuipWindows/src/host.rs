@@ -29,13 +29,13 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use crate::app_state::AppState;
 use crate::platform::traits::{Platform, PlatformError};
 use crate::platform::Lanes;
 use crate::protocol::messages::{encode, AuthResult, DeviceIdentity, FrontmostChanged, Heartbeat, HeartbeatAck};
-use crate::services::auth_throttle::{Attempt, AuthThrottle, Sender, MAX_NETWORK_DELAY_MS};
+use crate::services::auth_throttle::{Attempt, AuthThrottle, Sender};
 use crate::services::clock::SharedClock;
 use crate::services::dedupe::DedupeTable;
 use crate::services::logs::Logs;
@@ -76,7 +76,9 @@ pub const MAX_UNAUTHENTICATED_PER_SENDER: usize = 4;
 /// makes at most this many concurrent PIN guesses (spec 3.1 threat math).
 /// The same number bounds the network's wrong PINs still in their delay,
 /// counted apart from sockets (`GuessToken`), so closing a socket early
-/// frees its slot but not its guess. Neither locks a network out.
+/// frees its slot but not its guess; a wrong PIN finding none free queues
+/// for one. Neither locks a network out, and neither is consulted for a
+/// right PIN.
 pub const MAX_UNAUTHENTICATED_PER_NETWORK: usize = 8;
 
 /// Per-connection limits (`HostConfig::limits`). Tests shorten the deadline.
@@ -194,28 +196,97 @@ pub struct Host {
     listing_seq: Arc<AtomicU64>,
     publish_lock: Mutex<()>,
     pre_auth: Arc<Mutex<PreAuthCounts>>,
-    guesses: Arc<Mutex<GuessCounts>>,
+    guesses: GuessBudget,
 }
 
 #[derive(Debug, Default)]
 struct GuessCounts {
-    total: usize,
-    by_network: HashMap<String, usize>,
+    in_delay: HashMap<String, usize>,
+    queued: HashMap<String, usize>,
 }
 
 /// One of the `max_unauthenticated` slots, held for one sender and its
-/// network; freed on drop (socket closed or authenticated).
+/// network; freed when the last clone drops (socket closed or authenticated,
+/// and no wrong PIN of the socket still queued for a guess token).
+#[derive(Clone)]
 pub struct PreAuthSlot {
+    _held: Arc<SlotInner>,
+}
+
+struct SlotInner {
     counts: Arc<Mutex<PreAuthCounts>>,
     sender: Sender,
 }
 
-impl Drop for PreAuthSlot {
+impl Drop for SlotInner {
     fn drop(&mut self) {
         let mut c = lock(&self.counts);
         c.total -= 1;
         release(&mut c.by_sender, &self.sender.address);
         release(&mut c.by_network, &self.sender.network);
+    }
+}
+
+/// The wrong PINs each network may have in their delay
+/// (`max_unauthenticated_per_network`), and the wrong PINs queued for one.
+/// Per network only: a right PIN is never looked up here, so no sender's
+/// guesses can make another sender's right PIN fail.
+#[derive(Clone)]
+struct GuessBudget {
+    counts: Arc<Mutex<GuessCounts>>,
+    freed: Arc<Notify>,
+    per_network: usize,
+}
+
+impl GuessBudget {
+    fn new(per_network: usize) -> Self {
+        Self { counts: Arc::default(), freed: Arc::new(Notify::new()), per_network }
+    }
+
+    fn try_take(&self, network: &str) -> Option<GuessToken> {
+        let mut c = lock(&self.counts);
+        let n = c.in_delay.get(network).copied().unwrap_or(0);
+        if n >= self.per_network {
+            return None;
+        }
+        c.in_delay.insert(network.to_string(), n + 1);
+        Some(GuessToken { budget: self.clone(), network: network.to_string() })
+    }
+
+    /// Waits until `network` has a free token. The wait is counted in
+    /// `queued` (`Host::guesses_queued`) for as long as it lasts.
+    async fn take(self, network: String) -> GuessToken {
+        let _queued = Queued::enter(&self.counts, &network);
+        loop {
+            // Registered before the check, so a token freed in between
+            // still wakes this waiter.
+            let freed = self.freed.notified();
+            tokio::pin!(freed);
+            freed.as_mut().enable();
+            if let Some(token) = self.try_take(&network) {
+                return token;
+            }
+            freed.await;
+        }
+    }
+}
+
+/// One wrong PIN waiting for a token, counted until dropped.
+struct Queued {
+    counts: Arc<Mutex<GuessCounts>>,
+    network: String,
+}
+
+impl Queued {
+    fn enter(counts: &Arc<Mutex<GuessCounts>>, network: &str) -> Self {
+        *lock(counts).queued.entry(network.to_string()).or_insert(0) += 1;
+        Self { counts: counts.clone(), network: network.to_string() }
+    }
+}
+
+impl Drop for Queued {
+    fn drop(&mut self) {
+        release(&mut lock(&self.counts).queued, &self.network);
     }
 }
 
@@ -225,15 +296,14 @@ impl Drop for PreAuthSlot {
 /// peer could otherwise read "no answer yet" as "wrong", close, and guess
 /// again at once.
 struct GuessToken {
-    counts: Arc<Mutex<GuessCounts>>,
+    budget: GuessBudget,
     network: String,
 }
 
 impl Drop for GuessToken {
     fn drop(&mut self) {
-        let mut c = lock(&self.counts);
-        c.total -= 1;
-        release(&mut c.by_network, &self.network);
+        release(&mut lock(&self.budget.counts).in_delay, &self.network);
+        self.budget.freed.notify_waiters();
     }
 }
 
@@ -269,6 +339,7 @@ impl Host {
             }
             None => (HashMap::new(), false),
         };
+        let guesses = GuessBudget::new(parts.config.limits.max_unauthenticated_per_network);
         Ok(Arc::new(Host {
             lanes: Lanes::spawn(parts.platform)?,
             dedupe: DedupeTable::new(parts.clock.clone()),
@@ -292,7 +363,7 @@ impl Host {
             listing_seq: Arc::new(AtomicU64::new(0)),
             publish_lock: Mutex::new(()),
             pre_auth: Arc::new(Mutex::new(PreAuthCounts::default())),
-            guesses: Arc::new(Mutex::new(GuessCounts::default())),
+            guesses,
         }))
     }
 
@@ -390,7 +461,7 @@ impl Host {
         c.total += 1;
         c.by_sender.insert(sender.address.clone(), mine + 1);
         c.by_network.insert(sender.network.clone(), network + 1);
-        Ok(PreAuthSlot { counts: self.pre_auth.clone(), sender: sender.clone() })
+        Ok(PreAuthSlot { _held: Arc::new(SlotInner { counts: self.pre_auth.clone(), sender: sender.clone() }) })
     }
 
     pub fn unauthenticated_count(&self) -> usize {
@@ -409,28 +480,12 @@ impl Host {
 
     /// Wrong PINs from `network` still in their delay.
     pub fn guesses_in_delay(&self, network: &str) -> usize {
-        lock(&self.guesses).by_network.get(network).copied().unwrap_or(0)
+        lock(&self.guesses.counts).in_delay.get(network).copied().unwrap_or(0)
     }
 
-    /// Wrong PINs from anyone still in their delay.
-    pub fn all_guesses_in_delay(&self) -> usize {
-        lock(&self.guesses).total
-    }
-
-    /// Reserve a guess for `network`, or `None` when `max_unauthenticated`
-    /// wrong PINs in all, or `max_unauthenticated_per_network` of this
-    /// network's, are in their delay: the socket caps' numbers, which a
-    /// closed socket no longer enforces.
-    fn try_guess(&self, network: &str) -> Option<GuessToken> {
-        let limits = self.config.limits;
-        let mut g = lock(&self.guesses);
-        let n = g.by_network.get(network).copied().unwrap_or(0);
-        if g.total >= limits.max_unauthenticated || n >= limits.max_unauthenticated_per_network {
-            return None;
-        }
-        g.total += 1;
-        g.by_network.insert(network.to_string(), n + 1);
-        Some(GuessToken { counts: self.guesses.clone(), network: network.to_string() })
+    /// Wrong PINs from `network` waiting for a free guess token.
+    pub fn guesses_queued(&self, network: &str) -> usize {
+        lock(&self.guesses.counts).queued.get(network).copied().unwrap_or(0)
     }
 
     /// Queue raw JSON for one client. A full queue means the phone stopped
@@ -476,8 +531,11 @@ impl Host {
     }
 
     /// Handle an `auth` frame (decoded or not) from `sender`, the peer's
-    /// throttle keys (`AuthThrottle::attempt`).
-    pub async fn handle_auth(&self, id: ClientId, sender: &Sender, pin: Option<String>) {
+    /// throttle keys (`AuthThrottle::attempt`). `slot` is the socket's
+    /// pre-auth slot (`None` once authenticated): a wrong PIN that has to
+    /// queue for a guess token keeps it until it gets one, even if the
+    /// socket closes meanwhile.
+    pub async fn handle_auth(&self, id: ClientId, sender: &Sender, pin: Option<String>, slot: Option<PreAuthSlot>) {
         let host = &sender.address;
         let Some(pin) = pin else {
             self.send(id, &AuthResult::failure("Malformed auth message"));
@@ -488,20 +546,6 @@ impl Host {
             self.send(id, &AuthResult::failure("Server PIN not configured"));
             return;
         }
-        // Before the PIN is looked at, so a full network learns nothing,
-        // right PIN or not. It clears within `MAX_NETWORK_DELAY_MS`.
-        let Some(guess) = self.try_guess(&sender.network) else {
-            self.logs.ws(
-                Severity::Warn,
-                &format!(
-                    "auth: {host} refused, PIN not checked: its network {} or the host has too many wrong PINs in their delay",
-                    sender.network
-                ),
-            );
-            let secs = MAX_NETWORK_DELAY_MS / 1000;
-            self.send(id, &AuthResult::failure(format!("Too many attempts; try again in {secs}s")));
-            return;
-        };
         // Check, compare and record under one throttle lock (`attempt`).
         match self.throttle.attempt(sender, pin_store::matches(&expected, &pin)) {
             Attempt::Locked { remaining } => {
@@ -548,12 +592,36 @@ impl Host {
                         pin_store::describe_for_log(&expected)
                     ),
                 );
-                // The guess is released by its own task when the delay ends,
-                // so a socket closed meanwhile (`ws_server` drops this future)
-                // still counts it.
-                let delay = self.sleeper.sleep(Duration::from_millis(delay_ms));
+                // A wrong PIN holds one of its network's guess tokens for
+                // its delay. With none free it queues for one, keeping the
+                // socket's pre-auth slot, so the network's checks stay at
+                // `max_unauthenticated_per_network` per delay plus what its
+                // slots can queue (spec 3.1). Token, queue and delay live in
+                // their own task, so a socket closed meanwhile (`ws_server`
+                // drops this future) still counts them.
+                let budget = self.guesses.clone();
+                let network = sender.network.clone();
+                let ready = budget.try_take(&network);
+                let queued = if ready.is_none() {
+                    self.logs.ws(
+                        Severity::Warn,
+                        &format!(
+                            "auth: {host} wrong PIN queued: network {network} has {} wrong PINs in their delay",
+                            budget.per_network
+                        ),
+                    );
+                    slot
+                } else {
+                    None
+                };
+                let sleeper = self.sleeper.clone();
                 let waited = tokio::spawn(async move {
-                    delay.await;
+                    let guess = match ready {
+                        Some(token) => token,
+                        None => budget.take(network).await,
+                    };
+                    drop(queued);
+                    sleeper.sleep(Duration::from_millis(delay_ms)).await;
                     drop(guess);
                 });
                 let _ = waited.await;

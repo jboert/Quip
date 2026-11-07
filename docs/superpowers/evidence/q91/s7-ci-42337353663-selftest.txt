@@ -1,0 +1,34 @@
+Quip selftest
+time: 2026-11-07T04:13:09Z
+quip: 0.1.0 (git 7bed73aaf738)
+windows: 10.0.26100
+displays: 1
+display 1: Generic PnP Monitor primary 1024x768 at 0,0 work 1024x720 at 0,0 dpi 96 (100%)
+PASS process_snapshot
+PASS displays_one_primary
+PASS displays_work_area_inside_bounds
+FAIL frames_inside_0_to_1: no console window from its conhost.exe in 15 s
+    every top-level ConsoleWindowClass window:
+    0xc00a0 pid=8108 exe="C:\\Windows\\System32\\cmd.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    processes under its conhost:
+PASS foreground_window_owner
+FAIL classic_powershell_console: no console window from its conhost.exe in 15 s
+    every top-level ConsoleWindowClass window:
+    0x110012 pid=2276 exe="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    0xc00a0 pid=8108 exe="C:\\Windows\\System32\\cmd.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    processes under its conhost:
+FAIL classic_cmd_console: no console window from its conhost.exe in 15 s
+    every top-level ConsoleWindowClass window:
+    0x30210 pid=9408 exe="C:\\Windows\\System32\\cmd.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    0x110012 pid=2276 exe="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    0xc00a0 pid=8108 exe="C:\\Windows\\System32\\cmd.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    processes under its conhost:
+FAIL busy_shell_reads_unknown: no console window from its conhost.exe in 15 s
+    every top-level ConsoleWindowClass window:
+    0x2021c pid=1156 exe="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    0x30210 pid=9408 exe="C:\\Windows\\System32\\cmd.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    0x110012 pid=2276 exe="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    0xc00a0 pid=8108 exe="C:\\Windows\\System32\\cmd.exe" title=<title> visible=true owned=false ex_style=0xc0110 cloaked=false verdict=listed
+    processes under its conhost:
+PASS windows_terminal
+SUMMARY FAIL: 5 passed, 4 failed, 0 skipped of 9 cases

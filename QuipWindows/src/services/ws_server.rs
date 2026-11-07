@@ -8,9 +8,11 @@
 //!    `MAX_UNAUTHENTICATED_PER_NETWORK` from its network (`Sender::network`);
 //!    more are closed at once, so one LAN peer cannot take every slot from
 //!    the phone. A slot is freed as soon as its peer closes, even while a
-//!    wrong PIN's delay is running. A socket that has not finished the
-//!    WebSocket upgrade within `PRE_HANDSHAKE_DEADLINE` (10 s, the Mac's
-//!    `PreHandshakeReapPolicy`) is closed, and one that has not authenticated
+//!    wrong PIN's delay is running; only a wrong PIN still queued for its
+//!    network's guess token (`Host::handle_auth`) keeps it until it has one.
+//!    A socket that has not finished the WebSocket upgrade within
+//!    `PRE_HANDSHAKE_DEADLINE` (10 s, the Mac's `PreHandshakeReapPolicy`) is
+//!    closed, and one that has not authenticated
 //!    within `PRE_AUTH_DEADLINE` (120 s, long enough to type a PIN on the
 //!    phone's prompt) of its accept is closed too, so a peer that upgrades and
 //!    never sends a right PIN cannot hold a socket forever.
@@ -391,11 +393,12 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
                 let pin = serde_json::from_str::<AuthMessage>(&text).ok().map(|a| a.pin);
                 // A wrong PIN's reply waits out the throttle delay (up to
                 // `MAX_NETWORK_DELAY_MS`) while this socket holds its slot. A
-                // peer that closes meanwhile gives the slot back at once: the
-                // reply is abandoned (the attempt is already recorded) and
+                // peer that closes meanwhile gives the slot back at once
+                // (unless the PIN is queued for a guess token): the reply is
+                // abandoned (the attempt is already recorded) and
                 // the loop reads the close. `biased`: the attempt always runs
                 // first, so a close sent with the PIN cannot skip it.
-                let auth = host.handle_auth(id, &sender, pin);
+                let auth = host.handle_auth(id, &sender, pin, slot.clone());
                 tokio::pin!(auth);
                 let closed = tokio::select! {
                     biased;
@@ -438,7 +441,7 @@ async fn connection(host: Arc<Host>, stream: TcpStream, peer: SocketAddr, sender
             rate_dropping = false;
         }
         match decode_incoming(&text) {
-            Ok(Incoming::Auth(a)) => host.handle_auth(id, &sender, Some(a.pin)).await,
+            Ok(Incoming::Auth(a)) => host.handle_auth(id, &sender, Some(a.pin), None).await,
             Ok(Incoming::HeartbeatAck(a)) => host.heartbeat_ack(id, &a),
             Ok(msg) => host.route(id, msg, received).await,
             Err(DecodeError::Unknown(t)) => host.logs.debug(&format!("ignored type={t}")),

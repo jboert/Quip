@@ -69,7 +69,8 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
   IPv4) and at most 4 from one exact address, so one LAN peer holding
   sockets open for the 120 s cannot lock the phone out. More are closed at
   accept. A socket's slot is freed as soon as its peer closes, including
-  while a wrong PIN's delay runs.
+  while a wrong PIN's delay runs; only a wrong PIN still queued for a guess
+  token (below) keeps its slot until it has one.
 - Sender: the lockout and the per-sender cap use the exact peer address
   without its port, as on the Mac. An IPv4-mapped IPv6 address
   (`::ffff:192.0.2.1`) is its IPv4 address (`192.0.2.1`). So one device on a
@@ -85,29 +86,40 @@ host  → phone {"type":"layout_update", ...}            (first snapshot)
   not locked out. A success does not reset it (the owner pairing must not
   speed up a neighbour guessing); it is dropped after an hour with no
   failures.
-- Guesses in their delay: a right PIN is answered at once and a wrong one
+- Guesses in their delay: the PIN is always checked first, and a right PIN
+  from an address that is not locked out is accepted at once, whatever any
+  other sender (in its network or not) is doing. A wrong one is answered
   only after its delay, so "no answer yet" means "wrong". Each wrong PIN
-  therefore keeps a guess counted against its network until its delay ends,
-  even if the socket closes first. While 8 of a network's wrong PINs, or 16
-  in all, are in their delay, the next `auth` is refused unchecked, right
-  PIN or not, with
-  `Too many attempts; try again in 30s` (30 s bounds the longest delay).
-  This adds no lockout: it ends with the delays, and a network that can do
-  it can already fill the same pre-auth socket slots.
+  therefore holds one of its network's 8 guess tokens until its delay ends,
+  even if the socket closes first. A wrong PIN that finds all 8 taken is
+  not refused: it waits for a token (then its own delay), and while it waits
+  it keeps its socket's pre-auth slot, even after a close, so the waiting
+  is bounded by the per-address 4 and per-network 8 socket caps. Its
+  reply is `Incorrect PIN`, later; the log says
+  `auth: <addr> wrong PIN queued: network <net> has 8 wrong PINs in their delay`.
+  There is no token cap across networks (S5d had 16 in all, refused
+  unchecked: a peer on two networks could then make the owner's right PIN
+  fail with `Too many attempts`).
 - No hard lockout per /64 (asked for by a security review, rejected): it
   would let one device lock out every neighbour in its /64, a home LAN or a
   shared Wi-Fi, by guessing wrong 10 times, the denial of service that keying
   the lockout by exact address fixed. A /64 is slowed and capped instead.
 - Threat math: the PIN is 8 digits, 10^8 values, so a random search needs
-  5 x 10^7 guesses on average. One network makes at most 8 guesses per delay,
-  and the delay reaches its 30 s cap after 150 failures, so it gets about
+  5 x 10^7 guesses on average. One network gets a new PIN checked only as
+  one of its 8 tokens frees (plus at most 8 queued once, its socket cap), and
+  the delay reaches its 30 s cap after 150 failures, so it gets about
   8 / 30 s = 16 guesses a minute: 5 x 10^7 / 16 per minute is about 3.1 x 10^6
-  minutes, about 6 years on average. A peer holding many /64s (or many IPv4
-  addresses) gets 8 each but never more than 16 in all: about 32 a minute,
-  about 3 years. Rotating
-  addresses is needed at all because each exact address locks out for 15 min
-  after 10 failures. The fast first 150 failures per network change nothing
-  that matters (150 of 5 x 10^7).
+  minutes, about 6 years on average. Rotating addresses is needed at all
+  because each exact address locks out for 15 min after 10 failures. The
+  fast first 150 failures per network change nothing that matters (150 of
+  5 x 10^7).
+- Across networks the rates add up, with no shared cap (one would let the
+  attacker refuse the owner, above). An IPv6 /64 is about 16 a minute; an
+  IPv4 address is its own network, so its bound is its lockout: 10 failures
+  per 15 min, about 40 an hour. A peer that takes a whole IPv4 /24 on the
+  LAN (about 250 addresses) gets about 10^4 an hour, 5 x 10^7 / 10^4 = 5000 h,
+  about 7 months on average; two /64s get about 32 a minute, about 3 years.
+  Each lockout is logged (`auth: <addr> locked`), so such a search is loud.
 - There is no lockout across all senders: it would let any LAN peer lock the
   owner out by guessing wrong 10 times.
 - An authenticated phone may send 10 messages a second (the Mac's

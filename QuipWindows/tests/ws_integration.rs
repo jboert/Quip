@@ -1233,12 +1233,13 @@ async fn closing_during_the_wrong_pin_delay_frees_the_slot_at_once() {
     assert_eq!(h.host.guesses_in_delay("127.0.0.1"), 1, "the guess stays counted until its delay ends");
 }
 
-/// Closing early frees the socket but not the guess, so a network still
-/// gets at most 8 PIN checks per delay: the 9th is refused unchecked, even
-/// with the right PIN, while another network pairs.
+/// Closing early frees the socket but not the guess. With all 8 of a
+/// network's guess tokens in their delay its right PIN still pairs, and
+/// its next wrong PINs queue, each keeping its socket's slot after a close,
+/// so they stop at the per-address socket cap instead of guessing on.
 #[tokio::test]
-async fn a_network_with_eight_wrong_pins_in_their_delay_gets_no_ninth_check() {
-    use quip_windows::host::MAX_UNAUTHENTICATED_PER_NETWORK;
+async fn a_network_with_eight_wrong_pins_in_their_delay_queues_the_next_and_still_pairs() {
+    use quip_windows::host::{MAX_UNAUTHENTICATED_PER_NETWORK, MAX_UNAUTHENTICATED_PER_SENDER};
     let hanging: std::sync::Arc<dyn quip_windows::host::Sleeper> = std::sync::Arc::new(HangingSleeper);
     let h = start_with(Opts { sleeper: Some(hanging), ..Default::default() }).await;
     let v6 = quip_windows::services::ws_server::bind("[::1]:0".parse().unwrap()).await.unwrap();
@@ -1252,41 +1253,108 @@ async fn a_network_with_eight_wrong_pins_in_their_delay_gets_no_ninth_check() {
         q.ws.close(None).await.unwrap();
     }
     wait_for(|| h.host.unauthenticated_count() == 0).await;
-    let mut q = connect(h.addr).await;
-    q.recv().await;
-    q.send(json!({"type":"auth","pin":PIN})).await;
-    assert_eq!(q.recv().await["error"], "Too many attempts; try again in 30s");
-    assert!(h.log("websocket.log").contains("auth: 127.0.0.1 refused, PIN not checked"), "{}", h.log("websocket.log"));
-    assert_eq!(h.log("websocket.log").matches("incorrect PIN").count(), 8, "the 9th was never checked");
+    let mut owner = connect(h.addr).await;
+    owner.recv().await;
+    owner.send(json!({"type":"auth","pin":PIN})).await;
+    assert_eq!(owner.recv().await["success"], true, "the right PIN is checked first and pairs");
+    for n in 1..=MAX_UNAUTHENTICATED_PER_SENDER {
+        let mut q = connect(h.addr).await;
+        q.recv().await;
+        q.send(json!({"type":"auth","pin":"99999999"})).await;
+        wait_for(|| h.host.guesses_queued("127.0.0.1") == n).await;
+        q.ws.close(None).await.unwrap();
+    }
+    assert_eq!(h.host.guesses_in_delay("127.0.0.1"), MAX_UNAUTHENTICATED_PER_NETWORK);
+    // The queued PINs' sockets are closed, but they keep their slots.
+    wait_for(|| h.host.client_ids().len() == 1).await; // only the owner
+    assert_eq!(h.host.unauthenticated_from("127.0.0.1"), MAX_UNAUTHENTICATED_PER_SENDER);
+    assert!(tokio_tungstenite::connect_async(format!("ws://{}", h.addr)).await.is_err(), "no 5th guess");
+    let log = h.log("websocket.log");
+    assert_eq!(log.matches("incorrect PIN").count(), 12, "8 in their delay, 4 queued: {log}");
+    assert_eq!(log.matches("auth: 127.0.0.1 wrong PIN queued: network 127.0.0.1 has 8").count(), 4, "{log}");
+    assert!(!log.contains("Too many attempts"), "{log}");
     let mut other = connect(v6_addr).await;
     assert_eq!(other.recv().await["error"], "auth_required");
     other.send(json!({"type":"auth","pin":PIN})).await;
     assert_eq!(other.recv().await["success"], true, "another network still pairs");
 }
 
-/// Many networks still share the global number: with it at 2, two wrong
-/// PINs in their delay from one network keep another from being checked.
+/// `handle_auth` from `ip` on a fresh client, in a task of its own (a wrong
+/// PIN's reply may wait for its delay). The client's replies.
+fn auth_in_background(h: &Harness, ip: &str, pin: &str) -> tokio::sync::mpsc::Receiver<String> {
+    use quip_windows::services::auth_throttle::Sender;
+    let (id, rx) = h.host.register_client(format!("[{ip}]:50000"));
+    let host = h.host.clone();
+    let sender = Sender::of(ip.parse().unwrap());
+    let pin = pin.to_string();
+    tokio::spawn(async move { host.handle_auth(id, &sender, Some(pin), None).await });
+    rx
+}
+
+/// The security review's case against the all-senders cap: an attacker on
+/// two networks holds all 16 guess tokens there. The owner's right PIN, from
+/// a third network or from inside an attacker's, pairs at once, and a third
+/// network's wrong PIN still gets a token of its own.
 #[tokio::test]
-async fn wrong_pins_in_their_delay_are_capped_across_networks_too() {
+async fn attacker_tokens_on_two_networks_never_refuse_the_owners_right_pin() {
+    use quip_windows::host::MAX_UNAUTHENTICATED_PER_NETWORK;
     let hanging: std::sync::Arc<dyn quip_windows::host::Sleeper> = std::sync::Arc::new(HangingSleeper);
-    let limits = quip_windows::host::ConnectionLimits { max_unauthenticated: 2, ..Default::default() };
-    let h = start_with(Opts { sleeper: Some(hanging), limits, ..Default::default() }).await;
-    let v6 = quip_windows::services::ws_server::bind("[::1]:0".parse().unwrap()).await.unwrap();
-    let v6_addr = v6.local_addr().unwrap();
-    quip_windows::services::ws_server::spawn(h.host.clone(), v6);
-    for n in 1..=2 {
-        let mut q = connect(h.addr).await;
-        q.recv().await;
-        q.send(json!({"type":"auth","pin":"99999999"})).await;
-        wait_for(|| h.host.all_guesses_in_delay() == n).await;
-        q.ws.close(None).await.unwrap();
+    let h = start_with(Opts { sleeper: Some(hanging), ..Default::default() }).await;
+    let mut attacker = vec![];
+    for net in ["2001:db8:1:1", "2001:db8:1:2"] {
+        for i in 1..=MAX_UNAUTHENTICATED_PER_NETWORK {
+            attacker.push(auth_in_background(&h, &format!("{net}::{i:x}"), "99999999"));
+        }
+        wait_for(|| h.host.guesses_in_delay(&format!("{net}::/64")) == MAX_UNAUTHENTICATED_PER_NETWORK).await;
     }
-    wait_for(|| h.host.unauthenticated_count() == 0).await;
-    let mut other = connect(v6_addr).await;
-    other.recv().await;
-    other.send(json!({"type":"auth","pin":PIN})).await;
-    assert_eq!(other.recv().await["error"], "Too many attempts; try again in 30s");
-    assert_eq!(h.host.guesses_in_delay("::/64"), 0);
+    assert_eq!(auth_from(&h, "192.0.2.1", PIN).await["success"], true, "a third address pairs");
+    assert_eq!(auth_from(&h, "2001:db8:1:1::ff", PIN).await["success"], true, "a neighbour pairs too");
+    let _third = auth_in_background(&h, "2001:db8:1:3::1", "99999999");
+    wait_for(|| h.host.guesses_in_delay("2001:db8:1:3::/64") == 1).await;
+    assert_eq!(h.host.guesses_queued("2001:db8:1:3::/64"), 0, "no cap across networks");
+    for rx in &mut attacker {
+        assert!(rx.try_recv().is_err(), "every attacker guess is still in its delay");
+    }
+    assert!(!h.log("websocket.log").contains("refused"), "{}", h.log("websocket.log"));
+}
+
+/// A wrong PIN finding its network's tokens taken is delayed, not refused:
+/// it is answered `Incorrect PIN` only after a token frees and its own delay
+/// ends, so the network never has more than its cap of guesses in a delay.
+#[tokio::test]
+async fn a_wrong_pin_with_no_free_token_waits_for_one_instead_of_being_refused() {
+    let gate = std::sync::Arc::new(GateSleeper::new());
+    let sleeper: std::sync::Arc<dyn quip_windows::host::Sleeper> = gate.clone();
+    let limits = quip_windows::host::ConnectionLimits { max_unauthenticated_per_network: 2, ..Default::default() };
+    let h = start_with(Opts { sleeper: Some(sleeper), limits, ..Default::default() }).await;
+    let net = "2001:db8:1:1::/64";
+    let mut a = auth_in_background(&h, "2001:db8:1:1::a", "99999999");
+    wait_for(|| h.host.guesses_in_delay(net) == 1).await;
+    let mut b = auth_in_background(&h, "2001:db8:1:1::b", "99999999");
+    wait_for(|| h.host.guesses_in_delay(net) == 2).await;
+    let mut c = auth_in_background(&h, "2001:db8:1:1::c", "99999999");
+    wait_for(|| h.host.guesses_queued(net) == 1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(c.try_recv().is_err(), "queued, not refused");
+    assert_eq!(h.host.guesses_in_delay(net), 2);
+
+    gate.release(1); // a's delay ends; c takes its token and starts its own
+    assert_eq!(recv_json(&mut a).await["error"], "Incorrect PIN");
+    wait_for(|| h.host.guesses_queued(net) == 0).await;
+    assert_eq!(h.host.guesses_in_delay(net), 2, "c holds a's token: still at the cap");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(c.try_recv().is_err(), "c still waits its own delay");
+
+    gate.release(2);
+    assert_eq!(recv_json(&mut b).await["error"], "Incorrect PIN");
+    assert_eq!(recv_json(&mut c).await["error"], "Incorrect PIN");
+    wait_for(|| h.host.guesses_in_delay(net) == 0).await;
+    assert!(!h.log("websocket.log").contains("Too many"), "{}", h.log("websocket.log"));
+}
+
+async fn recv_json(rx: &mut tokio::sync::mpsc::Receiver<String>) -> serde_json::Value {
+    let text = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+    serde_json::from_str(&text).unwrap()
 }
 
 #[tokio::test]
@@ -1318,7 +1386,7 @@ async fn wait_for(cond: impl Fn() -> bool) {
 async fn auth_from(h: &Harness, ip: &str, pin: &str) -> serde_json::Value {
     use quip_windows::services::auth_throttle::Sender;
     let (id, mut rx) = h.host.register_client(format!("[{ip}]:50000"));
-    h.host.handle_auth(id, &Sender::of(ip.parse().unwrap()), Some(pin.to_string())).await;
+    h.host.handle_auth(id, &Sender::of(ip.parse().unwrap()), Some(pin.to_string()), None).await;
     let reply = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
     h.host.remove_client(id);
     reply

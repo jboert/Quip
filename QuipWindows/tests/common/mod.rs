@@ -62,6 +62,32 @@ impl Sleeper for HangingSleeper {
     }
 }
 
+/// Each sleep ends when the test hands out a permit (`release`): a wrong
+/// PIN's delay ends exactly when the test says so.
+pub struct GateSleeper(Arc<tokio::sync::Semaphore>);
+
+impl GateSleeper {
+    pub fn new() -> Self {
+        GateSleeper(Arc::new(tokio::sync::Semaphore::new(0)))
+    }
+
+    /// End `n` delays, oldest waiter first.
+    pub fn release(&self, n: usize) {
+        self.0.add_permits(n);
+    }
+}
+
+impl Sleeper for GateSleeper {
+    fn sleep(&self, _: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let gate = self.0.clone();
+        Box::pin(async move {
+            if let Ok(permit) = gate.acquire_owned().await {
+                permit.forget();
+            }
+        })
+    }
+}
+
 pub struct Harness {
     pub host: Arc<Host>,
     pub fake: FakePlatform,

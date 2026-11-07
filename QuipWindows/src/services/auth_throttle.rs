@@ -156,11 +156,12 @@ impl AuthThrottle {
     /// wrong PIN waits the longer of the address's delay (the Mac's 200 ms
     /// per failure up to 2 s, 0 on the failure that starts the lockout) and
     /// its network's (`network_delay_ms`). The delay is spent on the reply,
-    /// holding the socket's pre-auth slot, so a peer rotating addresses
-    /// gets no more than `MAX_UNAUTHENTICATED_PER_NETWORK` guesses per that
-    /// delay (spec 3.1 threat math). Closing the socket gives the slot back
-    /// but neither the failure (recorded here, before the delay) nor the
-    /// guess (`host::GuessToken`, held until the delay ends).
+    /// holding one of the network's `MAX_UNAUTHENTICATED_PER_NETWORK` guess
+    /// tokens (`host::GuessToken`; with none free the wrong PIN queues for
+    /// one, keeping its socket's pre-auth slot), so a peer rotating
+    /// addresses gets no more than that many guesses per delay (spec 3.1
+    /// threat math). Closing the socket gives back neither the failure
+    /// (recorded here, before the delay) nor the token or queue place.
     /// A success does not clear the network count: the owner's phone
     /// pairing must not reset the delay of a neighbour guessing.
     pub fn attempt(&self, sender: &Sender, correct: bool) -> Attempt {
