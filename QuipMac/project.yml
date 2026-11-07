@@ -94,7 +94,7 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Quip
-        CFBundleShortVersionString: 1.5.7
+        CFBundleShortVersionString: 1.6.0
         # Q-90: start with no Dock tile. QuipAppDelegate gives the copy that
         # runs its tile; a copy that hands its launch to launchd never gets one.
         LSUIElement: true
