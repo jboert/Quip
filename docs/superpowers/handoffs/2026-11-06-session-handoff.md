@@ -17,17 +17,17 @@ Plan of record: `docs/superpowers/plans/2026-11-06-q91-windows-host.md`
 - R1 (review-fix) is complete and pushed (`db0699c`; Windows CI run 42343269299
   green: listing 6, displays 2, qr 2, tray 3, selftest 11/11). One more fix from
   the automated security review is pushed (`b009569`: evict a pre-auth socket only
-  when it admits the sender). Windows CI on `b009569` started automatically;
-  check it first thing (`gh run list -R jboert/Quip -w Windows -L 1`).
+  when it admits the sender). Windows CI on `b009569`: run 42343467201 green.
 - The plan run is closed (Status line in the plan). S10-S12 (arrange, typing,
   release build) wait for the owner's PC check. Each starts as a fresh worker
   per the plan protocol; one review after the last slice of the next run.
 
 ## Owner's PC test (2026-11-07)
 
-`Quip.exe` built from `df3e45f` (pushed, reviewed code; NOT including R1) was
-sent to the owner. SHA-256
-`3beb48514c039e50dd47ce7353214ecf6a5e7af72f427e5ae8e90bc3d48c802c`.
+`Quip.exe` built from `b009569` (includes R1 and the eviction fix; Windows CI
+run 42343467201 green) was sent to the owner on 2026-11-07, replacing the
+earlier `df3e45f` build. SHA-256
+`32fd17ac8fd42e39f30217fbab7a04c9cdfacf58068c901215280bd0500575cf`.
 
 What works in this build: tray app, pairing (PIN or QR), Bonjour discovery,
 the phone's grid of PC windows (terminals shown; PowerShell and cmd
