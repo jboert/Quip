@@ -1,6 +1,6 @@
 # Plan: Q-91 Quip for Windows (phase 1)
 
-**Status:** In progress — approved by owner 2026-11-06 with a stop after S9 (owner checks the real PC before S10). S1-S4 complete; S5-S9 not started; S10-S12 on hold.
+**Status:** In progress — approved by owner 2026-11-06 with a stop after S9 (owner checks the real PC before S10). S1-S5 complete; S5b next; S6-S9 not started; S10-S12 on hold.
 
 - Spec (source of truth for behavior): `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`
 - PRD: `tasks/prd-quip-windows-host.md` · Board: Q-91 · Handoff: `docs/superpowers/handoffs/2026-11-06-session-handoff.md`
@@ -42,12 +42,31 @@
 - Notes: 454 tests (389 unit, 11 shared-vector, 54 integration); gate green, re-run by the orchestrator. Orchestrator fix: auth deadline 10 s -> 120 s (upgrade stays 10 s), since a phone with no saved PIN shows its prompt on the open socket. Spec 3.1/3.3/7 updated for the auth_required greeting, request_content reply, settings read retry. Residual missed mutants: fake console output arms, equivalent mutants, OS-dependent address listing.
 
 ### S5: Commit M1 + gate wiring + simulator QA scripts
-- **Status:** Not started
+- **Status:** Complete (QA scripts; uncommitted). The gate, changed-scopes and CI items below were not part of the worker's narrowed scope; the orchestrator still has to check them.
 - Goal: land M1 and prove the real phone app works against the host.
 - Scope: (M1 code and gate wiring were committed with S4.) Write `tools/qa/q91-{pair,layout,send,keys,arrange,two-backends}.sh` against `--fake-platform` on a simulator of our own (clone of D8C5154B, Quip 1.5.7).
 - Acceptance: `bash .github/scripts/changed-scopes-test.sh` 0 failures; `tools/check.sh` windows suite green and fails on an injected fmt error; each q91 script exits 0 and saves a screenshot to `docs/superpowers/evidence/q91/`; Windows CI `test` job green on the pushed commit.
+- Notes: six scripts plus a sourced `tools/qa/q91-lib.sh` (fake startup on its own port, PIN-link pairing, `wait_for`, Vision OCR of screenshots, a stdlib WebSocket peer). Each script pairs by the `quip://pair` link, so it works whatever port the phone's row held. They assert on the fake's `fake:` stdout lines, its `websocket.log` / `latency.log` / `injection.log`, the phone's saved rows, and OCR of the screen.
+  Run on simulator `1CA3EE21` (Quip 1.5.7), fake-windows on 8797, fake-mac on 8799, 2026-11-07 UTC:
+  | Script | Exit | Evidence | Facts checked |
+  |---|---|---|---|
+  | `q91-pair.sh` | 0 | `evidence/q91/s5-q91-pair.png` | row removed, then re-added by the link (`…0002 ws://127.0.0.1:8797`); `auth ok`; 1 phone; cards Windows Terminal / PowerShell / Command Prompt + titles; no Notepad, no folder |
+  | `q91-layout.sh` | 0 | `evidence/q91/s5-q91-layout.png` | open, retitle, close each on screen in the first screenshot (<1 s); a move reaches a layout_update at once (peer) |
+  | `q91-send.sh` | 0 | `evidence/q91/s5-q91-send.png` | typed line: `type units=13` then `chord=return`, latency `success=1 press_return=1`; multi-line (share sheet) to PowerShell: `shift+return`, no Return, `multiline_guard=1`; to cmd: nothing typed, injection.log `DROPPED … multi-line text refused`, refusal shown on the phone |
+  | `q91-keys.sh` | 0 | `evidence/q91/s5-q91-keys.png` | Return/Esc/Ctrl+C/Up/Down: `chord=` return / escape / ctrl+c / up / down and latency `quick_action action=press_*` `success=1`; the quick row is restored on exit |
+  | `q91-arrange.sh` | 0 | `evidence/q91/s5-q91-arrange.png` | horizontal: 4 `fake: move` (4101/4117/4133/4149, not Notepad), 494x1047 columns at -7/473/953/1433; vertical: 1934x267 rows at 0/260/520/780 |
+  | `q91-two-backends.sh` | 0 | `evidence/q91/s5-q91-two-backends.png`, `…-mac.png` | each fake holds 1 socket; switching shows each grid with none of the other's cards; no new auth and both sockets kept |
+  Limits: no dictation in the simulator (typed text uses the same `send_text`); the iPhone app has no control that sends `arrange_windows` (its Arrange button only re-lays out the phone grid), so `q91-arrange.sh` sends it from the scripted peer while the phone is paired.
+- Validation: `tools/qa/q91-{pair,layout,send,keys,arrange,two-backends}.sh 1CA3EE21-B289-4707-88DB-5E9940E82DD7` all exit 0; `bash -n tools/qa/q91-*.sh` clean.
 
-### S6: M2a Win32 window listing, displays, shell classification, frontmost
+- Orchestrator checks (rest of S5 acceptance): `bash .github/scripts/changed-scopes-test.sh` 17/17; `tools/check.sh` windows suite fails on an injected fmt error and is green after; Windows CI green on `0e97ee5` (after pinning the toolchain to 1.98.1: newer stable deprecated `fetch_update`); re-ran `tools/qa/q91-send.sh` on 1CA3EE21: 9/9 ok.
+
+### S5b: Pre-auth and PIN-guess hardening (automated security review of 21b83c2)
+- **Status:** Not started
+- Goal: one LAN peer cannot lock the phone out; PIN-guess limits cannot be dodged by rotating IPv6 addresses.
+- Acceptance: at most 4 pre-auth sockets per sender inside the global 16 (test: a 5th from the same host refused while another host still connects); throttle key normalises IPv4-mapped IPv6 to IPv4 and buckets IPv6 by /64 (tests: two addresses in one /64 share a lockout; `::ffff:192.0.2.1` and `192.0.2.1` share one); no global lockout (it would let an attacker lock out the owner; stated in spec 3.1); the phone's connect burst is not dropped by the 10/s rate limit (compare the Mac's `allowMessage` exemptions; test with a burst of the phone's startup frames); gate green.
+
+ Win32 window listing, displays, shell classification, frontmost
 - **Status:** Not started
 - Goal: real `WindowBackend` on Windows (spec 5.1).
 - Acceptance: `EnumWindows` filter (visible, titled, unowned, not tool, not cloaked); WT and conhost terminals classified with shell `powershell|pwsh|cmd|unknown` incl. child-process check (python/ssh in a shell -> unknown); minimized reports restored rect; displays from `EnumDisplayMonitors` with one primary; per-monitor DPI v2 manifest; Win32 UI tests (`QUIP_WIN_UI=1`) for listing/displays/classification pass in Windows CI.

@@ -112,9 +112,11 @@ fake: close handle=4099
 ```
 
 `BLOCKED inserted=N` marks a short insert (`uipi`), `landed_in=H` input that
-went to another window. Logs go to stderr. `latency.log` gets a line for every
-`send_text` (`text_len`, `segments`, `multiline_guard`) and every key
-`quick_action` (`action`, `inputs`), with `success=0|1`.
+went to another window. Logs go to stderr. `latency.log` gets a line for each
+`send_text` (`text_len`, `segments`, `multiline_guard`) and each key
+`quick_action` (`action`, `inputs`) that reached the injector, with
+`success=0|1`. A send refused before that (multi-line into cmd, window gone,
+input thread stopped) is written to `injection.log` only, as a `DROPPED` line.
 
 ## What it answers
 
