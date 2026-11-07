@@ -1,0 +1,8 @@
+# Same compiler on the Mac and in Windows CI. Without a pin, windows-latest
+# picked up a newer stable that deprecates `fetch_update`, and clippy's
+# -D warnings turned that into a CI-only failure (run 42330647124).
+# Bump deliberately, with the lint fixes in the same commit.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-gnu"]
