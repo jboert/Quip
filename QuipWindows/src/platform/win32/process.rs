@@ -1,0 +1,128 @@
+//! Processes behind the windows: the toolhelp snapshot `classify` walks, the
+//! exe path, and the display name from the exe's version resource.
+
+use std::ffi::c_void;
+
+use windows::core::{w, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+
+use super::window::from_wide;
+use crate::platform::traits::{PlatformError, PlatformResult};
+use crate::services::classify::Proc;
+
+/// Closes the handle when dropped.
+struct Owned(HANDLE);
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from a successful open call and is closed
+        // exactly once, here.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// Every process now: pid, parent pid, exe file name.
+pub fn snapshot() -> PlatformResult<Vec<Proc>> {
+    // SAFETY: plain flags; the handle is closed by `Owned`.
+    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+        .map_err(|e| PlatformError::Failed(format!("CreateToolhelp32Snapshot: {e}")))?;
+    let snap = Owned(snap);
+    let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+    let mut out = Vec::new();
+    // SAFETY: `entry` is a writable PROCESSENTRY32W with `dwSize` set, and
+    // `snap` is a live process snapshot.
+    let mut more = unsafe { Process32FirstW(snap.0, &mut entry) }.is_ok();
+    while more {
+        out.push(Proc {
+            pid: entry.th32ProcessID,
+            parent: entry.th32ParentProcessID,
+            exe: from_wide(&entry.szExeFile),
+        });
+        // SAFETY: as above.
+        more = unsafe { Process32NextW(snap.0, &mut entry) }.is_ok();
+    }
+    Ok(out)
+}
+
+/// Full exe path, `None` when the process cannot be opened (elevated,
+/// protected, or gone).
+pub fn exe_path(pid: u32) -> Option<String> {
+    // SAFETY: plain arguments; the handle is closed by `Owned`.
+    let process = Owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
+    let mut buf = vec![0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: `buf` is writable for `len` UTF-16 units; on success `len` is
+    // set to the units written, without the NUL.
+    unsafe { QueryFullProcessImageNameW(process.0, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) }.ok()?;
+    Some(String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())]))
+}
+
+fn wide_z(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// The name Task Manager shows for an exe: `FileDescription`, else
+/// `ProductName`, from its version resource. `FileDescription` first because
+/// `ProductName` is the suite, not the app, for much of what users run:
+/// "Microsoft® Windows® Operating System" for Notepad and Explorer,
+/// "Microsoft Office" for Word.
+pub fn display_name(exe_path: &str) -> Option<String> {
+    let path = wide_z(exe_path);
+    // SAFETY: `path` is NUL-terminated and outlives the call.
+    let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(path.as_ptr()), None) };
+    if size == 0 {
+        return None;
+    }
+    // u32 storage keeps every value VerQueryValueW points at aligned.
+    let mut data = vec![0u32; (size as usize).div_ceil(4)];
+    // SAFETY: `data` holds at least `size` writable bytes.
+    unsafe { GetFileVersionInfoW(PCWSTR(path.as_ptr()), 0, size, data.as_mut_ptr() as *mut c_void) }.ok()?;
+    let block = data.as_ptr() as *const c_void;
+
+    let mut langs: Vec<String> = Vec::new();
+    let mut ptr: *mut c_void = std::ptr::null_mut();
+    let mut len = 0u32;
+    // SAFETY: `block` is the version block just read; `ptr` / `len` are
+    // writable out values.
+    if unsafe { VerQueryValueW(block, w!("\\VarFileInfo\\Translation"), &mut ptr, &mut len) }.as_bool()
+        && !ptr.is_null()
+    {
+        let unit_count = len as usize / 2;
+        // SAFETY: on success `ptr` points inside `data` at `len` bytes of
+        // (language, code page) u16 pairs, 2-byte aligned.
+        let units = unsafe { std::slice::from_raw_parts(ptr as *const u16, unit_count) };
+        for [lang, code_page] in units.as_chunks::<2>().0 {
+            langs.push(format!("{lang:04x}{code_page:04x}"));
+        }
+    }
+    // US English, Unicode and Western code pages: what most exes ship.
+    langs.extend(["040904b0".to_string(), "040904e4".to_string()]);
+
+    for key in ["FileDescription", "ProductName"] {
+        for lang in &langs {
+            let sub = wide_z(&format!("\\StringFileInfo\\{lang}\\{key}"));
+            let mut ptr: *mut c_void = std::ptr::null_mut();
+            let mut chars = 0u32;
+            // SAFETY: as above; `sub` is NUL-terminated and outlives the call.
+            let found = unsafe { VerQueryValueW(block, PCWSTR(sub.as_ptr()), &mut ptr, &mut chars) }.as_bool();
+            if !found || ptr.is_null() || chars == 0 {
+                continue;
+            }
+            // SAFETY: on success `ptr` points inside `data` at `chars` UTF-16
+            // units (NUL included), 2-byte aligned.
+            let units = unsafe { std::slice::from_raw_parts(ptr as *const u16, chars as usize) };
+            let name = from_wide(units).trim().to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
+}

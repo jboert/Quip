@@ -130,7 +130,7 @@ pub enum PlatformError {
     },
     /// The OS refused the operation (elevated window, UIPI).
     Refused(String),
-    /// Built without a backend for this OS (M1 Win32 stub).
+    /// An operation the backend does not have yet.
     NotImplemented(&'static str),
     Failed(String),
 }

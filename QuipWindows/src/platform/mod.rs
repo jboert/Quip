@@ -4,6 +4,7 @@
 //! `project_quip_hangs_not_crashes`: every Mac "crash" was a blocked thread).
 
 pub mod fake;
+pub mod listing;
 pub mod traits;
 #[cfg(windows)]
 pub mod win32;

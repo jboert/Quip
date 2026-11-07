@@ -28,7 +28,8 @@ concurrency:
 jobs:
   test:
     # The same checks tools/check.sh runs on the Mac, natively on Windows:
-    # fmt, clippy, and every unit, integration and shared-vector test.
+    # fmt, clippy, and every unit, integration and shared-vector test; then
+    # the Win32 UI tests, which only run here and on a real PC.
     name: cargo test (QuipWindows)
     runs-on: windows-latest
     timeout-minutes: 30
@@ -51,6 +52,14 @@ jobs:
       - name: test
         working-directory: QuipWindows
         run: cargo test
+      - name: Win32 UI tests
+        # Spec 10.5: the real backend against real windows (consoles,
+        # Windows Terminal, Notepad, the monitors). One at a time: they
+        # share the desktop.
+        working-directory: QuipWindows
+        env:
+          QUIP_WIN_UI: "1"
+        run: cargo test --test "win32_*" -- --test-threads=1 --nocapture
 
   spike:
     # M0 probe: can a process on this runner bring a window to the front and
