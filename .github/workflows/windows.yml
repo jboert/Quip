@@ -58,9 +58,13 @@ jobs:
         # Spec 10.5: the real backend against real windows (consoles,
         # Windows Terminal, Notepad, the monitors). One at a time: they
         # share the desktop.
+        # QUIP_SELFTEST_RAW_PROBE: the integrity probe's raw SendInput,
+        # which bypasses the injector, runs on this throwaway desktop only
+        # (never on the owner's PC, where focus could move to a user window).
         working-directory: QuipWindows
         env:
           QUIP_WIN_UI: "1"
+          QUIP_SELFTEST_RAW_PROBE: "1"
         run: cargo test --test "win32_*" -- --test-threads=1 --nocapture
       - name: Selftest
         # Spec 10.5: the same cases through `Quip.exe --selftest`, the
@@ -71,6 +75,8 @@ jobs:
         # gives no console: start it with its output in files, wait for that
         # process alone (not its children), then print the output.
         working-directory: QuipWindows
+        env:
+          QUIP_SELFTEST_RAW_PROBE: "1"
         run: |
           "SELFTEST_DIR=$env:LOCALAPPDATA\Quip\Logs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           cargo build

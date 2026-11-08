@@ -36,6 +36,17 @@ pub fn write_report(dir: &Path, unix_seconds: f64, text: &str) -> std::io::Resul
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "100 selftest reports in one second"))
 }
 
+/// The switch for the probe's raw `SendInput` (`probe`): it bypasses the
+/// injector, so if focus moved to a user's window between the check and
+/// the send, marker text would land there. Only CI sets it
+/// (`.github/workflows/windows.yml`); on the owner's PC the probe skips it.
+pub const RAW_PROBE_ENV: &str = "QUIP_SELFTEST_RAW_PROBE";
+
+/// `RAW_PROBE_ENV`'s value turns the raw send on: exactly `1`.
+pub fn raw_probe_enabled(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 /// The `build_stamp` case: a build must name its commit, or a report from
 /// it cannot be traced to code. `Ok` holds the commit.
 pub fn check_build_stamp(build: &str) -> Result<String, String> {
@@ -129,5 +140,14 @@ mod tests {
         assert_eq!(second, dir.join("selftest-20270115T080000Z-1.txt"));
         assert_eq!(std::fs::read_to_string(first).unwrap(), "one\n");
         assert_eq!(std::fs::read_to_string(second).unwrap(), "two\n");
+    }
+
+    #[test]
+    fn the_raw_probe_runs_only_when_ci_turns_it_on() {
+        assert!(super::raw_probe_enabled(Some("1")));
+        for off in [None, Some(""), Some("0"), Some("true"), Some("yes"), Some(" 1")] {
+            assert!(!super::raw_probe_enabled(off), "{off:?}");
+        }
+        assert_eq!(super::RAW_PROBE_ENV, "QUIP_SELFTEST_RAW_PROBE", "the name windows.yml sets");
     }
 }

@@ -6,14 +6,19 @@
 //! spawn_at_integrity`), with one of its own windows in front. It acts only
 //! when the window in front carries `<marker>` (`own::has_marker`); else it
 //! sends nothing and exits 2. It never focuses anything. It runs
-//! `injector::execute(&[Type(<marker>)])` (no focus step), then ONE raw
-//! `SendInput` of the same text that bypasses the injector, to learn what
-//! Windows returns under UIPI (the `SendInput` docs say the count does not
-//! show it). Before the raw call it checks the marker window is still in
-//! front. It prints one line, `access=<…> injector=<error or ok>
-//! raw_inserted=<n>`, and exits 0.
+//! `injector::execute(&[Type(<marker>)])` (no focus step), then, only when
+//! `QUIP_SELFTEST_RAW_PROBE=1` (CI sets it; `selftest::RAW_PROBE_ENV`), ONE
+//! raw `SendInput` of the same text that bypasses the injector, to learn
+//! what Windows returns under UIPI (the `SendInput` docs say the count does
+//! not show it). Before the raw call it checks the marker window is still in
+//! front, but focus can still move between that check and the send, and the
+//! text would then land in a user's window: so on the owner's PC it is
+//! skipped (`raw_inserted=skipped(...)`). It prints one line,
+//! `access=<…> injector=<error or ok> raw_inserted=<n or skipped(...)>`, and
+//! exits 0.
 
 use super::own::has_marker;
+use super::{raw_probe_enabled, RAW_PROBE_ENV};
 use crate::platform::traits::{WindowBackend, WindowRef};
 use crate::platform::win32::{raw_send_units, window_title, Win32Platform};
 use crate::services::injector::{self, Step};
@@ -56,6 +61,9 @@ pub fn run(marker: &str) -> i32 {
         Some(e) => e.to_string(),
     };
     let raw = match marked_front(&p, marker) {
+        _ if !raw_probe_enabled(std::env::var(RAW_PROBE_ENV).ok().as_deref()) => {
+            format!("skipped(set {RAW_PROBE_ENV}=1 to run it; CI only)")
+        }
         Ok(again) if again == w => {
             let units: Vec<u16> = marker.encode_utf16().collect();
             raw_send_units(&units).to_string()
