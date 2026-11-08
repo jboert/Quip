@@ -58,9 +58,16 @@ pub fn send_units(units: &[u16]) -> usize {
     send_events(&keymap::unit_events(units)) / 2
 }
 
-/// Events inserted for the chord.
+/// Events inserted for the chord. When Windows inserted only part of it,
+/// the keys that part pressed are released again (`keymap::releases_after`),
+/// so Ctrl or Shift is never left down; the count is still the short one,
+/// and the injector stops (`InputBlocked`).
 pub fn press_key(chord: KeyChord) -> PlatformResult<usize> {
     let events = keymap::chord_events(chord)
         .ok_or_else(|| PlatformError::Failed(format!("no virtual key for {}", chord.describe())))?;
-    Ok(send_events(&events))
+    let n = send_events(&events);
+    if n < events.len() {
+        send_events(&keymap::releases_after(&events, n));
+    }
+    Ok(n)
 }

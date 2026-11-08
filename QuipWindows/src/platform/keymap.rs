@@ -81,6 +81,24 @@ pub fn chord_events(chord: KeyChord) -> Option<Vec<KeyEvent>> {
     Some(out)
 }
 
+/// The key-ups owed after `SendInput` inserted only the first `inserted` of
+/// `events` (UIPI, or the input desktop changed): every key pressed in that
+/// prefix whose release was not, the last pressed first. Without them a
+/// short chord leaves Ctrl or Shift logically down on the owner's PC. Keys
+/// this chord never pressed are left alone (the user may hold one).
+pub fn releases_after(events: &[KeyEvent], inserted: usize) -> Vec<KeyEvent> {
+    let landed = &events[..inserted.min(events.len())];
+    let mut held: Vec<KeyEvent> = Vec::new();
+    for e in landed {
+        if e.up {
+            held.retain(|h| (h.vk, h.scan) != (e.vk, e.scan));
+        } else {
+            held.push(*e);
+        }
+    }
+    held.iter().rev().map(|e| KeyEvent { up: true, ..*e }).collect()
+}
+
 /// A down/up pair per UTF-16 unit.
 pub fn unit_events(units: &[u16]) -> Vec<KeyEvent> {
     units.iter().flat_map(|&u| [KeyEvent::unit(u, false), KeyEvent::unit(u, true)]).collect()
@@ -127,6 +145,22 @@ mod tests {
             let QuickActionPlan::Keys(c) = keys::plan(action) else { panic!("{action}") };
             assert_eq!(vk(c[0].key).map(|(v, _)| v), Some(key), "{action}");
         }
+    }
+
+    #[test]
+    fn a_short_chord_releases_what_it_pressed_and_nothing_else() {
+        let ev = chord_events(KeyChord::ctrl(Key::Letter('c'))).unwrap();
+        let up = |vk: u16| KeyEvent::vk(vk, true, false);
+        assert_eq!(ev.len(), 4);
+        assert!(releases_after(&ev, 0).is_empty(), "nothing landed, nothing owed");
+        assert_eq!(releases_after(&ev, 1), [up(VK_CONTROL)], "Ctrl down landed: Ctrl must come up");
+        assert_eq!(releases_after(&ev, 2), [up(0x43), up(VK_CONTROL)], "C first, then Ctrl");
+        assert_eq!(releases_after(&ev, 3), [up(VK_CONTROL)]);
+        assert!(releases_after(&ev, 4).is_empty(), "complete: nothing owed");
+        assert!(releases_after(&ev, 9).is_empty());
+        let ev = chord_events(KeyChord::shift(Key::Up)).unwrap();
+        let owed = releases_after(&ev, 2);
+        assert_eq!(owed, [KeyEvent::vk(VK_UP, true, true), up(VK_SHIFT)], "the arrow keeps its extended flag");
     }
 
     #[test]
