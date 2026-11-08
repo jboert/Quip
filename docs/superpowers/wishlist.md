@@ -4,6 +4,29 @@ Future features, improvements, and known bugs tracked for eventual implementatio
 
 ---
 
+## Session log — 2026-11-08 (Q-91 phase 1 code-complete: S10-S12, review, R2)
+
+Plan `docs/superpowers/plans/2026-11-06-q91-windows-host.md`, install guide `QuipWindows/README.md`. Board: Q-91, Q-92.
+
+- **Done:** S10 arrange, minimize, close (`ffc80df`, `f6b4f9b`); S11 focus, typing, keys and the integrity guard, plus the parent-pid-reuse fix (`21a803e`..`f30587c`); S12 build stamp, icon, version resource, Bonjour retry, `tools/build-windows.sh`, README (`ebc90a3`..`0c3483a`, `c8fec0a`); one review of S10-S12 (needs fixes: 0 high, 3 medium, 7 low); R2 fixed 9 of 10 (`c10ab3d`..`d637c00`). The owner said "Proceed" on 2026-11-07, so S10-S12 started before the PC check. Windows CI green at `73edd67` (run 42465625413, attempt 2): win32_arrange 7/7, win32_input 10/10, win32_listing 7/7, tray 4/4, selftest 24/24.
+- **With the owner:** `Quip.exe` 0.1.0 (`3851d944897e`), SHA-256 `180e6c1b7f5054a96a022b9df2514ab0cbeea2629cb9ad100ff1c72d5774c364`, sent 2026-11-08; replaces every earlier build.
+- **WIP / next:** the owner's PC check, using spec 11 (10 checks) and the README. Record it in the plan's "Owner gates" and on the board.
+- **Blocked:** Q-92 (the iOS project does not open on Xcode 27.2).
+- **Owner decisions pending:**
+  - The PIN-guess rate summed across IPv4 addresses.
+  - Should the Mac's "New PIN" disconnect phones?
+  - Should `localURLs` refresh when the PC's address changes? Today the README says to restart Quip.
+  - Should typing be refused while the owner holds Ctrl or Shift?
+  - Is the phone's "after 0 characters" wording right for an admin window?
+  - Phase-2 order, signing and push (`docs/superpowers/specs/2026-11-07-q91-windows-phase2.md` section 6).
+- **Known gaps / future:**
+  - Finding 10: the 1 s listing opens every process for `GetProcessTimes`. Read the creation time only for the pids that `is_child_of` compares, which needs a lazy field in `Proc`.
+  - Flaky CI case `focus_stolen_stops_typing`: the first window read back `Some("")`, not its first 32 characters (twice, runs 42463785410 and 42465625413 attempt 1). `FocusLost{32}` itself was right, so this is a read-back timing race in the test.
+  - Untested off the PC: focus step 3 and the foreground lock, a run without admin rights (CI runs elevated), an admin window next to normal ones, two monitors with different scaling, the real lane-watchdog trigger.
+  - Phone 1.5.7 never sends `arrange_windows`, and QA mode and send-to-all exclude Windows terminals (phone tickets in phase 2).
+  - Delete simulator clone `1CA3EE21` when Q-91 ends.
+- **Acceptance flow (owner, on the PC):** follow `QuipWindows/README.md`. Install to `%LOCALAPPDATA%\Programs\Quip\` and allow it on Private networks. Pair by QR. Check the PowerShell window shows on the grid, then send `Get-Date` and check it runs. Run `Quip --selftest` and send the report. Repeat over Tailscale with `ws://<100.x>:8765`. Then run spec 11 checks 1-10.
+
 ## Session log — 2026-11-07 (Q-91 Quip for Windows: owner PC test)
 
 Plan `docs/superpowers/plans/2026-11-06-q91-windows-host.md`, spec `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`, handoff `docs/superpowers/handoffs/2026-11-06-session-handoff.md`. Board: Q-91, Q-92.

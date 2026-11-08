@@ -1,8 +1,8 @@
 # Session handoff, 2026-11-06 (evening): Q-91 Quip for Windows
 
 **Resume:** "Continue Q-91 from docs/superpowers/handoffs/2026-11-06-session-handoff.md:
-record the owner's PC test, then start S12 (release build) under the plan,
-then the one review."
+record the owner's PC test (spec 11), then fix what it finds; phase 2
+needs the owner's decisions first."
 
 ## Where it stands
 
@@ -33,44 +33,18 @@ Plan of record: `docs/superpowers/plans/2026-11-06-q91-windows-host.md`
 - Phase 2 (after S12, needs owner decisions in its section 6):
   `docs/superpowers/specs/2026-11-07-q91-windows-phase2.md`.
 
-## Owner's PC test (2026-11-07)
+## Owner's PC test (2026-11-08)
 
-`Quip.exe` built from `f30587c` (S10 arrange and S11 typing on top of R1;
-Windows CI run 42456098622 green: win32_arrange 5/5, win32_input 10/10,
-selftest 22/22) was sent to the owner on 2026-11-07, replacing the `f09f5b2`
-build. SHA-256
-`87880e381b859eccde320fd5f27acf846d1ac908a91817ecc497073cdb094bfb`.
-S10 and S11 were started on the owner's "Proceed" before the PC check.
+Phase 1 is code-complete: S1-S12, the reviews, R1 and R2 (see the plan's
+Status line). `Quip.exe` 0.1.0 (`3851d944897e`), SHA-256
+`180e6c1b7f5054a96a022b9df2514ab0cbeea2629cb9ad100ff1c72d5774c364`, was sent to the owner on 2026-11-08 and replaces every earlier
+build. Windows CI green at `73edd67` (run 42465625413).
 
-What works in this build: tray app, pairing (PIN or QR), Bonjour discovery,
-the phone's grid of PC windows, phone pins and colours, arrange, minimize and
-close, typing text and keys from the phone (PowerShell, cmd, Windows
-Terminal), `--selftest` (22 cases). Typing into a window run as administrator
-is refused on purpose ("is the window running as administrator?"): Windows
-drops that input silently. Not yet: terminal text read-back.
-
-Untested anywhere but the PC (owner check): focus when another app holds the
-foreground lock, a non-elevated run (CI runs elevated), two monitors with
-different scaling, an admin window next to a normal one.
-
-Steps for the owner:
-1. Copy `Quip.exe` to `%LOCALAPPDATA%\Programs\Quip\` and double-click it.
-   SmartScreen: More info, then Run anyway (unsigned).
-2. Windows Firewall prompt: allow on **Private** networks. If the home network
-   is set to Public, the phone cannot connect.
-3. Tray icon (bottom-right, maybe under the ^ arrow) -> Show pairing QR..., scan
-   from the phone. Or wait for the PC to appear in the phone's connection list.
-4. Open a PowerShell window: it should appear on the phone's grid. Type
-   `Get-Date` from the phone and send: it should run. Tap Arrange on a
-   Windows host only from a phone build that sends `arrange_windows` (1.5.7
-   does not).
-5. Selftest: in PowerShell, `& "$env:LOCALAPPDATA\Programs\Quip\Quip.exe" --selftest | Out-Host`.
-   Send back the newest `%LOCALAPPDATA%\Quip\Logs\selftest-*.txt` (it holds no
-   names or IPs).
-6. If the phone cannot connect: on the PC run `netstat -an | findstr 8765`
-   (expect `LISTENING`), and send `%LOCALAPPDATA%\Quip\Logs\websocket.log`.
-
-Record the result in the plan's "Owner gates" and on the board before S10.
+The owner's steps are now `QuipWindows/README.md` (install, firewall,
+pairing, Tailscale, `--selftest`, troubleshooting), then spec 11 checks 1-10.
+Record the result in the plan's "Owner gates", on the board and in the
+wishlist. What only the PC can answer is in the wishlist session log of
+2026-11-08 ("Untested off the PC").
 
 ## Open items
 
