@@ -16,6 +16,7 @@ use crate::protocol::messages::{
     TerminalContent,
 };
 use crate::protocol::types::WireUuid;
+use crate::services::arrange::{self, TargetResult};
 use crate::services::injection_log::{self, InjectionKind};
 use crate::services::injector::{self, Report, Step};
 use crate::services::keys::{self, QuickActionPlan};
@@ -318,6 +319,11 @@ impl Host {
         }
     }
 
+    /// Spec 5.2: restore, measure, move, verify, retry (`arrange::execute`)
+    /// on the input lane. A refused or gone window counts against the
+    /// outcome and gets an `injection.log` line; one held off its target
+    /// (an app's minimum size) gets a `websocket.log` line and is not
+    /// counted.
     async fn arrange(&self, m: ArrangeWindows) {
         let plan = self.state().arrange_plan(m.layout);
         let plan = match plan {
@@ -329,22 +335,33 @@ impl Host {
                 return;
             }
         };
-        let moves: Vec<_> = plan.iter().map(|(_, mv)| *mv).collect();
-        let Ok(results) = self.lanes.input(move |p| p.move_windows(&moves)).await else {
+        let targets = plan.clone();
+        let Ok(results) = self.lanes.input(move |p| arrange::execute(p, &targets, arrange::SETTLE)).await else {
             self.logs.ws(Severity::Error, &format!("arrange_windows: {INPUT_STOPPED}"));
             self.error(INPUT_STOPPED, None);
             return;
         };
         let mut refused = 0;
-        for (i, (id, _)) in plan.iter().enumerate() {
-            let msg = match results.get(i) {
-                Some(Ok(())) => continue,
-                Some(Err(e)) => e.to_string(),
-                None => "no result from the platform".to_string(),
+        for (i, t) in plan.iter().enumerate() {
+            let (msg, detail) = match results.get(i) {
+                Some(TargetResult::Moved) => continue,
+                Some(TargetResult::OffTarget { got }) => {
+                    self.logs.ws(
+                        Severity::Info,
+                        &format!(
+                            "arrange: {} ended at {}x{}, wanted {}x{} (minimum size?)",
+                            t.id, got.width, got.height, t.visible.width, t.visible.height
+                        ),
+                    );
+                    continue;
+                }
+                Some(TargetResult::Refused(why)) => (format!("refused: {why}"), why.clone()),
+                Some(TargetResult::Gone) => (PlatformError::WindowGone.to_string(), "window is gone".to_string()),
+                None => ("no result from the platform".to_string(), "no result".to_string()),
             };
             refused += 1;
-            let app = self.state().find_tracked(id).map(|w| w.platform.app.clone());
-            self.logs.injection("arrange", id, app.as_deref(), InjectionKind::Unknown, &msg, "elevated or refused");
+            let app = self.state().find_tracked(&t.id).map(|w| w.platform.app.clone());
+            self.logs.injection("arrange", &t.id, app.as_deref(), InjectionKind::Unknown, &msg, &detail);
         }
         let outcome = ArrangeOutcome::evaluate(plan.len(), true, || refused);
         if let Some(msg) = outcome.message() {

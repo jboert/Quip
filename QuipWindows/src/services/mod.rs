@@ -2,6 +2,7 @@
 //! rule with its own tests, each ported from the Mac / Shared test file named
 //! in its module doc (spec 10.3).
 
+pub mod arrange;
 pub mod auth_throttle;
 pub mod broadcast;
 pub mod classify;

@@ -3,7 +3,9 @@
 //!
 //! It records every call, keeps a per-window stream of what was typed, and can
 //! be told to misbehave the ways Windows does: refuse focus, report which
-//! focus step worked, refuse a move (elevated window), block while typing
+//! focus step worked, refuse a move (elevated window), hold a minimum size,
+//! land a move scaled (another monitor's DPI), report no border until a
+//! minimized window is restored (DWM), block while typing
 //! (the hang guard), steal focus between inputs, insert only part of a batch
 //! (UIPI), reuse a closed window's handle for a new process, or start a
 //! program (`python`) inside a shell.
@@ -27,7 +29,7 @@ use serde::Deserialize;
 
 use super::traits::{
     FocusStep, InputBackend, PlatformDisplay, PlatformError, PlatformResult, PlatformWindow, WindowBackend, WindowMove,
-    WindowRef,
+    WindowRects, WindowRef,
 };
 use crate::services::classify;
 use crate::services::keys::KeyChord;
@@ -41,7 +43,8 @@ pub enum FakeCall {
     FocusRefused { handle: u64 },
     TypeText { handle: u64, text: String },
     Key { handle: u64, chord: KeyChord },
-    Move { handle: u64, outer: PixelRect, restore_first: bool },
+    Restore { handle: u64 },
+    Move { handle: u64, outer: PixelRect },
     MoveRefused { handle: u64 },
     Minimize { handle: u64 },
     Close { handle: u64 },
@@ -174,6 +177,12 @@ struct State {
     refuse_focus: HashSet<u64>,
     focus_step: Option<FocusStep>,
     refuse_move: HashSet<u64>,
+    /// Border (px) a window gets once restored; until then it reports none.
+    border_after_restore: HashMap<u64, i32>,
+    /// The next move of the window lands with its size scaled by this percent.
+    rescale_once: HashMap<u64, i32>,
+    /// Smallest outer size the window accepts (`WM_GETMINMAXINFO`).
+    min_size: HashMap<u64, (i32, i32)>,
     block_typing: Option<Duration>,
     /// After this many inputs (batches + chords), focus jumps to the window.
     steal_focus: Option<(usize, u64)>,
@@ -289,6 +298,43 @@ impl FakePlatform {
             s.refuse_move.insert(handle);
         } else {
             s.refuse_move.remove(&handle);
+        }
+    }
+
+    /// The window reports no invisible border (outer = visible) until it is
+    /// restored, then `px` on the left, right and bottom: a minimized window
+    /// has no DWM bounds, so its border is known only after restore.
+    pub fn set_border_after_restore(&self, handle: u64, px: i32) {
+        let mut s = self.lock();
+        if let Some(w) = s.windows.iter_mut().find(|w| w.handle == handle) {
+            w.outer = w.visible;
+        }
+        s.border_after_restore.insert(handle, px);
+    }
+
+    /// The window's next move lands with its width and height scaled by
+    /// `percent` (a move onto a monitor with another DPI).
+    pub fn set_rescale_once(&self, handle: u64, percent: i32) {
+        self.lock().rescale_once.insert(handle, percent);
+    }
+
+    /// The window keeps an outer size of at least `w` x `h`.
+    pub fn set_min_size(&self, handle: u64, w: i32, h: i32) {
+        self.lock().min_size.insert(handle, (w, h));
+    }
+
+    pub fn set_maximized(&self, handle: u64, on: bool) {
+        if let Some(w) = self.lock().windows.iter_mut().find(|w| w.handle == handle) {
+            w.is_maximized = on;
+            if on {
+                w.is_minimized = false;
+            }
+        }
+    }
+
+    pub fn set_minimized(&self, handle: u64, on: bool) {
+        if let Some(w) = self.lock().windows.iter_mut().find(|w| w.handle == handle) {
+            w.is_minimized = on;
         }
     }
 
@@ -481,6 +527,39 @@ impl WindowBackend for FakePlatform {
         Ok(step)
     }
 
+    fn restore(&self, r: WindowRef) -> PlatformResult<()> {
+        self.check_panic();
+        let mut s = self.lock();
+        if !Self::owned(&s, r) {
+            return Err(PlatformError::WindowGone);
+        }
+        let border = s.border_after_restore.remove(&r.handle);
+        if let Some(w) = s.windows.iter_mut().find(|w| w.handle == r.handle) {
+            w.is_minimized = false;
+            w.is_maximized = false;
+            if let Some(px) = border {
+                let v = w.visible;
+                w.outer = PixelRect::new(v.x - px, v.y, v.width + 2 * px, v.height + px);
+            }
+        }
+        s.calls.push(FakeCall::Restore { handle: r.handle });
+        Self::say(&mut s, format!("restore handle={}", r.handle));
+        Ok(())
+    }
+
+    fn rects(&self, r: WindowRef) -> PlatformResult<WindowRects> {
+        let s = self.lock();
+        let Some(w) = s.windows.iter().find(|w| w.handle == r.handle && w.pid == r.pid) else {
+            return Err(PlatformError::WindowGone);
+        };
+        Ok(WindowRects {
+            outer: w.outer,
+            visible: w.visible,
+            is_minimized: w.is_minimized,
+            is_maximized: w.is_maximized,
+        })
+    }
+
     fn move_windows(&self, moves: &[WindowMove]) -> Vec<PlatformResult<()>> {
         self.check_panic();
         let mut s = self.lock();
@@ -497,22 +576,31 @@ impl WindowBackend for FakePlatform {
                 out.push(Err(PlatformError::Refused("elevated or refused".into())));
                 continue;
             }
-            s.calls.push(FakeCall::Move { handle, outer: m.outer, restore_first: m.restore_first });
+            s.calls.push(FakeCall::Move { handle, outer: m.outer });
             Self::say(
                 &mut s,
-                format!(
-                    "move handle={handle} outer={},{} {}x{} restore_first={}",
-                    m.outer.x, m.outer.y, m.outer.width, m.outer.height, m.restore_first
-                ),
+                format!("move handle={handle} outer={},{} {}x{}", m.outer.x, m.outer.y, m.outer.width, m.outer.height),
             );
+            let scale = s.rescale_once.remove(&handle);
+            let min = s.min_size.get(&handle).copied();
             if let Some(w) = s.windows.iter_mut().find(|w| w.handle == handle) {
-                // Keep the window's own border: visible = outer minus it.
-                let (l, t) = (w.visible.x - w.outer.x, w.visible.y - w.outer.y);
-                let (r, b) = (w.outer.right() - w.visible.right(), w.outer.bottom() - w.visible.bottom());
-                w.outer = m.outer;
-                w.visible = PixelRect::new(m.outer.x + l, m.outer.y + t, m.outer.width - l - r, m.outer.height - t - b);
-                if m.restore_first {
-                    w.is_minimized = false;
+                // A minimized window does not take a move (SetWindowPos moves
+                // its icon, not its restored rect): restore comes first.
+                if !w.is_minimized {
+                    let mut outer = m.outer;
+                    if let Some(pct) = scale {
+                        outer.width = outer.width * pct / 100;
+                        outer.height = outer.height * pct / 100;
+                    }
+                    if let Some((mw, mh)) = min {
+                        outer.width = outer.width.max(mw);
+                        outer.height = outer.height.max(mh);
+                    }
+                    // Keep the window's own border: visible = outer minus it.
+                    let (l, t) = (w.visible.x - w.outer.x, w.visible.y - w.outer.y);
+                    let (r, b) = (w.outer.right() - w.visible.right(), w.outer.bottom() - w.visible.bottom());
+                    w.outer = outer;
+                    w.visible = PixelRect::new(outer.x + l, outer.y + t, outer.width - l - r, outer.height - t - b);
                     w.is_maximized = false;
                 }
             }
@@ -677,7 +765,9 @@ mod tests {
         assert_eq!(p.minimize(stale), Err(PlatformError::WindowGone));
         assert_eq!(p.close(stale), Err(PlatformError::WindowGone));
         assert_eq!(p.current_shell(stale), Err(PlatformError::WindowGone));
-        let mv = WindowMove { window: stale, outer: PixelRect::new(0, 0, 1, 1), restore_first: false };
+        assert_eq!(p.restore(stale), Err(PlatformError::WindowGone));
+        assert_eq!(p.rects(stale), Err(PlatformError::WindowGone));
+        let mv = WindowMove { window: stale, outer: PixelRect::new(0, 0, 1, 1) };
         assert_eq!(p.move_windows(&[mv]), vec![Err(PlatformError::WindowGone)]);
         assert!(p.typed(1).is_empty() && p.calls().is_empty());
         assert_eq!(p.foreground_window(), Ok(Some(WindowRef { handle: 1, pid: 77 })));
@@ -739,7 +829,8 @@ mod tests {
         p.bring_to_foreground(W1).unwrap();
         p.send_units(W1, &"secret".encode_utf16().collect::<Vec<_>>()).unwrap();
         p.press_key(W1, KeyChord::SHIFT_ENTER).unwrap();
-        p.move_windows(&[WindowMove { window: W2, outer: PixelRect::new(0, 0, 10, 10), restore_first: false }]);
+        p.restore(W2).unwrap();
+        p.move_windows(&[WindowMove { window: W2, outer: PixelRect::new(0, 0, 10, 10) }]);
         p.minimize(W2).unwrap();
         p.close(W2).unwrap();
         p.set_refuse_focus(1, true);
@@ -750,7 +841,8 @@ mod tests {
                 "focus handle=1 step=already",
                 "type handle=1 units=6",
                 "key handle=1 chord=shift+return",
-                "move handle=2 outer=0,0 10x10 restore_first=false",
+                "restore handle=2",
+                "move handle=2 outer=0,0 10x10",
                 "minimize handle=2",
                 "close handle=2",
                 "focus REFUSED handle=1",
@@ -788,8 +880,8 @@ mod tests {
         let p = FakePlatform::from_fixture(&fixture());
         p.set_refuse_move(2, true);
         let r = p.move_windows(&[
-            WindowMove { window: W2, outer: PixelRect::new(0, 0, 10, 10), restore_first: false },
-            WindowMove { window: W1, outer: PixelRect::new(-7, 0, 974, 1047), restore_first: false },
+            WindowMove { window: W2, outer: PixelRect::new(0, 0, 10, 10) },
+            WindowMove { window: W1, outer: PixelRect::new(-7, 0, 974, 1047) },
         ]);
         assert!(r[0].is_err() && r[1].is_ok());
         assert_eq!(p.windows()[0].visible, PixelRect::new(0, 0, 960, 1040));

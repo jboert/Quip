@@ -4,9 +4,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::platform::traits::{PlatformDisplay, PlatformWindow, WindowMove, WindowRef};
+use crate::platform::traits::{PlatformDisplay, PlatformWindow, WindowRef};
 use crate::protocol::messages::{DisplayState, LayoutUpdate, WindowState};
 use crate::protocol::types::{ArrangeLayout, CliKind, TerminalState, WindowFrame};
+use crate::services::arrange;
 use crate::services::broadcast::{self, BroadcastCandidate};
 use crate::services::geometry::{self, DisplayEntry, DisplayRect};
 use crate::services::layout::{self, ArrangeOutcome, PixelRect};
@@ -425,11 +426,13 @@ impl AppState {
     }
 
     /// Spec 5.2: the windows the phone shows (the broadcast set), in
-    /// broadcast order, tiled on the primary display's work area,
-    /// border-compensated. Not only `enabled` ones: under the mirror-desktop
-    /// rule nothing starts enabled, so that would arrange nothing. `Err` is
-    /// the outcome to report when there is nothing to do.
-    pub fn arrange_plan(&self, layout: ArrangeLayout) -> Result<Vec<(String, WindowMove)>, ArrangeOutcome> {
+    /// broadcast order, tiled on the primary display's work area. The
+    /// targets are VISIBLE rects: the border is measured at arrange time,
+    /// after a minimized or maximized window is restored (`arrange::execute`).
+    /// Not only `enabled` ones: under the mirror-desktop rule nothing starts
+    /// enabled, so that would arrange nothing. `Err` is the outcome to report
+    /// when there is nothing to do.
+    pub fn arrange_plan(&self, layout: ArrangeLayout) -> Result<Vec<arrange::Target>, ArrangeOutcome> {
         let enabled: Vec<&TrackedWindow> = self.broadcast_set();
         let Some(primary) = self.displays.iter().find(|d| d.is_primary).or_else(|| self.displays.first()) else {
             return Err(ArrangeOutcome::evaluate(enabled.len(), false, || 0));
@@ -441,15 +444,11 @@ impl AppState {
         Ok(enabled
             .into_iter()
             .zip(targets)
-            .map(|(w, t)| {
-                (
-                    w.id.clone(),
-                    WindowMove {
-                        window: w.platform.window_ref(),
-                        outer: layout::compensate_border(t, w.platform.outer, w.platform.visible),
-                        restore_first: w.platform.is_minimized || w.platform.is_maximized,
-                    },
-                )
+            .map(|(w, t)| arrange::Target {
+                id: w.id.clone(),
+                window: w.platform.window_ref(),
+                visible: t,
+                restore_first: w.platform.is_minimized || w.platform.is_maximized,
             })
             .collect())
     }
@@ -686,11 +685,14 @@ mod tests {
         let s = state();
         let plan = s.arrange_plan(ArrangeLayout::Horizontal).unwrap();
         assert_eq!(plan.len(), 2, "the two terminals the phone shows, though neither is enabled; not Notepad");
-        assert_eq!(plan[0].0, s.windows()[0].id);
-        assert_eq!(plan[1].0, s.windows()[2].id);
-        assert_eq!(plan[0].1.outer, PixelRect::new(-7, 0, 974, 1047));
-        assert_eq!(plan[1].1.outer, PixelRect::new(953, 0, 974, 1047));
-        assert_eq!(plan[0].1.window, WindowRef { handle: 1, pid: 101 });
+        assert_eq!(plan[0].id, s.windows()[0].id);
+        assert_eq!(plan[1].id, s.windows()[2].id);
+        // Visible targets; the border is compensated at arrange time
+        // (`arrange::tests::the_targets_border_is_compensated_from_the_measured_rects`).
+        assert_eq!(plan[0].visible, PixelRect::new(0, 0, 960, 1040));
+        assert_eq!(plan[1].visible, PixelRect::new(960, 0, 960, 1040));
+        assert_eq!(plan[0].window, WindowRef { handle: 1, pid: 101 });
+        assert!(plan.iter().all(|t| !t.restore_first));
     }
 
     #[test]
@@ -726,7 +728,20 @@ mod tests {
         assert_eq!(snap.windows.len(), 1, "a minimized terminal is still shown");
         assert!(snap.windows[0].is_minimized);
         assert!(snap.windows[0].frame.width > 0.0, "with its restored frame");
-        assert!(s.arrange_plan(ArrangeLayout::Vertical).unwrap()[0].1.restore_first);
+        assert!(s.arrange_plan(ArrangeLayout::Vertical).unwrap()[0].restore_first);
+    }
+
+    #[test]
+    fn arrange_plan_restores_minimized_and_maximized_windows_first() {
+        let mut s = AppState::new(HashMap::new(), false);
+        let (mut min, mut max, plain) = (win(1, true, 0), win(3, true, 0), win(4, true, 0));
+        min.is_minimized = true;
+        max.is_maximized = true;
+        s.update(vec![min, max, plain], vec![display("DISPLAY1", 0, true)], None);
+        let plan = s.arrange_plan(ArrangeLayout::Horizontal).unwrap();
+        let first: Vec<(u64, bool)> = plan.iter().map(|t| (t.window.handle, t.restore_first)).collect();
+        assert_eq!(first, [(1, true), (3, true), (4, false)]);
+        assert_eq!(plan[2].visible, PixelRect::new(1280, 0, 640, 1040), "visible targets, no border");
     }
 
     #[test]

@@ -666,6 +666,82 @@ async fn arrange_with_nothing_shown_says_so() {
     assert_eq!(p.recv_type("error").await, json!({"type":"error","reason":"No enabled windows to arrange"}));
 }
 
+fn moves_of(h: &Harness) -> Vec<u64> {
+    h.fake
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            FakeCall::Move { handle, .. } => Some(handle),
+            _ => None,
+        })
+        .collect()
+}
+
+/// After an arrange: the next `layout_update`, then silence (no `error`).
+async fn arranged_without_error(p: &mut Phone) -> serde_json::Value {
+    let l = p.recv_type("layout_update").await;
+    p.assert_silent(QUIET).await;
+    l
+}
+
+#[tokio::test]
+async fn arrange_restores_a_minimized_window_and_tiles_it_without_a_gap() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    // Minimized: DWM reports no border until it is back (spec 5.2).
+    h.fake.set_minimized(102, true);
+    h.fake.set_border_after_restore(102, 7);
+    h.host.poll_tick().await;
+    let l = p.recv_type("layout_update").await;
+    assert_eq!(layout_window(&l, &h.window_id(102))["isMinimized"], true);
+    p.send(json!({"type":"arrange_windows","layout":"horizontal"})).await;
+    let l = arranged_without_error(&mut p).await;
+    let w = layout_window(&l, &h.window_id(102));
+    assert_eq!(w["isMinimized"], false);
+    // Columns over the 1920 px work area, normalized against the 1920 px display.
+    let x = w["frame"]["x"].as_f64().unwrap() * 1920.0;
+    let width = w["frame"]["width"].as_f64().unwrap() * 1920.0;
+    assert!((x - 960.0).abs() <= 1.0 && (x + width - 1920.0).abs() <= 1.0, "x={x} width={width}");
+    let calls = h.fake.calls();
+    let restore = calls.iter().position(|c| *c == FakeCall::Restore { handle: 102 }).expect("restored");
+    let mv = calls.iter().position(|c| matches!(c, FakeCall::Move { handle: 102, .. })).expect("moved");
+    assert!(restore < mv, "restored before it was measured and moved: {calls:?}");
+    assert_eq!(moves_of(&h), [101, 102], "on target the first time");
+}
+
+#[tokio::test]
+async fn a_cross_dpi_rescale_is_corrected_by_a_second_move() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    h.fake.set_rescale_once(101, 125);
+    // Vertical: the fixture already sits in columns, so rows change the layout.
+    p.send(json!({"type":"arrange_windows","layout":"vertical"})).await;
+    let l = arranged_without_error(&mut p).await;
+    let mut moved = moves_of(&h);
+    moved.sort_unstable();
+    assert_eq!(moved, [101, 101, 102], "two moves for the rescaled window, one for the other");
+    let f = &layout_window(&l, &h.window_id(101))["frame"];
+    // Rows over the 1040 px work area, normalized against the 1080 px display.
+    let (y, height) = (f["y"].as_f64().unwrap() * 1080.0, f["height"].as_f64().unwrap() * 1080.0);
+    let width = f["width"].as_f64().unwrap() * 1920.0;
+    assert!(y.abs() <= 1.0 && (height - 520.0).abs() <= 1.0 && (width - 1920.0).abs() <= 1.0, "{f}");
+}
+
+#[tokio::test]
+async fn a_window_at_minimum_size_is_logged_not_an_error() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    h.fake.set_min_size(102, 1200, 700);
+    p.send(json!({"type":"arrange_windows","layout":"horizontal"})).await;
+    arranged_without_error(&mut p).await;
+    let ws = h.log("websocket.log");
+    assert!(
+        ws.contains(&format!("arrange: {} ended at 1186x1040, wanted 960x1040 (minimum size?)", h.window_id(102))),
+        "{ws}"
+    );
+    assert!(!h.log("injection.log").contains("op=arrange"));
+}
+
 #[tokio::test]
 async fn a_dead_input_lane_says_so_not_elevated() {
     let h = start().await;

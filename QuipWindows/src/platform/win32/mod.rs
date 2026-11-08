@@ -6,6 +6,7 @@
 //! listing rules themselves are pure, in `platform::listing` and
 //! `services::classify`; this module only reads what Windows reports.
 
+mod arrange;
 mod display;
 mod process;
 mod window;
@@ -21,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 use crate::platform::listing::{keeps_window, rejected_by, ListingFacts};
 use crate::platform::traits::{
     FocusStep, InputBackend, PlatformDisplay, PlatformError, PlatformResult, PlatformWindow, WindowBackend, WindowMove,
-    WindowRef,
+    WindowRects, WindowRef,
 };
 use crate::services::classify::{self, Proc};
 use crate::services::keys::KeyChord;
@@ -42,8 +43,12 @@ pub fn os_version() -> Option<String> {
     status.is_ok().then(|| format!("{}.{}.{}", v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber))
 }
 
-/// What `NotImplemented` says for the operations this backend does not do yet.
-pub const NOT_IMPLEMENTED: &str = "the Win32 backend lists windows but cannot act on them yet (use --fake-platform)";
+pub use arrange::{NOT_RESPONDING, REFUSED as MOVE_REFUSED};
+
+/// What `NotImplemented` says for the operations this backend does not do
+/// yet: focus and input (S11).
+pub const NOT_IMPLEMENTED: &str =
+    "the Win32 backend lists and arranges windows but cannot focus or type yet (use --fake-platform)";
 
 pub struct Win32Platform {
     /// Quip's own windows are never listed (spec 5.1).
@@ -258,14 +263,20 @@ impl WindowBackend for Win32Platform {
     fn bring_to_foreground(&self, _window: WindowRef) -> PlatformResult<FocusStep> {
         ni()
     }
+    fn restore(&self, w: WindowRef) -> PlatformResult<()> {
+        arrange::restore(self.live(w)?)
+    }
+    fn rects(&self, w: WindowRef) -> PlatformResult<WindowRects> {
+        arrange::rects(self.live(w)?)
+    }
     fn move_windows(&self, moves: &[WindowMove]) -> Vec<PlatformResult<()>> {
-        moves.iter().map(|_| ni()).collect()
+        arrange::move_windows(moves.iter().map(|m| self.live(m.window).map(|h| (h, m.outer))).collect())
     }
-    fn minimize(&self, _window: WindowRef) -> PlatformResult<()> {
-        ni()
+    fn minimize(&self, w: WindowRef) -> PlatformResult<()> {
+        arrange::minimize(self.live(w)?)
     }
-    fn close(&self, _window: WindowRef) -> PlatformResult<()> {
-        ni()
+    fn close(&self, w: WindowRef) -> PlatformResult<()> {
+        arrange::close(self.live(w)?)
     }
 }
 
@@ -283,16 +294,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn acting_on_a_window_says_what_is_missing() {
+    fn only_focus_and_input_are_not_implemented() {
         let Ok(p) = Win32Platform::new() else { panic!("Win32Platform::new failed") };
         let w = WindowRef { handle: 1, pid: 1 };
-        assert!(matches!(p.close(w), Err(PlatformError::NotImplemented(m)) if m.contains("--fake-platform")));
-        assert!(matches!(p.send_units(w, &[65]), Err(PlatformError::NotImplemented(_))));
+        assert!(
+            matches!(p.send_units(w, &[65]), Err(PlatformError::NotImplemented(m)) if m.contains("--fake-platform"))
+        );
+        assert!(matches!(p.press_key(w, KeyChord::RETURN), Err(PlatformError::NotImplemented(_))));
+        assert!(matches!(p.bring_to_foreground(w), Err(PlatformError::NotImplemented(_))));
     }
 
     #[test]
     fn a_dead_window_is_gone() {
         let Ok(p) = Win32Platform::new() else { panic!("Win32Platform::new failed") };
-        assert_eq!(p.current_shell(WindowRef { handle: 0, pid: 4242 }), Err(PlatformError::WindowGone));
+        let dead = WindowRef { handle: 0, pid: 4242 };
+        assert_eq!(p.current_shell(dead), Err(PlatformError::WindowGone));
+        assert_eq!(p.restore(dead), Err(PlatformError::WindowGone));
+        assert_eq!(p.rects(dead), Err(PlatformError::WindowGone));
+        assert_eq!(p.minimize(dead), Err(PlatformError::WindowGone));
+        assert_eq!(p.close(dead), Err(PlatformError::WindowGone));
+        let mv = WindowMove { window: dead, outer: crate::services::layout::PixelRect::new(0, 0, 10, 10) };
+        assert_eq!(p.move_windows(&[mv]), vec![Err(PlatformError::WindowGone)]);
     }
 }

@@ -330,6 +330,12 @@ mod tests {
         fn bring_to_foreground(&self, w: WindowRef) -> crate::platform::traits::PlatformResult<FocusStep> {
             self.inner.bring_to_foreground(w)
         }
+        fn restore(&self, w: WindowRef) -> crate::platform::traits::PlatformResult<()> {
+            self.inner.restore(w)
+        }
+        fn rects(&self, w: WindowRef) -> crate::platform::traits::PlatformResult<crate::platform::traits::WindowRects> {
+            self.inner.rects(w)
+        }
         fn move_windows(
             &self,
             m: &[crate::platform::traits::WindowMove],

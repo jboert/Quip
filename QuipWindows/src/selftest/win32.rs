@@ -7,7 +7,10 @@
 //!   its own when it carries a title marker unique to the run (`own`), and
 //!   only a console's owner shell and that shell's own children are ever
 //!   ended;
-//! - it never types into, moves, focuses or closes a window it did not open;
+//! - it never types into, moves, minimizes, focuses or closes a window it did
+//!   not open: the arrange cases build their targets ONLY from the windows
+//!   they opened (never from a listing or `AppState`, which hold the user's
+//!   windows), and every backend call checks the pid still owns the handle;
 //!   the consoles it opens come to the front by themselves, nothing more;
 //! - it never describes a window it did not open by its title (the report's
 //!   `Redactor` drops any that slip through).
@@ -16,7 +19,7 @@
 //!   back as it was; the pairing QR window it opens shows a made-up address
 //!   and PIN and is closed again.
 //!
-//! A case is one entry in `CASES`; arrange and typing cases are added there.
+//! A case is one entry in `CASES`; typing cases are added there (S11).
 
 use std::collections::{HashMap, HashSet};
 use std::os::windows::process::CommandExt;
@@ -32,9 +35,12 @@ use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow
 use super::own;
 use super::report::{exit_code, format_report, CaseResult, DisplayInfo, Header, Outcome, Redactor, EXIT_FAILED};
 use crate::app_state::AppState;
-use crate::platform::traits::{PlatformWindow, WindowBackend};
+use crate::platform::traits::{PlatformWindow, WindowBackend, WindowRef};
 use crate::platform::win32::{effective_dpis, os_version, process_snapshot, Win32Platform};
+use crate::protocol::types::ArrangeLayout;
+use crate::services::arrange::{self, Target, TargetResult};
 use crate::services::classify::{exe_stem, Proc, TerminalHost, CONSOLE_CLASS, WT_CLASS};
+use crate::services::layout::{self, PixelRect};
 use crate::services::log_paths::LogPaths;
 use crate::services::multiline_policy::Shell;
 
@@ -58,7 +64,111 @@ pub const CASES: &[Case] = &[
     Case { name: "windows_terminal", run: windows_terminal },
     Case { name: "start_with_windows_round_trip", run: start_with_windows_round_trip },
     Case { name: "pairing_qr_window", run: pairing_qr_window },
+    Case { name: "arrange_own_windows", run: arrange_own_windows },
+    Case { name: "arrange_restores_minimized", run: arrange_restores_minimized },
+    Case { name: "minimize_and_close_own_console", run: minimize_and_close_own_console },
 ];
+
+/// The primary display's work area.
+fn primary_work_area(ctx: &Ctx) -> Result<PixelRect, String> {
+    let displays = ctx.platform.list_displays().map_err(|e| format!("list_displays: {e}"))?;
+    displays.iter().find(|d| d.is_primary).map(|d| d.work_area).ok_or_else(|| "no primary display".to_string())
+}
+
+/// Arranges `own` (windows this run opened, and only those) and says what is
+/// wrong: a result other than `Moved`, or a tile off the work area's edges.
+fn arrange_check(ctx: &Ctx, own: &[WindowRef], layout: ArrangeLayout, restore_first: bool) -> Vec<String> {
+    let work = match primary_work_area(ctx) {
+        Ok(w) => w,
+        Err(e) => return vec![e],
+    };
+    let targets: Vec<Target> = own
+        .iter()
+        .zip(layout::arrange(layout, own.len(), work))
+        .enumerate()
+        .map(|(i, (&window, visible))| Target { id: format!("own-{i}"), window, visible, restore_first })
+        .collect();
+    let results = arrange::execute(&ctx.platform, &targets, arrange::SETTLE);
+    let mut problems: Vec<String> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| **r != TargetResult::Moved)
+        .map(|(i, r)| format!("{layout:?}: window {i}: {r:?} (wanted {:?})", targets[i].visible))
+        .collect();
+    let got: Result<Vec<PixelRect>, String> =
+        own.iter().map(|&w| ctx.platform.rects(w).map(|r| r.visible).map_err(|e| format!("rects: {e}"))).collect();
+    match got {
+        Ok(got) => {
+            let off = arrange::tiling_problems(layout, work, &got);
+            if !off.is_empty() {
+                problems.push(format!("{layout:?} on {work:?}: {}; got {got:?}", off.join("; ")));
+            }
+        }
+        Err(e) => problems.push(e),
+    }
+    problems
+}
+
+/// Two consoles of its own, tiled side by side, then stacked.
+fn arrange_own_windows(ctx: &mut Ctx) -> Outcome {
+    let mut own = Vec::new();
+    for tag in ["arr-a", "arr-b"] {
+        match ctx.open_conhost("arrange console", tag, cmd_titled) {
+            Ok(w) => own.push(w.window_ref()),
+            Err(e) => return Outcome::Fail(e),
+        }
+    }
+    let mut problems = arrange_check(ctx, &own, ArrangeLayout::Horizontal, false);
+    problems.extend(arrange_check(ctx, &own, ArrangeLayout::Vertical, false));
+    fail_all(problems)
+}
+
+/// One console of its own minimized first, then arranged with a second: it
+/// must come back and be tiled.
+fn arrange_restores_minimized(ctx: &mut Ctx) -> Outcome {
+    let mut own = Vec::new();
+    for tag in ["min-a", "min-b"] {
+        match ctx.open_conhost("arrange console", tag, cmd_titled) {
+            Ok(w) => own.push(w.window_ref()),
+            Err(e) => return Outcome::Fail(e),
+        }
+    }
+    if let Err(e) = ctx.platform.minimize(own[0]) {
+        return Outcome::Fail(format!("minimize: {e}"));
+    }
+    let iconic = wait_until(CLOSE_WAIT, || ctx.platform.rects(own[0]).is_ok_and(|r| r.is_minimized));
+    if !iconic {
+        return Outcome::Fail(format!("not minimized {} s after minimize", CLOSE_WAIT.as_secs()));
+    }
+    let mut problems = arrange_check(ctx, &own, ArrangeLayout::Horizontal, true);
+    if ctx.platform.rects(own[0]).is_ok_and(|r| r.is_minimized) {
+        problems.push("still minimized after the arrange".into());
+    }
+    fail_all(problems)
+}
+
+/// A console of its own: minimize makes it iconic, close (`WM_CLOSE`)
+/// removes it within 5 s.
+fn minimize_and_close_own_console(ctx: &mut Ctx) -> Outcome {
+    let w = match ctx.open_conhost("minimize console", "min-close", cmd_titled) {
+        Ok(w) => w,
+        Err(e) => return Outcome::Fail(e),
+    };
+    let own = w.window_ref();
+    if let Err(e) = ctx.platform.minimize(own) {
+        return Outcome::Fail(format!("minimize: {e}"));
+    }
+    if !wait_until(CLOSE_WAIT, || ctx.platform.rects(own).is_ok_and(|r| r.is_minimized)) {
+        return Outcome::Fail(format!("not minimized {} s after minimize", CLOSE_WAIT.as_secs()));
+    }
+    if let Err(e) = ctx.platform.close(own) {
+        return Outcome::Fail(format!("close: {e}"));
+    }
+    if !wait_until(CLOSE_WAIT, || !is_live(own.handle, own.pid)) {
+        return Outcome::Fail(format!("still open {} s after close", CLOSE_WAIT.as_secs()));
+    }
+    Outcome::Pass
+}
 
 /// The tray's QR window, with a made-up address and PIN: opens, a second
 /// Show reuses it, the lister leaves it out, Esc closes it.

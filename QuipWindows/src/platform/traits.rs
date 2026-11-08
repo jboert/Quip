@@ -153,14 +153,25 @@ impl std::error::Error for PlatformError {}
 
 pub type PlatformResult<T> = Result<T, PlatformError>;
 
-/// One window of an arrange batch.
+/// One window of an arrange batch. Restoring a minimized or maximized window
+/// is a separate call (`WindowBackend::restore`), made before its rects are
+/// read (spec 5.2, `services::arrange`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowMove {
     pub window: WindowRef,
     /// Target OUTER rect (border already compensated).
     pub outer: PixelRect,
-    /// Minimized or maximized: `ShowWindow(SW_RESTORE)` first.
-    pub restore_first: bool,
+}
+
+/// A window's rects and state, read now (not the last poll's answer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowRects {
+    /// `GetWindowRect`: what `SetWindowPos` takes.
+    pub outer: PixelRect,
+    /// `DWMWA_EXTENDED_FRAME_BOUNDS`: what the user sees.
+    pub visible: PixelRect,
+    pub is_minimized: bool,
+    pub is_maximized: bool,
 }
 
 pub trait WindowBackend: Send + Sync {
@@ -178,9 +189,15 @@ pub trait WindowBackend: Send + Sync {
     /// The spec 5.3 sequence (restoring a minimized window first). `Err`
     /// means the window is NOT in front and nothing may be typed.
     fn bring_to_foreground(&self, window: WindowRef) -> PlatformResult<FocusStep>;
+    /// `ShowWindowAsync(SW_RESTORE)`, then wait (up to 500 ms) until the
+    /// window is neither minimized nor maximized. `Ok` only when it is.
+    fn restore(&self, window: WindowRef) -> PlatformResult<()>;
+    /// The window's rects and state now.
+    fn rects(&self, window: WindowRef) -> PlatformResult<WindowRects>;
     /// `BeginDeferWindowPos` batch. One result per move, in order; a refused
     /// window does not stop the others.
     fn move_windows(&self, moves: &[WindowMove]) -> Vec<PlatformResult<()>>;
+    /// `ShowWindowAsync(SW_MINIMIZE)`: never blocks on a hung window.
     fn minimize(&self, window: WindowRef) -> PlatformResult<()>;
     /// `PostMessage(WM_CLOSE)`. Never `TerminateProcess`.
     fn close(&self, window: WindowRef) -> PlatformResult<()>;

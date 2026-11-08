@@ -272,6 +272,11 @@ pub const HELP: &str = "commands:
   title <window> <text>        retitle
   front <window>|none          change the foreground window
   refuse <window> on|off       make focus fail for it
+  minimize <window>            minimize it (no border until restored, as DWM)
+  maximize <window>            maximize it
+  refuse-move <window> on|off  make arrange fail to move it (an elevated window)
+  rescale <window> <percent>   its next move lands scaled (another monitor's DPI)
+  min-size <window> W H        it keeps an outer size of at least W x H
   run <window> <exe>...|shell  start a program in its shell (run 3 python.exe), or back to the shell
   block <ms>|off               block typing (hang-guard check)
   uipi <n>|off                 let only n units per batch in (an elevated window: uipi 0)
@@ -379,6 +384,35 @@ pub async fn command(fake: &FakeHost, line: &str, next_handle: &mut u64) -> bool
         ["refuse", w, onoff] => match find_window(p, h, w) {
             Ok(handle) => p.set_refuse_focus(handle, *onoff == "on"),
             Err(e) => say(e),
+        },
+        ["minimize", w] => match find_window(p, h, w) {
+            Ok(handle) => {
+                p.set_minimized(handle, true);
+                p.set_border_after_restore(handle, 7);
+                h.poll_tick().await;
+            }
+            Err(e) => say(e),
+        },
+        ["maximize", w] => match find_window(p, h, w) {
+            Ok(handle) => {
+                p.set_maximized(handle, true);
+                h.poll_tick().await;
+            }
+            Err(e) => say(e),
+        },
+        ["refuse-move", w, onoff @ ("on" | "off")] => match find_window(p, h, w) {
+            Ok(handle) => p.set_refuse_move(handle, *onoff == "on"),
+            Err(e) => say(e),
+        },
+        ["rescale", w, pct] => match (find_window(p, h, w), pct.parse::<i32>()) {
+            (Ok(handle), Ok(pct)) if pct > 0 => p.set_rescale_once(handle, pct),
+            (Err(e), _) => say(e),
+            _ => say("rescale: <window> <percent>".into()),
+        },
+        ["min-size", w, wd, ht] => match (find_window(p, h, w), wd.parse::<i32>(), ht.parse::<i32>()) {
+            (Ok(handle), Ok(wd), Ok(ht)) => p.set_min_size(handle, wd, ht),
+            (Err(e), _, _) => say(e),
+            _ => say("min-size: <window> W H".into()),
         },
         ["run", w, "shell"] => match find_window(p, h, w) {
             Ok(handle) => {
@@ -660,6 +694,30 @@ mod tests {
         let t0 = std::time::Instant::now();
         let _ = p.send_units(ra, &[0x61]);
         assert!(t0.elapsed() < std::time::Duration::from_millis(100));
+
+        command(&f, "minimize 5001", &mut next).await;
+        let a = p.windows().into_iter().find(|w| w.handle == 5001).unwrap();
+        assert!(a.is_minimized && a.outer == a.visible, "minimized, no border until restored");
+        command(&f, "maximize 5002", &mut next).await;
+        assert!(p.windows().into_iter().find(|w| w.handle == 5002).unwrap().is_maximized);
+        command(&f, "refuse-move 5002 on", &mut next).await;
+        let mv = |h: u64| crate::platform::traits::WindowMove {
+            window: p.windows().into_iter().find(|w| w.handle == h).unwrap().window_ref(),
+            outer: PixelRect::new(0, 0, 500, 400),
+        };
+        assert!(p.move_windows(&[mv(5002)])[0].is_err());
+        command(&f, "refuse-move 5002 maybe", &mut next).await;
+        command(&f, "refuse-move 5002 off", &mut next).await;
+        assert!(p.move_windows(&[mv(5002)])[0].is_ok());
+        command(&f, "rescale 5002 150", &mut next).await;
+        command(&f, "rescale 5002 x", &mut next).await;
+        command(&f, "rescale nothing-like-this 150", &mut next).await;
+        p.move_windows(&[mv(5002)]);
+        assert_eq!(p.windows().into_iter().find(|w| w.handle == 5002).unwrap().outer, PixelRect::new(0, 0, 750, 600));
+        command(&f, "min-size 5002 900 x", &mut next).await;
+        command(&f, "min-size 5002 900 800", &mut next).await;
+        p.move_windows(&[mv(5002)]);
+        assert_eq!(p.windows().into_iter().find(|w| w.handle == 5002).unwrap().outer, PixelRect::new(0, 0, 900, 800));
 
         command(&f, "close 5003", &mut next).await;
         command(&f, "close nothing-like-this", &mut next).await;
