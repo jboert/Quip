@@ -17,7 +17,7 @@ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow, PeekMessageW,
-    SetForegroundWindow, MSG, PM_NOREMOVE, SW_RESTORE,
+    SetForegroundWindow, SetWindowPos, HWND_TOP, MSG, PM_NOREMOVE, SWP_NOMOVE, SWP_NOSIZE, SW_RESTORE,
 };
 
 use super::{arrange, input, window};
@@ -83,6 +83,20 @@ impl Drop for Attached {
     }
 }
 
+/// `BringWindowToTop`, which waits on `h`'s thread: for another thread's
+/// window the same z-order change is queued instead (`SWP_ASYNCWINDOWPOS`),
+/// so a window that stops pumping messages after the hung check cannot
+/// block the input lane (`arrange::ASYNC`).
+fn to_top(h: HWND) {
+    if arrange::on_this_thread(h) {
+        // SAFETY: a window of this thread.
+        let _ = unsafe { BringWindowToTop(h) };
+    } else {
+        // SAFETY: plain value arguments; a stale handle fails harmlessly.
+        let _ = unsafe { SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | arrange::ASYNC) };
+    }
+}
+
 /// The spec 5.3 sequence for `h`, owned by `pid` (already checked live).
 pub fn bring_to_foreground(h: HWND, pid: u32) -> PlatformResult<FocusStep> {
     if in_front(h, pid) {
@@ -108,9 +122,11 @@ pub fn bring_to_foreground(h: HWND, pid: u32) -> PlatformResult<FocusStep> {
         // SAFETY: a null out pointer is allowed; any handle is accepted.
         let fg_thread = if fg.is_invalid() { 0 } else { unsafe { GetWindowThreadProcessId(fg, None) } };
         let attached = Attached::to(fg_thread);
+        to_top(h);
         // SAFETY: plain handle arguments; `h` is not hung (checked above).
+        // `SetFocus` only reaches a window of a thread attached to this one
+        // (the one in front, just checked not hung); any other fails at once.
         unsafe {
-            let _ = BringWindowToTop(h);
             let _ = SetForegroundWindow(h);
             let _ = SetFocus(h);
         }

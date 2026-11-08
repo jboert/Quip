@@ -3,13 +3,17 @@
 //! this only makes the calls. Every function takes an HWND the caller got
 //! from `Win32Platform::live`, so the pid still owns it.
 //!
-//! Nothing here can block on a hung window: a window `IsHungAppWindow`
-//! reports is refused before `SetWindowPos` (which waits for the window's
-//! thread), and restore and minimize post with `ShowWindowAsync`.
+//! Nothing here waits on another thread's window: moves are queued with
+//! `SWP_ASYNCWINDOWPOS` (one `SetWindowPos` each, no deferred batch), and
+//! restore and minimize post with `ShowWindowAsync`. `IsHungAppWindow` is
+//! not enough on its own: it reports a window only after 5 s without
+//! pumping, so one that stops just before the call would block the input
+//! lane. A window it does report is still refused up front.
 //!
 //! A window of the CALLING thread (the tests' own windows) gets the
-//! synchronous `ShowWindow` instead: `ShowWindowAsync` would queue it on a
-//! thread that is busy waiting for it.
+//! synchronous `ShowWindow` and `SetWindowPos` (in one deferred batch)
+//! instead: an async call would queue it on a thread that is busy waiting
+//! for it.
 //!
 //! Never `TerminateProcess`: close is `WM_CLOSE`, which the app may answer
 //! with a "save changes?" prompt.
@@ -21,8 +25,8 @@ use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GetWindowThreadProcessId, IsHungAppWindow, PostMessageW,
-    SetWindowPos, ShowWindow, ShowWindowAsync, SHOW_WINDOW_CMD, SWP_NOACTIVATE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE,
-    WM_CLOSE,
+    SetWindowPos, ShowWindow, ShowWindowAsync, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, WM_CLOSE,
 };
 
 use super::window;
@@ -46,7 +50,7 @@ fn is_hung(h: HWND) -> bool {
     unsafe { IsHungAppWindow(h) }.as_bool()
 }
 
-fn on_this_thread(h: HWND) -> bool {
+pub(super) fn on_this_thread(h: HWND) -> bool {
     // SAFETY: a null out pointer is allowed; any handle value is accepted.
     let thread = unsafe { GetWindowThreadProcessId(h, None) };
     // SAFETY: no arguments.
@@ -121,8 +125,15 @@ pub fn rects(h: HWND) -> PlatformResult<WindowRects> {
     })
 }
 
-const FLAGS: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS =
-    windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS(SWP_NOZORDER.0 | SWP_NOACTIVATE.0);
+const FLAGS: SET_WINDOW_POS_FLAGS = SET_WINDOW_POS_FLAGS(SWP_NOZORDER.0 | SWP_NOACTIVATE.0);
+
+/// `SetWindowPos` flags for a window of ANOTHER thread: queued to that
+/// thread instead of sent and waited for. A synchronous `SetWindowPos` (or
+/// `EndDeferWindowPos`) blocks until the window's thread pumps messages, and
+/// `IsHungAppWindow` only says so after 5 s, so a window that stops pumping
+/// just before or during the call would block the input lane for good. The
+/// verify after `SETTLE` reads where it really ended.
+pub(super) const ASYNC: SET_WINDOW_POS_FLAGS = SWP_ASYNCWINDOWPOS;
 
 /// One `BeginDeferWindowPos` batch. `false` when any step failed: Windows'
 /// docs say to abandon the whole batch then (spec 5.2).
@@ -142,10 +153,12 @@ fn deferred(batch: &[(HWND, PixelRect)]) -> bool {
     unsafe { EndDeferWindowPos(hdwp) }.is_ok()
 }
 
-/// One `SetWindowPos` with its own result.
+/// One `SetWindowPos` with its own result; `ASYNC` for another thread's
+/// window.
 fn set_window_pos(h: HWND, r: PixelRect) -> PlatformResult<()> {
+    let flags = if on_this_thread(h) { FLAGS } else { FLAGS | ASYNC };
     // SAFETY: plain value arguments; a stale handle fails harmlessly.
-    match unsafe { SetWindowPos(h, HWND::default(), r.x, r.y, r.width, r.height, FLAGS) } {
+    match unsafe { SetWindowPos(h, HWND::default(), r.x, r.y, r.width, r.height, flags) } {
         Ok(()) => Ok(()),
         Err(_) if !window::is_window(h) => Err(PlatformError::WindowGone),
         Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => Err(PlatformError::Refused(REFUSED.into())),
@@ -154,8 +167,12 @@ fn set_window_pos(h: HWND, r: PixelRect) -> PlatformResult<()> {
 }
 
 /// Moves `moves` (each already checked with `live`, or its error), one
-/// result per entry, in order. A hung window is refused without a call; the
-/// rest go in one deferred batch, or one by one when the batch fails.
+/// result per entry, in order. A hung window is refused without a call.
+/// Another thread's window (every real target) gets its own asynchronous
+/// `SetWindowPos`: `DeferWindowPos` does not take `SWP_ASYNCWINDOWPOS`, and
+/// `EndDeferWindowPos` waits on every window's thread. Only this thread's
+/// own windows (tests) go in one deferred batch, or one by one when the
+/// batch fails.
 pub fn move_windows(moves: Vec<PlatformResult<(HWND, PixelRect)>>) -> Vec<PlatformResult<()>> {
     let mut out: Vec<Option<PlatformResult<()>>> = Vec::with_capacity(moves.len());
     let mut batch: Vec<(usize, HWND, PixelRect)> = Vec::new();
@@ -163,6 +180,7 @@ pub fn move_windows(moves: Vec<PlatformResult<(HWND, PixelRect)>>) -> Vec<Platfo
         match m {
             Err(e) => out.push(Some(Err(e))),
             Ok((h, _)) if is_hung(h) => out.push(Some(Err(PlatformError::Refused(NOT_RESPONDING.into())))),
+            Ok((h, r)) if !on_this_thread(h) => out.push(Some(set_window_pos(h, r))),
             Ok((h, r)) => {
                 out.push(None);
                 batch.push((i, h, r));

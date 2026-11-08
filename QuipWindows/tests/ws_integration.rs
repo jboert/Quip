@@ -816,6 +816,27 @@ async fn a_window_that_closed_before_the_arrange_is_logged_as_closed_not_refused
 }
 
 #[tokio::test]
+async fn a_stalled_input_call_answers_the_phone_and_the_next_action_runs() {
+    let limits = quip_windows::host::ConnectionLimits { input_stall: Duration::from_millis(300), ..Default::default() };
+    let h = start_with(Opts { limits, ..Default::default() }).await;
+    let (mut p, _) = paired(h.addr).await;
+    // One SendInput that never comes back in time: a window that stopped
+    // pumping messages under a Win32 call.
+    h.fake.set_block_typing(Some(Duration::from_secs(3)));
+    p.send(json!({"type":"send_text","windowId":h.window_id(101),"text":"x","pressReturn":false,"messageId":ID_A}))
+        .await;
+    let e = p.recv_type("error").await;
+    assert_eq!(e["reason"], quip_windows::services::router::INPUT_STALLED);
+    let ws = h.log("websocket.log");
+    assert!(ws.contains("input lane: send_text dropped: a Win32 call ran over"), "{ws}");
+    assert!(h.log("injection.log").contains("op=sendText"), "the drop is in injection.log too");
+    h.fake.set_block_typing(None);
+    p.send(json!({"type":"minimize_window","windowId":h.window_id(102),"messageId":ID_B})).await;
+    p.recv_type("layout_update").await;
+    assert!(h.fake.calls().contains(&FakeCall::Minimize { handle: 102 }), "the lane runs again");
+}
+
+#[tokio::test]
 async fn a_dead_input_lane_says_so_not_elevated() {
     let h = start().await;
     let (mut p, _) = paired(h.addr).await;

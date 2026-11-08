@@ -387,11 +387,19 @@ For each window: if minimized or maximized, restore it first
 iconic nor zoomed), and only then read its rects. A minimized window has no
 DWM bounds (5.1 lists it with its restored outer rect as both rects), so its
 border is known only once it is restored.
-Then `SetWindowPos(hwnd, null, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE)`,
-batched with `BeginDeferWindowPos` / `DeferWindowPos` / `EndDeferWindowPos`.
-Windows' docs say to abandon the whole batch when one `DeferWindowPos`
-fails, so on any batch failure each window is moved by its own
-`SetWindowPos` and gets its own result.
+Then `SetWindowPos(hwnd, null, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE |
+SWP_ASYNCWINDOWPOS)`, one call per window. A synchronous `SetWindowPos` (or
+`EndDeferWindowPos`) waits until the window's thread pumps messages, and
+`IsHungAppWindow` reports a window only after 5 s without pumping, so a
+window that stopped just before or during the call would block the input
+lane, and every later send, key, arrange, minimize and close with it.
+`DeferWindowPos` does not take `SWP_ASYNCWINDOWPOS`, so every other thread's
+window (every real target) is moved on its own, and the move is queued to
+that thread; the verify below reads where it really ended. Only windows of
+the calling thread (the tests' own) still go in one `BeginDeferWindowPos` /
+`DeferWindowPos` / `EndDeferWindowPos` batch; Windows' docs say to abandon
+the whole batch when one `DeferWindowPos` fails, so on a batch failure each
+is moved by its own `SetWindowPos` and gets its own result.
 
 The invisible resize border: target rect R is the visible rect. Read the
 window's `GetWindowRect` and `DWMWA_EXTENDED_FRAME_BOUNDS`, take the per-edge
@@ -415,8 +423,7 @@ the first move was not moved at all and is refused the same way; one that
 moved but stopped short (a minimum size) stays the `websocket.log` case. A
 window that closed in between is logged with `kind=windowClosed`.
 A window whose thread does not respond (`IsHungAppWindow`) is skipped the
-same way with `detail="not responding"`: `SetWindowPos` would block the
-input thread. The others still move. `layout.rs` (the math) is pure and
+same way with `detail="not responding"`. The others still move. `layout.rs` (the math) is pure and
 unit-tested on the Mac; the restore / measure / move / verify order lives in
 `services/arrange.rs`, above `platform/`, so the fake tests it too.
 
@@ -433,7 +440,10 @@ usually just flashes the taskbar button. Sequence:
 2. `SetForegroundWindow(hwnd)`. Poll `GetForegroundWindow() == hwnd` every
    20 ms for up to 100 ms; if it is, done.
 3. Otherwise `AttachThreadInput(our thread, foreground window's thread, TRUE)`,
-   then `BringWindowToTop`, `SetForegroundWindow`, `SetFocus`, then detach
+   then raise it (`SetWindowPos(HWND_TOP, SWP_NOMOVE | SWP_NOSIZE |
+   SWP_ASYNCWINDOWPOS)` for another thread's window: `BringWindowToTop`
+   waits on the window's thread; `BringWindowToTop` for one of the calling
+   thread), `SetForegroundWindow`, `SetFocus`, then detach
    (always, also on an early return). Poll up to 150 ms. Skip this step when
    the foreground window does not respond (`IsHungAppWindow`): attaching to
    a hung thread can block.
@@ -548,7 +558,17 @@ Main thread: a Win32 message loop that owns the tray icon
 (`Shell_NotifyIconW`) and the QR window. Networking runs on a tokio runtime
 on worker threads; the two sides talk over channels. All Win32 window,
 focus and input calls run on one dedicated platform thread (not the tray
-thread), so a slow `SendInput` never freezes the tray menu.
+thread), so a slow `SendInput` never freezes the tray menu. (The listing
+poll has a second thread of its own, `platform::Lanes`.) The input thread
+has a watchdog: when ONE backend call on it runs past 5 s
+(`INPUT_STALL_LIMIT`, ten times the slowest legitimate call, a focus
+refusal or a restore), the phone that asked gets an `error` ("A window
+stopped responding to Windows; Quip gave up on this action"),
+`websocket.log` gets a line, and the lane gets a new thread. Every call the
+old thread makes once it comes back fails at once, so it can no longer
+type, focus or move anything, and the jobs queued behind it are answered
+the same way. A long text is many quick calls, not one slow one, so it is
+never cut off.
 
 Menu:
 

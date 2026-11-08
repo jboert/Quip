@@ -84,13 +84,16 @@ pub const MAX_UNAUTHENTICATED_PER_SENDER: usize = 4;
 /// right PIN.
 pub const MAX_UNAUTHENTICATED_PER_NETWORK: usize = 8;
 
-/// Per-connection limits (`HostConfig::limits`). Tests shorten the deadline.
+/// Per-connection limits (`HostConfig::limits`), and how long one Win32
+/// call on the input lane may run (`platform::INPUT_STALL_LIMIT`). Tests
+/// shorten the deadlines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectionLimits {
     pub pre_auth_deadline: Duration,
     pub max_unauthenticated: usize,
     pub max_unauthenticated_per_sender: usize,
     pub max_unauthenticated_per_network: usize,
+    pub input_stall: Duration,
 }
 
 impl Default for ConnectionLimits {
@@ -100,6 +103,7 @@ impl Default for ConnectionLimits {
             max_unauthenticated: MAX_UNAUTHENTICATED,
             max_unauthenticated_per_sender: MAX_UNAUTHENTICATED_PER_SENDER,
             max_unauthenticated_per_network: MAX_UNAUTHENTICATED_PER_NETWORK,
+            input_stall: crate::platform::INPUT_STALL_LIMIT,
         }
     }
 }
@@ -465,7 +469,7 @@ impl Host {
         };
         let guesses = GuessBudget::new(parts.config.limits.max_unauthenticated_per_network);
         Ok(Arc::new(Host {
-            lanes: Lanes::spawn(parts.platform)?,
+            lanes: Lanes::spawn_with(parts.platform, parts.config.limits.input_stall, crate::platform::STALL_CHECK)?,
             dedupe: DedupeTable::new(parts.clock.clone()),
             throttle: AuthThrottle::new(parts.clock.clone()),
             config: parts.config,

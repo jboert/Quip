@@ -7,9 +7,10 @@
 //! are built from those windows only, never from a desktop listing, so a
 //! window the user has open is never moved, minimized or closed.
 //!
-//! `arrange::execute` runs on the thread that created the own windows: a
-//! cross-thread `SetWindowPos` to a thread that pumps no messages would
-//! block.
+//! `arrange::execute` runs on the thread that created the `OwnWindow`s, so
+//! they take the synchronous same-thread path (one deferred batch). Another
+//! thread's window (consoles, `BlockedWindow`) gets the queued
+//! `SWP_ASYNCWINDOWPOS` path.
 #![cfg(windows)]
 
 use std::collections::HashSet;
@@ -29,8 +30,8 @@ use quip_windows::services::layout::{self, PixelRect};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, IsIconic, IsWindow, PostMessageW, ShowWindow, SW_MINIMIZE, WINDOW_EX_STYLE,
-    WM_CLOSE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    CreateWindowExW, DestroyWindow, DispatchMessageW, IsIconic, IsWindow, PeekMessageW, PostMessageW, ShowWindow,
+    TranslateMessage, MSG, PM_REMOVE, SW_MINIMIZE, WINDOW_EX_STYLE, WM_CLOSE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
@@ -251,4 +252,97 @@ fn minimize_then_close_an_own_console() {
         !alive && !marked
     });
     assert!(closed, "the marked console is gone within 5 s");
+}
+
+/// A top-level window of this process made on ITS OWN thread, which then
+/// sleeps for `hold` without pumping messages: a window that just stopped
+/// responding, before `IsHungAppWindow` says so (5 s). Afterwards the
+/// thread handles what was queued and destroys the window; drop waits for
+/// it.
+struct BlockedWindow {
+    handle: u64,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BlockedWindow {
+    fn new(hold: Duration) -> BlockedWindow {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            // SAFETY: plain arguments; the window belongs to this thread.
+            let h = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("STATIC"),
+                    w!("quip-test-blocked"),
+                    WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                    200,
+                    160,
+                    420,
+                    300,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .unwrap();
+            tx.send(h.0 as usize as u64).unwrap();
+            sleep(hold);
+            let mut msg = MSG::default();
+            // SAFETY: a writable MSG; this thread's own queue.
+            while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+                // SAFETY: a message this thread just took off its queue.
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            // SAFETY: a window of this thread.
+            let _ = unsafe { DestroyWindow(h) };
+        });
+        BlockedWindow { handle: rx.recv().unwrap(), thread: Some(thread) }
+    }
+    fn window_ref(&self) -> WindowRef {
+        WindowRef { handle: self.handle, pid: std::process::id() }
+    }
+}
+
+impl Drop for BlockedWindow {
+    fn drop(&mut self) {
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// R2 finding 1: a synchronous `SetWindowPos` / `EndDeferWindowPos` /
+/// `BringWindowToTop` waits until the window's thread pumps, so a window
+/// that stopped pumping blocked the input lane, and every later action with
+/// it. Each call must return within 1 s while the thread sleeps 4 s.
+#[test]
+fn a_window_whose_thread_stopped_pumping_blocks_no_move_focus_or_minimize() {
+    if !ui_enabled() {
+        return;
+    }
+    let p = Win32Platform::new().unwrap();
+    let b = BlockedWindow::new(Duration::from_secs(4));
+    let w = b.window_ref();
+    let quick = |what: &str, f: &dyn Fn() -> String| {
+        let t = Instant::now();
+        let got = f();
+        eprintln!("{what}: {got} in {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(1), "{what} took {:?} ({got})", t.elapsed());
+    };
+    quick("move_windows", &|| {
+        let mv = WindowMove { window: w, outer: PixelRect::new(60, 60, 400, 300) };
+        let r = p.move_windows(&[mv]);
+        assert_eq!(r, vec![Ok(())], "queued, not refused");
+        format!("{r:?}")
+    });
+    quick("bring_to_foreground", &|| format!("{:?}", p.bring_to_foreground(w)));
+    quick("minimize", &|| {
+        let r = p.minimize(w);
+        assert_eq!(r, Ok(()));
+        format!("{r:?}")
+    });
 }

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::host::{ClientId, Host};
 use crate::platform::traits::{FocusStep, Platform, PlatformError, WindowRef};
+use crate::platform::{LaneError, INPUT_STALL_LIMIT};
 use crate::protocol::messages::{
     ArrangeWindows, CloseWindow, ErrorMessage, Incoming, MinimizeWindow, PreferenceRequest, PreferenceRestore,
     PreferenceSnapshot, QuickAction, RequestContent, SelectWindow, SendText, SendTextAck, SetColor, SetPin,
@@ -30,6 +31,11 @@ pub const FOCUS_REFUSED: &str = "Windows refused to focus the window";
 /// reached Windows at all, and it will not recover until a restart.
 pub const INPUT_STOPPED: &str = "Windows host input thread stopped";
 pub const INPUT_BLOCKED_DETAIL: &str = "input blocked (elevated window?)";
+/// A Win32 call on the input lane ran past `INPUT_STALL_LIMIT` (a window
+/// that stopped pumping messages): the lane got a new thread, this action
+/// was dropped, the next one runs.
+pub const INPUT_STALLED: &str =
+    "A window stopped responding to Windows; Quip gave up on this action (see websocket.log)";
 
 /// What a failed input plan tells the phone and `injection.log`.
 pub struct FailureReport {
@@ -141,6 +147,24 @@ impl Host {
         dup
     }
 
+    /// What the phone is told when the input lane had no result for `op`.
+    /// A stall gets a `websocket.log` line; a dead lane says it stopped.
+    fn lane_failed(&self, e: LaneError, op: &str) -> &'static str {
+        match e {
+            LaneError::Gone => INPUT_STOPPED,
+            LaneError::Stalled => {
+                self.logs.ws(
+                    Severity::Error,
+                    &format!(
+                        "input lane: {op} dropped: a Win32 call ran over {} s (a window that stopped responding?); the lane has a new thread",
+                        INPUT_STALL_LIMIT.as_secs()
+                    ),
+                );
+                INPUT_STALLED
+            }
+        }
+    }
+
     fn rid(id: Option<WireUuid>) -> String {
         id.map(|i| i.short()).unwrap_or_else(|| "nil".into())
     }
@@ -161,7 +185,7 @@ impl Host {
                 self.logs.ws(Severity::Warn, &format!("select_window {}: {e}", m.window_id));
                 self.error(FOCUS_REFUSED, None);
             }
-            Err(_) => self.error(INPUT_STOPPED, None),
+            Err(e) => self.error(self.lane_failed(e, "select_window"), None),
         }
         self.poll_tick().await;
     }
@@ -181,9 +205,10 @@ impl Host {
         let (text, press_return) = (m.text.clone(), m.press_return);
         let outcome = self.lanes.input(move |p| send_text_on_lane(p, target, &text, press_return)).await;
         let (shell, decision, report) = match outcome {
-            Err(_) => {
-                self.logs.injection("sendText", &window.id, Some(&app), InjectionKind::Unknown, INPUT_STOPPED, "");
-                self.error(INPUT_STOPPED, m.message_id);
+            Err(e) => {
+                let reason = self.lane_failed(e, "send_text");
+                self.logs.injection("sendText", &window.id, Some(&app), InjectionKind::Unknown, reason, "");
+                self.error(reason, m.message_id);
                 return;
             }
             Ok(SendOutcome::Gone) => {
@@ -288,18 +313,21 @@ impl Host {
         };
         let inputs = steps_count(&steps);
         let target = window.platform.window_ref();
-        let report = self.lanes.input(move |p| injector::execute(p, target, &steps)).await;
-        let Ok(report) = report else {
-            self.logs.injection(
-                "quickAction",
-                &window.id,
-                Some(&window.platform.app),
-                InjectionKind::Unknown,
-                INPUT_STOPPED,
-                &format!("action={action}"),
-            );
-            self.error(INPUT_STOPPED, m.message_id);
-            return;
+        let report = match self.lanes.input(move |p| injector::execute(p, target, &steps)).await {
+            Ok(r) => r,
+            Err(e) => {
+                let reason = self.lane_failed(e, "quick_action");
+                self.logs.injection(
+                    "quickAction",
+                    &window.id,
+                    Some(&window.platform.app),
+                    InjectionKind::Unknown,
+                    reason,
+                    &format!("action={action}"),
+                );
+                self.error(reason, m.message_id);
+                return;
+            }
         };
         let total = self.clock.monotonic().saturating_sub(received);
         let (inject_ms, total_ms) = (ms(report.elapsed), ms(total.max(report.elapsed)));
@@ -336,10 +364,14 @@ impl Host {
             }
         };
         let targets = plan.clone();
-        let Ok(results) = self.lanes.input(move |p| arrange::execute(p, &targets, arrange::SETTLE)).await else {
-            self.logs.ws(Severity::Error, &format!("arrange_windows: {INPUT_STOPPED}"));
-            self.error(INPUT_STOPPED, None);
-            return;
+        let results = match self.lanes.input(move |p| arrange::execute(p, &targets, arrange::SETTLE)).await {
+            Ok(r) => r,
+            Err(e) => {
+                let reason = self.lane_failed(e, "arrange_windows");
+                self.logs.ws(Severity::Error, &format!("arrange_windows: {reason}"));
+                self.error(reason, None);
+                return;
+            }
         };
         let mut refused = 0;
         for (i, t) in plan.iter().enumerate() {
@@ -390,7 +422,7 @@ impl Host {
                 self.logs.ws(Severity::Warn, &format!("minimize_window {} ({app}): {e}", m.window_id));
                 self.error(format!("Could not minimize {app} — {e} (see websocket.log)"), m.message_id);
             }
-            Err(_) => self.error(INPUT_STOPPED, m.message_id),
+            Err(e) => self.error(self.lane_failed(e, "minimize_window"), m.message_id),
         }
     }
 
@@ -410,7 +442,7 @@ impl Host {
                 self.logs.ws(Severity::Warn, &format!("close_window {}: {e}", m.window_id));
                 self.error(format!("Could not close the window — {e}"), None);
             }
-            Err(_) => self.error(INPUT_STOPPED, None),
+            Err(e) => self.error(self.lane_failed(e, "close_window"), None),
         }
     }
 
