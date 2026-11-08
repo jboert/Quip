@@ -36,6 +36,7 @@ use crate::services::multiline_policy::Shell;
 
 pub use display::effective_dpis;
 pub use process::snapshot as process_snapshot;
+pub use process::terminate_if_same;
 pub use window::handle_of;
 
 /// `major.minor.build`, e.g. `10.0.26100`, from `RtlGetVersion`

@@ -38,8 +38,7 @@ use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
-use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow, PostMessageW, WM_CLOSE};
 
 mod input;
@@ -48,7 +47,7 @@ use super::own;
 use super::report::{exit_code, format_report, CaseResult, DisplayInfo, Header, Outcome, Redactor, EXIT_FAILED};
 use crate::app_state::AppState;
 use crate::platform::traits::{PlatformWindow, WindowBackend, WindowRef};
-use crate::platform::win32::{effective_dpis, os_version, process_snapshot, Win32Platform};
+use crate::platform::win32::{effective_dpis, os_version, process_snapshot, terminate_if_same, Win32Platform};
 use crate::protocol::types::ArrangeLayout;
 use crate::services::arrange::{self, Target, TargetResult};
 use crate::services::classify::{exe_stem, Proc, TerminalHost, CONSOLE_CLASS, WT_CLASS};
@@ -509,18 +508,12 @@ fn wait_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
     }
 }
 
-/// Ends `pids`, which `own::still_running` picked from a console's own tree.
-fn end(pids: &[u32]) {
-    for &pid in pids {
-        // SAFETY: plain arguments; the handle is closed right after.
-        if let Ok(h) = unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) } {
-            // SAFETY: a live process handle opened with PROCESS_TERMINATE,
-            // closed exactly once here.
-            unsafe {
-                let _ = TerminateProcess(h, 1);
-                let _ = CloseHandle(h);
-            }
-        }
+/// Ends `procs`, which `own::still_running` picked from a console's own
+/// tree, each only if the pid still names the process listed (its creation
+/// time, `terminate_if_same`).
+fn end(procs: &[Proc]) {
+    for p in procs {
+        terminate_if_same(p.pid, p.created);
     }
 }
 

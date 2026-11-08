@@ -10,7 +10,8 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 
 use super::window::from_wide;
@@ -61,11 +62,37 @@ pub fn created(pid: u32) -> Option<u64> {
     }
     // SAFETY: plain arguments; the handle is closed by `Owned`.
     let process = Owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
+    created_of(&process)
+}
+
+/// The creation time of an open process handle (with query access).
+fn created_of(process: &Owned) -> Option<u64> {
     let (mut c, mut e, mut k, mut u) =
         (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
     // SAFETY: four writable FILETIMEs and a live process handle.
     unsafe { GetProcessTimes(process.0, &mut c, &mut e, &mut k, &mut u) }.ok()?;
     Some((u64::from(c.dwHighDateTime) << 32) | u64::from(c.dwLowDateTime))
+}
+
+/// Ends `pid` only if the process the handle opens is the one listed with
+/// creation time `created` (`classify::same_process`): between a snapshot and
+/// `OpenProcess` the pid can be reused by someone else's process. `true`
+/// when `TerminateProcess` was called and succeeded. The handle is closed
+/// on every path (`Owned`).
+pub fn terminate_if_same(pid: u32, created: Option<u64>) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    // SAFETY: plain arguments; the handle is closed by `Owned`.
+    let Ok(h) = (unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
+        return false;
+    };
+    let process = Owned(h);
+    if !crate::services::classify::same_process(created, created_of(&process)) {
+        return false;
+    }
+    // SAFETY: a live process handle opened with PROCESS_TERMINATE.
+    unsafe { TerminateProcess(process.0, 1) }.is_ok()
 }
 
 /// Full exe path, `None` when the process cannot be opened (elevated,

@@ -16,7 +16,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use quip_windows::platform::traits::{PlatformWindow, WindowBackend, WindowRef};
-use quip_windows::platform::win32::{process_snapshot, Win32Platform};
+use quip_windows::platform::win32::{process_snapshot, terminate_if_same, Win32Platform};
 use quip_windows::selftest::own::{has_marker, marker};
 use quip_windows::services::classify::{exe_stem, TerminalHost, CONSOLE_CLASS, WT_CLASS};
 use quip_windows::services::layout::PixelRect;
@@ -399,4 +399,36 @@ fn foreground_window_names_its_owner() {
         unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd(handle), Some(&mut owner)) };
         assert_eq!(owner, pid);
     }
+}
+
+/// R2 finding 6: the selftest ends a leftover process only when the pid
+/// still names the process it listed (creation time), never a newer one
+/// that got the pid. A child of this test, with no window.
+#[test]
+fn terminate_if_same_ends_only_the_listed_process() {
+    if !ui_enabled() {
+        return;
+    }
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut child = Command::new("ping.exe")
+        .args(["-n", "60", "127.0.0.1"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let listed = process_snapshot().unwrap().into_iter().find(|p| p.pid == pid).expect("the child is listed");
+    let created = listed.created.expect("its creation time is readable");
+    assert!(!terminate_if_same(pid, Some(created + 1)), "another start time: not ours");
+    assert!(!terminate_if_same(pid, None), "no start time: cannot tell");
+    sleep(Duration::from_millis(200));
+    assert!(child.try_wait().unwrap().is_none(), "still running after both refusals");
+    assert!(terminate_if_same(pid, Some(created)));
+    let start = Instant::now();
+    while child.try_wait().unwrap().is_none() && start.elapsed() < Duration::from_secs(5) {
+        sleep(Duration::from_millis(50));
+    }
+    assert!(child.try_wait().unwrap().is_some(), "ended");
 }

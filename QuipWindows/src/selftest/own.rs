@@ -64,10 +64,10 @@ pub fn cleanup_targets(owner: u32, procs: &[Proc]) -> Vec<Proc> {
 }
 
 /// Which of `targets` (taken while the window was known to be ours) are
-/// still running in `now`. A pid counts only with the same parent and exe,
-/// so a reused pid is never taken for one of ours.
-pub fn still_running(targets: &[Proc], now: &[Proc]) -> Vec<u32> {
-    targets.iter().filter(|t| now.contains(t)).map(|t| t.pid).collect()
+/// still running in `now`. A pid counts only with the same parent, exe and
+/// creation time, so a reused pid is never taken for one of ours.
+pub fn still_running(targets: &[Proc], now: &[Proc]) -> Vec<Proc> {
+    targets.iter().filter(|t| now.contains(t)).cloned().collect()
 }
 
 /// `root` and everything under it, as (pid, exe), for failure details.
@@ -147,7 +147,9 @@ mod tests {
     fn a_reused_pid_is_not_still_running() {
         let targets = [p(20, 10, r"C:\Windows\System32\cmd.exe"), p(30, 20, r"C:\Windows\System32\PING.EXE")];
         let now = [p(20, 77, r"C:\Windows\System32\cmd.exe"), p(30, 20, r"C:\Windows\System32\PING.EXE")];
-        assert_eq!(still_running(&targets, &now), [30]);
+        let pids: Vec<u32> = still_running(&targets, &now).iter().map(|p| p.pid).collect();
+        assert_eq!(pids, [30]);
+        assert_eq!(still_running(&targets, &now)[0].created, Some(30), "with its creation time, for `end`");
         assert!(still_running(&targets, &[]).is_empty());
     }
 

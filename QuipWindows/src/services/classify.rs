@@ -108,6 +108,13 @@ impl Proc {
     }
 }
 
+/// The process a handle opened is the one a snapshot listed: both creation
+/// times are known and equal. Anything else (unreadable, or another start
+/// time: the pid was reused after the snapshot) is not ours to end.
+pub fn same_process(listed: Option<u64>, opened: Option<u64>) -> bool {
+    matches!((listed, opened), (Some(a), Some(b)) if a == b)
+}
+
 /// Console plumbing that is a child of the shell but not a program the user
 /// runs in it.
 fn is_console_host(exe: &str) -> bool {
@@ -537,5 +544,14 @@ mod tests {
         assert_eq!(classify("Cls", Some(r"C:\p\ab"), None, &[]).app, "ab");
         assert_eq!(classify("Cls", Some(r"C:\p\.exe"), None, &[]).app, ".exe");
         assert_eq!(classify("Cls", Some(r"C:\p\a.exe"), None, &[]).app, "a");
+    }
+
+    #[test]
+    fn only_the_listed_process_is_the_same_process() {
+        assert!(same_process(Some(42), Some(42)));
+        assert!(!same_process(Some(42), Some(43)), "the pid was reused after the snapshot");
+        assert!(!same_process(None, Some(42)), "listed without a time: cannot tell");
+        assert!(!same_process(Some(42), None), "opened but unreadable: cannot tell");
+        assert!(!same_process(None, None));
     }
 }
