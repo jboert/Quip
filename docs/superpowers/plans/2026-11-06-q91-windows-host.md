@@ -1,6 +1,6 @@
 # Plan: Q-91 Quip for Windows (phase 1)
 
-**Status:** Run complete through S9 (owner stop): S1-S9 incl. S5b-S5e complete, review done, R1 review-fix complete (Windows CI run 42343269299 green at db0699c), plus one post-review eviction-order fix. Next: owner's PC check (Owner gates), then S10-S12 (detailed 2026-11-07, not started until then).
+**Status:** S1-S10 complete. S1-S9 (incl. S5b-S5e), the review and R1 are done; S10 (arrange) started on the owner's go-ahead on 2026-11-07, before the PC check (Windows CI run 42453073506 green at f6b4f9b: win32_arrange 5/5, selftest 14/14). Next: S11 (focus, typing, keys), then S12. The owner's PC check (Owner gates) is still open.
 
 - Spec (source of truth for behavior): `docs/superpowers/specs/2026-11-06-q91-quip-windows-host.md`
 - Test plan (every layer, coverage matrix, owner PC scripts, release gate): `docs/superpowers/specs/2026-11-07-q91-windows-test-plan.md`
@@ -210,6 +210,7 @@
   - CI has one monitor, so the cross-DPI retry is tested only by the fake and on a PC with two monitors of different scale.
 
 ### S11: M4 Win32 focus, typing, keys
+- Carry-over from S10 CI (run 42451750896, attempt 1): the existing `windows_terminal` selftest case once read the tab's shell as Unknown, listing winlogon, dwm and csrss as children of WindowsTerminal.exe. The rerun passed. Suspect a reused parent pid in the process snapshot; check the parent's creation time before S11 relies on the shell lookup.
 - **Status:** Not started (waits for the owner's PC check)
 - Goal: real `bring_to_foreground`, `send_units` and `press_key` (spec 5.3-5.5), and the integrity check of spec 5.4 step 2b in the shared injector. Text and keys land only in the window the phone chose, never in an elevated one, and multi-line text never runs early.
 - What exists: all the rules above `platform/`. `injector::execute` checks foreground handle and pid before every batch and key (`src/services/injector.rs:67-131`); `typing_plan` makes 32-unit batches that never split a surrogate pair (`src/services/typing_plan.rs:22-74`); `multiline_policy::windows_decide` (`src/services/multiline_policy.rs:196-205`); `keys::plan` (`src/services/keys.rs:91-112`); `router::send_text_on_lane` re-reads the shell at send time (`src/services/router.rs:88-102`). Win32 `current_shell` and `foreground_window` are real (`src/platform/win32/mod.rs:239-256`); focus and input answer `NotImplemented` (`:258-260`, `:272-279`).
