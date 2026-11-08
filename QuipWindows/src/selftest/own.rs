@@ -50,17 +50,15 @@ fn is_own(p: &Proc) -> bool {
 pub fn cleanup_targets(owner: u32, procs: &[Proc]) -> Vec<Proc> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    let mut stack = vec![owner];
-    while let Some(pid) = stack.pop() {
-        if pid == 0 || !seen.insert(pid) {
-            continue;
-        }
-        let Some(p) = procs.iter().find(|p| p.pid == pid) else { continue };
-        if !is_own(p) {
+    let mut stack: Vec<&Proc> = procs.iter().filter(|p| p.pid == owner && owner != 0).take(1).collect();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p.pid) || !is_own(p) {
             continue;
         }
         out.push(p.clone());
-        stack.extend(procs.iter().filter(|c| c.parent == pid && c.pid != pid).map(|c| c.pid));
+        // `is_child_of`: a process older than `p` that names p's pid as its
+        // parent was started by an exited process whose pid `p` reuses.
+        stack.extend(procs.iter().filter(|c| c.is_child_of(p)));
     }
     out
 }
@@ -76,15 +74,13 @@ pub fn still_running(targets: &[Proc], now: &[Proc]) -> Vec<u32> {
 pub fn tree(root: u32, procs: &[Proc]) -> Vec<(u32, String)> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    let mut stack = vec![root];
-    while let Some(pid) = stack.pop() {
-        if !seen.insert(pid) {
+    let mut stack: Vec<&Proc> = procs.iter().filter(|p| p.pid == root).take(1).collect();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p.pid) {
             continue;
         }
-        if let Some(p) = procs.iter().find(|p| p.pid == pid) {
-            out.push((p.pid, p.exe.clone()));
-        }
-        stack.extend(procs.iter().filter(|c| c.parent == pid && c.pid != pid).map(|c| c.pid));
+        out.push((p.pid, p.exe.clone()));
+        stack.extend(procs.iter().filter(|c| c.is_child_of(p)));
     }
     out
 }
@@ -93,8 +89,9 @@ pub fn tree(root: u32, procs: &[Proc]) -> Vec<(u32, String)> {
 mod tests {
     use super::*;
 
+    /// Created in pid order, so a listed parent is older than its child.
     fn p(pid: u32, parent: u32, exe: &str) -> Proc {
-        Proc { pid, parent, exe: exe.into() }
+        Proc { pid, parent, exe: exe.into(), created: Some(pid.into()) }
     }
 
     #[test]
@@ -152,6 +149,20 @@ mod tests {
         let now = [p(20, 77, r"C:\Windows\System32\cmd.exe"), p(30, 20, r"C:\Windows\System32\PING.EXE")];
         assert_eq!(still_running(&targets, &now), [30]);
         assert!(still_running(&targets, &[]).is_empty());
+    }
+
+    #[test]
+    fn cleanup_skips_an_older_process_under_a_reused_pid() {
+        // cmd 20 got the pid of an exited process that started 5 and 6.
+        let mut old_cmd = p(5, 20, r"C:\Windows\System32\cmd.exe");
+        old_cmd.created = Some(1);
+        let mut old_ping = p(6, 20, r"C:\Windows\System32\PING.EXE");
+        old_ping.created = None;
+        let procs = [p(20, 1, r"C:\Windows\System32\cmd.exe"), old_cmd, old_ping, p(30, 20, "ping.exe")];
+        let got: Vec<u32> = cleanup_targets(20, &procs).into_iter().map(|p| p.pid).collect();
+        assert_eq!(got, [20, 30]);
+        let got: Vec<u32> = tree(20, &procs).into_iter().map(|(p, _)| p).collect();
+        assert_eq!(got, [20, 30]);
     }
 
     #[test]

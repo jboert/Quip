@@ -96,10 +96,9 @@ fn process_tree(root: u32) -> String {
         if !seen.insert(pid) {
             continue;
         }
-        if let Some(p) = procs.iter().find(|p| p.pid == pid) {
-            out.push_str(&format!("{}{} {}\n", "  ".repeat(depth), p.pid, p.exe));
-        }
-        for c in procs.iter().filter(|c| c.parent == pid && c.pid != pid) {
+        let Some(p) = procs.iter().find(|p| p.pid == pid) else { continue };
+        out.push_str(&format!("{}{} {}\n", "  ".repeat(depth), p.pid, p.exe));
+        for c in procs.iter().filter(|c| c.is_child_of(p)) {
             stack.push((c.pid, depth + 1));
         }
     }

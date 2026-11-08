@@ -76,8 +76,36 @@ pub fn resolve_shell(shells: &[String]) -> Shell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proc {
     pub pid: u32,
+    /// The pid of the process that started it. Windows does not clear this
+    /// when that process exits, and reuses pids, so it can name a NEWER
+    /// process that never started it: check with `is_child_of`.
     pub parent: u32,
     pub exe: String,
+    /// Creation time (`GetProcessTimes`, 100 ns ticks since 1601), `None`
+    /// when the process could not be opened (another user's, protected).
+    pub created: Option<u64>,
+}
+
+impl Proc {
+    /// `self` was started by `parent`: its parent pid names it, AND
+    /// `parent` is not younger than `self`. A parent created after its
+    /// "child" holds a reused pid: the real parent exited long ago (CI saw
+    /// winlogon and csrss, children of a session's exited `smss.exe`, listed
+    /// under a new `WindowsTerminal.exe` that got that pid). A child whose
+    /// age cannot be read under a parent whose age can is not counted
+    /// either: Quip can read every process its user starts, so it is a
+    /// system process. A parent whose age cannot be read keeps the snapshot's
+    /// word (nothing better is known).
+    pub fn is_child_of(&self, parent: &Proc) -> bool {
+        if self.parent != parent.pid || self.pid == parent.pid {
+            return false;
+        }
+        match (parent.created, self.created) {
+            (Some(p), Some(c)) => c >= p,
+            (Some(_), None) => false,
+            (None, _) => true,
+        }
+    }
 }
 
 /// Console plumbing that is a child of the shell but not a program the user
@@ -96,10 +124,8 @@ pub fn foreground_program(shell_pid: u32, procs: &[Proc]) -> String {
     let mut current = root;
     let mut seen = std::collections::HashSet::from([root.pid]);
     loop {
-        let children: Vec<&Proc> = procs
-            .iter()
-            .filter(|p| p.parent == current.pid && p.pid != current.pid && !is_console_host(&p.exe))
-            .collect();
+        let children: Vec<&Proc> =
+            procs.iter().filter(|p| p.is_child_of(current) && !is_console_host(&p.exe)).collect();
         if let Some(program) = children.iter().find(|c| shell_of_exe(&c.exe).is_none()) {
             return program.exe.clone();
         }
@@ -131,7 +157,7 @@ pub fn foreground_program(shell_pid: u32, procs: &[Proc]) -> String {
 /// `conhost.exe python.exe`) contributes that program, so it reads unknown.
 pub fn console_programs(host: TerminalHost, owner_pid: u32, procs: &[Proc]) -> Vec<String> {
     let Some(owner) = procs.iter().find(|p| p.pid == owner_pid) else { return vec![] };
-    let children = |pid: u32| procs.iter().filter(move |p| p.parent == pid && p.pid != pid);
+    let children = |parent: &Proc| procs.iter().filter(move |p| p.is_child_of(parent)).collect::<Vec<&Proc>>();
     let program = |p: &Proc| {
         if shell_of_exe(&p.exe).is_some() {
             foreground_program(p.pid, procs)
@@ -144,21 +170,22 @@ pub fn console_programs(host: TerminalHost, owner_pid: u32, procs: &[Proc]) -> V
             if shell_of_exe(&owner.exe).is_some() {
                 return vec![foreground_program(owner.pid, procs)];
             }
-            let started: Vec<String> = children(owner.pid).filter(|c| !is_console_host(&c.exe)).map(program).collect();
+            let started: Vec<String> =
+                children(owner).into_iter().filter(|c| !is_console_host(&c.exe)).map(program).collect();
             if !started.is_empty() {
                 return started;
             }
             procs
                 .iter()
-                .find(|p| p.pid == owner.parent && p.pid != owner.pid && shell_of_exe(&p.exe).is_some())
+                .find(|p| owner.is_child_of(p) && shell_of_exe(&p.exe).is_some())
                 .map(|parent| vec![foreground_program(parent.pid, procs)])
                 .unwrap_or_default()
         }
         TerminalHost::WindowsTerminal => {
             let mut tabs: Vec<&Proc> = vec![];
-            for c in children(owner.pid) {
+            for c in children(owner) {
                 if is_console_host(&c.exe) {
-                    tabs.extend(children(c.pid).filter(|g| !is_console_host(&g.exe)));
+                    tabs.extend(children(c).into_iter().filter(|g| !is_console_host(&g.exe)));
                 } else {
                     tabs.push(c);
                 }
@@ -325,7 +352,15 @@ mod tests {
     }
 
     fn procs(rows: &[(u32, u32, &str)]) -> Vec<Proc> {
-        rows.iter().map(|(pid, parent, exe)| Proc { pid: *pid, parent: *parent, exe: exe.to_string() }).collect()
+        // Created in pid order, so every listed parent is older than its child.
+        rows.iter()
+            .map(|(pid, parent, exe)| Proc {
+                pid: *pid,
+                parent: *parent,
+                exe: exe.to_string(),
+                created: Some(*pid as u64),
+            })
+            .collect()
     }
 
     #[test]
@@ -422,6 +457,64 @@ mod tests {
         assert_eq!(shell_of_window(TerminalHost::WindowsTerminal, 30, &profile), Shell::Unknown);
         let empty = procs(&[(30, 1, "WindowsTerminal.exe")]);
         assert_eq!(shell_of_window(TerminalHost::WindowsTerminal, 30, &empty), Shell::Unknown);
+    }
+
+    fn aged(pid: u32, parent: u32, exe: &str, created: Option<u64>) -> Proc {
+        Proc { pid, parent, exe: exe.into(), created }
+    }
+
+    #[test]
+    fn a_parent_younger_than_its_child_holds_a_reused_pid() {
+        let old = aged(20, 8, "winlogon.exe", Some(100));
+        let wt = aged(8, 1, "WindowsTerminal.exe", Some(500));
+        assert!(!old.is_child_of(&wt), "started before the process that now has its parent's pid");
+        assert!(aged(21, 8, "pwsh.exe", Some(600)).is_child_of(&wt));
+        assert!(aged(21, 8, "pwsh.exe", Some(500)).is_child_of(&wt), "same tick counts");
+        assert!(!aged(21, 9, "pwsh.exe", Some(600)).is_child_of(&wt), "another parent");
+        assert!(!aged(8, 8, "x.exe", Some(600)).is_child_of(&wt), "never its own child");
+    }
+
+    #[test]
+    fn unreadable_ages() {
+        let wt = aged(8, 1, "WindowsTerminal.exe", Some(500));
+        assert!(!aged(20, 8, "csrss.exe", None).is_child_of(&wt), "an unreadable child of a readable parent");
+        let hidden = aged(8, 1, "WindowsTerminal.exe", None);
+        assert!(
+            aged(21, 8, "pwsh.exe", Some(1)).is_child_of(&hidden),
+            "an unreadable parent keeps the snapshot's word"
+        );
+        assert!(aged(21, 8, "pwsh.exe", None).is_child_of(&hidden));
+    }
+
+    #[test]
+    fn windows_terminal_on_a_reused_pid_keeps_its_own_tab_only() {
+        // CI run 42451750896: WindowsTerminal.exe got the pid of the session's
+        // exited smss.exe, whose children (winlogon, csrss) still name it.
+        let p = vec![
+            aged(7112, 8072, "winlogon.exe", Some(10)),
+            aged(6488, 8072, "csrss.exe", Some(9)),
+            aged(5952, 7112, "dwm.exe", Some(11)),
+            aged(8072, 900, "WindowsTerminal.exe", Some(5000)),
+            aged(6208, 8072, "OpenConsole.exe", Some(5001)),
+            aged(2400, 8072, "powershell.exe", Some(5002)),
+        ];
+        assert_eq!(console_programs(TerminalHost::WindowsTerminal, 8072, &p), s(&["powershell.exe"]));
+        assert_eq!(shell_of_window(TerminalHost::WindowsTerminal, 8072, &p), Shell::PowerShell);
+    }
+
+    #[test]
+    fn a_shell_on_a_reused_pid_is_not_busy_with_an_older_program() {
+        let p = vec![aged(40, 50, "python.exe", Some(10)), aged(50, 1, "pwsh.exe", Some(20))];
+        assert_eq!(foreground_program(50, &p), "pwsh.exe");
+        // A console owned by conhost: its "parent shell" must be older too.
+        let p = vec![aged(11, 10, "conhost.exe", Some(10)), aged(10, 1, "cmd.exe", Some(20))];
+        assert_eq!(console_programs(TerminalHost::Console, 11, &p), Vec::<String>::new());
+        let p = vec![
+            aged(11, 10, "conhost.exe", Some(30)),
+            aged(10, 1, "cmd.exe", Some(20)),
+            aged(12, 11, "ping.exe", Some(5)),
+        ];
+        assert_eq!(shell_of_window(TerminalHost::Console, 11, &p), Shell::Cmd, "an older ping is not conhost's");
     }
 
     #[test]

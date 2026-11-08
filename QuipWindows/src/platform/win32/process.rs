@@ -4,13 +4,13 @@
 use std::ffi::c_void;
 
 use windows::core::{w, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 use super::window::from_wide;
@@ -44,11 +44,28 @@ pub fn snapshot() -> PlatformResult<Vec<Proc>> {
             pid: entry.th32ProcessID,
             parent: entry.th32ParentProcessID,
             exe: from_wide(&entry.szExeFile),
+            created: created(entry.th32ProcessID),
         });
         // SAFETY: as above.
         more = unsafe { Process32NextW(snap.0, &mut entry) }.is_ok();
     }
     Ok(out)
+}
+
+/// When `pid` started (`GetProcessTimes`, 100 ns ticks since 1601), `None`
+/// when it cannot be opened. With it `Proc::is_child_of` can tell a real
+/// child from a process whose parent pid was reused.
+pub fn created(pid: u32) -> Option<u64> {
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: plain arguments; the handle is closed by `Owned`.
+    let process = Owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
+    let (mut c, mut e, mut k, mut u) =
+        (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+    // SAFETY: four writable FILETIMEs and a live process handle.
+    unsafe { GetProcessTimes(process.0, &mut c, &mut e, &mut k, &mut u) }.ok()?;
+    Some((u64::from(c.dwHighDateTime) << 32) | u64::from(c.dwLowDateTime))
 }
 
 /// Full exe path, `None` when the process cannot be opened (elevated,
