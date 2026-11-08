@@ -800,6 +800,22 @@ async fn a_window_at_minimum_size_is_logged_not_an_error() {
 }
 
 #[tokio::test]
+async fn a_window_that_closed_before_the_arrange_is_logged_as_closed_not_refused() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    // Gone after the phone was shown it: the plan still names it.
+    let gone = h.window_id(102);
+    h.fake.remove_window(102);
+    p.send(json!({"type":"arrange_windows","layout":"horizontal"})).await;
+    let e = p.recv_type("error").await;
+    assert_eq!(e["reason"], "Windows refused to move 1 of 2 windows (elevated or protected)");
+    let inj = h.log("injection.log");
+    let line = inj.lines().find(|l| l.contains("op=arrange")).unwrap_or_else(|| panic!("{inj}"));
+    assert!(line.contains(&format!("window={gone}")), "{line}");
+    assert!(line.contains("kind=windowClosed"), "a stale id greps apart from a refusal: {line}");
+}
+
+#[tokio::test]
 async fn a_dead_input_lane_says_so_not_elevated() {
     let h = start().await;
     let (mut p, _) = paired(h.addr).await;

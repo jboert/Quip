@@ -343,7 +343,7 @@ impl Host {
         };
         let mut refused = 0;
         for (i, t) in plan.iter().enumerate() {
-            let (msg, detail) = match results.get(i) {
+            let (msg, detail, kind) = match results.get(i) {
                 Some(TargetResult::Moved) => continue,
                 Some(TargetResult::OffTarget { got }) => {
                     self.logs.ws(
@@ -355,13 +355,17 @@ impl Host {
                     );
                     continue;
                 }
-                Some(TargetResult::Refused(why)) => (format!("refused: {why}"), why.clone()),
-                Some(TargetResult::Gone) => (PlatformError::WindowGone.to_string(), "window is gone".to_string()),
-                None => ("no result from the platform".to_string(), "no result".to_string()),
+                Some(TargetResult::Refused(why)) => (format!("refused: {why}"), why.clone(), InjectionKind::Unknown),
+                // A stale id (self-heals on the next poll) greps apart from
+                // a refusal (CLAUDE.md, injection.log `kind`).
+                Some(TargetResult::Gone) => {
+                    (PlatformError::WindowGone.to_string(), "window is gone".to_string(), InjectionKind::WindowClosed)
+                }
+                None => ("no result from the platform".to_string(), "no result".to_string(), InjectionKind::Unknown),
             };
             refused += 1;
             let app = self.state().find_tracked(&t.id).map(|w| w.platform.app.clone());
-            self.logs.injection("arrange", &t.id, app.as_deref(), InjectionKind::Unknown, &msg, &detail);
+            self.logs.injection("arrange", &t.id, app.as_deref(), kind, &msg, &detail);
         }
         let outcome = ArrangeOutcome::evaluate(plan.len(), true, || refused);
         if let Some(msg) = outcome.message() {
