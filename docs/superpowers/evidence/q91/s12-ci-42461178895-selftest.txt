@@ -1,0 +1,36 @@
+Quip selftest
+time: 2026-11-08T08:06:01Z
+quip: Quip for Windows 0.1.0 (876ff666a4f5)
+windows: 10.0.26100
+displays: 1
+display 1: Generic PnP Monitor primary 1024x768 at 0,0 work 1024x720 at 0,0 dpi 96 (100%)
+PASS process_snapshot
+PASS displays_one_primary
+PASS displays_work_area_inside_bounds
+PASS frames_inside_0_to_1
+PASS foreground_window_owner
+PASS classic_powershell_console
+PASS classic_cmd_console
+PASS busy_shell_reads_unknown
+PASS windows_terminal
+PASS start_with_windows_round_trip
+PASS pairing_qr_window
+PASS arrange_own_windows
+PASS arrange_restores_minimized
+PASS minimize_and_close_own_console
+PASS focus_own_console
+    note: second console in front via set_foreground
+    note: first console in front via alt_fallback
+PASS type_marker_read_back
+    note: focus via already
+PASS multi_line_waits_for_return
+PASS multi_line_refused_in_cmd
+PASS focus_stolen_stops_typing
+PASS quick_keys_reach_own_console
+PASS ctrl_c_stops_ping
+PASS elevated_target_types_nothing
+    note: probe at 0x2000 under 0x3000: access=elevated injector=input blocked after 0 chars raw_inserted=27 own_rid=0x2000
+PASS build_stamp
+    note: commit 876ff666a4f5
+PASS log_dir_writable
+SUMMARY PASS: 24 passed, 0 failed, 0 skipped of 24 cases
