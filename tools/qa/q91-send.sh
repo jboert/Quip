@@ -17,8 +17,13 @@
 #     Return; latency.log `multiline_guard=1`.
 #  3. the same into Command Prompt: refused, nothing typed into cmd, the
 #     refusal in injection.log (DROPPED) and its reason on the phone.
+#  4. (S11, spec 5.4 step 2b) `fw elevated 4117 on`, then one line into
+#     PowerShell: nothing typed (no `type handle=4117`), injection.log
+#     `detail="input blocked (elevated window?)"`, the phone shows the
+#     "administrator" reason. `fw elevated 4117 off` after.
 #
-# Evidence: <screenshot-dir>/s5-q91-send.png (the cmd refusal on the phone).
+# Evidence: <screenshot-dir>/s5-q91-send.png (the cmd refusal on the phone),
+# <screenshot-dir>/s11-q91-send.png (the elevated refusal).
 
 UDID="${1:?usage: q91-send.sh <simulator-udid> [port] [screenshot-dir]}"
 PORT="${2:-8797}"
@@ -63,20 +68,25 @@ share_send() {  # send a multi-line prompt through the share review sheet
     sleep "${SHARE_WAIT:-2}"
 }
 
+compose_send() {  # type $1 in the compose field and tap send; sets mark, lmark
+    xcrun simctl io "$UDID" screenshot "$WORK/field.png" >/dev/null 2>&1
+    local xy bx by
+    xy="$(ocr "$WORK/field.png" | awk '/Type a prompt/ {print $1, $2; exit}')"
+    [ -n "$xy" ] || { echo "FAIL: the compose field is not on screen"; exit 1; }
+    idb ui tap --udid "$UDID" $xy >/dev/null
+    sleep 0.7
+    idb ui text --udid "$UDID" "$1" >/dev/null
+    sleep 0.7
+    mark=$(lines); lmark=$(lat_lines)
+    read -r bx by <<<"$(send_button)"
+    [ -n "${bx:-}" ] || { echo "FAIL: no send button found"; exit 1; }
+    idb ui tap --udid "$UDID" "$bx" "$by" >/dev/null
+}
+
 # 1. One line into PowerShell (handle 4117).
 select_window "$W_POWERSHELL" 4117
 TEXT="echo q91-send"
-xcrun simctl io "$UDID" screenshot "$WORK/field.png" >/dev/null 2>&1
-xy="$(ocr "$WORK/field.png" | awk '/Type a prompt/ {print $1, $2; exit}')"
-[ -n "$xy" ] || { echo "FAIL: the compose field is not on screen"; exit 1; }
-idb ui tap --udid "$UDID" $xy >/dev/null
-sleep 0.7
-idb ui text --udid "$UDID" "$TEXT" >/dev/null
-sleep 0.7
-mark=$(lines); lmark=$(lat_lines)
-read -r bx by <<<"$(send_button)"
-[ -n "${bx:-}" ] || { echo "FAIL: no send button found"; exit 1; }
-idb ui tap --udid "$UDID" "$bx" "$by" >/dev/null
+compose_send "$TEXT"
 wait_for "$OUT" "key handle=4117 chord=return" 5
 sleep 0.5
 got="$(since "$mark" | grep -E 'handle=4117 (units|chord)|type handle=4117|key handle=4117' | sed 's/^fake: //' | paste -sd'|' -)"
@@ -113,4 +123,25 @@ check "cmd multi-line: nothing typed or pressed" "" "$(grep -E '(type|key) handl
 expect "cmd multi-line: injection.log DROPPED multi-line text refused" \
     grep -qE "DROPPED op=sendText window=$W_CMD .*msg=\"multi-line text refused\"" <(tail -n +$((imark + 1)) "$LOGS/injection.log")
 
-finish "$SHOTS/s5-q91-send.png"
+# 4. An elevated PowerShell (integrity above Quip's): nothing typed, the
+#    "administrator" reason on the phone.
+fw elevated 4117 on
+idb ui key --udid "$UDID" 41 >/dev/null 2>&1
+sleep 0.5
+select_window "$W_POWERSHELL" 4117
+imark=$([ -f "$LOGS/injection.log" ] && wc -l <"$LOGS/injection.log" | tr -d ' ' || echo 0)
+compose_send "echo q91-elevated"
+wait_for "$OUT" "access handle=4117 elevated" 5
+expect "elevated: the phone shows the administrator reason" on_screen "administrator" 6
+cp "$WORK/poll.png" "$SHOTS/s11-q91-send.png"
+sleep 0.5
+new="$(since "$mark")"
+check "elevated: the host asked the integrity level" "yes" "$(grep -q 'access handle=4117 elevated' <<<"$new" && echo yes || echo no)"
+check "elevated: nothing typed or pressed" "" "$(grep -E '(type|key) handle=4117' <<<"$new")"
+expect "elevated: injection.log input blocked (elevated window?)" \
+    grep -qE "DROPPED op=sendText window=$W_POWERSHELL .*detail=\"input blocked \(elevated window\?\)\"" <(tail -n +$((imark + 1)) "$LOGS/injection.log")
+expect "elevated: latency.log success=0" \
+    grep -qE "send_text .*success=0" <(tail -n +$((lmark + 1)) "$LAT")
+fw elevated 4117 off
+
+finish "$SHOTS/s5-q91-send.png" "$SHOTS/s11-q91-send.png"

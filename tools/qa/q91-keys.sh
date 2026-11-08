@@ -15,7 +15,12 @@
 # per tap, `fake: key handle=4117 chord=<key>` and a latency.log
 # `quick_action action=<action> ... success=1`.
 #
-# Evidence: <screenshot-dir>/s5-q91-keys.png.
+# Then (S11, spec 5.5 + 5.4 step 2b) `fw elevated 4117 on` and one more Esc
+# tap: no `chord=` line, injection.log `op=quickAction` with
+# `detail="input blocked (elevated window?) action=press_escape"`, the phone
+# shows the "administrator" reason. `fw elevated 4117 off` after.
+#
+# Evidence: <screenshot-dir>/s5-q91-keys.png, <screenshot-dir>/s11-q91-keys.png.
 
 UDID="${1:?usage: q91-keys.sh <simulator-udid> [port] [screenshot-dir]}"
 PORT="${2:-8797}"
@@ -65,4 +70,18 @@ press "Ctrl+C button" 53 886 ctrl+c press_ctrl_c
 press "Up button" 80 886 up press_up
 press "Down button" 107 886 down press_down
 
-finish "$SHOTS/s5-q91-keys.png"
+# An elevated window: the Esc button presses nothing.
+fw elevated 4117 on
+sleep 0.3
+mark=$(lines)
+imark=$([ -f "$LOGS/injection.log" ] && wc -l <"$LOGS/injection.log" | tr -d ' ' || echo 0)
+idb ui tap --udid "$UDID" 26 886 >/dev/null
+wait_for "$OUT" "access handle=4117 elevated" 4
+expect "elevated: the phone shows the administrator reason" on_screen "administrator" 6
+cp "$WORK/poll.png" "$SHOTS/s11-q91-keys.png"
+check "elevated Esc presses nothing" "" "$(since "$mark" | grep 'chord=')"
+expect "elevated Esc: injection.log op=quickAction input blocked" \
+    grep -qE "DROPPED op=quickAction window=$W_POWERSHELL .*detail=\"input blocked \(elevated window\?\) action=press_escape\"" <(tail -n +$((imark + 1)) "$LOGS/injection.log")
+fw elevated 4117 off
+
+finish "$SHOTS/s5-q91-keys.png" "$SHOTS/s11-q91-keys.png"
