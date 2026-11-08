@@ -8,21 +8,23 @@
 //! on `0.0.0.0:<port>` with the 1 s poll and heartbeat.
 //!
 //! `run` (Windows) is the process: one instance, then `start` on the
-//! Win32 platform, Bonjour (`advertise`, stopped on Quit), then the tray
+//! Win32 platform, Bonjour (`advertise_when_ready`, which waits for a LAN
+//! address; `MdnsHolder` stops it on Quit), then the tray
 //! loop on the main thread. Every error before
 //! the tray is up is shown in a message box (there is no console).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::host::{ConnectionLimits, Host, HostConfig, HostParts, Ticks, TokioSleeper};
+use crate::host::{ConnectionLimits, Host, HostConfig, HostParts, Sleeper, Ticks, TokioSleeper};
 use crate::platform::traits::Platform;
 use crate::services::clock::SystemClock;
 use crate::services::local_addresses::{interface_ipv4s, websocket_urls};
 use crate::services::log_paths::{default_config_dir, LogPaths};
 use crate::services::logs::Logs;
-use crate::services::mdns_advertiser::{Advert, MdnsAdvertiser};
+use crate::services::mdns_advertiser::Advert;
 use crate::services::prefs_store::PrefsStore;
 use crate::services::quip_log::Severity;
 use crate::services::settings::{LoadOutcome, SettingsError, SettingsStore};
@@ -142,31 +144,113 @@ pub async fn start(paths: &AppPaths, platform: Arc<dyn Platform>, opts: StartOpt
     Ok(Running { host, addr, settings_path: store.path().to_path_buf() })
 }
 
-/// Advertises the running host over Bonjour on `addresses` (spec 3.1).
-/// Every outcome is logged to websocket.log; a failure leaves the host
-/// running (the phone still connects by its saved or scanned URL). Only the
-/// real app calls this: `--fake-platform` never advertises.
-pub fn advertise(host: &Host, addresses: &[Ipv4Addr], port: u16) -> Option<MdnsAdvertiser> {
+/// How often a host with no LAN address looks again (spec 6).
+pub const MDNS_RETRY: Duration = Duration::from_secs(30);
+/// While waiting, a log line on the 1st try and every this many after.
+pub const MDNS_LOG_EVERY: u32 = 10;
+
+fn logged_try(n: u32) -> bool {
+    n == 1 || n.is_multiple_of(MDNS_LOG_EVERY)
+}
+
+/// Advertises the running host over Bonjour (spec 3.1, 6) as soon as it
+/// can: tries at once, then every `MDNS_RETRY` until `read_addrs` gives a
+/// LAN address and `start` succeeds, and returns what `start` made. Every
+/// outcome is logged to websocket.log (waiting and failures on the 1st try
+/// and every 10th); the host serves meanwhile (the phone connects by its
+/// saved or scanned URL). Cancel it by dropping or aborting the future. Only
+/// the real app calls this: `--fake-platform` never advertises.
+pub async fn advertise_when_ready<T, R, F, S>(
+    host: &Host,
+    port: u16,
+    mut read_addrs: R,
+    sleeper: &dyn Sleeper,
+    mut start: S,
+) -> T
+where
+    R: FnMut() -> F,
+    F: std::future::Future<Output = Vec<Ipv4Addr>>,
+    S: FnMut(&Advert) -> Result<T, String>,
+{
     let did_prefix: String = host.config.device_id.chars().take(8).collect();
-    let Some(advert) = Advert::new(&host.config.display_name, addresses, port, &host.config.device_id) else {
-        host.logs.ws(Severity::Warn, "mDNS: no LAN address, not advertising (pair with the QR or the URL)");
-        return None;
-    };
-    match MdnsAdvertiser::start(&advert) {
-        Ok(a) => {
-            host.logs.ws(
-                Severity::Info,
+    let mut tries = 0u32;
+    let mut failures = 0u32;
+    loop {
+        tries += 1;
+        let addresses = read_addrs().await;
+        match Advert::new(&host.config.display_name, &addresses, port, &host.config.device_id) {
+            None if logged_try(tries) => host.logs.ws(
+                Severity::Warn,
                 &format!(
-                    "mDNS: advertising _quip._tcp on {} LAN address(es), port {port} (did={did_prefix})",
-                    advert.ips.len()
+                    "mDNS: no LAN address, not advertising yet (pair with the QR or the URL); checking every {} s (try {tries})",
+                    MDNS_RETRY.as_secs()
                 ),
-            );
-            Some(a)
+            ),
+            None => {}
+            Some(advert) => match start(&advert) {
+                Ok(a) => {
+                    let found = if tries > 1 { "LAN address found, " } else { "" };
+                    host.logs.ws(
+                        Severity::Info,
+                        &format!(
+                            "mDNS: {found}advertising _quip._tcp on {} LAN address(es), port {port} (did={did_prefix})",
+                            advert.ips.len()
+                        ),
+                    );
+                    return a;
+                }
+                Err(e) => {
+                    failures += 1;
+                    if logged_try(failures) {
+                        host.logs.ws(
+                            Severity::Error,
+                            &format!("mDNS: not advertising: {e}; retrying every {} s (try {tries})", MDNS_RETRY.as_secs()),
+                        );
+                    }
+                }
+            },
         }
-        Err(e) => {
-            host.logs.ws(Severity::Error, &format!("mDNS: not advertising: {e}"));
-            None
-        }
+        sleeper.sleep(MDNS_RETRY).await;
+    }
+}
+
+/// The Bonjour advertiser, or the task still waiting to make one. `stop`
+/// (the tray's Quit) ends both.
+pub struct MdnsHolder<T: Send + 'static> {
+    task: tokio::task::JoinHandle<()>,
+    slot: Arc<Mutex<Option<T>>>,
+}
+
+impl<T: Send + 'static> MdnsHolder<T> {
+    /// Runs `advertise` on `rt`; what it returns is kept until `stop`.
+    pub fn spawn<Fut>(rt: &tokio::runtime::Handle, advertise: Fut) -> Self
+    where
+        Fut: std::future::Future<Output = T> + Send + 'static,
+    {
+        let slot = Arc::new(Mutex::new(None));
+        let put = slot.clone();
+        let task = rt.spawn(async move {
+            let advertiser = advertise.await;
+            if let Ok(mut s) = put.lock() {
+                *s = Some(advertiser);
+            }
+        });
+        Self { task, slot }
+    }
+
+    /// Whether the advertiser is up.
+    pub fn is_advertising(&self) -> bool {
+        self.slot.lock().is_ok_and(|s| s.is_some())
+    }
+
+    /// Stops the waiting task and drops the advertiser (its goodbye goes
+    /// out). `true` when one was up.
+    pub fn stop(self) -> bool {
+        self.task.abort();
+        let taken = self.slot.lock().ok().and_then(|mut s| s.take());
+        let was = taken.is_some();
+        drop(taken);
+        was
     }
 }
 
@@ -207,7 +291,13 @@ pub fn run() -> i32 {
             return 1;
         }
     };
-    let advertiser = advertise(&running.host, &interface_ipv4s(), running.addr.port());
+    let host = running.host.clone();
+    let port = running.addr.port();
+    let mdns = MdnsHolder::spawn(rt.handle(), async move {
+        let read = || async { tokio::task::spawn_blocking(interface_ipv4s).await.unwrap_or_default() };
+        advertise_when_ready(&host, port, read, &TokioSleeper, crate::services::mdns_advertiser::MdnsAdvertiser::start)
+            .await
+    });
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("Quip.exe"));
     let app = tray::TrayApp {
         host: running.host.clone(),
@@ -223,8 +313,7 @@ pub fn run() -> i32 {
             1
         }
     };
-    if advertiser.is_some() {
-        drop(advertiser);
+    if mdns.stop() {
         running.host.logs.ws(Severity::Info, "mDNS: stopped");
     }
     running.host.flush();
@@ -323,16 +412,193 @@ mod tests {
         assert!(!p.config_dir.join("settings.toml.bad").exists());
     }
 
-    #[tokio::test]
-    async fn no_lan_address_is_logged_and_nothing_is_advertised() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = paths(tmp.path());
-        let r = start(&p, Arc::new(FakePlatform::default()), loopback()).await.unwrap();
-        let tailscale_only = [Ipv4Addr::new(100, 101, 1, 2)];
-        assert!(advertise(&r.host, &tailscale_only, r.addr.port()).is_none());
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Records each wait; after `limit` waits it never wakes again (so a
+    /// host that never finds a LAN address does not spin the test).
+    struct CountingSleeper {
+        waits: Mutex<Vec<Duration>>,
+        limit: usize,
+    }
+
+    impl CountingSleeper {
+        fn new(limit: usize) -> Self {
+            Self { waits: Mutex::new(Vec::new()), limit }
+        }
+        fn waits(&self) -> Vec<Duration> {
+            self.waits.lock().unwrap().clone()
+        }
+    }
+
+    impl Sleeper for CountingSleeper {
+        fn sleep(&self, d: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            let mut w = self.waits.lock().unwrap();
+            w.push(d);
+            if w.len() > self.limit {
+                Box::pin(std::future::pending())
+            } else {
+                Box::pin(async {})
+            }
+        }
+    }
+
+    /// Each call gives the next list; the last one repeats.
+    fn addresses(lists: Vec<Vec<Ipv4Addr>>) -> (Arc<AtomicUsize>, impl FnMut() -> std::future::Ready<Vec<Ipv4Addr>>) {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let r = reads.clone();
+        let read = move || {
+            let i = r.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(lists[i.min(lists.len() - 1)].clone())
+        };
+        (reads, read)
+    }
+
+    async fn started_host(dir: &std::path::Path) -> (Running, AppPaths) {
+        let p = paths(dir);
+        (start(&p, Arc::new(FakePlatform::default()), loopback()).await.unwrap(), p)
+    }
+
+    fn ws_log(r: &Running, p: &AppPaths) -> String {
         r.host.flush();
-        let log = std::fs::read_to_string(p.log_dir.join("websocket.log")).unwrap();
-        assert!(log.contains("mDNS: no LAN address, not advertising"), "{log}");
+        std::fs::read_to_string(p.log_dir.join("websocket.log")).unwrap()
+    }
+
+    const LAN: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 20);
+    const TAILSCALE: Ipv4Addr = Ipv4Addr::new(100, 101, 1, 2);
+
+    #[tokio::test]
+    async fn a_lan_address_that_appears_later_is_advertised_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (r, p) = started_host(tmp.path()).await;
+        let (reads, read) = addresses(vec![vec![], vec![TAILSCALE], vec![LAN]]);
+        let sleeper = CountingSleeper::new(100);
+        let mut starts = Vec::new();
+        let got = advertise_when_ready(&r.host, 8765, read, &sleeper, |a: &Advert| {
+            starts.push(a.ips.clone());
+            Ok::<_, String>("advertiser")
+        })
+        .await;
+        assert_eq!(got, "advertiser");
+        assert_eq!(starts, vec![vec![LAN]], "exactly one start, on the LAN address only");
+        assert_eq!(reads.load(Ordering::SeqCst), 3);
+        assert_eq!(sleeper.waits(), vec![MDNS_RETRY, MDNS_RETRY], "30 s between tries, none after");
+        let log = ws_log(&r, &p);
+        assert_eq!(log.matches("mDNS: no LAN address, not advertising yet").count(), 1, "the 1st try only: {log}");
+        assert_eq!(
+            log.matches("mDNS: LAN address found, advertising _quip._tcp on 1 LAN address(es), port 8765").count(),
+            1,
+            "{log}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lan_address_at_start_is_advertised_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (r, p) = started_host(tmp.path()).await;
+        let (_, read) = addresses(vec![vec![LAN]]);
+        let sleeper = CountingSleeper::new(100);
+        advertise_when_ready(&r.host, 8765, read, &sleeper, |_: &Advert| Ok::<_, String>(())).await;
+        assert!(sleeper.waits().is_empty(), "no wait before the first try");
+        let log = ws_log(&r, &p);
+        assert!(log.contains("mDNS: advertising _quip._tcp on 1 LAN address(es), port 8765 (did="), "{log}");
+        assert!(!log.contains("no LAN address") && !log.contains("found"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn tailscale_only_never_starts_and_logs_every_tenth_try() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (r, p) = started_host(tmp.path()).await;
+        let (reads, read) = addresses(vec![vec![TAILSCALE]]);
+        let sleeper = CountingSleeper::new(24);
+        let mut starts = 0;
+        let waited = tokio::time::timeout(
+            Duration::from_millis(300),
+            advertise_when_ready(&r.host, 8765, read, &sleeper, |_: &Advert| {
+                starts += 1;
+                Ok::<_, String>(())
+            }),
+        )
+        .await;
+        assert!(waited.is_err(), "it keeps waiting");
+        assert_eq!(starts, 0);
+        assert_eq!(reads.load(Ordering::SeqCst), 25);
+        let log = ws_log(&r, &p);
+        assert_eq!(log.matches("mDNS: no LAN address, not advertising yet").count(), 3, "tries 1, 10, 20: {log}");
+        assert!(log.contains("(pair with the QR or the URL)") && log.contains("(try 20)"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_is_retried() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (r, p) = started_host(tmp.path()).await;
+        let (_, read) = addresses(vec![vec![LAN]]);
+        let sleeper = CountingSleeper::new(100);
+        let mut tries = 0;
+        let got = advertise_when_ready(&r.host, 8765, read, &sleeper, |_: &Advert| {
+            tries += 1;
+            if tries < 3 {
+                Err("mDNS register: boom".to_string())
+            } else {
+                Ok(tries)
+            }
+        })
+        .await;
+        assert_eq!(got, 3);
+        assert_eq!(sleeper.waits(), vec![MDNS_RETRY, MDNS_RETRY]);
+        let log = ws_log(&r, &p);
+        assert_eq!(log.matches("mDNS: not advertising: mDNS register: boom").count(), 1, "the 1st failure only: {log}");
+        assert!(log.contains("mDNS: LAN address found, advertising"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn stop_ends_the_wait_and_nothing_starts_after() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (r, _p) = started_host(tmp.path()).await;
+        let starts = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let (host, s, g) = (r.host.clone(), starts.clone(), gate.clone());
+        let holder = MdnsHolder::spawn(&tokio::runtime::Handle::current(), async move {
+            let sleeper = GatedSleeper(g);
+            let (_, read) = addresses(vec![vec![], vec![LAN]]);
+            advertise_when_ready(&host, 8765, read, &sleeper, |_: &Advert| {
+                s.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>(())
+            })
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!holder.is_advertising());
+        assert!(!holder.stop(), "nothing was up");
+        gate.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(starts.load(Ordering::SeqCst), 0, "a stopped wait never starts Bonjour");
+    }
+
+    #[tokio::test]
+    async fn stop_drops_an_advertiser_that_is_up() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        struct Advertiser(Arc<AtomicUsize>);
+        impl Drop for Advertiser {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let d = dropped.clone();
+        let holder = MdnsHolder::spawn(&tokio::runtime::Handle::current(), async move { Advertiser(d) });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(holder.is_advertising());
+        assert!(holder.stop());
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "dropped, so its goodbye goes out");
+    }
+
+    /// Each wait ends when the test notifies.
+    struct GatedSleeper(Arc<tokio::sync::Notify>);
+
+    impl Sleeper for GatedSleeper {
+        fn sleep(&self, _: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            let g = self.0.clone();
+            Box::pin(async move { g.notified().await })
+        }
     }
 
     #[tokio::test]
