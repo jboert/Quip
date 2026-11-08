@@ -11,12 +11,14 @@ on:
     paths:
       - "QuipWindows/**"
       - "tools/fake-windows/**"
+      - "tools/build-windows.sh"
       - "Shared/Tests/Fixtures/**"
       - ".github/workflows/windows.yml"
   pull_request:
     paths:
       - "QuipWindows/**"
       - "tools/fake-windows/**"
+      - "tools/build-windows.sh"
       - "Shared/Tests/Fixtures/**"
       - ".github/workflows/windows.yml"
   workflow_dispatch:
