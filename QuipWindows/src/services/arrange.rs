@@ -377,6 +377,9 @@ mod tests {
         fn close(&self, w: WindowRef) -> R<()> {
             self.inner.close(w)
         }
+        fn input_access(&self, w: WindowRef) -> R<crate::platform::traits::InputAccess> {
+            self.inner.input_access(w)
+        }
     }
 
     impl crate::platform::traits::InputBackend for Spy {

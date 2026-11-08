@@ -1,6 +1,8 @@
-//! The Win32 backend. Listing (windows, displays, foreground, shell) is
-//! real; acting on windows (focus, input, move, minimize, close) answers
-//! `NotImplemented` until those parts land (spec 5.2 - 5.4).
+//! The Win32 backend: listing (windows, displays, foreground, shell),
+//! arrange, minimize and close (spec 5.1 - 5.2, `arrange`), focus (5.3,
+//! `focus`), the integrity check (5.4 step 2b, `integrity`) and input (5.4,
+//! 5.5, `input`). Every call that acts on a window checks first that the pid
+//! still owns the handle (`live`).
 //!
 //! Every call blocks and runs on a platform lane (`platform::lanes`). The
 //! listing rules themselves are pure, in `platform::listing` and
@@ -8,6 +10,9 @@
 
 mod arrange;
 mod display;
+mod focus;
+mod input;
+pub mod integrity;
 mod process;
 mod window;
 
@@ -19,10 +24,11 @@ use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
+use crate::platform::integrity::access;
 use crate::platform::listing::{keeps_window, rejected_by, ListingFacts};
 use crate::platform::traits::{
-    FocusStep, InputBackend, PlatformDisplay, PlatformError, PlatformResult, PlatformWindow, WindowBackend, WindowMove,
-    WindowRects, WindowRef,
+    FocusStep, InputAccess, InputBackend, PlatformDisplay, PlatformError, PlatformResult, PlatformWindow,
+    WindowBackend, WindowMove, WindowRects, WindowRef,
 };
 use crate::services::classify::{self, Proc};
 use crate::services::keys::KeyChord;
@@ -44,15 +50,19 @@ pub fn os_version() -> Option<String> {
 }
 
 pub use arrange::{NOT_RESPONDING, REFUSED as MOVE_REFUSED};
+pub use input::send_units as raw_send_units;
 
-/// What `NotImplemented` says for the operations this backend does not do
-/// yet: focus and input (S11).
-pub const NOT_IMPLEMENTED: &str =
-    "the Win32 backend lists and arranges windows but cannot focus or type yet (use --fake-platform)";
+/// The title of top-level window `handle` (for the probe's marker check).
+pub fn window_title(handle: u64) -> String {
+    window::title(window::hwnd(handle))
+}
 
 pub struct Win32Platform {
     /// Quip's own windows are never listed (spec 5.1).
     own_pid: Option<u32>,
+    /// Quip's own integrity level (RID), read once. Unreadable = 0, so every
+    /// window reads as above it and nothing is typed (fail closed).
+    own_rid: u32,
     /// Exe path -> version-resource name. Read once per exe, not every poll.
     names: Mutex<HashMap<String, Option<String>>>,
 }
@@ -67,7 +77,13 @@ impl Win32Platform {
         let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
         // SAFETY: no arguments.
         let own_pid = unsafe { GetCurrentProcessId() };
-        Ok(Self { own_pid: Some(own_pid), names: Mutex::new(HashMap::new()) })
+        let own_rid = integrity::own_rid().unwrap_or(0);
+        Ok(Self { own_pid: Some(own_pid), own_rid, names: Mutex::new(HashMap::new()) })
+    }
+
+    /// Quip's own integrity level (RID), 0 when it could not be read.
+    pub fn own_rid(&self) -> u32 {
+        self.own_rid
     }
 
     /// Lists this process's windows too, for tests that make their own
@@ -226,10 +242,6 @@ impl RawWindow {
     }
 }
 
-fn ni<T>() -> PlatformResult<T> {
-    Err(PlatformError::NotImplemented(NOT_IMPLEMENTED))
-}
-
 impl WindowBackend for Win32Platform {
     fn list_windows(&self) -> PlatformResult<Vec<PlatformWindow>> {
         // One snapshot per poll serves every terminal in it.
@@ -260,8 +272,8 @@ impl WindowBackend for Win32Platform {
         Ok(Some(classify::resolve_shell(&classify::console_programs(host, w.pid, &procs))))
     }
 
-    fn bring_to_foreground(&self, _window: WindowRef) -> PlatformResult<FocusStep> {
-        ni()
+    fn bring_to_foreground(&self, w: WindowRef) -> PlatformResult<FocusStep> {
+        focus::bring_to_foreground(self.live(w)?, w.pid)
     }
     fn restore(&self, w: WindowRef) -> PlatformResult<()> {
         arrange::restore(self.live(w)?)
@@ -278,14 +290,20 @@ impl WindowBackend for Win32Platform {
     fn close(&self, w: WindowRef) -> PlatformResult<()> {
         arrange::close(self.live(w)?)
     }
+    fn input_access(&self, w: WindowRef) -> PlatformResult<InputAccess> {
+        self.live(w)?;
+        Ok(access(integrity::rid_of_pid(w.pid), self.own_rid))
+    }
 }
 
 impl InputBackend for Win32Platform {
-    fn send_units(&self, _window: WindowRef, _units: &[u16]) -> PlatformResult<usize> {
-        ni()
+    fn send_units(&self, w: WindowRef, units: &[u16]) -> PlatformResult<usize> {
+        self.live(w)?;
+        Ok(input::send_units(units))
     }
-    fn press_key(&self, _window: WindowRef, _chord: KeyChord) -> PlatformResult<usize> {
-        ni()
+    fn press_key(&self, w: WindowRef, chord: KeyChord) -> PlatformResult<usize> {
+        self.live(w)?;
+        input::press_key(chord)
     }
 }
 
@@ -294,14 +312,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_focus_and_input_are_not_implemented() {
+    fn its_own_integrity_level_is_read() {
         let Ok(p) = Win32Platform::new() else { panic!("Win32Platform::new failed") };
-        let w = WindowRef { handle: 1, pid: 1 };
-        assert!(
-            matches!(p.send_units(w, &[65]), Err(PlatformError::NotImplemented(m)) if m.contains("--fake-platform"))
-        );
-        assert!(matches!(p.press_key(w, KeyChord::RETURN), Err(PlatformError::NotImplemented(_))));
-        assert!(matches!(p.bring_to_foreground(w), Err(PlatformError::NotImplemented(_))));
+        assert!(p.own_rid() >= crate::platform::integrity::LOW_RID, "rid {:#x}", p.own_rid());
+        let me = std::process::id();
+        assert_eq!(integrity::rid_of_pid(me), Some(p.own_rid()));
+        assert_eq!(integrity::rid_of_pid(0), None);
     }
 
     #[test]
@@ -313,6 +329,10 @@ mod tests {
         assert_eq!(p.rects(dead), Err(PlatformError::WindowGone));
         assert_eq!(p.minimize(dead), Err(PlatformError::WindowGone));
         assert_eq!(p.close(dead), Err(PlatformError::WindowGone));
+        assert_eq!(p.bring_to_foreground(dead), Err(PlatformError::WindowGone));
+        assert_eq!(p.input_access(dead), Err(PlatformError::WindowGone));
+        assert_eq!(p.send_units(dead, &[65]), Err(PlatformError::WindowGone));
+        assert_eq!(p.press_key(dead, KeyChord::RETURN), Err(PlatformError::WindowGone));
         let mv = WindowMove { window: dead, outer: crate::services::layout::PixelRect::new(0, 0, 10, 10) };
         assert_eq!(p.move_windows(&[mv]), vec![Err(PlatformError::WindowGone)]);
     }

@@ -7,7 +7,8 @@
 //! land a move scaled (another monitor's DPI), report no border until a
 //! minimized window is restored (DWM), block while typing
 //! (the hang guard), steal focus between inputs, insert only part of a batch
-//! (UIPI), reuse a closed window's handle for a new process, or start a
+//! (UIPI), run at a higher integrity level (`set_input_access`), reuse a
+//! closed window's handle for a new process, or start a
 //! program (`python`) inside a shell.
 //!
 //! Input lands like `SendInput`: in whatever window is in front. The fake's
@@ -28,8 +29,8 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::traits::{
-    FocusStep, InputBackend, PlatformDisplay, PlatformError, PlatformResult, PlatformWindow, WindowBackend, WindowMove,
-    WindowRects, WindowRef,
+    FocusStep, InputAccess, InputBackend, PlatformDisplay, PlatformError, PlatformResult, PlatformWindow,
+    WindowBackend, WindowMove, WindowRects, WindowRef,
 };
 use crate::services::classify;
 use crate::services::keys::KeyChord;
@@ -39,15 +40,41 @@ use crate::services::multiline_policy::Shell;
 /// One recorded call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FakeCall {
-    Focus { handle: u64, step: FocusStep },
-    FocusRefused { handle: u64 },
-    TypeText { handle: u64, text: String },
-    Key { handle: u64, chord: KeyChord },
-    Restore { handle: u64 },
-    Move { handle: u64, outer: PixelRect },
-    MoveRefused { handle: u64 },
-    Minimize { handle: u64 },
-    Close { handle: u64 },
+    Focus {
+        handle: u64,
+        step: FocusStep,
+    },
+    FocusRefused {
+        handle: u64,
+    },
+    TypeText {
+        handle: u64,
+        text: String,
+    },
+    Key {
+        handle: u64,
+        chord: KeyChord,
+    },
+    /// The injector asked the window's integrity level (spec 5.4 step 2b).
+    InputAccess {
+        handle: u64,
+    },
+    Restore {
+        handle: u64,
+    },
+    Move {
+        handle: u64,
+        outer: PixelRect,
+    },
+    MoveRefused {
+        handle: u64,
+    },
+    Minimize {
+        handle: u64,
+    },
+    Close {
+        handle: u64,
+    },
 }
 
 /// What a window received, in order.
@@ -195,6 +222,10 @@ struct State {
     no_input_guard: bool,
     /// At most this many units per batch / events per chord get in.
     input_limit: Option<usize>,
+    /// `input_access` answers per window (default `Allowed`).
+    input_access: HashMap<u64, InputAccess>,
+    /// `input_access` fails with this for the window.
+    input_access_error: HashMap<u64, PlatformError>,
     /// Input-lane calls panic (kills the lane: "input thread stopped").
     panic_input: bool,
     echo: bool,
@@ -360,6 +391,23 @@ impl FakePlatform {
     /// `None` lifts it. `Some(0)` is UIPI blocking everything.
     pub fn set_input_limit(&self, n: Option<usize>) {
         self.lock().input_limit = n;
+    }
+
+    /// What `input_access` answers for the window (an elevated window:
+    /// `Elevated`). The fake's own typing is NOT stopped by it: only the
+    /// injector's check keeps the input out, as on Windows, where UIPI drops
+    /// it silently.
+    pub fn set_input_access(&self, handle: u64, access: InputAccess) {
+        self.lock().input_access.insert(handle, access);
+    }
+
+    /// `input_access` fails with `err` for the window (`None` clears it).
+    pub fn set_input_access_error(&self, handle: u64, err: Option<PlatformError>) {
+        let mut s = self.lock();
+        match err {
+            Some(e) => s.input_access_error.insert(handle, e),
+            None => s.input_access_error.remove(&handle),
+        };
     }
 
     /// Start (or end) a program in the window's console: `["pwsh.exe",
@@ -641,6 +689,24 @@ impl WindowBackend for FakePlatform {
             s.foreground = None;
         }
         Ok(())
+    }
+
+    fn input_access(&self, r: WindowRef) -> PlatformResult<InputAccess> {
+        self.check_panic();
+        let mut s = self.lock();
+        if !Self::owned(&s, r) {
+            return Err(PlatformError::WindowGone);
+        }
+        s.calls.push(FakeCall::InputAccess { handle: r.handle });
+        if let Some(e) = s.input_access_error.get(&r.handle).cloned() {
+            Self::say(&mut s, format!("access handle={} FAILED", r.handle));
+            return Err(e);
+        }
+        let access = s.input_access.get(&r.handle).copied().unwrap_or(InputAccess::Allowed);
+        if access != InputAccess::Allowed {
+            Self::say(&mut s, format!("access handle={} {}", r.handle, access.as_str()));
+        }
+        Ok(access)
     }
 }
 

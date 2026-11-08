@@ -47,6 +47,9 @@ impl Outcome {
 pub struct CaseResult {
     pub name: String,
     pub outcome: Outcome,
+    /// Evidence a case records whatever its outcome (the focus step used,
+    /// what the integrity probe saw), one `note:` line each under it.
+    pub notes: Vec<String>,
 }
 
 /// One monitor as the header shows it.
@@ -155,6 +158,9 @@ pub fn format_report(header: &Header, results: &[CaseResult], redactor: &Redacto
             for l in lines {
                 out.push_str(&format!("\n    {}", l.trim_end()));
             }
+        }
+        for n in r.notes.iter().flat_map(|n| n.lines()).filter(|l| !l.trim().is_empty()) {
+            out.push_str(&format!("\n    note: {}", n.trim_end()));
         }
         out.push('\n');
     }
@@ -396,7 +402,27 @@ mod tests {
     use super::*;
 
     fn case(name: &str, outcome: Outcome) -> CaseResult {
-        CaseResult { name: name.into(), outcome }
+        CaseResult { name: name.into(), outcome, notes: vec![] }
+    }
+
+    #[test]
+    fn notes_go_under_their_case_and_are_redacted() {
+        let mut pass = case("focus_own_console", Outcome::Pass);
+        pass.notes = vec!["step=set_foreground".into(), "".into()];
+        let mut fail = case("elevated_target_types_nothing", Outcome::Fail("probe failed".into()));
+        fail.notes = vec!["raw_inserted=0\nfrom C:\\Users\\bob\\x".into()];
+        let mut r = Redactor::new();
+        r.profile(r"C:\Users\bob");
+        let text = format_report(&header(), &[pass, fail], &r);
+        assert!(text.contains("PASS focus_own_console\n    note: step=set_foreground\n"), "{text}");
+        assert!(
+            text.contains(
+                "FAIL elevated_target_types_nothing: probe failed\n    note: raw_inserted=0\n    note: from "
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("bob"), "{text}");
+        assert!(!text.contains("note: \n"), "empty notes are dropped: {text}");
     }
 
     fn header() -> Header {

@@ -14,6 +14,7 @@ const USAGE: &str = "usage: Quip              the tray app (Windows)
        Quip --selftest   check this PC, write a report to %LOCALAPPDATA%\\Quip\\Logs
        Quip --fake-platform [--port N] [--pin PIN] [--fixture PATH] [--log-dir DIR]
        Quip --help
+       Quip --input-probe <marker>   internal: the selftest's integrity probe
 From an interactive prompt use `start /wait Quip --selftest` (cmd) or
 `Quip --selftest | Out-Host` (PowerShell) to see the output before the next prompt.";
 
@@ -27,6 +28,8 @@ fn main() {
         if has("--help") || has("-h") {
             println!("{USAGE}");
             0
+        } else if args.first().map(String::as_str) == Some("--input-probe") {
+            input_probe(args.get(1).map(String::as_str).unwrap_or(""))
         } else if has("--selftest") {
             selftest()
         } else if has("--fake-platform") {
@@ -67,6 +70,17 @@ fn real_host() -> i32 {
 #[cfg(windows)]
 fn selftest() -> i32 {
     quip_windows::selftest::win32::run()
+}
+
+#[cfg(windows)]
+fn input_probe(marker: &str) -> i32 {
+    quip_windows::selftest::probe::run(marker)
+}
+
+#[cfg(not(windows))]
+fn input_probe(_marker: &str) -> i32 {
+    eprintln!("Quip for Windows: --input-probe runs only on Windows.");
+    2
 }
 
 #[cfg(not(windows))]

@@ -55,12 +55,23 @@ pub fn chars_in(units: &[u16], inserted: usize) -> usize {
     char::decode_utf16(units[..inserted.min(units.len())].iter().copied()).filter(Result::is_ok).count()
 }
 
-/// Run the batches: `still_foreground` before each, then `send`, which
-/// returns how many units it inserted. A short insert stops at once: nothing
+/// Run the batches: `wait(pause)` between two batches (never before the
+/// first: spec 5.4 step 3, 5 ms in M0), then `still_foreground`, then
+/// `send`, which returns how many units it inserted. The check comes after
+/// the pause, right before the batch. A short insert stops at once: nothing
 /// more is sent.
-pub fn run(text: &str, mut still_foreground: impl FnMut() -> bool, mut send: impl FnMut(&[u16]) -> usize) -> Outcome {
+pub fn run(
+    text: &str,
+    pause: std::time::Duration,
+    mut wait: impl FnMut(std::time::Duration),
+    mut still_foreground: impl FnMut() -> bool,
+    mut send: impl FnMut(&[u16]) -> usize,
+) -> Outcome {
     let mut typed = 0;
-    for b in batches(text) {
+    for (i, b) in batches(text).into_iter().enumerate() {
+        if i > 0 {
+            wait(pause);
+        }
         if !still_foreground() {
             return Outcome::FocusLost(typed);
         }
@@ -78,11 +89,48 @@ mod tests {
     //! Shape of `KeystrokeInjectorWriteExpressionTests` (text in, exact key
     //! stream out), with the spec 10.3 Windows cases.
     use super::*;
+    use std::time::Duration;
+
+    /// `run` with no pause.
+    fn go(text: &str, fg: impl FnMut() -> bool, send: impl FnMut(&[u16]) -> usize) -> Outcome {
+        run(text, Duration::ZERO, |_| {}, fg, send)
+    }
+
+    #[test]
+    fn the_pause_comes_between_batches_not_before_the_first() {
+        let events = std::cell::RefCell::new(Vec::<String>::new());
+        let t = "e".repeat(70); // 3 batches
+        let r = run(
+            &t,
+            Duration::from_millis(5),
+            |d| events.borrow_mut().push(format!("wait {}", d.as_millis())),
+            || {
+                events.borrow_mut().push("check".into());
+                true
+            },
+            |u| {
+                events.borrow_mut().push(format!("send {}", u.len()));
+                u.len()
+            },
+        );
+        assert_eq!(r, Outcome::Done(70));
+        assert_eq!(
+            *events.borrow(),
+            ["check", "send 32", "wait 5", "check", "send 32", "wait 5", "check", "send 6"],
+            "the check comes after the pause, right before its batch"
+        );
+        events.borrow_mut().clear();
+        assert_eq!(
+            run("x", Duration::from_millis(5), |_| events.borrow_mut().push("wait".into()), || true, |u| u.len()),
+            Outcome::Done(1)
+        );
+        assert!(events.borrow().is_empty(), "one batch: no pause at all");
+    }
 
     #[test]
     fn empty_text_is_no_batches() {
         assert!(batches("").is_empty());
-        assert_eq!(run("", || false, |_| panic!("nothing to send")), Outcome::Done(0));
+        assert_eq!(go("", || false, |_| panic!("nothing to send")), Outcome::Done(0));
     }
 
     #[test]
@@ -117,7 +165,7 @@ mod tests {
         let mut checks = 0;
         let mut sent = 0;
         assert_eq!(
-            run(
+            go(
                 &t,
                 || {
                     checks += 1;
@@ -139,7 +187,7 @@ mod tests {
         let t = "c".repeat(100);
         let mut n = 0;
         let mut sent = 0;
-        let r = run(
+        let r = go(
             &t,
             || {
                 n += 1;
@@ -158,7 +206,7 @@ mod tests {
     fn focus_lost_before_the_first_batch_types_nothing() {
         let mut sent = false;
         assert_eq!(
-            run(
+            go(
                 "x",
                 || false,
                 |_| {
@@ -173,7 +221,7 @@ mod tests {
 
     #[test]
     fn non_bmp_text_counts_chars_not_units() {
-        assert_eq!(run("😀😀", || true, |u| u.len()), Outcome::Done(2));
+        assert_eq!(go("😀😀", || true, |u| u.len()), Outcome::Done(2));
     }
 
     #[test]
@@ -181,7 +229,7 @@ mod tests {
         let t = "d".repeat(100);
         let mut calls = 0;
         // The second batch only gets 5 of its 32 units in.
-        let r = run(
+        let r = go(
             &t,
             || true,
             |u| {
@@ -199,7 +247,7 @@ mod tests {
 
     #[test]
     fn a_fully_blocked_first_batch_types_nothing() {
-        assert_eq!(run("abc", || true, |_| 0), Outcome::Blocked(0));
+        assert_eq!(go("abc", || true, |_| 0), Outcome::Blocked(0));
     }
 
     #[test]

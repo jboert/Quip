@@ -9,7 +9,7 @@ use common::*;
 use futures_util::StreamExt;
 use quip_windows::host::HEARTBEAT_INTERVAL;
 use quip_windows::platform::fake::{FakeCall, Typed};
-use quip_windows::platform::traits::FocusStep;
+use quip_windows::platform::traits::{FocusStep, InputAccess};
 use quip_windows::protocol::limits::MAX_MESSAGE_BYTES;
 use quip_windows::services::keys::{Key, KeyChord};
 use serde_json::json;
@@ -301,6 +301,63 @@ async fn focus_refused_types_nothing_errors_and_logs() {
         .log("injection.log")
         .contains(r#"kind=unknown msg="Windows refused to focus the window" detail="focus refused""#));
     assert!(h.log("latency.log").contains("success=0"));
+}
+
+// --- elevated windows (spec 5.4 step 2b) ---
+
+#[tokio::test]
+async fn an_elevated_window_types_nothing_and_says_administrator() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    // UIPI drops the input silently: the fake's own guard is off, so only
+    // the injector's integrity check can keep the text out.
+    h.fake.set_input_guard(false);
+    h.fake.set_input_access(101, InputAccess::Elevated);
+    p.send(
+        json!({"type":"send_text","windowId":h.window_id(101),"text":"Get-Date","pressReturn":true,"messageId":ID_A}),
+    )
+    .await;
+    let e = p.recv().await;
+    assert_eq!(e["type"], "error");
+    assert_eq!(e["messageId"], ID_A);
+    assert!(e["reason"].as_str().unwrap().contains("administrator"), "{e}");
+    p.assert_silent(QUIET).await; // no send_text_ack
+    let inj = h.log("injection.log");
+    assert!(inj.contains("op=sendText") && inj.contains("kind=unknown"), "{inj}");
+    assert!(inj.contains(r#"detail="input blocked (elevated window?)""#), "{inj}");
+    assert!(h.log("latency.log").contains("success=0"));
+    let calls = h.fake.calls();
+    assert!(calls.iter().any(|c| matches!(c, FakeCall::Focus { handle: 101, .. })), "{calls:?}");
+    assert!(!calls.iter().any(|c| matches!(c, FakeCall::TypeText { .. } | FakeCall::Key { .. })), "{calls:?}");
+    assert!(h.fake.typed(101).is_empty() && h.fake.typed(102).is_empty());
+}
+
+#[tokio::test]
+async fn a_quick_action_to_an_elevated_window_presses_nothing() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    h.fake.set_input_guard(false);
+    h.fake.set_input_access(102, InputAccess::Unknown);
+    p.send(json!({"type":"quick_action","windowId":h.window_id(102),"action":"press_ctrl_c","messageId":ID_A})).await;
+    let e = p.recv().await;
+    assert_eq!(e["type"], "error");
+    assert!(e["reason"].as_str().unwrap().contains("administrator"), "{e}");
+    let inj = h.log("injection.log");
+    assert!(inj.contains("op=quickAction"), "{inj}");
+    assert!(inj.contains(r#"detail="input blocked (elevated window?) action=press_ctrl_c""#), "{inj}");
+    assert!(!h.fake.calls().iter().any(|c| matches!(c, FakeCall::Key { .. } | FakeCall::TypeText { .. })));
+}
+
+#[tokio::test]
+async fn select_window_on_an_elevated_window_still_focuses() {
+    let h = start().await;
+    let (mut p, _) = paired(h.addr).await;
+    h.fake.set_input_access(102, InputAccess::Elevated);
+    let w102 = h.window_id(102);
+    p.send(json!({"type":"select_window","windowId":w102})).await;
+    assert_eq!(p.recv().await, json!({"type":"frontmost_changed","windowId":w102}), "focus is not input");
+    p.assert_silent(QUIET).await;
+    assert!(!h.fake.calls().iter().any(|c| matches!(c, FakeCall::InputAccess { .. })));
 }
 
 #[tokio::test]

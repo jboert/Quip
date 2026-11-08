@@ -25,6 +25,7 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::host::{ConnectionLimits, Host, HostConfig, HostParts, Ticks, TokioSleeper};
 use crate::platform::fake::{window_from_fixture, FakePlatform, Fixture, FixtureRect, FixtureWindow};
+use crate::platform::traits::InputAccess;
 use crate::services::clock::SystemClock;
 use crate::services::device_id::FAKE_DEVICE_ID;
 use crate::services::layout::PixelRect;
@@ -279,7 +280,8 @@ pub const HELP: &str = "commands:
   min-size <window> W H        it keeps an outer size of at least W x H
   run <window> <exe>...|shell  start a program in its shell (run 3 python.exe), or back to the shell
   block <ms>|off               block typing (hang-guard check)
-  uipi <n>|off                 let only n units per batch in (an elevated window: uipi 0)
+  uipi <n>|off                 let only n units per batch in (the short-count guard)
+  elevated <window> on|off|unknown  its integrity level is above Quip's (or unreadable): no input
   quit                         exit
 <window> = handle, wire id, or a unique piece of the title";
 
@@ -440,6 +442,18 @@ pub async fn command(fake: &FakeHost, line: &str, next_handle: &mut u64) -> bool
             }
             Err(e) => say(e),
         },
+        ["elevated", w, mode @ ("on" | "off" | "unknown")] => match find_window(p, h, w) {
+            Ok(handle) => p.set_input_access(
+                handle,
+                match *mode {
+                    "on" => InputAccess::Elevated,
+                    "unknown" => InputAccess::Unknown,
+                    _ => InputAccess::Allowed,
+                },
+            ),
+            Err(e) => say(e),
+        },
+        ["elevated", ..] => say("elevated: <window> on|off|unknown".into()),
         ["uipi", "off"] => p.set_input_limit(None),
         ["uipi", n] => match n.parse::<usize>() {
             Ok(n) => p.set_input_limit(Some(n)),
@@ -678,6 +692,17 @@ mod tests {
         assert_eq!(p.current_shell(ra), Ok(Some(Shell::Pwsh)));
         command(&f, "run 5001", &mut next).await;
         assert_eq!(p.current_shell(ra), Ok(Some(Shell::Pwsh)), "no program: unknown command");
+
+        assert_eq!(p.input_access(ra), Ok(InputAccess::Allowed));
+        command(&f, "elevated 5001 on", &mut next).await;
+        assert_eq!(p.input_access(ra), Ok(InputAccess::Elevated));
+        command(&f, "elevated 5001 unknown", &mut next).await;
+        assert_eq!(p.input_access(ra), Ok(InputAccess::Unknown));
+        command(&f, "elevated 5001 maybe", &mut next).await;
+        command(&f, "elevated nothing-like-this on", &mut next).await;
+        assert_eq!(p.input_access(ra), Ok(InputAccess::Unknown));
+        command(&f, "elevated 5001 off", &mut next).await;
+        assert_eq!(p.input_access(ra), Ok(InputAccess::Allowed));
 
         command(&f, "uipi 0", &mut next).await;
         assert_eq!(p.send_units(ra, &[0x61]), Ok(0));

@@ -55,7 +55,7 @@ fn on_this_thread(h: HWND) -> bool {
 
 /// `ShowWindowAsync`, or `ShowWindow` for a window of this thread. `Err`
 /// when Windows refused to queue it.
-fn show(h: HWND, cmd: SHOW_WINDOW_CMD) -> PlatformResult<()> {
+pub(super) fn show(h: HWND, cmd: SHOW_WINDOW_CMD) -> PlatformResult<()> {
     if on_this_thread(h) {
         // SAFETY: a live window of this thread. The return value is the
         // previous visibility, not success.

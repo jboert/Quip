@@ -14,12 +14,16 @@
 //! - typing is one `send_units` call per `SendInput` batch, and the injector,
 //!   not the backend, asks `foreground_window` before every batch and every
 //!   key. A backend may check too, but nothing relies on it;
+//! - before the first input of a plan the injector asks `input_access`, and
+//!   types nothing unless the window's integrity level is not above Quip's
+//!   (spec 5.4 step 2b: UIPI drops input to an elevated window, and
+//!   `SendInput` does not say so);
 //! - `send_units` / `press_key` report how many inputs Windows inserted; a
-//!   short count (UIPI: an elevated window ignores a normal-integrity sender)
-//!   stops typing in the injector.
+//!   short count stops typing in the injector (the second guard).
 
 use std::fmt;
 
+pub use super::integrity::InputAccess;
 use crate::services::classify::TerminalHost;
 use crate::services::keys::KeyChord;
 use crate::services::layout::PixelRect;
@@ -201,6 +205,10 @@ pub trait WindowBackend: Send + Sync {
     fn minimize(&self, window: WindowRef) -> PlatformResult<()>;
     /// `PostMessage(WM_CLOSE)`. Never `TerminateProcess`.
     fn close(&self, window: WindowRef) -> PlatformResult<()>;
+    /// The integrity level of the process that owns `window`, compared with
+    /// Quip's own (`integrity::access`). The injector asks once, after focus
+    /// and before the first input; anything but `Ok(Allowed)` types nothing.
+    fn input_access(&self, window: WindowRef) -> PlatformResult<InputAccess>;
 }
 
 pub trait InputBackend: Send + Sync {

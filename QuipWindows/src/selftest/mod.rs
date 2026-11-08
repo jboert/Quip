@@ -7,6 +7,8 @@
 //! holds the case registry and runs it.
 
 pub mod own;
+#[cfg(windows)]
+pub mod probe;
 pub mod report;
 #[cfg(windows)]
 pub mod win32;

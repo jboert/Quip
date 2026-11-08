@@ -8,10 +8,17 @@
 //!   only a console's owner shell and that shell's own children are ever
 //!   ended;
 //! - it never types into, moves, minimizes, focuses or closes a window it did
-//!   not open: the arrange cases build their targets ONLY from the windows
-//!   they opened (never from a listing or `AppState`, which hold the user's
-//!   windows), and every backend call checks the pid still owns the handle;
-//!   the consoles it opens come to the front by themselves, nothing more;
+//!   not open: the arrange and input cases build their targets ONLY from the
+//!   windows they opened (never from a listing or `AppState`, which hold the
+//!   user's windows), and every backend call checks the pid still owns the
+//!   handle;
+//! - it focuses and types only into windows it opened, and only through
+//!   `injector::execute` (which checks the foreground handle and pid before
+//!   every batch and key, and the integrity level before the first input);
+//!   its test wrappers (a focus thief, a counter) never send input
+//!   themselves; Ctrl+C goes only to its own `ping` of 127.0.0.1; it never
+//!   uses the clipboard. A case whose window loses focus to the user FAILs
+//!   ("focus moved"); it never retries into whatever is in front;
 //! - it never describes a window it did not open by its title (the report's
 //!   `Redactor` drops any that slip through).
 //!
@@ -19,7 +26,8 @@
 //!   back as it was; the pairing QR window it opens shows a made-up address
 //!   and PIN and is closed again.
 //!
-//! A case is one entry in `CASES`; typing cases are added there (S11).
+//! A case is one entry in `CASES`; the focus, typing and key cases are in
+//! `win32/input.rs`.
 
 use std::collections::{HashMap, HashSet};
 use std::os::windows::process::CommandExt;
@@ -31,6 +39,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow, PostMessageW, WM_CLOSE};
+
+mod input;
 
 use super::own;
 use super::report::{exit_code, format_report, CaseResult, DisplayInfo, Header, Outcome, Redactor, EXIT_FAILED};
@@ -67,7 +77,19 @@ pub const CASES: &[Case] = &[
     Case { name: "arrange_own_windows", run: arrange_own_windows },
     Case { name: "arrange_restores_minimized", run: arrange_restores_minimized },
     Case { name: "minimize_and_close_own_console", run: minimize_and_close_own_console },
+    Case { name: "focus_own_console", run: input::focus_own_console },
+    Case { name: "type_marker_read_back", run: input::type_marker_read_back },
+    Case { name: "multi_line_waits_for_return", run: input::multi_line_waits_for_return },
+    Case { name: "multi_line_refused_in_cmd", run: input::multi_line_refused_in_cmd },
+    Case { name: "focus_stolen_stops_typing", run: input::focus_stolen_stops_typing },
+    Case { name: "quick_keys_reach_own_console", run: input::quick_keys_reach_own_console },
+    Case { name: "ctrl_c_stops_ping", run: input::ctrl_c_stops_ping },
+    Case { name: "elevated_target_types_nothing", run: input::elevated_target_types_nothing },
 ];
+
+/// Cases the Win32 UI tests run that `--selftest` does not.
+pub const EXTRA_CASES: &[Case] =
+    &[Case { name: "windows_terminal_types_and_reads_back", run: input::windows_terminal_types_and_reads_back }];
 
 /// The primary display's work area.
 fn primary_work_area(ctx: &Ctx) -> Result<PixelRect, String> {
@@ -221,6 +243,13 @@ pub struct Ctx {
     redactor: Redactor,
     opened: Vec<Opened>,
     markers: u32,
+    /// The run's own temp folder (the input cases' result files), made on
+    /// first use and removed at the end.
+    dir: Option<std::path::PathBuf>,
+    /// `Quip.exe`, for the integrity probe.
+    probe_exe: std::path::PathBuf,
+    /// The current case's notes (`CaseResult::notes`).
+    notes: Vec<String>,
 }
 
 impl Ctx {
@@ -310,6 +339,16 @@ impl Ctx {
         tag: &str,
         args: impl Fn(&str) -> String,
     ) -> Result<PlatformWindow, String> {
+        self.open_conhost_marked(what, tag, args).map(|(w, _)| w)
+    }
+
+    /// `open_conhost`, also giving the marker it set.
+    fn open_conhost_marked(
+        &mut self,
+        what: &'static str,
+        tag: &str,
+        args: impl Fn(&str) -> String,
+    ) -> Result<(PlatformWindow, String), String> {
         let marker = self.new_marker(tag);
         let args = args(&marker);
         let before = self.handles()?;
@@ -327,7 +366,7 @@ impl Ctx {
         match found {
             Some(w) => {
                 self.claim(index, &w);
-                Ok(w)
+                Ok((w, marker))
             }
             None => Err(format!(
                 "no new console window titled {marker} in {} s\nevery top-level {CONSOLE_CLASS} window:\n{}console processes:\n{}",
@@ -395,10 +434,40 @@ impl Ctx {
     }
 }
 
+impl Ctx {
+    fn new(platform: Win32Platform, redactor: Redactor, probe_exe: std::path::PathBuf) -> Ctx {
+        Ctx { platform, redactor, opened: Vec::new(), markers: 0, dir: None, probe_exe, notes: Vec::new() }
+    }
+
+    fn remove_dir(&mut self) {
+        if let Some(d) = self.dir.take() {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
 impl Drop for Ctx {
     fn drop(&mut self) {
         let _ = self.close_opened();
+        self.remove_dir();
     }
+}
+
+/// Runs the named cases (from `CASES` or `EXTRA_CASES`) the way `--selftest`
+/// does, for the Win32 UI tests. `probe_exe` is `Quip.exe`. An unknown name
+/// is an `Err`.
+pub fn run_named(names: &[&str], probe_exe: std::path::PathBuf) -> Result<Vec<CaseResult>, String> {
+    let platform = Win32Platform::new().map_err(|e| e.to_string())?;
+    let all: Vec<&Case> = CASES.iter().chain(EXTRA_CASES).collect();
+    let mut picked = Vec::new();
+    for n in names {
+        let c = all.iter().find(|c| c.name == *n).ok_or_else(|| format!("no case {n}"))?;
+        picked.push(Case { name: c.name, run: c.run });
+    }
+    let mut ctx = Ctx::new(platform, Redactor::new(), probe_exe);
+    let results = run_cases(&mut ctx, &picked);
+    ctx.remove_dir();
+    Ok(results)
 }
 
 fn hwnd(handle: u64) -> HWND {
@@ -753,6 +822,7 @@ fn header(platform: &Win32Platform, unix_seconds: f64) -> Header {
 fn run_cases(ctx: &mut Ctx, cases: &[Case]) -> Vec<CaseResult> {
     let mut results = Vec::with_capacity(cases.len());
     for case in cases {
+        ctx.notes.clear();
         let outcome = catch_unwind(AssertUnwindSafe(|| (case.run)(ctx)))
             .unwrap_or_else(|_| Outcome::Fail("the case panicked".into()));
         let left = ctx.close_opened();
@@ -762,7 +832,7 @@ fn run_cases(ctx: &mut Ctx, cases: &[Case]) -> Vec<CaseResult> {
             (_, false) => Outcome::Fail(left.join("\n")),
         };
         eprintln!("{} {}", outcome.label(), case.name);
-        results.push(CaseResult { name: case.name.to_string(), outcome });
+        results.push(CaseResult { name: case.name.to_string(), outcome, notes: std::mem::take(&mut ctx.notes) });
     }
     results
 }
@@ -781,8 +851,16 @@ pub fn run() -> i32 {
     };
     let redactor = Redactor::from_env(&env, hostname::get().ok().and_then(|h| h.into_string().ok()));
     let header = header(&platform, started);
-    let mut ctx = Ctx { platform, redactor, opened: Vec::new(), markers: 0 };
+    let probe_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Quip selftest: cannot find Quip.exe: {e}");
+            return EXIT_FAILED;
+        }
+    };
+    let mut ctx = Ctx::new(platform, redactor, probe_exe);
     let results = run_cases(&mut ctx, CASES);
+    ctx.remove_dir();
     let text = format_report(&header, &results, &ctx.redactor);
     print!("{text}");
     let dir = LogPaths::default_dir(&env);

@@ -9,18 +9,24 @@
 //! - before every typing batch and before every key (including the Return
 //!   after the pause) the injector asks `foreground_window` and stops with
 //!   `FocusLost` unless it is the target, handle AND pid;
+//! - once, before the first `Type` or `Key` step (after focus), it asks
+//!   `input_access`; anything but `Allowed` stops with `InputBlocked` and
+//!   nothing typed (spec 5.4 step 2b: Windows drops input to an elevated
+//!   window without saying so). A window gone by then is `WindowGone`;
 //! - a batch or chord that Windows only partly inserted stops typing with
-//!   `InputBlocked`.
+//!   `InputBlocked` (the second guard).
 
 use std::time::{Duration, Instant};
 
 use super::keys::KeyChord;
 use super::multiline_policy::WindowsSend;
 use super::typing_plan::{self, Outcome};
-use crate::platform::traits::{FocusStep, Platform, PlatformError, WindowRef};
+use crate::platform::traits::{FocusStep, InputAccess, Platform, PlatformError, WindowRef};
 
 /// Spec 5.4 step 6: the pause before Return.
 pub const RETURN_PAUSE: Duration = Duration::from_millis(30);
+/// Spec 5.4 step 3: the pause between typing batches (M0's value).
+pub const BATCH_PAUSE: Duration = Duration::from_millis(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
@@ -74,6 +80,8 @@ fn type_text(p: &dyn Platform, window: WindowRef, text: &str, before: usize) -> 
     let mut failure: Option<PlatformError> = None;
     let outcome = typing_plan::run(
         text,
+        BATCH_PAUSE,
+        std::thread::sleep,
         || in_front(p, window),
         |units| match p.send_units(window, units) {
             Ok(n) => n,
@@ -108,10 +116,30 @@ fn press(p: &dyn Platform, window: WindowRef, chord: KeyChord, typed: usize) -> 
     }
 }
 
+/// Spec 5.4 step 2b: `Ok` only when the window's integrity level allows
+/// input. A failed query types nothing either.
+fn may_type(p: &dyn Platform, window: WindowRef) -> Result<(), PlatformError> {
+    match p.input_access(window) {
+        Ok(InputAccess::Allowed) => Ok(()),
+        Err(PlatformError::WindowGone) => Err(PlatformError::WindowGone),
+        Ok(InputAccess::Elevated | InputAccess::Unknown) | Err(_) => {
+            Err(PlatformError::InputBlocked { after_chars: 0 })
+        }
+    }
+}
+
 pub fn execute(p: &dyn Platform, window: WindowRef, steps: &[Step]) -> Report {
     let start = Instant::now();
     let mut report = Report { focus: None, typed_chars: 0, error: None, elapsed: Duration::ZERO };
+    let mut access_checked = false;
     for step in steps {
+        if matches!(step, Step::Type(_) | Step::Key(_)) && !access_checked {
+            access_checked = true;
+            if let Err(e) = may_type(p, window) {
+                report.error = Some(e);
+                break;
+            }
+        }
         let r = match step {
             Step::Focus => p.bring_to_foreground(window).map(|s| report.focus = Some(s)),
             Step::Type(t) => type_text(p, window, t, report.typed_chars).map(|n| report.typed_chars += n),
@@ -259,7 +287,13 @@ mod tests {
     #[test]
     fn the_target_must_match_by_pid_too() {
         let f = fake();
-        // Window 1 is in front, but the injector was told pid 9 owns it.
+        f.set_foreground(Some(1));
+        // Window 1 (pid 1) is in front, but the injector was told pid 9 owns
+        // it. A second fake row lets pid 9 pass the backend's own checks, so
+        // only the injector's foreground comparison can stop it.
+        let mut stale = f.windows()[0].clone();
+        stale.pid = 9;
+        f.add_window(stale);
         let r = execute(&f, WindowRef { handle: 1, pid: 9 }, &[Step::Type("x".into())]);
         assert_eq!(r.error, Some(PlatformError::FocusLost { after_chars: 0 }));
         assert!(f.typed(1).is_empty());
@@ -348,6 +382,9 @@ mod tests {
         fn close(&self, w: WindowRef) -> crate::platform::traits::PlatformResult<()> {
             self.inner.close(w)
         }
+        fn input_access(&self, w: WindowRef) -> crate::platform::traits::PlatformResult<InputAccess> {
+            self.inner.input_access(w)
+        }
     }
 
     impl crate::platform::traits::InputBackend for Refusing {
@@ -376,6 +413,66 @@ mod tests {
             let r = execute(&p, W1, &steps(&text, Shell::Pwsh, false));
             assert_eq!(r.error, Some(want));
         }
+    }
+
+    #[test]
+    fn an_elevated_target_gets_no_input_at_all() {
+        let f = fake();
+        f.set_input_access(1, InputAccess::Elevated);
+        let r = execute(&f, W1, &steps("Get-Date", Shell::PowerShell, true));
+        assert_eq!(r.error, Some(PlatformError::InputBlocked { after_chars: 0 }));
+        assert!(r.focus.is_some(), "focus is not input: it still ran");
+        assert!(f.typed(1).is_empty() && f.typed(2).is_empty());
+        assert!(!f.calls().iter().any(|c| matches!(c, FakeCall::TypeText { .. } | FakeCall::Key { .. })));
+        let r = execute(&f, W1, &[Step::Focus, Step::Key(KeyChord::ctrl(Key::Letter('c')))]);
+        assert_eq!(r.error, Some(PlatformError::InputBlocked { after_chars: 0 }));
+        assert!(f.typed(1).is_empty(), "no key either");
+    }
+
+    #[test]
+    fn unknown_integrity_is_treated_as_elevated() {
+        let f = fake();
+        f.set_input_access(1, InputAccess::Unknown);
+        let r = execute(&f, W1, &steps("x", Shell::PowerShell, false));
+        assert_eq!(r.error, Some(PlatformError::InputBlocked { after_chars: 0 }));
+        assert!(f.typed(1).is_empty());
+    }
+
+    #[test]
+    fn a_failed_access_query_types_nothing() {
+        let f = fake();
+        f.set_input_access_error(1, Some(PlatformError::Failed("OpenProcessToken failed".into())));
+        let r = execute(&f, W1, &steps("x", Shell::PowerShell, true));
+        assert_eq!(r.error, Some(PlatformError::InputBlocked { after_chars: 0 }));
+        assert!(f.typed(1).is_empty());
+        f.set_input_access_error(1, Some(PlatformError::WindowGone));
+        let r = execute(&f, W1, &steps("x", Shell::PowerShell, true));
+        assert_eq!(r.error, Some(PlatformError::WindowGone), "a window gone by then says so");
+        assert!(f.typed(1).is_empty());
+    }
+
+    #[test]
+    fn access_is_checked_once_after_focus() {
+        let f = fake();
+        f.set_foreground(Some(2));
+        let r = execute(&f, W1, &steps("a\nb", Shell::Pwsh, false));
+        assert!(r.ok(), "{r:?}");
+        let calls = f.calls();
+        let kinds: Vec<&str> = calls
+            .iter()
+            .map(|c| match c {
+                FakeCall::Focus { .. } => "focus",
+                FakeCall::InputAccess { .. } => "access",
+                FakeCall::TypeText { .. } => "type",
+                FakeCall::Key { .. } => "key",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["focus", "access", "type", "key", "type"]);
+        // Focus alone (select_window) never asks.
+        f.clear_calls();
+        assert!(execute(&f, W1, &[Step::Focus]).ok());
+        assert!(!f.calls().iter().any(|c| matches!(c, FakeCall::InputAccess { .. })));
     }
 
     #[test]
