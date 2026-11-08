@@ -92,8 +92,10 @@ mod tests {
 
     #[test]
     fn names_are_log_tokens() {
-        for a in [InputAccess::Allowed, InputAccess::Elevated, InputAccess::Unknown] {
-            assert!(!a.as_str().contains(' '));
-        }
+        // The fake's `access handle=N elevated` line (tools/qa/q91-*.sh) and
+        // the probe's `access=` field carry these.
+        assert_eq!(InputAccess::Allowed.as_str(), "allowed");
+        assert_eq!(InputAccess::Elevated.as_str(), "elevated");
+        assert_eq!(InputAccess::Unknown.as_str(), "unknown");
     }
 }
