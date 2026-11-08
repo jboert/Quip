@@ -94,12 +94,30 @@ impl Drop for OwnWindow {
 }
 
 /// Posts `WM_CLOSE` when dropped to a console this test opened.
-struct CloseOnDrop(u64);
+/// Only while `pid` still owns the handle: HWND values are reused, and a
+/// handle this test found may name a user's window by the time it drops.
+struct CloseOnDrop {
+    handle: u64,
+    pid: u32,
+}
+
+impl CloseOnDrop {
+    fn of(w: &PlatformWindow) -> CloseOnDrop {
+        CloseOnDrop { handle: w.handle, pid: w.pid }
+    }
+}
 
 impl Drop for CloseOnDrop {
     fn drop(&mut self) {
+        let h = hwnd(self.handle);
+        let mut owner = 0u32;
+        // SAFETY: a writable out pointer; any handle value is accepted.
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(h, Some(&mut owner)) };
+        if owner == 0 || owner != self.pid {
+            return;
+        }
         // SAFETY: posting to a stale handle fails harmlessly.
-        let _ = unsafe { PostMessageW(hwnd(self.0), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        let _ = unsafe { PostMessageW(h, WM_CLOSE, WPARAM(0), LPARAM(0)) };
     }
 }
 
@@ -128,7 +146,7 @@ fn open_console(p: &Win32Platform, tag: &str) -> (PlatformWindow, CloseOnDrop, S
             .into_iter()
             .find(|w| !before.contains(&w.handle) && w.class_name == CONSOLE_CLASS && has_marker(&w.title, &m));
         if let Some(w) = found {
-            let guard = CloseOnDrop(w.handle);
+            let guard = CloseOnDrop::of(&w);
             return (w, guard, m);
         }
         sleep(Duration::from_millis(200));
@@ -357,4 +375,26 @@ fn a_window_whose_thread_stopped_pumping_blocks_no_move_focus_or_minimize() {
         waited >= Duration::from_secs(1),
         "a synchronous move must wait on a thread that does not pump: {waited:?}"
     );
+}
+
+/// R2 finding 9: `CloseOnDrop` posts `WM_CLOSE` only while the pid it was
+/// made with still owns the handle (HWND values are reused).
+#[test]
+fn close_on_drop_posts_only_to_the_window_its_pid_still_owns() {
+    if !ui_enabled() {
+        return;
+    }
+    let p = Win32Platform::new().unwrap();
+    let own = OwnWindow::new();
+    let r = own.window_ref();
+    let close_queued = || {
+        let mut msg = MSG::default();
+        // SAFETY: a writable MSG; a window of this thread.
+        unsafe { PeekMessageW(&mut msg, own.0, WM_CLOSE, WM_CLOSE, PM_REMOVE) }.as_bool()
+    };
+    drop(CloseOnDrop { handle: r.handle, pid: r.pid.wrapping_add(1) });
+    assert!(!close_queued(), "another pid: nothing posted");
+    drop(CloseOnDrop { handle: r.handle, pid: r.pid });
+    assert!(close_queued(), "its own pid: WM_CLOSE posted");
+    assert!(p.rects(r).is_ok(), "the window itself is untouched (the message was taken off the queue)");
 }

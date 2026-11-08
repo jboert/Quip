@@ -128,12 +128,30 @@ fn powershell_titled(m: &str, then: &str) -> String {
 
 /// Posts `WM_CLOSE` when dropped to a window another process owns, found by
 /// this test's marker.
-struct CloseOnDrop(u64);
+/// Only while `pid` still owns the handle: HWND values are reused, and a
+/// handle this test found may name a user's window by the time it drops.
+struct CloseOnDrop {
+    handle: u64,
+    pid: u32,
+}
+
+impl CloseOnDrop {
+    fn of(w: &PlatformWindow) -> CloseOnDrop {
+        CloseOnDrop { handle: w.handle, pid: w.pid }
+    }
+}
 
 impl Drop for CloseOnDrop {
     fn drop(&mut self) {
+        let h = hwnd(self.handle);
+        let mut owner = 0u32;
+        // SAFETY: a writable out pointer; any handle value is accepted.
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(h, Some(&mut owner)) };
+        if owner == 0 || owner != self.pid {
+            return;
+        }
         // SAFETY: posting to a stale handle fails harmlessly.
-        let _ = unsafe { PostMessageW(hwnd(self.0), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        let _ = unsafe { PostMessageW(h, WM_CLOSE, WPARAM(0), LPARAM(0)) };
     }
 }
 
@@ -163,7 +181,7 @@ fn open_conhost(p: &Win32Platform, tag: &str, args: impl Fn(&str) -> String) -> 
             console_processes(),
         )
     });
-    let guard = CloseOnDrop(w.handle);
+    let guard = CloseOnDrop::of(&w);
     (w, guard)
 }
 
@@ -251,7 +269,7 @@ fn windows_terminal_is_a_terminal_with_its_tab_shell() {
         .unwrap();
     let w = wait_new(&p, &before, Duration::from_secs(20), |w| w.class_name == WT_CLASS && has_marker(&w.title, &m))
         .unwrap_or_else(|| panic!("no new Windows Terminal window titled {m} in 20 s"));
-    let _close = CloseOnDrop(w.handle);
+    let _close = CloseOnDrop::of(&w);
     let got = wait_listed(&p, w.handle, Duration::from_secs(15), |w| w.shell == Some(Shell::PowerShell));
     let tree = process_tree(w.pid);
     let got = got.unwrap_or_else(|| panic!("Windows Terminal left the listing\n{tree}"));
@@ -279,7 +297,7 @@ fn notepad_is_an_app_not_a_terminal() {
         w.exe_path.as_deref().map(exe_stem).as_deref() == Some("notepad") && has_marker(&w.title, &m)
     })
     .unwrap_or_else(|| panic!("no Notepad window titled {m} in 15 s"));
-    let _close = CloseOnDrop(w.handle);
+    let _close = CloseOnDrop::of(&w);
     assert_eq!(w.terminal, None);
     assert_eq!(w.shell, None);
     assert!(w.app.eq_ignore_ascii_case("notepad"), "FileDescription or exe stem, not the OS product name: {:?}", w.app);
