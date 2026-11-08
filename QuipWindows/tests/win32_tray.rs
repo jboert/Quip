@@ -128,3 +128,43 @@ fn the_tray_icon_is_added_and_removed() {
     // SAFETY: the icon is ours and no longer shown.
     let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyIcon(hicon) };
 }
+
+/// Spec 9: Explorer shows Quip's icon and version for the exe (the
+/// resource `build.rs` compiles).
+#[test]
+fn the_exe_has_an_icon_and_a_version_resource() {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+    use windows::Win32::UI::Shell::ExtractIconExW;
+
+    if !ui_enabled() {
+        return;
+    }
+    let exe = HSTRING::from(env!("CARGO_BIN_EXE_Quip"));
+    // SAFETY: index -1 with no out arrays asks only for the icon count.
+    let icons = unsafe { ExtractIconExW(&exe, -1, None, None, 0) };
+    assert!(icons >= 1, "Quip.exe holds {icons} icons");
+
+    // SAFETY: a valid path; no handle is returned.
+    let size = unsafe { GetFileVersionInfoSizeW(&exe, None) };
+    assert!(size > 0, "no version resource");
+    let mut data = vec![0u8; size as usize];
+    // SAFETY: `data` holds `size` writable bytes for the call.
+    unsafe { GetFileVersionInfoW(&exe, 0, size, data.as_mut_ptr().cast()) }.unwrap();
+    let query = |key: &str| -> String {
+        let sub = HSTRING::from(format!(r"\StringFileInfo\040904B0\{key}"));
+        let mut ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut len = 0u32;
+        // SAFETY: `data` is the block GetFileVersionInfoW filled; the out
+        // pointer then points inside it, `len` UTF-16 units with the NUL.
+        let ok = unsafe { VerQueryValueW(data.as_ptr().cast(), PCWSTR(sub.as_ptr()), &mut ptr, &mut len) };
+        assert!(ok.as_bool() && !ptr.is_null(), "no {key}");
+        // SAFETY: as above; the block outlives this slice.
+        let units = unsafe { std::slice::from_raw_parts(ptr as *const u16, len as usize) };
+        String::from_utf16_lossy(units).trim_end_matches('\0').to_string()
+    };
+    assert_eq!(query("FileVersion"), env!("CARGO_PKG_VERSION"));
+    assert_eq!(query("ProductName"), "Quip");
+    assert_eq!(query("FileDescription"), "Quip for Windows");
+    assert_eq!(query("Comments"), quip_windows::build_info::BUILD, "the commit stamp");
+}

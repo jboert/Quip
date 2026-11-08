@@ -205,7 +205,8 @@ fn add_icon() {
         let Ok(mut guard) = t.try_borrow_mut() else { return };
         let Some(tray) = guard.as_mut() else { return };
         tray.notify = None;
-        match NotifyIcon::add(tray.hwnd, ICON_ID, tray.icon, "Quip") {
+        // The tooltip names the build (spec 9, owner check 1).
+        match NotifyIcon::add(tray.hwnd, ICON_ID, tray.icon, &crate::build_info::product_line()) {
             Ok(n) => {
                 tray.notify = Some(n);
                 // SAFETY: our window and timer id; no timer is fine.

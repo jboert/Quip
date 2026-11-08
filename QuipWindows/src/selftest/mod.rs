@@ -36,9 +36,88 @@ pub fn write_report(dir: &Path, unix_seconds: f64, text: &str) -> std::io::Resul
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "100 selftest reports in one second"))
 }
 
+/// The `build_stamp` case: a build must name its commit, or a report from
+/// it cannot be traced to code. `Ok` holds the commit.
+pub fn check_build_stamp(build: &str) -> Result<String, String> {
+    crate::build_info::sha_of(build)
+        .map(str::to_string)
+        .ok_or_else(|| format!("build {build:?} has no commit stamp; build it from a git checkout"))
+}
+
+/// The probe file `log_dir_writable` makes in the logs folder.
+pub fn probe_file_name(pid: u32) -> String {
+    format!("selftest-probe-{pid}.tmp")
+}
+
+/// The `log_dir_writable` case: creates (folder too, as the logs do),
+/// writes and deletes `probe_file_name(pid)` in `dir`. A host that cannot
+/// do this logs nothing at all.
+pub fn check_log_dir_writable(dir: &Path, pid: u32) -> Result<(), String> {
+    let at = |what: &str, e: std::io::Error| format!("{what} in {}: {e}", dir.display());
+    std::fs::create_dir_all(dir).map_err(|e| at("cannot make the folder", e))?;
+    let path = dir.join(probe_file_name(pid));
+    let text = format!("quip selftest probe {pid}\n");
+    // Plain create + truncate: a probe left by a killed run is overwritten,
+    // and the read-back proves this run's write landed.
+    std::fs::write(&path, &text).map_err(|e| at("cannot write a file", e))?;
+    let back = std::fs::read_to_string(&path).map_err(|e| at("cannot read back a file", e))?;
+    std::fs::remove_file(&path).map_err(|e| at("cannot delete a file", e))?;
+    if back != text {
+        return Err(format!("a file written in {} read back different", dir.display()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stamped_build_passes_with_its_commit() {
+        assert_eq!(check_build_stamp("0.1.0 (a52c5e2abcde)"), Ok("a52c5e2abcde".into()));
+        assert_eq!(check_build_stamp("0.1.0 (a52c5e2abcde-dirty)"), Ok("a52c5e2abcde".into()));
+    }
+
+    #[test]
+    fn an_unstamped_build_fails() {
+        let e = check_build_stamp("0.1.0").unwrap_err();
+        assert!(e.contains("no commit"), "{e}");
+    }
+
+    #[test]
+    fn the_log_dir_probe_leaves_nothing_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Quip").join("Logs");
+        check_log_dir_writable(&dir, 42).unwrap();
+        assert!(dir.is_dir(), "the folder is made, as the logs make it");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "the probe file is gone");
+    }
+
+    #[test]
+    fn an_unwritable_log_dir_fails_and_says_where() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A file where the folder should be: nothing can be made inside it.
+        let dir = tmp.path().join("Logs");
+        std::fs::write(&dir, "not a folder").unwrap();
+        let e = check_log_dir_writable(&dir, 42).unwrap_err();
+        assert!(e.contains("Logs"), "{e}");
+    }
+
+    #[test]
+    fn the_probe_file_is_named_for_the_selftest_and_its_pid() {
+        // The README and the safety rules name this file; it never collides
+        // with a log or a report.
+        assert_eq!(probe_file_name(42), "selftest-probe-42.tmp");
+    }
+
+    #[test]
+    fn a_leftover_probe_file_is_not_trusted() {
+        // A stale probe from a killed run must not count as a write.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(probe_file_name(42)), "old").unwrap();
+        check_log_dir_writable(tmp.path(), 42).unwrap();
+        assert!(!tmp.path().join(probe_file_name(42)).exists());
+    }
 
     #[test]
     fn a_report_is_written_into_a_new_folder_and_never_overwritten() {

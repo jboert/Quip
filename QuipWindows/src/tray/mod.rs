@@ -10,6 +10,7 @@ pub mod autostart;
 #[cfg(windows)]
 pub mod console;
 pub mod icon;
+pub mod icon_art;
 pub mod instance;
 pub mod menu;
 pub mod qr;

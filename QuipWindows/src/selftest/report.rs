@@ -66,8 +66,8 @@ pub struct DisplayInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
     pub unix_seconds: f64,
-    pub quip_version: String,
-    pub git_sha: Option<String>,
+    /// `build_info::BUILD`: version, commit, `-dirty`.
+    pub build: String,
     /// `major.minor.build`, e.g. `10.0.26100`.
     pub windows_version: Option<String>,
     pub displays: Vec<DisplayInfo>,
@@ -132,8 +132,8 @@ pub fn format_report(header: &Header, results: &[CaseResult], redactor: &Redacto
     let mut out = String::new();
     out.push_str("Quip selftest\n");
     out.push_str(&format!("time: {}\n", iso8601(header.unix_seconds)));
-    let sha = header.git_sha.as_deref().map(|s| format!(" (git {s})")).unwrap_or_default();
-    out.push_str(&format!("quip: {}{sha}\n", header.quip_version));
+    // The same string as `Quip --version` and the first websocket.log line.
+    out.push_str(&format!("quip: Quip for Windows {}\n", header.build));
     out.push_str(&format!("windows: {}\n", header.windows_version.as_deref().unwrap_or("unknown")));
     out.push_str(&format!("displays: {}\n", header.displays.len()));
     for (i, d) in header.displays.iter().enumerate() {
@@ -428,8 +428,7 @@ mod tests {
     fn header() -> Header {
         Header {
             unix_seconds: 1_800_000_000.0,
-            quip_version: "0.1.0".into(),
-            git_sha: Some("a52c5e2abcde".into()),
+            build: "0.1.0 (a52c5e2abcde)".into(),
             windows_version: Some("10.0.26100".into()),
             displays: vec![
                 DisplayInfo {
@@ -473,7 +472,7 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "Quip selftest");
         assert!(lines.contains(&"time: 2027-01-15T08:00:00Z"), "{text}");
-        assert!(lines.contains(&"quip: 0.1.0 (git a52c5e2abcde)"), "{text}");
+        assert!(lines.contains(&"quip: Quip for Windows 0.1.0 (a52c5e2abcde)"), "{text}");
         assert!(lines.contains(&"windows: 10.0.26100"), "{text}");
         assert!(lines.contains(&"displays: 2"), "{text}");
         assert!(
@@ -509,9 +508,9 @@ mod tests {
 
     #[test]
     fn no_git_sha_or_windows_version_still_reads() {
-        let h = Header { git_sha: None, windows_version: None, displays: vec![], ..header() };
+        let h = Header { build: "0.1.0".into(), windows_version: None, displays: vec![], ..header() };
         let text = format_report(&h, &[case("a", Outcome::Pass)], &Redactor::new());
-        assert!(text.contains("quip: 0.1.0\n"), "{text}");
+        assert!(text.contains("quip: Quip for Windows 0.1.0\n"), "{text}");
         assert!(text.contains("windows: unknown\n"), "{text}");
         assert!(text.contains("displays: 0\n"), "{text}");
     }

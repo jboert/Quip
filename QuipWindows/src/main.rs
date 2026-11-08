@@ -13,6 +13,7 @@
 const USAGE: &str = "usage: Quip              the tray app (Windows)
        Quip --selftest   check this PC, write a report to %LOCALAPPDATA%\\Quip\\Logs
        Quip --fake-platform [--port N] [--pin PIN] [--fixture PATH] [--log-dir DIR]
+       Quip --version    print the version and commit of this build
        Quip --help
        Quip --input-probe <marker>   internal: the selftest's integrity probe
 From an interactive prompt use `start /wait Quip --selftest` (cmd) or
@@ -27,6 +28,9 @@ fn main() {
         attach_console();
         if has("--help") || has("-h") {
             println!("{USAGE}");
+            0
+        } else if has("--version") {
+            println!("{}", quip_windows::build_info::product_line());
             0
         } else if args.first().map(String::as_str) == Some("--input-probe") {
             input_probe(args.get(1).map(String::as_str).unwrap_or(""))

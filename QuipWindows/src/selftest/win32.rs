@@ -24,7 +24,9 @@
 //!
 //! - the one setting it touches, the "Start with Windows" Run value, is put
 //!   back as it was; the pairing QR window it opens shows a made-up address
-//!   and PIN and is closed again.
+//!   and PIN and is closed again;
+//! - the only file it writes outside its temp folder is its own probe in the
+//!   logs folder (`selftest-probe-<pid>.tmp`, deleted at once) and the report.
 //!
 //! A case is one entry in `CASES`; the focus, typing and key cases are in
 //! `win32/input.rs`.
@@ -85,6 +87,8 @@ pub const CASES: &[Case] = &[
     Case { name: "quick_keys_reach_own_console", run: input::quick_keys_reach_own_console },
     Case { name: "ctrl_c_stops_ping", run: input::ctrl_c_stops_ping },
     Case { name: "elevated_target_types_nothing", run: input::elevated_target_types_nothing },
+    Case { name: "build_stamp", run: build_stamp },
+    Case { name: "log_dir_writable", run: log_dir_writable },
 ];
 
 /// Cases the Win32 UI tests run that `--selftest` does not.
@@ -547,6 +551,27 @@ fn fail_all(problems: Vec<String>) -> Outcome {
     }
 }
 
+/// This exe names its commit (an unstamped build cannot be traced). No SKIP.
+fn build_stamp(ctx: &mut Ctx) -> Outcome {
+    match super::check_build_stamp(crate::build_info::BUILD) {
+        Ok(sha) => {
+            ctx.notes.push(format!("commit {sha}"));
+            Outcome::Pass
+        }
+        Err(e) => Outcome::Fail(e),
+    }
+}
+
+/// The logs folder takes a file of its own (made and deleted again); a host
+/// that cannot write there logs nothing. No SKIP.
+fn log_dir_writable(_: &mut Ctx) -> Outcome {
+    let dir = LogPaths::default_dir(&|k| std::env::var(k).ok());
+    match super::check_log_dir_writable(&dir, std::process::id()) {
+        Ok(()) => Outcome::Pass,
+        Err(e) => Outcome::Fail(e),
+    }
+}
+
 fn process_snapshot_works(_: &mut Ctx) -> Outcome {
     let procs = match process_snapshot() {
         Ok(p) => p,
@@ -807,13 +832,7 @@ fn header(platform: &Win32Platform, unix_seconds: f64) -> Header {
             work_area: d.work_area,
         })
         .collect();
-    Header {
-        unix_seconds,
-        quip_version: env!("CARGO_PKG_VERSION").to_string(),
-        git_sha: option_env!("QUIP_GIT_SHA").map(str::to_string),
-        windows_version: os_version(),
-        displays,
-    }
+    Header { unix_seconds, build: crate::build_info::BUILD.to_string(), windows_version: os_version(), displays }
 }
 
 /// Runs `cases` in order. A panicking case fails; whatever a case opened is

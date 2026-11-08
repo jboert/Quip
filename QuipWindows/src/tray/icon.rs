@@ -1,42 +1,9 @@
-//! The tray icon, drawn at run time at the size Windows asks for (no icon
-//! resource to compile): a teal disc with a white ring and tail, a plain
-//! "Q". `pixels` is pure and tested; `create` turns it into an HICON.
+//! The tray icon, drawn at run time at the size Windows asks for: a teal
+//! disc with a white ring and tail, a plain "Q". `pixels` (in `icon_art`,
+//! which `build.rs` also uses for the exe's `.ico` resource) is pure and
+//! tested; `create` turns it into an HICON.
 
-/// Teal, opaque, as `0xAARRGGBB`.
-pub const DISC: u32 = 0xFF1F_7A8C;
-pub const MARK: u32 = 0xFFFF_FFFF;
-pub const CLEAR: u32 = 0x0000_0000;
-
-/// `size` x `size` pixels, rows top to bottom, each `0xAARRGGBB` with
-/// straight alpha (what a 32-bit icon bitmap holds).
-pub fn pixels(size: usize) -> Vec<u32> {
-    let s = size as f64;
-    let c = (s - 1.0) / 2.0;
-    let (ring_in, ring_out) = (0.22 * s, 0.34 * s);
-    let tail = |x: f64, y: f64| {
-        // Distance from the segment (0.58s, 0.58s) -> (0.86s, 0.86s).
-        let (ax, bx) = (0.58 * s, 0.86 * s);
-        let t = (((x - ax) + (y - ax)) / (2.0 * (bx - ax))).clamp(0.0, 1.0);
-        let (px, py) = (ax + t * (bx - ax), ax + t * (bx - ax));
-        ((x - px).powi(2) + (y - py).powi(2)).sqrt() <= 0.07 * s
-    };
-    let mut out = Vec::with_capacity(size * size);
-    for row in 0..size {
-        for col in 0..size {
-            let (x, y) = (col as f64, row as f64);
-            let d = ((x - c).powi(2) + (y - c).powi(2)).sqrt();
-            let px = if (ring_in..=ring_out).contains(&d) || tail(x, y) {
-                MARK
-            } else if d <= s / 2.0 {
-                DISC
-            } else {
-                CLEAR
-            };
-            out.push(px);
-        }
-    }
-    out
-}
+pub use super::icon_art::{pixels, CLEAR, DISC, MARK};
 
 #[cfg(windows)]
 pub use self::win32::create;

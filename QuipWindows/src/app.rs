@@ -96,6 +96,8 @@ pub async fn start(paths: &AppPaths, platform: Arc<dyn Platform>, opts: StartOpt
         .map_err(StartError::Settings)?;
     let clock = SystemClock::shared();
     let logs = Logs::new(LogPaths::new(paths.log_dir.clone()), clock.clone(), false);
+    let port = opts.port.unwrap_or(settings.port);
+    logs.ws(Severity::Info, &format!("start: {}, port {port}", crate::build_info::product_line()));
     match &outcome {
         LoadOutcome::Created => {
             logs.ws(Severity::Info, &format!("settings: created {} (new PIN and device id)", store.path().display()))
@@ -110,7 +112,6 @@ pub async fn start(paths: &AppPaths, platform: Arc<dyn Platform>, opts: StartOpt
             ),
         ),
     }
-    let port = opts.port.unwrap_or(settings.port);
     let ips = tokio::task::spawn_blocking(interface_ipv4s).await.unwrap_or_default();
     let display_name = hostname::get().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "Windows PC".into());
     let host = Host::new(HostParts {
@@ -280,6 +281,22 @@ mod tests {
         assert_eq!(after.device_id, first.device_id, "a new PIN keeps the device id");
         assert!(r.host.state().show_all_apps());
         assert!(std::fs::read_to_string(p.log_dir.join("websocket.log")).unwrap().contains("settings: created"));
+    }
+
+    /// Spec 8/9: every start's first `websocket.log` line names the build,
+    /// before the settings line of a first run.
+    #[tokio::test]
+    async fn start_writes_the_stamp_line_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = paths(tmp.path());
+        let r = start(&p, Arc::new(FakePlatform::default()), loopback()).await.unwrap();
+        r.host.flush();
+        let log = std::fs::read_to_string(p.log_dir.join("websocket.log")).unwrap();
+        let first = log.lines().next().unwrap_or("");
+        // The port asked for (0 here: any free one; 8765 by default).
+        let want = format!("start: Quip for Windows {}, port 0", crate::build_info::BUILD);
+        assert!(first.ends_with(&want), "first line {first:?}, want it to end with {want:?}\n{log}");
+        assert!(log.contains("settings: created"), "{log}");
     }
 
     #[tokio::test]

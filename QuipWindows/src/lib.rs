@@ -9,6 +9,7 @@
 
 pub mod app;
 pub mod app_state;
+pub mod build_info;
 pub mod fake_mode;
 pub mod host;
 pub mod platform;
