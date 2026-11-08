@@ -39,7 +39,7 @@ while IFS= read -r f; do
         # and tools/ is the swiftc harness for that same Shared code.
         # Q-91: the Windows host. tools/fake-windows/ is its fake, not Swift,
         # so it must match before the tools/* (swiftc harness) arm.
-        QuipWindows/*|tools/fake-windows/*)
+        QuipWindows/*|tools/fake-windows/*|tools/build-windows.sh)
             windows=true ;;
         # The shared fixtures are read by the Swift tests AND the Windows host
         # (Q-91 shared vectors), so a fixture change runs both.

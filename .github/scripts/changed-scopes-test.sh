@@ -57,6 +57,8 @@ expect "Windows host → windows only" $'apple=false\nrust=false\nandroid=false\
     "QuipWindows/src/services/router.rs"
 expect "fake-windows → windows, not the swiftc harness" $'apple=false\nrust=false\nandroid=false\nwindows=true' \
     "tools/fake-windows/fixture.json"
+expect "build-windows.sh → windows, not the swiftc harness" $'apple=false\nrust=false\nandroid=false\nwindows=true' \
+    "tools/build-windows.sh"
 expect "shared fixture → apple and windows" $'apple=true\nrust=false\nandroid=false\nwindows=true' \
     "Shared/Tests/Fixtures/vectors/multiline.json"
 expect "shared Swift test → apple only" "$APPLE" "Shared/Tests/WireFixtureTests.swift"

@@ -273,8 +273,9 @@ Field names and meaning follow `LayoutUpdate` and `WindowState` in
 ```
 QuipWindows/
   Cargo.toml                 package quip-windows, bin "Quip"
-  build.rs                   embeds icon + manifest (DPI awareness, asInvoker)
-  assets/quip.ico, Quip.exe.manifest
+  build.rs                   stamps the build, embeds manifest (DPI awareness,
+                             asInvoker), icon and version resource; the .ico is
+                             generated in OUT_DIR from src/tray/icon_art.rs
   README.md                  install + troubleshooting (owner-facing)
   src/
     main.rs                  tray message loop on the main thread; tokio runtime on a worker
@@ -578,8 +579,8 @@ Quit Quip
   `BonjourAdvertiser`), on the LAN (RFC 1918) addresses of non-virtual
   adapters only, from start until Quit. A failure is logged and the host
   keeps running. `--fake-platform` never advertises. With no LAN address at
-  start it does not advertise and today never retries; S12 adds a retry when
-  a LAN address appears.
+  start it retries every 30 s and advertises once one appears (S12,
+  `app::advertise_when_ready`; logged on the 1st try and every 10th).
 - No console window: `#![windows_subsystem = "windows"]`.
 
 ## 7. Settings

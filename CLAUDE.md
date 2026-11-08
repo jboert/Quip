@@ -15,7 +15,9 @@ All Mac diagnostic logs live under `~/Library/Logs/Quip/`. They survive reboots 
 
 On Linux, the equivalents live under `$XDG_STATE_HOME/quip/` (default `~/.local/state/quip/`).
 
-Path resolution lives in `QuipMac/Services/LogPaths.swift` and `QuipLinux/src/services/log_paths.rs` — change one place if you ever need to relocate.
+On Windows (QuipWindows), the logs live in `%LOCALAPPDATA%\Quip\Logs\`: `websocket.log`, `injection.log`, `latency.log`, `phone.log`, plus one `selftest-<time>.txt` per `--selftest` run.
+
+Path resolution lives in `QuipMac/Services/LogPaths.swift` `QuipLinux/src/services/log_paths.rs` and `QuipWindows/src/services/log_paths.rs` — change one place if you ever need to relocate.
 
 ## Debugging "photo upload spins forever"
 
