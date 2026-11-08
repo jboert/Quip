@@ -4,7 +4,7 @@ options:
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
-  createIntermediateGroups: false
+  createIntermediateGroups: true
 settings:
   base:
     # Stay on Swift 5 language mode for the iOS target. Local builds use
@@ -25,17 +25,20 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: .
-        excludes:
-          - "project.yml"
-          - "*.xcodeproj/**"
-          - "Tests/**"
-          - "Signing.xcconfig"
-          - "Signing.local.xcconfig"
-          - "build/**"
-          - "QuipLiveActivity/**"
-          - "QuipWatch/**"
-          - "NotificationService/**"
+      # Q-92: explicit folders, not `path: .`. With `path: .` xcodegen lists
+      # Models/Resources/Services/Views under both the root group and a
+      # "QuipiOS" group, which Xcode 27.2 refuses to open. It also kept
+      # ruflo state (.claude-flow/, ruvector.db) out of the project.
+      - Models
+      - Resources
+      - Services
+      - Views
+      - Assets.xcassets
+      - QuipApp.swift
+      - path: Info.plist
+        buildPhase: none
+      - path: QuipiOS.entitlements
+        buildPhase: none
       - path: QuipLiveActivity/Shared
       - path: ../Shared
         excludes:
