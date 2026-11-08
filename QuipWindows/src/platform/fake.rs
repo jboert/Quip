@@ -204,6 +204,9 @@ struct State {
     refuse_focus: HashSet<u64>,
     focus_step: Option<FocusStep>,
     refuse_move: HashSet<u64>,
+    /// `move_windows` says Ok but the window stays put (Windows ignored it:
+    /// UIPI, or an app that undoes every move).
+    ignore_move: HashSet<u64>,
     /// Border (px) a window gets once restored; until then it reports none.
     border_after_restore: HashMap<u64, i32>,
     /// The next move of the window lands with its size scaled by this percent.
@@ -329,6 +332,16 @@ impl FakePlatform {
             s.refuse_move.insert(handle);
         } else {
             s.refuse_move.remove(&handle);
+        }
+    }
+
+    /// `move_windows` answers Ok for the window and does not move it.
+    pub fn set_ignore_move(&self, handle: u64, ignore: bool) {
+        let mut s = self.lock();
+        if ignore {
+            s.ignore_move.insert(handle);
+        } else {
+            s.ignore_move.remove(&handle);
         }
     }
 
@@ -629,6 +642,10 @@ impl WindowBackend for FakePlatform {
                 &mut s,
                 format!("move handle={handle} outer={},{} {}x{}", m.outer.x, m.outer.y, m.outer.width, m.outer.height),
             );
+            if s.ignore_move.contains(&handle) {
+                out.push(Ok(()));
+                continue;
+            }
             let scale = s.rescale_once.remove(&handle);
             let min = s.min_size.get(&handle).copied();
             if let Some(w) = s.windows.iter_mut().find(|w| w.handle == handle) {

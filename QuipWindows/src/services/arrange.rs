@@ -26,7 +26,7 @@
 use std::time::Duration;
 
 use super::layout::{self, PixelRect};
-use crate::platform::traits::{Platform, PlatformError, WindowMove, WindowRects, WindowRef};
+use crate::platform::traits::{InputAccess, Platform, PlatformError, WindowMove, WindowRects, WindowRef};
 use crate::protocol::types::ArrangeLayout;
 
 /// How long the host waits after the batch before it measures (spec 5.2).
@@ -34,6 +34,11 @@ pub const SETTLE: Duration = Duration::from_millis(150);
 
 /// How far (px) any edge may be from its target and still count as there.
 pub const TOLERANCE: i32 = 1;
+
+/// The refusal text for a window Windows would not move (spec 5.2): one
+/// above Quip's integrity level, or one still exactly where it was after
+/// the move and its retry (Windows can ignore a move without an error).
+pub const NOT_MOVED: &str = "elevated or refused";
 
 /// One window to tile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,8 +156,21 @@ pub fn execute(p: &dyn Platform, targets: &[Target], settle: Duration) -> Vec<Ta
 
     // 1. Restore, then 2. measure. A window minimized or maximized since the
     // listing is restored too, and measured again.
+    // UIPI: a window above Quip's integrity level ignores the move without
+    // an error, so it is refused up front, like typing (spec 5.4 step 2b).
+    for (i, t) in targets.iter().enumerate() {
+        results[i] = match p.input_access(t.window) {
+            Ok(InputAccess::Allowed) => None,
+            Ok(InputAccess::Elevated | InputAccess::Unknown) => Some(TargetResult::Refused(NOT_MOVED.into())),
+            Err(e) => Some(failed(e)),
+        };
+    }
+
     let mut restored = vec![false; n];
     for (i, t) in targets.iter().enumerate() {
+        if results[i].is_some() {
+            continue;
+        }
         if t.restore_first {
             restored[i] = true;
             if let Err(e) = p.restore(t.window) {
@@ -175,6 +193,9 @@ pub fn execute(p: &dyn Platform, targets: &[Target], settle: Duration) -> Vec<Ta
 
     // 3. One batch.
     let pending: Vec<usize> = (0..n).filter(|&i| results[i].is_none()).collect();
+    // Where each was before the first move: one still there after the retry
+    // was not moved at all, which is a refusal, not a minimum size.
+    let before: Vec<Option<PixelRect>> = rects.iter().map(|r| r.map(|r| r.visible)).collect();
     let moved = move_batch(p, targets, &pending, &rects, &mut results);
     if moved.is_empty() {
         return finish(results);
@@ -207,7 +228,9 @@ pub fn execute(p: &dyn Platform, targets: &[Target], settle: Duration) -> Vec<Ta
     for &i in &retried {
         if results[i].is_none() {
             results[i] = Some(match rects[i] {
-                Some(r) if !on_target(r.visible, targets[i].visible) => TargetResult::OffTarget { got: r.visible },
+                Some(r) if on_target(r.visible, targets[i].visible) => TargetResult::Moved,
+                Some(r) if before[i] == Some(r.visible) => TargetResult::Refused(NOT_MOVED.into()),
+                Some(r) => TargetResult::OffTarget { got: r.visible },
                 _ => TargetResult::Moved,
             });
         }
@@ -509,6 +532,44 @@ mod tests {
         assert!(!r[1].is_refused());
         assert_eq!(got.width, 1200 - 14, "the minimum outer width, less the border");
         assert_eq!(moves(&p), [1, 2, 2], "one retry, then it is left alone");
+    }
+
+    #[test]
+    fn an_elevated_or_unreadable_window_is_refused_before_anything_is_done_to_it() {
+        use crate::platform::traits::InputAccess;
+        let p = fake();
+        p.set_minimized(2, true);
+        p.set_input_access(2, InputAccess::Elevated);
+        p.set_input_access(3, InputAccess::Unknown);
+        let t = targets(&p, &[1, 2, 3], ArrangeLayout::Horizontal);
+        let r = execute(&p, &t, Duration::ZERO);
+        let refused = TargetResult::Refused(NOT_MOVED.into());
+        assert_eq!(r, vec![TargetResult::Moved, refused.clone(), refused]);
+        assert_eq!(NOT_MOVED, "elevated or refused");
+        assert_eq!(moves(&p), [1]);
+        assert!(!p.calls().contains(&FakeCall::Restore { handle: 2 }), "not restored either");
+    }
+
+    #[test]
+    fn a_window_that_closed_before_its_access_check_is_gone() {
+        let p = fake();
+        let t = targets(&p, &[1, 2], ArrangeLayout::Horizontal);
+        p.set_input_access_error(1, Some(PlatformError::WindowGone));
+        let r = execute(&p, &t, Duration::ZERO);
+        assert_eq!(r, vec![TargetResult::Gone, TargetResult::Moved]);
+    }
+
+    #[test]
+    fn a_window_windows_silently_leaves_in_place_is_refused_not_off_target() {
+        let p = fake();
+        p.set_ignore_move(2, true);
+        let before = visible(&p, 2);
+        let t = targets(&p, &[1, 2], ArrangeLayout::Horizontal);
+        let r = execute(&p, &t, Duration::ZERO);
+        assert_eq!(r, vec![TargetResult::Moved, TargetResult::Refused(NOT_MOVED.into())]);
+        assert!(r[1].is_refused());
+        assert_eq!(visible(&p, 2), before);
+        assert_eq!(moves(&p), [1, 2, 2], "moved, retried once, then refused");
     }
 
     #[test]

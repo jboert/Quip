@@ -407,6 +407,13 @@ refused.
 
 A window that does not move (elevated window, UIPI) is skipped and logged to
 `injection.log` with `op=arrange kind=unknown detail="elevated or refused"`.
+Windows can ignore a move to such a window without an error, so before
+anything is done to it each window's integrity level is read
+(`input_access`, as for typing): `Elevated` or `Unknown` is refused at once.
+A window whose visible rect, after the retry, is exactly what it was before
+the first move was not moved at all and is refused the same way; one that
+moved but stopped short (a minimum size) stays the `websocket.log` case. A
+window that closed in between is logged with `kind=windowClosed`.
 A window whose thread does not respond (`IsHungAppWindow`) is skipped the
 same way with `detail="not responding"`: `SetWindowPos` would block the
 input thread. The others still move. `layout.rs` (the math) is pure and
