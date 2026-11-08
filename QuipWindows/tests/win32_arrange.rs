@@ -30,8 +30,9 @@ use quip_windows::services::layout::{self, PixelRect};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, DispatchMessageW, IsIconic, IsWindow, PeekMessageW, PostMessageW, ShowWindow,
-    TranslateMessage, MSG, PM_REMOVE, SW_MINIMIZE, WINDOW_EX_STYLE, WM_CLOSE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    CreateWindowExW, DestroyWindow, DispatchMessageW, IsIconic, IsWindow, PeekMessageW, PostMessageW, SetWindowPos,
+    ShowWindow, TranslateMessage, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_MINIMIZE, WINDOW_EX_STYLE, WM_CLOSE,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
@@ -345,4 +346,15 @@ fn a_window_whose_thread_stopped_pumping_blocks_no_move_focus_or_minimize() {
         assert_eq!(r, Ok(()));
         format!("{r:?}")
     });
+    // Control: the fixture really is the hazard. A synchronous SetWindowPos
+    // (what move_windows did before R2) waits until the thread pumps again.
+    let t = Instant::now();
+    // SAFETY: plain value arguments; the window exists until its thread ends.
+    let _ = unsafe { SetWindowPos(hwnd(w.handle), None, 80, 80, 300, 200, SWP_NOZORDER | SWP_NOACTIVATE) };
+    let waited = t.elapsed();
+    eprintln!("control: synchronous SetWindowPos waited {waited:?}");
+    assert!(
+        waited >= Duration::from_secs(1),
+        "a synchronous move must wait on a thread that does not pump: {waited:?}"
+    );
 }
