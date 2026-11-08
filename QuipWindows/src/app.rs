@@ -159,8 +159,10 @@ fn logged_try(n: u32) -> bool {
 /// outcome is logged to websocket.log (waiting and failures on the 1st try
 /// and every 10th); the host serves meanwhile (the phone connects by its
 /// saved or scanned URL). Cancel it by dropping or aborting the future. Only
-/// the real app calls this: `--fake-platform` never advertises.
-pub async fn advertise_when_ready<T, R, F, S>(
+/// the real app calls this: `--fake-platform` never advertises. `start` is
+/// async so the real one can run off the tokio workers
+/// (`Keeper::start_blocking`).
+pub async fn advertise_when_ready<T, R, F, S, G>(
     host: &Host,
     port: u16,
     mut read_addrs: R,
@@ -170,7 +172,8 @@ pub async fn advertise_when_ready<T, R, F, S>(
 where
     R: FnMut() -> F,
     F: std::future::Future<Output = Vec<Ipv4Addr>>,
-    S: FnMut(&Advert) -> Result<T, String>,
+    S: FnMut(&Advert) -> G,
+    G: std::future::Future<Output = Result<T, String>>,
 {
     let did_prefix: String = host.config.device_id.chars().take(8).collect();
     let mut tries = 0u32;
@@ -187,7 +190,7 @@ where
                 ),
             ),
             None => {}
-            Some(advert) => match start(&advert) {
+            Some(advert) => match start(&advert).await {
                 Ok(a) => {
                     let found = if tries > 1 { "LAN address found, " } else { "" };
                     host.logs.ws(
@@ -214,41 +217,96 @@ where
     }
 }
 
+/// Where the advertiser is.
+enum Slot<T> {
+    Waiting,
+    Up(T),
+    /// `stop` ran: anything started from now on is dropped at once.
+    Stopped,
+}
+
+fn slot<T>(m: &Mutex<Slot<T>>) -> std::sync::MutexGuard<'_, Slot<T>> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// The Bonjour advertiser, or the task still waiting to make one. `stop`
 /// (the tray's Quit) ends both.
 pub struct MdnsHolder<T: Send + 'static> {
     task: tokio::task::JoinHandle<()>,
-    slot: Arc<Mutex<Option<T>>>,
+    slot: Arc<Mutex<Slot<T>>>,
+}
+
+/// What the waiting task hands a started advertiser to.
+pub struct Keeper<T> {
+    slot: Arc<Mutex<Slot<T>>>,
+    on_late_stop: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl<T> Clone for Keeper<T> {
+    fn clone(&self) -> Self {
+        Keeper { slot: self.slot.clone(), on_late_stop: self.on_late_stop.clone() }
+    }
+}
+
+impl<T: Send + 'static> Keeper<T> {
+    /// Runs `start` (synchronous: it binds a socket and registers the
+    /// service) on a blocking thread, so it never holds a tokio worker, and
+    /// keeps what it made. `abort` cannot cut it short; when `stop` ran
+    /// first, what it made is dropped at once instead (its goodbye goes out)
+    /// and `on_late_stop` runs (the "mDNS: stopped" line).
+    pub async fn start_blocking<F>(&self, start: F) -> Result<(), String>
+    where
+        F: FnOnce() -> Result<T, String> + Send + 'static,
+    {
+        let k = self.clone();
+        match tokio::task::spawn_blocking(move || start().map(|a| k.keep(a))).await {
+            Ok(r) => r,
+            Err(e) => Err(format!("the start did not finish: {e}")),
+        }
+    }
+
+    fn keep(&self, made: T) {
+        let mut s = slot(&self.slot);
+        if matches!(*s, Slot::Stopped) {
+            drop(s);
+            drop(made);
+            (self.on_late_stop)();
+        } else {
+            *s = Slot::Up(made);
+        }
+    }
 }
 
 impl<T: Send + 'static> MdnsHolder<T> {
-    /// Runs `advertise` on `rt`; what it returns is kept until `stop`.
-    pub fn spawn<Fut>(rt: &tokio::runtime::Handle, advertise: Fut) -> Self
+    /// Runs `advertise` on `rt` with a `Keeper` for what it starts.
+    /// `on_late_stop` runs if an advertiser comes up after `stop`.
+    pub fn spawn<A, Fut>(
+        rt: &tokio::runtime::Handle,
+        advertise: A,
+        on_late_stop: impl Fn() + Send + Sync + 'static,
+    ) -> Self
     where
-        Fut: std::future::Future<Output = T> + Send + 'static,
+        A: FnOnce(Keeper<T>) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        let slot = Arc::new(Mutex::new(None));
-        let put = slot.clone();
-        let task = rt.spawn(async move {
-            let advertiser = advertise.await;
-            if let Ok(mut s) = put.lock() {
-                *s = Some(advertiser);
-            }
-        });
+        let slot = Arc::new(Mutex::new(Slot::Waiting));
+        let keeper = Keeper { slot: slot.clone(), on_late_stop: Arc::new(on_late_stop) };
+        let task = rt.spawn(advertise(keeper));
         Self { task, slot }
     }
 
     /// Whether the advertiser is up.
     pub fn is_advertising(&self) -> bool {
-        self.slot.lock().is_ok_and(|s| s.is_some())
+        matches!(*slot(&self.slot), Slot::Up(_))
     }
 
     /// Stops the waiting task and drops the advertiser (its goodbye goes
-    /// out). `true` when one was up.
+    /// out). `true` when one was up. A start still running finishes on its
+    /// blocking thread and is dropped there (`Keeper`).
     pub fn stop(self) -> bool {
+        let taken = std::mem::replace(&mut *slot(&self.slot), Slot::Stopped);
         self.task.abort();
-        let taken = self.slot.lock().ok().and_then(|mut s| s.take());
-        let was = taken.is_some();
+        let was = matches!(taken, Slot::Up(_));
         drop(taken);
         was
     }
@@ -293,11 +351,19 @@ pub fn run() -> i32 {
     };
     let host = running.host.clone();
     let port = running.addr.port();
-    let mdns = MdnsHolder::spawn(rt.handle(), async move {
-        let read = || async { tokio::task::spawn_blocking(interface_ipv4s).await.unwrap_or_default() };
-        advertise_when_ready(&host, port, read, &TokioSleeper, crate::services::mdns_advertiser::MdnsAdvertiser::start)
-            .await
-    });
+    let late = running.host.clone();
+    let mdns = MdnsHolder::spawn(
+        rt.handle(),
+        move |keeper| async move {
+            let read = || async { tokio::task::spawn_blocking(interface_ipv4s).await.unwrap_or_default() };
+            let start = |a: &Advert| {
+                let (a, k) = (a.clone(), keeper.clone());
+                async move { k.start_blocking(move || crate::services::mdns_advertiser::MdnsAdvertiser::start(&a)).await }
+            };
+            advertise_when_ready(&host, port, read, &TokioSleeper, start).await
+        },
+        move || late.logs.ws(Severity::Info, "mDNS: stopped"),
+    );
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("Quip.exe"));
     let app = tray::TrayApp {
         host: running.host.clone(),
@@ -316,6 +382,9 @@ pub fn run() -> i32 {
     if mdns.stop() {
         running.host.logs.ws(Severity::Info, "mDNS: stopped");
     }
+    // A start still under way finishes, is dropped and logs "mDNS: stopped"
+    // (`Keeper`): give it a moment before the log is flushed.
+    rt.shutdown_timeout(Duration::from_secs(2));
     running.host.flush();
     code
 }
@@ -475,7 +544,7 @@ mod tests {
         let mut starts = Vec::new();
         let got = advertise_when_ready(&r.host, 8765, read, &sleeper, |a: &Advert| {
             starts.push(a.ips.clone());
-            Ok::<_, String>("advertiser")
+            std::future::ready(Ok::<_, String>("advertiser"))
         })
         .await;
         assert_eq!(got, "advertiser");
@@ -497,7 +566,7 @@ mod tests {
         let (r, p) = started_host(tmp.path()).await;
         let (_, read) = addresses(vec![vec![LAN]]);
         let sleeper = CountingSleeper::new(100);
-        advertise_when_ready(&r.host, 8765, read, &sleeper, |_: &Advert| Ok::<_, String>(())).await;
+        advertise_when_ready(&r.host, 8765, read, &sleeper, |_: &Advert| std::future::ready(Ok::<_, String>(()))).await;
         assert!(sleeper.waits().is_empty(), "no wait before the first try");
         let log = ws_log(&r, &p);
         assert!(log.contains("mDNS: advertising _quip._tcp on 1 LAN address(es), port 8765 (did="), "{log}");
@@ -515,7 +584,7 @@ mod tests {
             Duration::from_millis(300),
             advertise_when_ready(&r.host, 8765, read, &sleeper, |_: &Advert| {
                 starts += 1;
-                Ok::<_, String>(())
+                std::future::ready(Ok::<_, String>(()))
             }),
         )
         .await;
@@ -536,11 +605,7 @@ mod tests {
         let mut tries = 0;
         let got = advertise_when_ready(&r.host, 8765, read, &sleeper, |_: &Advert| {
             tries += 1;
-            if tries < 3 {
-                Err("mDNS register: boom".to_string())
-            } else {
-                Ok(tries)
-            }
+            std::future::ready(if tries < 3 { Err("mDNS register: boom".to_string()) } else { Ok(tries) })
         })
         .await;
         assert_eq!(got, 3);
@@ -557,15 +622,19 @@ mod tests {
         let starts = Arc::new(AtomicUsize::new(0));
         let gate = Arc::new(tokio::sync::Notify::new());
         let (host, s, g) = (r.host.clone(), starts.clone(), gate.clone());
-        let holder = MdnsHolder::spawn(&tokio::runtime::Handle::current(), async move {
-            let sleeper = GatedSleeper(g);
-            let (_, read) = addresses(vec![vec![], vec![LAN]]);
-            advertise_when_ready(&host, 8765, read, &sleeper, |_: &Advert| {
-                s.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, String>(())
-            })
-            .await
-        });
+        let holder = MdnsHolder::<()>::spawn(
+            &tokio::runtime::Handle::current(),
+            move |_keeper| async move {
+                let sleeper = GatedSleeper(g);
+                let (_, read) = addresses(vec![vec![], vec![LAN]]);
+                advertise_when_ready(&host, 8765, read, &sleeper, |_: &Advert| {
+                    s.fetch_add(1, Ordering::SeqCst);
+                    std::future::ready(Ok::<_, String>(()))
+                })
+                .await
+            },
+            || {},
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!holder.is_advertising());
         assert!(!holder.stop(), "nothing was up");
@@ -584,11 +653,63 @@ mod tests {
             }
         }
         let d = dropped.clone();
-        let holder = MdnsHolder::spawn(&tokio::runtime::Handle::current(), async move { Advertiser(d) });
+        let holder = MdnsHolder::spawn(
+            &tokio::runtime::Handle::current(),
+            move |k| async move { k.start_blocking(move || Ok(Advertiser(d))).await.unwrap() },
+            || {},
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(holder.is_advertising());
         assert!(holder.stop());
         assert_eq!(dropped.load(Ordering::SeqCst), 1, "dropped, so its goodbye goes out");
+    }
+
+    /// R2 finding 7: a start that is still running when Quit stops the
+    /// holder (it blocks, so `abort` cannot interrupt it) must not leave an
+    /// advertiser up with nobody to stop it: it is dropped once it returns,
+    /// and "mDNS: stopped" is still logged. It runs off the tokio workers,
+    /// so this single-threaded runtime keeps going while it blocks.
+    #[tokio::test]
+    async fn a_start_that_finishes_after_stop_is_dropped_and_logged() {
+        struct Advertiser(Arc<AtomicUsize>);
+        impl Drop for Advertiser {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let late = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (d, l) = (dropped.clone(), late.clone());
+        let holder = MdnsHolder::spawn(
+            &tokio::runtime::Handle::current(),
+            move |k| async move {
+                let _ = k
+                    .start_blocking(move || {
+                        let _ = started_tx.send(());
+                        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+                        Ok(Advertiser(d))
+                    })
+                    .await;
+            },
+            move || {
+                l.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        // The start is blocking now; the test's own (only) worker is free.
+        tokio::task::spawn_blocking(move || started_rx.recv_timeout(Duration::from_secs(5))).await.unwrap().unwrap();
+        assert!(!holder.is_advertising());
+        assert!(!holder.stop(), "nothing was up yet");
+        release_tx.send(()).unwrap();
+        for _ in 0..100 {
+            if late.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(late.load(Ordering::SeqCst), 1, "\"mDNS: stopped\" is logged for the late one");
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "dropped at once, so its goodbye goes out");
     }
 
     /// Each wait ends when the test notifies.
