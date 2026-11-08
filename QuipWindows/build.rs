@@ -32,13 +32,23 @@ fn git(args: &[&str]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// What the exe is built from, relative to the crate (cargo runs this with
+/// the crate as its working directory). `-dirty` looks at these only, and
+/// this script reruns when any of them changes, so the stamp follows them.
+/// An edit elsewhere in the monorepo (or to the crate's tests or README)
+/// does not change the exe and does not mark it. `tools/build-windows.sh`
+/// has the same list and checks the exe's stamp against the tree.
+const BUILD_INPUTS: &[&str] = &["src", "build.rs", "Cargo.toml", "Cargo.lock", ".cargo", "rust-toolchain.toml"];
+
 /// Sets `QUIP_BUILD` (`describe`) and, with git, `QUIP_GIT_SHA`. Dirty =
-/// a tracked file differs from HEAD (untracked files do not count: a stray
-/// scratch file in the checkout does not change what was built).
+/// a tracked file in `BUILD_INPUTS` differs from HEAD (untracked files do
+/// not count: a stray scratch file does not change what was built).
 fn stamp_build() -> String {
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let sha = git(&["rev-parse", "--short=12", "HEAD"]);
-    let dirty = sha.is_some() && git(&["status", "--porcelain", "--untracked-files=no"]).is_some();
+    let mut status = vec!["status", "--porcelain", "--untracked-files=no", "--"];
+    status.extend_from_slice(BUILD_INPUTS);
+    let dirty = sha.is_some() && git(&status).is_some();
     let build = describe::describe(&version, sha.as_deref(), dirty);
     println!("cargo:rustc-env=QUIP_BUILD={build}");
     let Some(sha) = sha else { return build };
@@ -130,8 +140,11 @@ fn main() {
         }
         embed_resources(&build);
     }
-    // An edit to the crate's sources makes the tree dirty, so rerun then
-    // too (a directory is scanned for any change).
-    println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=build.rs");
+    // An edit to a build input makes the tree dirty, so rerun then too (a
+    // directory is scanned for any change).
+    for input in BUILD_INPUTS {
+        if Path::new(input).exists() {
+            println!("cargo:rerun-if-changed={input}");
+        }
+    }
 }

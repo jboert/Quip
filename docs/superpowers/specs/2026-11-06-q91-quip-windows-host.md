@@ -651,8 +651,11 @@ change. It also checks the PE subsystem is `Windows GUI` and that the commit
 stamp is in the exe, and never copies the exe anywhere but `dist/`.
 
 Build stamp: `Quip.exe --version` prints `Quip for Windows <version>
-(<12-char git sha>)`, with `-dirty` after the sha when the tree had
-uncommitted changes. The same string is the tray icon's tooltip, the first
+(<12-char git sha>)`, with `-dirty` after the sha when a build input of
+the crate (`src`, `build.rs`, `Cargo.toml`, `Cargo.lock`, `.cargo`,
+`rust-toolchain.toml`) had uncommitted changes; `build.rs` reruns when any
+of them changes, and `tools/build-windows.sh` fails when the exe's stamp
+disagrees with its own `git status` of the same list. The same string is the tray icon's tooltip, the first
 `websocket.log` line of each start and the `--selftest` header. The exe also
 carries a version resource and the Quip icon (`.ico`), so Explorer shows
 both.

@@ -2,6 +2,9 @@
 # Build the shippable Quip for Windows (Q-91, spec 9) on the Mac:
 #   tools/build-windows.sh                       build and check QuipWindows/dist/Quip.exe
 #   tools/build-windows.sh --check-imports FILE  check `objdump -p` output only (FILE or - for stdin)
+#   tools/build-windows.sh --check-stamp STAMP FILE
+#                                                check a stamp ("0.1.0 (<sha>[-dirty])") against
+#                                                `git status --porcelain` output (FILE or -)
 #
 # Steps: (a) toolchain present, else print the install commands and exit 2;
 # (b) cargo release build for x86_64-pc-windows-gnu; (c) copy to
@@ -9,7 +12,9 @@
 # system DLL on the list below, or an api-ms-win-* API set (a MinGW runtime
 # DLL such as libgcc_s_seh-1.dll would not be on the owner's PC); (e) the PE
 # subsystem is Windows GUI (no console window); (f) the HEAD commit is
-# stamped in the exe; (g) print size, SHA-256 and the stamp.
+# stamped in the exe, and `-dirty` in the stamp agrees with this script's own
+# `git status` of the build inputs (a stale or lying stamp fails); (g) print
+# size, SHA-256 and the stamp.
 #
 # It writes only to QuipWindows/target/ and QuipWindows/dist/, and never
 # copies the exe anywhere else: getting it to the PC is the owner's call.
@@ -40,6 +45,35 @@ userenv.dll
 version.dll
 ws2_32.dll
 "
+
+# What the exe is built from, relative to QuipWindows/. The same list as
+# BUILD_INPUTS in QuipWindows/build.rs (a test holds them equal): `-dirty`
+# means a tracked file here differs from HEAD.
+BUILD_INPUTS="src build.rs Cargo.toml Cargo.lock .cargo rust-toolchain.toml"
+
+# check_stamp STAMP: reads `git status --porcelain` of the build inputs on
+# stdin. Returns 1 when the stamp says clean and the tree is not, or says
+# -dirty and the tree is clean (a stamp left from an older build).
+check_stamp() {
+    local stamp="$1" changes
+    changes="$(sed '/^[[:space:]]*$/d')"
+    case "$stamp" in
+        *-dirty\)*)
+            if [ -z "$changes" ]; then
+                echo "stamp check: Quip.exe is stamped -dirty but the build inputs are clean (a stale build?)" >&2
+                return 1
+            fi
+            ;;
+        *)
+            if [ -n "$changes" ]; then
+                echo "stamp check: Quip.exe is stamped clean but the build inputs have uncommitted changes:" >&2
+                echo "$changes" >&2
+                return 1
+            fi
+            ;;
+    esac
+    echo "stamp check: ok"
+}
 
 # Reads `objdump -p` output on stdin. Prints each DLL that is not allowed
 # and returns 1 if there was one, or if there were no imports at all (an
@@ -74,7 +108,17 @@ if [ "${1:-}" = "--check-imports" ]; then
     fi
     exit $?
 fi
-[ $# -eq 0 ] || { echo "usage: $0 [--check-imports <file|->]" >&2; exit 2; }
+if [ "${1:-}" = "--check-stamp" ]; then
+    [ $# -eq 3 ] || { echo "usage: $0 --check-stamp <stamp> <file|->" >&2; exit 2; }
+    if [ "$3" = "-" ]; then
+        check_stamp "$2"
+    else
+        [ -f "$3" ] || { echo "no such file: $3" >&2; exit 2; }
+        check_stamp "$2" <"$3"
+    fi
+    exit $?
+fi
+[ $# -eq 0 ] || { echo "usage: $0 [--check-imports <file|-> | --check-stamp <stamp> <file|->]" >&2; exit 2; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CRATE="$ROOT/QuipWindows"
@@ -130,6 +174,9 @@ sha="$(git -C "$ROOT" rev-parse --short=12 HEAD)"
 stamp="$(LC_ALL=C grep -aoE "$version \\($sha(-dirty)?\\)" "$exe" | head -1 || true)"
 if [ -n "$stamp" ]; then
     echo "stamp: Quip for Windows $stamp"
+    # shellcheck disable=SC2086  # BUILD_INPUTS is a word list
+    tree="$(cd "$CRATE" && git status --porcelain --untracked-files=no -- $BUILD_INPUTS)"
+    check_stamp "$stamp" <<<"$tree" || failed=1
     case "$stamp" in
         *-dirty*) echo "note: built from a tree with uncommitted changes; commit first for a build you ship" >&2 ;;
     esac

@@ -45,8 +45,11 @@ exe imports only Windows system DLLs, it is a GUI program (no console window),
 and it carries the commit it was built from. At the end it prints the size,
 the SHA-256 and the stamp, for example
 `stamp: Quip for Windows 0.1.0 (0123456789ab)`. A stamp that ends in
-`-dirty` means the tree had uncommitted changes. Commit first for a build you
-hand out.
+`-dirty` means a file the exe is built from (`QuipWindows/src`, `build.rs`,
+`Cargo.toml`, `Cargo.lock`, `.cargo`, `rust-toolchain.toml`) had uncommitted
+changes; edits anywhere else in the repo do not count. The script checks the
+stamp against `git status` itself and fails when they disagree. Commit first
+for a build you hand out.
 
 The script never copies the exe anywhere but `dist/`. Get it to the PC any
 way you like: USB stick, cloud drive or a network share.
