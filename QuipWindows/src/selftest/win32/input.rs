@@ -537,6 +537,9 @@ pub fn windows_terminal_types_and_reads_back(ctx: &mut Ctx) -> Outcome {
     let script = format!(
         "$Host.UI.RawUI.WindowTitle='{m}'; 'ready' | Out-File -FilePath '{d}\\{m}-ready.txt'; $r = Read-Host; $r | Out-File -Encoding utf8 -FilePath '{d}\\{m}.txt'"
     );
+    // wt.exe splits its own command line at every `;` (a new-tab
+    // separator) unless it is written `\;`.
+    let script = script.replace(';', "\\;");
     let index = ctx.expect("Windows Terminal", &m, WT_CLASS, false);
     let launched = Command::new("wt.exe")
         .args(["-w", "new", "powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-Command", &script])
