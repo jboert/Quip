@@ -404,6 +404,14 @@ mod tests {
         let mv = calls.iter().position(|c| matches!(c, FakeCall::Move { handle: 1, .. })).unwrap();
         assert!(restore < mv);
         assert_eq!(moves(&p), [1, 2], "on target the first time: no retry");
+        let restored: Vec<u64> = calls
+            .iter()
+            .filter_map(|c| match c {
+                FakeCall::Restore { handle } => Some(*handle),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(restored, [1], "once, and never a window that is neither minimized nor maximized");
     }
 
     #[test]
@@ -471,6 +479,19 @@ mod tests {
         // Again, already in place: one move each, still no retry.
         execute(&p, &t, Duration::ZERO);
         assert_eq!(moves(&p), [1, 2, 3]);
+    }
+
+    #[test]
+    fn the_verify_waits_for_the_settle_time() {
+        let p = fake();
+        let t = targets(&p, &[1], ArrangeLayout::Vertical);
+        let start = std::time::Instant::now();
+        execute(&p, &t, Duration::from_millis(60));
+        assert!(start.elapsed() >= Duration::from_millis(60), "{:?}", start.elapsed());
+        // Nothing moved: nothing to verify, no wait.
+        let start = std::time::Instant::now();
+        assert!(execute(&p, &[], Duration::from_secs(5)).is_empty());
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
