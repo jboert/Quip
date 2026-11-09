@@ -48,9 +48,9 @@ wishlist. What only the PC can answer is in the wishlist session log of
 
 ## Open items
 
-- Q-92: the iOS suite cannot open its generated Xcode project on this Mac
-  (Xcode 27.2). Every commit today used `QUIP_SKIP_CHECK=1` for that reason,
-  with the suites that did run named in each message.
+- Q-92 fixed in `b473ade` (2026-11-08): the iOS project opens on Xcode 27.2
+  again and the iOS suite runs (1578 passed). The phone has Quip 1.6.0 from
+  `b473ade`; whether 1.6.0 sends `arrange_windows` is not yet checked.
 - Owner decision pending (told, not answered): rates of PIN guessing add up
   across IPv4 addresses (no all-senders guess cap, so the owner's right PIN is
   never refused). Spec 3.1 has the math.
